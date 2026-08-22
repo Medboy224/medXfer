@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"time"
 )
@@ -26,7 +25,7 @@ type PeerOffer struct {
 	FileSize   int64  `json:"file_size"`
 }
 
-// StartDiscoveryServer runs both UDP beacon and TCP discovery responder on the sender
+// StartDiscoveryServer runs on the sender to reply to discovery sweeps
 func StartDiscoveryServer(ctx context.Context, fileName string, fileSize int64, tcpPort int) {
 	hostname, _ := os.Hostname()
 	if hostname == "" {
@@ -47,10 +46,11 @@ func StartDiscoveryServer(ctx context.Context, fileName string, fileSize int64, 
 		return
 	}
 
-	// 1. TCP Discovery Responder (Handles Hotspot Subnet Sweeps)
+	// 1. TCP Sweep Responder (Unicast probe listener)
 	go func() {
 		listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", DiscoveryPort))
 		if err != nil {
+			fmt.Printf("[!] Warning: Could not bind discovery port %d: %v\n", DiscoveryPort, err)
 			return
 		}
 		defer listener.Close()
@@ -73,7 +73,7 @@ func StartDiscoveryServer(ctx context.Context, fileName string, fileSize int64, 
 		}
 	}()
 
-	// 2. UDP Broadcast Beacon (Handles regular Wi-Fi routers)
+	// 2. UDP Broadcast Beacon
 	go func() {
 		bcastAddr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("255.255.255.255:%d", DiscoveryPort))
 		if err != nil {
@@ -99,95 +99,62 @@ func StartDiscoveryServer(ctx context.Context, fileName string, fileSize int64, 
 	}()
 }
 
-// ScanForSenders runs both a UDP listener and a concurrent TCP subnet sweep
+// ScanForSenders sweeps all active subnets across all network cards
 func ScanForSenders(duration time.Duration) ([]PeerOffer, error) {
 	discovered := make(map[string]PeerOffer)
 	var mu sync.Mutex
-
 	var wg sync.WaitGroup
 
-	// Task A: Passive UDP Listener
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		addr := net.UDPAddr{Port: DiscoveryPort, IP: net.IPv4zero}
-		conn, err := net.ListenUDP("udp4", &addr)
+	subnets := GetAllLocalSubnets()
+	if len(subnets) == 0 {
+		return nil, fmt.Errorf("no active network adapters found")
+	}
+
+	// Helper function to probe a specific IP address
+	probeIP := func(ip string, timeout time.Duration) {
+		target := fmt.Sprintf("%s:%d", ip, DiscoveryPort)
+		conn, err := net.DialTimeout("tcp4", target, timeout)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
 
-		_ = conn.SetReadDeadline(time.Now().Add(duration))
-		buf := make([]byte, 2048)
-
-		for {
-			n, srcAddr, err := conn.ReadFromUDP(buf)
-			if err != nil {
-				break
-			}
-			var offer PeerOffer
-			if err := json.Unmarshal(buf[:n], &offer); err == nil && offer.Magic == BeaconMagic {
-				if offer.HostIP == "" || offer.HostIP == "127.0.0.1" {
-					offer.HostIP = srcAddr.IP.String()
-				}
-				mu.Lock()
-				discovered[fmt.Sprintf("%s:%d", offer.HostIP, offer.Port)] = offer
-				mu.Unlock()
-			}
-		}
-	}()
-
-	// Task B: Active Parallel TCP Subnet Sweep (Bypasses Hotspot Isolation)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		localIP := GetLocalIP()
-		if localIP == "127.0.0.1" {
+		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		respBytes, err := io.ReadAll(conn)
+		if err != nil {
 			return
 		}
 
-		parts := strings.Split(localIP, ".")
-		if len(parts) != 4 {
-			return
+		var offer PeerOffer
+		if err := json.Unmarshal(respBytes, &offer); err == nil && offer.Magic == BeaconMagic {
+			// Always use the probed IP as the true working routing address
+			offer.HostIP = ip
+			mu.Lock()
+			discovered[fmt.Sprintf("%s:%d", offer.HostIP, offer.Port)] = offer
+			mu.Unlock()
 		}
-		subnetPrefix := fmt.Sprintf("%s.%s.%s.", parts[0], parts[1], parts[2])
+	}
 
-		var sweepWg sync.WaitGroup
+	// Priority Phase: Probe default gateways (.1) on all adapters first
+	for _, sub := range subnets {
+		wg.Add(1)
+		go func(gw string) {
+			defer wg.Done()
+			probeIP(gw, 400*time.Millisecond)
+		}(sub.GatewayIP)
+	}
 
-		// Sweep all 254 possible hosts concurrently
+	// Full Subnet Sweep Phase: Probe 1-254 across all detected network cards
+	for _, sub := range subnets {
 		for i := 1; i <= 254; i++ {
-			targetHost := fmt.Sprintf("%s%d", subnetPrefix, i)
-			sweepWg.Add(1)
-
+			targetIP := fmt.Sprintf("%s%d", sub.SubnetPrefix, i)
+			wg.Add(1)
 			go func(ip string) {
-				defer sweepWg.Done()
-
-				target := fmt.Sprintf("%s:%d", ip, DiscoveryPort)
-				conn, err := net.DialTimeout("tcp4", target, 350*time.Millisecond)
-				if err != nil {
-					return
-				}
-				defer conn.Close()
-
-				_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-				respBytes, err := io.ReadAll(conn)
-				if err != nil {
-					return
-				}
-
-				var offer PeerOffer
-				if err := json.Unmarshal(respBytes, &offer); err == nil && offer.Magic == BeaconMagic {
-					if offer.HostIP == "" || offer.HostIP == "127.0.0.1" {
-						offer.HostIP = ip
-					}
-					mu.Lock()
-					discovered[fmt.Sprintf("%s:%d", offer.HostIP, offer.Port)] = offer
-					mu.Unlock()
-				}
-			}(targetHost)
+				defer wg.Done()
+				probeIP(ip, 350*time.Millisecond)
+			}(targetIP)
 		}
-		sweepWg.Wait()
-	}()
+	}
 
 	wg.Wait()
 
