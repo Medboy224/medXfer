@@ -25,7 +25,7 @@ type PeerOffer struct {
 	FileSize   int64  `json:"file_size"`
 }
 
-// StartDiscoveryServer listens for incoming discovery requests on both TCP and UDP
+// StartDiscoveryServer listens on both TCP and UDP for incoming discovery requests
 func StartDiscoveryServer(ctx context.Context, fileName string, fileSize int64, tcpPort int) {
 	hostname, _ := os.Hostname()
 	if hostname == "" {
@@ -46,7 +46,7 @@ func StartDiscoveryServer(ctx context.Context, fileName string, fileSize int64, 
 		return
 	}
 
-	// 1. TCP Probe Responder
+	// 1. TCP Unicast Sweep Responder (0.0.0.0 listens on all interfaces)
 	go func() {
 		listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", DiscoveryPort))
 		if err != nil {
@@ -98,23 +98,23 @@ func StartDiscoveryServer(ctx context.Context, fileName string, fileSize int64, 
 	}()
 }
 
-// ScanForSenders discovers senders using a prioritized gateway probe and a worker pool
+// ScanForSenders sweeps all active subnets using 128 concurrent worker routines
 func ScanForSenders(duration time.Duration) ([]PeerOffer, error) {
 	discovered := make(map[string]PeerOffer)
 	var mu sync.Mutex
 
-	probeIP := func(ip string, timeout time.Duration) bool {
+	probeIP := func(ip string, timeout time.Duration) {
 		target := fmt.Sprintf("%s:%d", ip, DiscoveryPort)
 		conn, err := net.DialTimeout("tcp4", target, timeout)
 		if err != nil {
-			return false
+			return
 		}
 		defer conn.Close()
 
-		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_ = conn.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
 		respBytes, err := io.ReadAll(conn)
 		if err != nil {
-			return false
+			return
 		}
 
 		var offer PeerOffer
@@ -123,27 +123,25 @@ func ScanForSenders(duration time.Duration) ([]PeerOffer, error) {
 			mu.Lock()
 			discovered[fmt.Sprintf("%s:%d", offer.HostIP, offer.Port)] = offer
 			mu.Unlock()
-			return true
 		}
-		return false
 	}
 
 	subnets := GetAllLocalSubnets()
 
-	// STEP 1: Fast Priority Gateways Probe (Phone hotspot is always .1)
-	for _, sub := range subnets {
-		probeIP(sub.GatewayIP, 800*time.Millisecond)
-	}
-
-	// STEP 2: Check ARP table (if on Android receiver)
-	for _, clientIP := range GetConnectedHotspotClients() {
-		probeIP(clientIP, 600*time.Millisecond)
-	}
-
-	// STEP 3: Controlled Worker Pool for remaining subnet IPs (32 concurrent max)
+	// High-speed parallel worker pool (128 concurrent streams)
 	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, 32)
+	semaphore := make(chan struct{}, 128)
 
+	// Step 1: Probe ARP clients first
+	for _, clientIP := range GetConnectedHotspotClients() {
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+			probeIP(ip, 350*time.Millisecond)
+		}(clientIP)
+	}
+
+	// Step 2: Sweep full subnets
 	for _, sub := range subnets {
 		for i := 1; i <= 254; i++ {
 			targetIP := fmt.Sprintf("%s%d", sub.SubnetPrefix, i)
@@ -151,10 +149,10 @@ func ScanForSenders(duration time.Duration) ([]PeerOffer, error) {
 
 			go func(ip string) {
 				defer wg.Done()
-				semaphore <- struct{}{}        // Acquire token
-				defer func() { <-semaphore }() // Release token
+				semaphore <- struct{}{}
+				defer func() { <-semaphore }()
 
-				probeIP(ip, 500*time.Millisecond)
+				probeIP(ip, 350*time.Millisecond)
 			}(targetIP)
 		}
 	}

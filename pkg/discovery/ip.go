@@ -14,22 +14,31 @@ type SubnetInfo struct {
 	GatewayIP     string // e.g. "192.168.43.1"
 }
 
-// GetLocalIP returns the best active LAN or Hotspot IPv4 address
+// GetLocalIP returns the best local IP, prioritizing Wi-Fi/Hotspot over Cellular
 func GetLocalIP() string {
 	subnets := GetAllLocalSubnets()
+
+	// 1. Prioritize Wi-Fi and Hotspot ranges
 	for _, s := range subnets {
-		// Prefer actual Wi-Fi / Hotspot ranges
-		if strings.HasPrefix(s.IP, "192.168.43.") || strings.HasPrefix(s.IP, "192.168.1.") || strings.HasPrefix(s.IP, "192.168.0.") {
+		if strings.HasPrefix(s.IP, "192.168.43.") {
 			return s.IP
 		}
 	}
-	if len(subnets) > 0 {
+	for _, s := range subnets {
+		if strings.HasPrefix(s.IP, "192.168.") || strings.HasPrefix(s.IP, "172.20.10.") {
+			return s.IP
+		}
+	}
+
+	// 2. Fallback to any detected adapter
+	if len(subnets) > 0 && !strings.HasPrefix(subnets[0].IP, "127.") {
 		return subnets[0].IP
 	}
-	return "127.0.0.1"
+
+	return "192.168.43.1"
 }
 
-// GetConnectedHotspotClients checks the Linux/Android ARP table
+// GetConnectedHotspotClients checks the ARP cache (if accessible)
 func GetConnectedHotspotClients() []string {
 	var clients []string
 	f, err := os.Open("/proc/net/arp")
@@ -39,7 +48,7 @@ func GetConnectedHotspotClients() []string {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
-	if scanner.Scan() { // skip header
+	if scanner.Scan() {
 		for scanner.Scan() {
 			fields := strings.Fields(scanner.Text())
 			if len(fields) >= 4 {
@@ -54,11 +63,12 @@ func GetConnectedHotspotClients() []string {
 	return clients
 }
 
-// GetAllLocalSubnets returns real active network subnets
+// GetAllLocalSubnets returns all physical subnets AND forces standard hotspot ranges
 func GetAllLocalSubnets() []SubnetInfo {
 	var results []SubnetInfo
 	seenPrefixes := make(map[string]bool)
 
+	// 1. Detect physical/Wi-Fi network adapters
 	ifaces, err := net.Interfaces()
 	if err == nil {
 		for _, iface := range ifaces {
@@ -66,9 +76,9 @@ func GetAllLocalSubnets() []SubnetInfo {
 				continue
 			}
 
-			// Skip common virtual adapters (VMware, VirtualBox, WSL)
+			// Filter out virtual network adapters
 			name := strings.ToLower(iface.Name)
-			if strings.Contains(name, "vEthernet") || strings.Contains(name, "virtual") || strings.Contains(name, "vmnet") {
+			if strings.Contains(name, "vethernet") || strings.Contains(name, "virtual") || strings.Contains(name, "vmnet") {
 				continue
 			}
 
@@ -84,6 +94,7 @@ func GetAllLocalSubnets() []SubnetInfo {
 				}
 
 				ip := ipNet.IP.To4().String()
+				// Skip link-local and loopback
 				if strings.HasPrefix(ip, "169.254.") || ip == "127.0.0.1" {
 					continue
 				}
@@ -105,14 +116,27 @@ func GetAllLocalSubnets() []SubnetInfo {
 		}
 	}
 
-	// Fallback for Android Termux where hotspot interface is masked
-	if len(results) == 0 {
-		results = append(results, SubnetInfo{
-			InterfaceName: "hotspot_default",
-			IP:            "192.168.43.1",
-			SubnetPrefix:  "192.168.43.",
-			GatewayIP:     "192.168.43.1",
-		})
+	// 2. UNCONDITIONALLY inject standard Hotspot ranges
+	// Guarantees Termux always scans the hotspot network even when mobile data is active
+	mandatoryHotspotPrefixes := []string{
+		"192.168.43.", // Android Hotspot (Standard)
+		"192.168.44.", // Android Hotspot (Secondary)
+		"192.168.49.", // Wi-Fi Direct
+		"192.168.1.",  // Standard Home Wi-Fi
+		"192.168.0.",  // Standard Home Wi-Fi
+		"172.20.10.",  // iOS Hotspot
+	}
+
+	for _, prefix := range mandatoryHotspotPrefixes {
+		if !seenPrefixes[prefix] {
+			seenPrefixes[prefix] = true
+			results = append(results, SubnetInfo{
+				InterfaceName: "hotspot_forced",
+				IP:            prefix + "1",
+				SubnetPrefix:  prefix,
+				GatewayIP:     prefix + "1",
+			})
+		}
 	}
 
 	return results
