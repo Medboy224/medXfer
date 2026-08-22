@@ -25,7 +25,7 @@ type PeerOffer struct {
 	FileSize   int64  `json:"file_size"`
 }
 
-// StartDiscoveryServer runs on the sender to reply to discovery sweeps
+// StartDiscoveryServer listens for incoming discovery requests on both TCP and UDP
 func StartDiscoveryServer(ctx context.Context, fileName string, fileSize int64, tcpPort int) {
 	hostname, _ := os.Hostname()
 	if hostname == "" {
@@ -46,11 +46,10 @@ func StartDiscoveryServer(ctx context.Context, fileName string, fileSize int64, 
 		return
 	}
 
-	// 1. TCP Sweep Responder (Unicast probe listener)
+	// 1. TCP Probe Responder
 	go func() {
 		listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", DiscoveryPort))
 		if err != nil {
-			fmt.Printf("[!] Warning: Could not bind discovery port %d: %v\n", DiscoveryPort, err)
 			return
 		}
 		defer listener.Close()
@@ -99,59 +98,63 @@ func StartDiscoveryServer(ctx context.Context, fileName string, fileSize int64, 
 	}()
 }
 
-// ScanForSenders sweeps all active subnets across all network cards
+// ScanForSenders discovers senders using a prioritized gateway probe and a worker pool
 func ScanForSenders(duration time.Duration) ([]PeerOffer, error) {
 	discovered := make(map[string]PeerOffer)
 	var mu sync.Mutex
-	var wg sync.WaitGroup
 
-	subnets := GetAllLocalSubnets()
-	if len(subnets) == 0 {
-		return nil, fmt.Errorf("no active network adapters found")
-	}
-
-	// Helper function to probe a specific IP address
-	probeIP := func(ip string, timeout time.Duration) {
+	probeIP := func(ip string, timeout time.Duration) bool {
 		target := fmt.Sprintf("%s:%d", ip, DiscoveryPort)
 		conn, err := net.DialTimeout("tcp4", target, timeout)
 		if err != nil {
-			return
+			return false
 		}
 		defer conn.Close()
 
 		_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		respBytes, err := io.ReadAll(conn)
 		if err != nil {
-			return
+			return false
 		}
 
 		var offer PeerOffer
 		if err := json.Unmarshal(respBytes, &offer); err == nil && offer.Magic == BeaconMagic {
-			// Always use the probed IP as the true working routing address
 			offer.HostIP = ip
 			mu.Lock()
 			discovered[fmt.Sprintf("%s:%d", offer.HostIP, offer.Port)] = offer
 			mu.Unlock()
+			return true
 		}
+		return false
 	}
 
-	// Priority Phase: Probe default gateways (.1) on all adapters first
+	subnets := GetAllLocalSubnets()
+
+	// STEP 1: Fast Priority Gateways Probe (Phone hotspot is always .1)
 	for _, sub := range subnets {
-		wg.Add(1)
-		go func(gw string) {
-			defer wg.Done()
-			probeIP(gw, 400*time.Millisecond)
-		}(sub.GatewayIP)
+		probeIP(sub.GatewayIP, 800*time.Millisecond)
 	}
 
-	// Full Subnet Sweep Phase: Probe 1-254 across all detected network cards
+	// STEP 2: Check ARP table (if on Android receiver)
+	for _, clientIP := range GetConnectedHotspotClients() {
+		probeIP(clientIP, 600*time.Millisecond)
+	}
+
+	// STEP 3: Controlled Worker Pool for remaining subnet IPs (32 concurrent max)
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, 32)
+
 	for _, sub := range subnets {
 		for i := 1; i <= 254; i++ {
 			targetIP := fmt.Sprintf("%s%d", sub.SubnetPrefix, i)
 			wg.Add(1)
+
 			go func(ip string) {
 				defer wg.Done()
-				probeIP(ip, 350*time.Millisecond)
+				semaphore <- struct{}{}        // Acquire token
+				defer func() { <-semaphore }() // Release token
+
+				probeIP(ip, 500*time.Millisecond)
 			}(targetIP)
 		}
 	}
