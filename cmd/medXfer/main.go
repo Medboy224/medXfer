@@ -64,10 +64,10 @@ func handleSend(args []string) {
 	localIP := discovery.GetLocalIP()
 	bindAddr := fmt.Sprintf("0.0.0.0:%d", *portFlag)
 
-	// Broadcast UDP offer on LAN
+	// Start dual-mode discovery server (TCP sweep responder + UDP beacon)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go discovery.BroadcastSenderOffer(ctx, fileName, fileSize, *portFlag)
+	discovery.StartDiscoveryServer(ctx, fileName, fileSize, *portFlag)
 
 	fmt.Println("==================================================")
 	fmt.Printf(" [SENDER READY] Offering: %s (%.2f MB)\n", fileName, float64(fileSize)/(1024*1024))

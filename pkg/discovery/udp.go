@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,53 +26,8 @@ type PeerOffer struct {
 	FileSize   int64  `json:"file_size"`
 }
 
-// GetAllBroadcastAddresses calculates the directed broadcast IP for all active adapters
-func GetAllBroadcastAddresses() []string {
-	var broadcasts []string
-
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return []string{"255.255.255.255"}
-	}
-
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-
-		for _, addr := range addrs {
-			ipNet, ok := addr.(*net.IPNet)
-			if !ok || ipNet.IP.To4() == nil {
-				continue
-			}
-
-			ip := ipNet.IP.To4()
-			mask := ipNet.Mask
-			if len(mask) == 4 {
-				// Calculate subnet broadcast: IP | (^Mask)
-				bcast := net.IPv4(
-					ip[0]|^mask[0],
-					ip[1]|^mask[1],
-					ip[2]|^mask[2],
-					ip[3]|^mask[3],
-				)
-				broadcasts = append(broadcasts, bcast.String())
-			}
-		}
-	}
-
-	// Always append global broadcast as fallback
-	broadcasts = append(broadcasts, "255.255.255.255")
-	return broadcasts
-}
-
-// BroadcastSenderOffer announces an available file across all active network interfaces
-func BroadcastSenderOffer(ctx context.Context, fileName string, fileSize int64, tcpPort int) {
+// StartDiscoveryServer runs both UDP beacon and TCP discovery responder on the sender
+func StartDiscoveryServer(ctx context.Context, fileName string, fileSize int64, tcpPort int) {
 	hostname, _ := os.Hostname()
 	if hostname == "" {
 		hostname = "Device"
@@ -84,73 +42,154 @@ func BroadcastSenderOffer(ctx context.Context, fileName string, fileSize int64, 
 		FileSize:   fileSize,
 	}
 
-	data, err := json.Marshal(offer)
+	offerBytes, err := json.Marshal(offer)
 	if err != nil {
 		return
 	}
 
-	ticker := time.NewTicker(600 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
+	// 1. TCP Discovery Responder (Handles Hotspot Subnet Sweeps)
+	go func() {
+		listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", DiscoveryPort))
+		if err != nil {
 			return
-		case <-ticker.C:
-			// Send beacons to every detected broadcast interface
-			targets := GetAllBroadcastAddresses()
-			for _, bcastIP := range targets {
-				rAddr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", bcastIP, DiscoveryPort))
-				if err != nil {
-					continue
-				}
+		}
+		defer listener.Close()
 
-				conn, err := net.DialUDP("udp4", nil, rAddr)
-				if err != nil {
-					continue
-				}
-				_, _ = conn.Write(data)
-				_ = conn.Close()
+		go func() {
+			<-ctx.Done()
+			listener.Close()
+		}()
+
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_ = c.SetWriteDeadline(time.Now().Add(1 * time.Second))
+				_, _ = c.Write(offerBytes)
+			}(conn)
+		}
+	}()
+
+	// 2. UDP Broadcast Beacon (Handles regular Wi-Fi routers)
+	go func() {
+		bcastAddr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("255.255.255.255:%d", DiscoveryPort))
+		if err != nil {
+			return
+		}
+		conn, err := net.DialUDP("udp4", nil, bcastAddr)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		ticker := time.NewTicker(600 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, _ = conn.Write(offerBytes)
 			}
 		}
-	}
+	}()
 }
 
-// ScanForSenders collects active senders on the LAN within a timeout window
+// ScanForSenders runs both a UDP listener and a concurrent TCP subnet sweep
 func ScanForSenders(duration time.Duration) ([]PeerOffer, error) {
-	addr := net.UDPAddr{
-		Port: DiscoveryPort,
-		IP:   net.IPv4zero,
-	}
-	conn, err := net.ListenUDP("udp4", &addr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open discovery listener: %w", err)
-	}
-	defer conn.Close()
-
-	_ = conn.SetReadDeadline(time.Now().Add(duration))
 	discovered := make(map[string]PeerOffer)
-	buf := make([]byte, 2048)
+	var mu sync.Mutex
 
-	for {
-		n, srcAddr, err := conn.ReadFromUDP(buf)
+	var wg sync.WaitGroup
+
+	// Task A: Passive UDP Listener
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		addr := net.UDPAddr{Port: DiscoveryPort, IP: net.IPv4zero}
+		conn, err := net.ListenUDP("udp4", &addr)
 		if err != nil {
-			break // Timeout reached
+			return
 		}
+		defer conn.Close()
 
-		var offer PeerOffer
-		if err := json.Unmarshal(buf[:n], &offer); err != nil {
-			continue
-		}
+		_ = conn.SetReadDeadline(time.Now().Add(duration))
+		buf := make([]byte, 2048)
 
-		if offer.Magic == BeaconMagic {
-			if offer.HostIP == "" || offer.HostIP == "127.0.0.1" {
-				offer.HostIP = srcAddr.IP.String()
+		for {
+			n, srcAddr, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				break
 			}
-			key := fmt.Sprintf("%s:%d", offer.HostIP, offer.Port)
-			discovered[key] = offer
+			var offer PeerOffer
+			if err := json.Unmarshal(buf[:n], &offer); err == nil && offer.Magic == BeaconMagic {
+				if offer.HostIP == "" || offer.HostIP == "127.0.0.1" {
+					offer.HostIP = srcAddr.IP.String()
+				}
+				mu.Lock()
+				discovered[fmt.Sprintf("%s:%d", offer.HostIP, offer.Port)] = offer
+				mu.Unlock()
+			}
 		}
-	}
+	}()
+
+	// Task B: Active Parallel TCP Subnet Sweep (Bypasses Hotspot Isolation)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		localIP := GetLocalIP()
+		if localIP == "127.0.0.1" {
+			return
+		}
+
+		parts := strings.Split(localIP, ".")
+		if len(parts) != 4 {
+			return
+		}
+		subnetPrefix := fmt.Sprintf("%s.%s.%s.", parts[0], parts[1], parts[2])
+
+		var sweepWg sync.WaitGroup
+
+		// Sweep all 254 possible hosts concurrently
+		for i := 1; i <= 254; i++ {
+			targetHost := fmt.Sprintf("%s%d", subnetPrefix, i)
+			sweepWg.Add(1)
+
+			go func(ip string) {
+				defer sweepWg.Done()
+
+				target := fmt.Sprintf("%s:%d", ip, DiscoveryPort)
+				conn, err := net.DialTimeout("tcp4", target, 350*time.Millisecond)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+
+				_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+				respBytes, err := io.ReadAll(conn)
+				if err != nil {
+					return
+				}
+
+				var offer PeerOffer
+				if err := json.Unmarshal(respBytes, &offer); err == nil && offer.Magic == BeaconMagic {
+					if offer.HostIP == "" || offer.HostIP == "127.0.0.1" {
+						offer.HostIP = ip
+					}
+					mu.Lock()
+					discovered[fmt.Sprintf("%s:%d", offer.HostIP, offer.Port)] = offer
+					mu.Unlock()
+				}
+			}(targetHost)
+		}
+		sweepWg.Wait()
+	}()
+
+	wg.Wait()
 
 	var results []PeerOffer
 	for _, off := range discovered {
