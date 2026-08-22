@@ -8,15 +8,11 @@ import (
 
 type ProgressBar struct {
 	startTime time.Time
-	lastBytes int64
-	lastTime  time.Time
 }
 
 func NewProgressBar() *ProgressBar {
-	now := time.Now()
 	return &ProgressBar{
-		startTime: now,
-		lastTime:  now,
+		startTime: time.Now(),
 	}
 }
 
@@ -38,7 +34,6 @@ func (p *ProgressBar) Render(currentBytes, totalBytes int64, speedMBps float64) 
 	currentMB := float64(currentBytes) / (1024 * 1024)
 	totalMB := float64(totalBytes) / (1024 * 1024)
 
-	// Calculate ETA
 	etaStr := "--:--"
 	if speedMBps > 0.1 && currentBytes < totalBytes {
 		remainingBytes := totalBytes - currentBytes

@@ -5,23 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"time"
 )
 
 const (
 	DiscoveryPort = 19998
-	BeaconMagic   = "MEDXFER_DISCOVERY_V1"
+	BeaconMagic   = "MEDXFER_BEACON_V2"
 )
 
-type BeaconPacket struct {
-	Magic   string `json:"magic"`
-	Role    string `json:"role"`
-	TCPPort int    `json:"tcp_port"`
-	HostIP  string `json:"host_ip"`
+type PeerOffer struct {
+	Magic      string `json:"magic"`
+	DeviceName string `json:"device_name"`
+	HostIP     string `json:"host_ip"`
+	Port       int    `json:"port"`
+	FileName   string `json:"file_name"`
+	FileSize   int64  `json:"file_size"`
 }
 
-// BroadcastReceiverBeacon announces receiver readiness on the local subnet (255.255.255.255)
-func BroadcastReceiverBeacon(ctx context.Context, tcpPort int) {
+func BroadcastSenderOffer(ctx context.Context, fileName string, fileSize int64, tcpPort int) {
 	broadcastAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("255.255.255.255:%d", DiscoveryPort))
 	if err != nil {
 		return
@@ -33,19 +35,26 @@ func BroadcastReceiverBeacon(ctx context.Context, tcpPort int) {
 	}
 	defer conn.Close()
 
-	packet := BeaconPacket{
-		Magic:   BeaconMagic,
-		Role:    "receiver",
-		TCPPort: tcpPort,
-		HostIP:  GetLocalIP(),
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "Device"
 	}
 
-	data, err := json.Marshal(packet)
+	offer := PeerOffer{
+		Magic:      BeaconMagic,
+		DeviceName: hostname,
+		HostIP:     GetLocalIP(),
+		Port:       tcpPort,
+		FileName:   fileName,
+		FileSize:   fileSize,
+	}
+
+	data, err := json.Marshal(offer)
 	if err != nil {
 		return
 	}
 
-	ticker := time.NewTicker(800 * time.Millisecond)
+	ticker := time.NewTicker(600 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -58,38 +67,44 @@ func BroadcastReceiverBeacon(ctx context.Context, tcpPort int) {
 	}
 }
 
-// DiscoverReceiver listens for an active receiver on the LAN
-func DiscoverReceiver(timeout time.Duration) (string, int, error) {
+func ScanForSenders(duration time.Duration) ([]PeerOffer, error) {
 	addr := net.UDPAddr{
 		Port: DiscoveryPort,
 		IP:   net.IPv4zero,
 	}
 	conn, err := net.ListenUDP("udp", &addr)
 	if err != nil {
-		return "", 0, fmt.Errorf("UDP listen failed: %w", err)
+		return nil, fmt.Errorf("failed to open discovery listener: %w", err)
 	}
 	defer conn.Close()
 
-	_ = conn.SetReadDeadline(time.Now().Add(timeout))
-	buf := make([]byte, 1024)
+	_ = conn.SetReadDeadline(time.Now().Add(duration))
+	discovered := make(map[string]PeerOffer)
+	buf := make([]byte, 2048)
 
 	for {
 		n, srcAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
-			return "", 0, fmt.Errorf("no receiver found on LAN (timed out)")
+			break
 		}
 
-		var pkt BeaconPacket
-		if err := json.Unmarshal(buf[:n], &pkt); err != nil {
+		var offer PeerOffer
+		if err := json.Unmarshal(buf[:n], &offer); err != nil {
 			continue
 		}
 
-		if pkt.Magic == BeaconMagic && pkt.Role == "receiver" {
-			targetIP := pkt.HostIP
-			if targetIP == "" || targetIP == "127.0.0.1" {
-				targetIP = srcAddr.IP.String()
+		if offer.Magic == BeaconMagic {
+			if offer.HostIP == "" || offer.HostIP == "127.0.0.1" {
+				offer.HostIP = srcAddr.IP.String()
 			}
-			return targetIP, pkt.TCPPort, nil
+			key := fmt.Sprintf("%s:%d", offer.HostIP, offer.Port)
+			discovered[key] = offer
 		}
 	}
+
+	var results []PeerOffer
+	for _, off := range discovered {
+		results = append(results, off)
+	}
+	return results, nil
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"path/filepath"
 	"sync"
@@ -19,7 +20,7 @@ type ChunkJob struct {
 	Length uint32
 }
 
-type ProgressCallback func(bytesSent, totalBytes int64, speedMBps float64)
+type ProgressCallback func(bytesProcessed, totalBytes int64, speedMBps float64)
 
 type Sender struct {
 	WorkerCount int
@@ -41,7 +42,7 @@ func NewSender(workers int, chunkSize uint32) *Sender {
 	}
 }
 
-func (s *Sender) Transfer(filePath string, targetAddr string, progressCb ProgressCallback) error {
+func (s *Sender) ServeAndSend(bindAddr string, filePath string, progressCb ProgressCallback) error {
 	disk, err := OpenForReading(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to open source file: %w", err)
@@ -51,7 +52,6 @@ func (s *Sender) Transfer(filePath string, targetAddr string, progressCb Progres
 	fileSize := disk.Size()
 	fileName := filepath.Base(filePath)
 
-	// Calculate chunk counts
 	totalChunks := uint32((fileSize + int64(s.ChunkSize) - 1) / int64(s.ChunkSize))
 	if totalChunks == 0 {
 		totalChunks = 1
@@ -69,10 +69,15 @@ func (s *Sender) Transfer(filePath string, targetAddr string, progressCb Progres
 		TotalChunks: totalChunks,
 	}
 
-	// 1. Establish Control Connection
-	ctrlConn, err := net.Dial("tcp", targetAddr)
+	listener, err := net.Listen("tcp", bindAddr)
 	if err != nil {
-		return fmt.Errorf("failed to connect to receiver control port: %w", err)
+		return fmt.Errorf("failed to bind sender listener: %w", err)
+	}
+	defer listener.Close()
+
+	ctrlConn, err := listener.Accept()
+	if err != nil {
+		return fmt.Errorf("failed to accept receiver control connection: %w", err)
 	}
 	defer ctrlConn.Close()
 	_ = TuneConn(ctrlConn, s.SocketBuf)
@@ -81,7 +86,6 @@ func (s *Sender) Transfer(filePath string, targetAddr string, progressCb Progres
 		return fmt.Errorf("failed to send metadata: %w", err)
 	}
 
-	// 2. Spawn Parallel Worker Sockets
 	jobs := make(chan ChunkJob, totalChunks)
 	for i := uint32(0); i < totalChunks; i++ {
 		offset := uint64(i) * uint64(s.ChunkSize)
@@ -99,39 +103,46 @@ func (s *Sender) Transfer(filePath string, targetAddr string, progressCb Progres
 		errOnce     sync.Once
 		transferErr error
 		startTime   = time.Now()
+		joined      = 0
 	)
 
-	// 3. Launch Sender Worker Pool
-	for w := 0; w < s.WorkerCount; w++ {
+	for joined < s.WorkerCount {
+		wConn, aErr := listener.Accept()
+		if aErr != nil {
+			return fmt.Errorf("failed to accept worker connection: %w", aErr)
+		}
+		_ = TuneConn(wConn, s.SocketBuf)
+
+		fType, fLen, hErr := protocol.ReadFrameHeader(wConn)
+		if hErr != nil || fType != protocol.TypeHandshake {
+			wConn.Close()
+			continue
+		}
+
+		sessionPayload := make([]byte, fLen)
+		if _, rErr := io.ReadFull(wConn, sessionPayload); rErr != nil || string(sessionPayload) != sessionID {
+			wConn.Close()
+			continue
+		}
+
+		joined++
 		wg.Add(1)
-		go func(workerID int) {
+
+		go func(workerID int, conn net.Conn) {
 			defer wg.Done()
-
-			wConn, cErr := net.Dial("tcp", targetAddr)
-			if cErr != nil {
-				errOnce.Do(func() { transferErr = fmt.Errorf("worker %d dial failed: %w", workerID, cErr) })
-				return
-			}
-			defer wConn.Close()
-			_ = TuneConn(wConn, s.SocketBuf)
-
-			// Handshake worker with SessionID
-			if hErr := protocol.WriteRawFrame(wConn, protocol.TypeHandshake, []byte(sessionID)); hErr != nil {
-				errOnce.Do(func() { transferErr = fmt.Errorf("worker %d handshake failed: %w", workerID, hErr) })
-				return
-			}
+			defer conn.Close()
 
 			readBuf := make([]byte, s.ChunkSize)
 
 			for job := range jobs {
 				sliceBuf := readBuf[:job.Length]
 				if _, rErr := disk.ReadChunkAt(sliceBuf, int64(job.Offset)); rErr != nil {
-					errOnce.Do(func() { transferErr = fmt.Errorf("disk read failed at chunk %d: %w", job.Index, rErr) })
+					errOnce.Do(func() { transferErr = fmt.Errorf("disk read error: %w", rErr) })
 					return
 				}
 
-				if wErr := protocol.WriteChunk(wConn, job.Index, job.Offset, sliceBuf); wErr != nil {
-					errOnce.Do(func() { transferErr = fmt.Errorf("socket write failed at chunk %d: %w", job.Index, wErr) })
+				if wErr := protocol.WriteChunk(conn, job.Index, job.Offset, sliceBuf); wErr != nil {
+					errOnce.Do(func() { transferErr = fmt.Errorf("socket write failed: %w", wErr) })
 					return
 				}
 
@@ -145,7 +156,7 @@ func (s *Sender) Transfer(filePath string, targetAddr string, progressCb Progres
 					progressCb(curSent, fileSize, speedMBps)
 				}
 			}
-		}(w)
+		}(joined, wConn)
 	}
 
 	wg.Wait()
@@ -153,10 +164,9 @@ func (s *Sender) Transfer(filePath string, targetAddr string, progressCb Progres
 		return transferErr
 	}
 
-	// 4. Wait for receiver ACK confirmation
 	frameType, _, aErr := protocol.ReadFrameHeader(ctrlConn)
 	if aErr != nil || frameType != protocol.TypeAck {
-		return fmt.Errorf("final transfer ACK failed: %w", aErr)
+		return fmt.Errorf("final confirmation ACK failed: %w", aErr)
 	}
 
 	return nil

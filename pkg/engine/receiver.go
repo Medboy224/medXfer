@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -29,32 +28,30 @@ func NewReceiver(outputDir string, workers int) *Receiver {
 	}
 }
 
-func (r *Receiver) ListenAndReceive(bindAddr string, progressCb ProgressCallback) error {
-	listener, err := net.Listen("tcp", bindAddr)
+func (r *Receiver) Pull(targetAddr string, progressCb ProgressCallback) error {
+	ctrlConn, err := net.Dial("tcp", targetAddr)
 	if err != nil {
-		return fmt.Errorf("failed to bind receiver to %s: %w", bindAddr, err)
-	}
-	defer listener.Close()
-
-	// 1. Accept Control Connection
-	ctrlConn, err := listener.Accept()
-	if err != nil {
-		return fmt.Errorf("failed to accept control connection: %w", err)
+		return fmt.Errorf("could not connect to sender control port: %w", err)
 	}
 	defer ctrlConn.Close()
 	_ = TuneConn(ctrlConn, r.SocketBuf)
 
 	meta, err := protocol.RecvMeta(ctrlConn)
 	if err != nil {
-		return fmt.Errorf("failed to receive session metadata: %w", err)
+		return fmt.Errorf("failed to read metadata: %w", err)
 	}
 
-	// 2. Preallocate disk storage
 	disk, err := CreateAndPreallocate(r.OutputDir, meta.FileName, meta.FileSize)
 	if err != nil {
-		return fmt.Errorf("failed to preallocate disk file: %w", err)
+		return fmt.Errorf("failed to create staging file: %w", err)
 	}
-	defer disk.Close()
+
+	transferSuccess := false
+	defer func() {
+		if !transferSuccess {
+			disk.Cleanup()
+		}
+	}()
 
 	var (
 		wg             sync.WaitGroup
@@ -63,36 +60,24 @@ func (r *Receiver) ListenAndReceive(bindAddr string, progressCb ProgressCallback
 		errOnce        sync.Once
 		transferErr    error
 		startTime      = time.Now()
-		workersJoined  = 0
 	)
 
-	// 3. Accept Worker Connections matching SessionID
-	for workersJoined < r.WorkerCount {
-		conn, aErr := listener.Accept()
-		if aErr != nil {
-			return fmt.Errorf("failed accepting worker stream: %w", aErr)
+	for w := 0; w < r.WorkerCount; w++ {
+		wConn, cErr := net.Dial("tcp", targetAddr)
+		if cErr != nil {
+			return fmt.Errorf("worker %d dial failed: %w", w, cErr)
 		}
-		_ = TuneConn(conn, r.SocketBuf)
+		_ = TuneConn(wConn, r.SocketBuf)
 
-		// Read handshake frame
-		fType, fLen, hErr := protocol.ReadFrameHeader(conn)
-		if hErr != nil || fType != protocol.TypeHandshake {
-			conn.Close()
-			continue
+		if hErr := protocol.WriteRawFrame(wConn, protocol.TypeHandshake, []byte(meta.SessionID)); hErr != nil {
+			wConn.Close()
+			return fmt.Errorf("worker %d handshake failed: %w", w, hErr)
 		}
 
-		sessionPayload := make([]byte, fLen)
-		if _, rErr := io.ReadFull(conn, sessionPayload); rErr != nil || !bytes.Equal(sessionPayload, []byte(meta.SessionID)) {
-			conn.Close()
-			continue
-		}
-
-		workersJoined++
 		wg.Add(1)
-
-		go func(workerConn net.Conn) {
+		go func(workerID int, conn net.Conn) {
 			defer wg.Done()
-			defer workerConn.Close()
+			defer conn.Close()
 
 			chunkBuf := make([]byte, meta.ChunkSize)
 
@@ -101,19 +86,18 @@ func (r *Receiver) ListenAndReceive(bindAddr string, progressCb ProgressCallback
 					return
 				}
 
-				header, cErr := protocol.ReadChunk(workerConn, chunkBuf)
-				if cErr != nil {
-					if cErr == io.EOF || atomic.LoadUint32(&chunksReceived) >= meta.TotalChunks {
+				header, rErr := protocol.ReadChunk(conn, chunkBuf)
+				if rErr != nil {
+					if rErr == io.EOF || atomic.LoadUint32(&chunksReceived) >= meta.TotalChunks {
 						return
 					}
-					errOnce.Do(func() { transferErr = fmt.Errorf("chunk read failed: %w", cErr) })
+					errOnce.Do(func() { transferErr = fmt.Errorf("chunk read failed: %w", rErr) })
 					return
 				}
 
-				// Concurrent thread-safe random access write
 				sliceData := chunkBuf[:header.DataLen]
 				if _, wErr := disk.WriteChunkAt(sliceData, int64(header.Offset)); wErr != nil {
-					errOnce.Do(func() { transferErr = fmt.Errorf("disk write failed at offset %d: %w", header.Offset, wErr) })
+					errOnce.Do(func() { transferErr = fmt.Errorf("disk write failed: %w", wErr) })
 					return
 				}
 
@@ -129,7 +113,7 @@ func (r *Receiver) ListenAndReceive(bindAddr string, progressCb ProgressCallback
 					progressCb(curBytes, meta.FileSize, speedMBps)
 				}
 			}
-		}(conn)
+		}(w, wConn)
 	}
 
 	wg.Wait()
@@ -137,9 +121,11 @@ func (r *Receiver) ListenAndReceive(bindAddr string, progressCb ProgressCallback
 		return transferErr
 	}
 
-	// 4. Send Confirmation ACK to sender
-	_ = disk.Sync()
-	_ = protocol.WriteRawFrame(ctrlConn, protocol.TypeAck, []byte("OK"))
+	if err := disk.Finalize(); err != nil {
+		return fmt.Errorf("failed to finalize received file: %w", err)
+	}
+	transferSuccess = true
 
+	_ = protocol.WriteRawFrame(ctrlConn, protocol.TypeAck, []byte("OK"))
 	return nil
 }

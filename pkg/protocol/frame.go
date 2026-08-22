@@ -8,7 +8,6 @@ import (
 	"io"
 )
 
-// WriteRawFrame serializes a basic typed frame with a generic payload
 func WriteRawFrame(w io.Writer, frameType byte, payload []byte) error {
 	header := make([]byte, FrameHeaderSize)
 	binary.BigEndian.PutUint16(header[0:2], MagicBytes)
@@ -27,7 +26,6 @@ func WriteRawFrame(w io.Writer, frameType byte, payload []byte) error {
 	return nil
 }
 
-// ReadFrameHeader reads and validates the initial 8-byte frame header
 func ReadFrameHeader(r io.Reader) (frameType byte, length uint32, err error) {
 	header := make([]byte, FrameHeaderSize)
 	if _, err := io.ReadFull(r, header); err != nil {
@@ -39,17 +37,13 @@ func ReadFrameHeader(r io.Reader) (frameType byte, length uint32, err error) {
 		return 0, 0, ErrInvalidMagic
 	}
 
-	version := header[2]
-	if version != Version1 {
+	if header[2] != Version1 {
 		return 0, 0, ErrUnsupportedVersion
 	}
 
-	frameType = header[3]
-	length = binary.BigEndian.Uint32(header[4:8])
-	return frameType, length, nil
+	return header[3], binary.BigEndian.Uint32(header[4:8]), nil
 }
 
-// SendMeta encodes metadata as JSON and streams it across the control socket
 func SendMeta(w io.Writer, meta *Metadata) error {
 	payload, err := json.Marshal(meta)
 	if err != nil {
@@ -58,7 +52,6 @@ func SendMeta(w io.Writer, meta *Metadata) error {
 	return WriteRawFrame(w, TypeMeta, payload)
 }
 
-// RecvMeta reads and parses metadata JSON from a control connection
 func RecvMeta(r io.Reader) (*Metadata, error) {
 	frameType, length, err := ReadFrameHeader(r)
 	if err != nil {
@@ -80,12 +73,10 @@ func RecvMeta(r io.Reader) (*Metadata, error) {
 	return &meta, nil
 }
 
-// WriteChunk streams a chunk header and binary payload over a worker socket
 func WriteChunk(w io.Writer, index uint32, offset uint64, data []byte) error {
 	checksum := crc32.ChecksumIEEE(data)
 	payloadLen := uint32(ChunkHeaderSize + len(data))
 
-	// 1. Write Frame Envelope
 	frameHeader := make([]byte, FrameHeaderSize)
 	binary.BigEndian.PutUint16(frameHeader[0:2], MagicBytes)
 	frameHeader[2] = Version1
@@ -96,7 +87,6 @@ func WriteChunk(w io.Writer, index uint32, offset uint64, data []byte) error {
 		return err
 	}
 
-	// 2. Write Chunk Metadata Header
 	chunkHeader := make([]byte, ChunkHeaderSize)
 	binary.BigEndian.PutUint32(chunkHeader[0:4], index)
 	binary.BigEndian.PutUint64(chunkHeader[4:12], offset)
@@ -107,12 +97,10 @@ func WriteChunk(w io.Writer, index uint32, offset uint64, data []byte) error {
 		return err
 	}
 
-	// 3. Stream Raw Chunk Bytes
 	_, err := w.Write(data)
 	return err
 }
 
-// ReadChunk parses a chunk frame from the stream and validates the checksum
 func ReadChunk(r io.Reader, buf []byte) (ChunkHeader, error) {
 	var ch ChunkHeader
 
@@ -124,7 +112,6 @@ func ReadChunk(r io.Reader, buf []byte) (ChunkHeader, error) {
 		return ch, fmt.Errorf("expected TypeChunk (0x03), got 0x%02x", frameType)
 	}
 
-	// Read 20-byte chunk header
 	headerBuf := make([]byte, ChunkHeaderSize)
 	if _, err := io.ReadFull(r, headerBuf); err != nil {
 		return ch, fmt.Errorf("failed to read chunk header: %w", err)
@@ -142,13 +129,11 @@ func ReadChunk(r io.Reader, buf []byte) (ChunkHeader, error) {
 		return ch, fmt.Errorf("frame payload length mismatch")
 	}
 
-	// Read actual data payload into provided buffer
 	targetSlice := buf[:ch.DataLen]
 	if _, err := io.ReadFull(r, targetSlice); err != nil {
 		return ch, fmt.Errorf("failed to read chunk data: %w", err)
 	}
 
-	// Validate integrity
 	if crc32.ChecksumIEEE(targetSlice) != ch.Checksum {
 		return ch, ErrChecksumMismatch
 	}
