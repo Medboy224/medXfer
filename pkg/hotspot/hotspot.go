@@ -18,7 +18,7 @@ const (
 func (b Band) String() string {
 	switch b {
 	case Band5GHz:
-		return "5 GHz (Preferred)"
+		return "5 GHz"
 	case Band2GHz:
 		return "2.4 GHz"
 	default:
@@ -39,6 +39,7 @@ type NetworkInfo struct {
 	LocalIP     net.IP
 	BroadcastIP net.IP
 	Band        Band
+	Channel     int // <-- This was the missing field causing the error
 }
 
 type Controller interface {
@@ -50,18 +51,15 @@ func New() Controller {
 	return newController()
 }
 
-// GenerateCredentials generates an ephemeral SSID and high-entropy password
 func GenerateCredentials() (string, string) {
-	const charset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // Crockford Base32 (no ambiguous chars)
+	const charset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // Crockford Base32
 
-	// Random 4-character SSID suffix
 	ssidSuffix := make([]byte, 4)
 	for i := range ssidSuffix {
 		num, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		ssidSuffix[i] = charset[num.Int64()]
 	}
 
-	// Random 8-character Passphrase
 	password := make([]byte, 8)
 	for i := range password {
 		num, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))

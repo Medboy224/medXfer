@@ -40,15 +40,49 @@ func main() {
 	}
 }
 
+// reorderArgs moves all flags (-flag, --flag) ahead of positional arguments
+// so Go doesn't stop parsing when it sees the file path.
+func reorderArgs(args []string) []string {
+	valFlags := map[string]bool{
+		"-port": true, "--port": true,
+		"-workers": true, "--workers": true,
+		"-chunk": true, "--chunk": true,
+		"-out": true, "--out": true,
+		"-ip": true, "--ip": true,
+	}
+
+	var flags []string
+	var positionals []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if valFlags[arg] {
+			flags = append(flags, arg)
+			if i+1 < len(args) {
+				i++
+				flags = append(flags, args[i])
+			}
+		} else if strings.HasPrefix(arg, "-") {
+			flags = append(flags, arg)
+		} else {
+			positionals = append(positionals, arg)
+		}
+	}
+
+	return append(flags, positionals...)
+}
+
 // 2. Sender Handler
 func handleSend(args []string) {
+	normalizedArgs := reorderArgs(args)
+
 	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
 	portFlag := sendCmd.Int("port", defaultPort, "TCP port to bind sender on")
 	workersFlag := sendCmd.Int("workers", 4, "Number of parallel TCP streams")
-	chunkSizeMB := sendCmd.Int("chunk", 4, "Chunk slice size in MB")
-	createNetwork := sendCmd.Bool("create-network", false, "Create a dedicated high-speed Wi-Fi Direct network (Windows)")
+	chunkSizeMB := sendCmd.Int("chunk", 2, "Chunk slice size in MB (Default 2MB for stability)")
+	createNetwork := sendCmd.Bool("create-network", false, "Create a dedicated Wi-Fi Direct network (Windows)")
 
-	_ = sendCmd.Parse(args)
+	_ = sendCmd.Parse(normalizedArgs)
 
 	if sendCmd.NArg() < 1 {
 		fmt.Println("Error: Missing file path.")
@@ -74,7 +108,7 @@ func handleSend(args []string) {
 		hs = hotspot.New()
 		ssid, pass := hotspot.GenerateCredentials()
 
-		fmt.Println("[*] Creating dedicated 5 GHz Wi-Fi Direct network...")
+		fmt.Println("[*] Creating dedicated Wi-Fi Direct network...")
 		var err error
 		netInfo, err = hs.Start(hotspot.Config{
 			SSID:     ssid,
@@ -92,7 +126,7 @@ func handleSend(args []string) {
 			}()
 
 			fmt.Println("==================================================")
-			fmt.Printf(" [NETWORK READY] %s (%s)\n", netInfo.SSID, netInfo.Band)
+			fmt.Printf(" [NETWORK READY] %s (%s, Channel %d)\n", netInfo.SSID, netInfo.Band, netInfo.Channel)
 			fmt.Printf(" Password: %s\n", netInfo.Password)
 			fmt.Println("==================================================")
 			fmt.Println("Scan to connect your phone:")
@@ -142,6 +176,10 @@ func handleSend(args []string) {
 
 	// Step D: Stream File over Parallel Engine
 	chunkSize := uint32(*chunkSizeMB * 1024 * 1024)
+	if chunkSize == 0 {
+		chunkSize = 2 * 1024 * 1024 // Fallback to 2MB if user inputs 0
+	}
+
 	sender := engine.NewSender(*workersFlag, chunkSize)
 	bar := ui.NewProgressBar()
 
@@ -158,12 +196,14 @@ func handleSend(args []string) {
 
 // 3. Receiver Handler
 func handleRecv(args []string) {
+	normalizedArgs := reorderArgs(args)
+
 	recvCmd := flag.NewFlagSet("recv", flag.ExitOnError)
 	ipFlag := recvCmd.String("ip", "", "Direct sender address (e.g. 192.168.137.1:18888)")
 	outDirFlag := recvCmd.String("out", ".", "Directory to save received files")
 	workersFlag := recvCmd.Int("workers", 4, "Number of parallel TCP streams")
 
-	_ = recvCmd.Parse(args)
+	_ = recvCmd.Parse(normalizedArgs)
 
 	var targetAddr string
 
