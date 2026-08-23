@@ -61,34 +61,39 @@ func handleSend(args []string) {
 
 	fileName := filepath.Base(filePath)
 	fileSize := info.Size()
-	localIP := discovery.GetLocalIP()
+	primaryIP := discovery.GetPrimaryLocalIP()
 	bindAddr := fmt.Sprintf("0.0.0.0:%d", *portFlag)
 
-	// Start dual-mode discovery server (TCP sweep responder + UDP beacon)
+	// Launch decoupled discovery responder
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	discovery.StartDiscoveryServer(ctx, fileName, fileSize, *portFlag)
+
+	offer := &discovery.TransferOffer{
+		FileName: fileName,
+		FileSize: fileSize,
+	}
+	server := discovery.NewDiscoveryServer("sender", *portFlag, offer)
+	server.Start(ctx)
 
 	fmt.Println("==================================================")
 	fmt.Printf(" [SENDER READY] Offering: %s (%.2f MB)\n", fileName, float64(fileSize)/(1024*1024))
-	fmt.Printf(" Local Endpoint: %s:%d\n", localIP, *portFlag)
+	fmt.Printf(" Primary IP: %s:%d\n", primaryIP, *portFlag)
 	fmt.Println("==================================================")
 
 	if *hotspotSSID != "" {
-		fmt.Println("\nScan with receiver phone to join Wi-Fi Hotspot:")
+		fmt.Println("\nScan to join Wi-Fi Hotspot:")
 		discovery.PrintHotspotQR(*hotspotSSID, *hotspotPass)
 		fmt.Println()
 	}
 
-	fmt.Println("Pairing QR Code (Receiver IP:Port):")
-	discovery.PrintTerminalQR(fmt.Sprintf("%s:%d", localIP, *portFlag))
-	fmt.Println("\n[*] Waiting for receiver to connect and pull file...")
+	fmt.Println("Pairing QR Code:")
+	discovery.PrintTerminalQR(fmt.Sprintf("%s:%d", primaryIP, *portFlag))
+	fmt.Println("\n[*] Waiting for receiver to connect...")
 
 	chunkSize := uint32(*chunkSizeMB * 1024 * 1024)
 	sender := engine.NewSender(*workersFlag, chunkSize)
 	bar := ui.NewProgressBar()
 
-	// Uses ServeAndSend matching pkg/engine/sender.go
 	err = sender.ServeAndSend(bindAddr, filePath, func(current, total int64, speed float64) {
 		bar.Render(current, total, speed)
 	})
@@ -103,7 +108,7 @@ func handleSend(args []string) {
 func handleRecv(args []string) {
 	recvCmd := flag.NewFlagSet("recv", flag.ExitOnError)
 	ipFlag := recvCmd.String("ip", "", "Direct sender address (e.g. 192.168.43.1:18888)")
-	outDirFlag := recvCmd.String("out", ".", "Directory to save the received file")
+	outDirFlag := recvCmd.String("out", ".", "Directory to save received files")
 	workersFlag := recvCmd.Int("workers", 4, "Number of parallel TCP streams")
 
 	_ = recvCmd.Parse(args)
@@ -116,26 +121,33 @@ func handleRecv(args []string) {
 			targetAddr = fmt.Sprintf("%s:%d", targetAddr, defaultPort)
 		}
 	} else {
-		// Peer scanning loop matching pkg/discovery/udp.go
 		reader := bufio.NewReader(os.Stdin)
 		for {
-			fmt.Println("\n[*] Scanning local network for active senders...")
-			offers, err := discovery.ScanForSenders(2500 * time.Millisecond)
+			fmt.Println("\n[*] Searching local network for medXfer senders...")
+			peers, err := discovery.DiscoverPeers(2 * time.Second)
 			if err != nil {
-				fmt.Printf("[-] Discovery scan error: %v\n", err)
+				fmt.Printf("[-] Discovery error: %v\n", err)
+			}
+
+			// Filter to active senders with offers
+			var senders []discovery.Peer
+			for _, p := range peers {
+				if p.Role == "sender" && p.Offer != nil {
+					senders = append(senders, p)
+				}
 			}
 
 			fmt.Println("==================================================")
 			fmt.Println("       medXfer - Available Senders on LAN         ")
 			fmt.Println("==================================================")
 
-			if len(offers) == 0 {
-				fmt.Println(" (No active senders found on local network)")
+			if len(senders) == 0 {
+				fmt.Println(" (No active senders found)")
 			} else {
-				for i, off := range offers {
-					sizeMB := float64(off.FileSize) / (1024 * 1024)
-					fmt.Printf(" [%d] %s (%s:%d)\n", i+1, off.DeviceName, off.HostIP, off.Port)
-					fmt.Printf("     File: %s (%.2f MB)\n\n", off.FileName, sizeMB)
+				for i, s := range senders {
+					sizeMB := float64(s.Offer.FileSize) / (1024 * 1024)
+					fmt.Printf(" [%d] %s (%s:%d)\n", i+1, s.DeviceName, s.HostIP, s.Port)
+					fmt.Printf("     File: %s (%.2f MB)\n\n", s.Offer.FileName, sizeMB)
 				}
 			}
 
@@ -155,7 +167,7 @@ func handleRecv(args []string) {
 			} else if strings.EqualFold(input, "r") {
 				continue
 			} else if strings.EqualFold(input, "m") {
-				fmt.Print("Enter sender IP:Port (e.g. 192.168.43.15:18888): ")
+				fmt.Print("Enter sender IP:Port: ")
 				manualInput, _ := reader.ReadString('\n')
 				manualInput = strings.TrimSpace(manualInput)
 				if !strings.Contains(manualInput, ":") {
@@ -163,13 +175,13 @@ func handleRecv(args []string) {
 				}
 				targetAddr = manualInput
 				break
-			} else if num, err := strconv.Atoi(input); err == nil && num >= 1 && num <= len(offers) {
-				selected := offers[num-1]
+			} else if num, err := strconv.Atoi(input); err == nil && num >= 1 && num <= len(senders) {
+				selected := senders[num-1]
 				targetAddr = fmt.Sprintf("%s:%d", selected.HostIP, selected.Port)
-				fmt.Printf("\n[+] Selected [%s] offering '%s'\n", selected.DeviceName, selected.FileName)
+				fmt.Printf("\n[+] Selected [%s] offering '%s'\n", selected.DeviceName, selected.Offer.FileName)
 				break
 			} else {
-				fmt.Println("[-] Invalid selection, please try again.")
+				fmt.Println("[-] Invalid selection.")
 			}
 		}
 	}
@@ -178,7 +190,6 @@ func handleRecv(args []string) {
 	receiver := engine.NewReceiver(*outDirFlag, *workersFlag)
 	bar := ui.NewProgressBar()
 
-	// Uses Pull matching pkg/engine/receiver.go
 	err := receiver.Pull(targetAddr, func(current, total int64, speed float64) {
 		bar.Render(current, total, speed)
 	})
