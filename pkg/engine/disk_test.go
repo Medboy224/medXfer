@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"crypto/rand"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -10,54 +11,76 @@ import (
 func TestConcurrentChunkReadWrite(t *testing.T) {
 	tempDir := t.TempDir()
 	fileName := "concurrent_test.bin"
-	chunkSize := 1024 * 1024 // 1 MB
-	totalChunks := 8
-	fileSize := int64(chunkSize * totalChunks)
+	chunkCount := 8
+	chunkSize := 1024 * 1024 // 1 MB per chunk
+	totalSize := int64(chunkCount * chunkSize)
 
-	// Step 1: Preallocate file
-	dm, err := CreateAndPreallocate(tempDir, fileName, fileSize)
+	// Step 1: Preallocate target file
+	dm, err := CreateAndPreallocate(tempDir, fileName, totalSize)
 	if err != nil {
 		t.Fatalf("CreateAndPreallocate failed: %v", err)
 	}
 
-	// Step 2: Concurrently write chunks in random order
-	var wg sync.WaitGroup
-	chunkDataList := make([][]byte, totalChunks)
-
-	for i := 0; i < totalChunks; i++ {
-		chunkDataList[i] = bytes.Repeat([]byte{byte(i + 1)}, chunkSize)
+	// Prepare mock chunk data
+	expectedChunks := make([][]byte, chunkCount)
+	for i := 0; i < chunkCount; i++ {
+		expectedChunks[i] = make([]byte, chunkSize)
+		_, _ = rand.Read(expectedChunks[i])
 	}
 
-	for i := 0; i < totalChunks; i++ {
+	// Step 2: Concurrently write chunks into the preallocated file
+	var wg sync.WaitGroup
+	for i := 0; i < chunkCount; i++ {
 		wg.Add(1)
-		go func(idx int) {
+		go func(index int) {
 			defer wg.Done()
-			offset := int64(idx * chunkSize)
-			_, wErr := dm.WriteChunkAt(chunkDataList[idx], offset)
+			offset := int64(index * chunkSize)
+			n, wErr := dm.WriteChunkAt(expectedChunks[index], offset)
 			if wErr != nil {
-				t.Errorf("WriteChunkAt failed for chunk %d: %v", idx, wErr)
+				t.Errorf("WriteChunkAt error at chunk %d: %v", index, wErr)
+			}
+			if n != chunkSize {
+				t.Errorf("WriteChunkAt short write at chunk %d: got %d, want %d", index, n, chunkSize)
 			}
 		}(i)
 	}
 	wg.Wait()
-	_ = dm.Close()
 
-	// Step 3: Verify contents by reading back
-	readDm, err := OpenForReading(filepath.Join(tempDir, fileName))
+	// Step 3: Finalize (flushes buffers, closes handle, renames .xferpart -> final file)
+	if fErr := dm.Finalize(); fErr != nil {
+		t.Fatalf("dm.Finalize failed: %v", fErr)
+	}
+
+	// Step 4: Open file for concurrent reading
+	finalPath := filepath.Join(tempDir, fileName)
+	readDM, err := OpenForReading(finalPath)
 	if err != nil {
 		t.Fatalf("OpenForReading failed: %v", err)
 	}
-	defer readDm.Close()
+	defer readDM.Close()
 
-	for i := 0; i < totalChunks; i++ {
-		readBuf := make([]byte, chunkSize)
-		offset := int64(i * chunkSize)
-		_, rErr := readDm.ReadChunkAt(readBuf, offset)
-		if rErr != nil {
-			t.Fatalf("ReadChunkAt failed at index %d: %v", i, rErr)
-		}
-		if !bytes.Equal(readBuf, chunkDataList[i]) {
-			t.Fatalf("Data corruption detected at chunk %d", i)
-		}
+	if readDM.Size() != totalSize {
+		t.Fatalf("Unexpected file size: got %d, want %d", readDM.Size(), totalSize)
 	}
+
+	// Step 5: Concurrently read and verify each chunk
+	for i := 0; i < chunkCount; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			buf := make([]byte, chunkSize)
+			offset := int64(index * chunkSize)
+			n, rErr := readDM.ReadChunkAt(buf, offset)
+			if rErr != nil {
+				t.Errorf("ReadChunkAt error at chunk %d: %v", index, rErr)
+			}
+			if n != chunkSize {
+				t.Errorf("ReadChunkAt short read at chunk %d: got %d, want %d", index, n, chunkSize)
+			}
+			if !bytes.Equal(buf, expectedChunks[index]) {
+				t.Errorf("Data corruption at chunk %d", index)
+			}
+		}(i)
+	}
+	wg.Wait()
 }

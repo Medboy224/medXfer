@@ -30,32 +30,32 @@ func TestEndToEndMultiStreamTransfer(t *testing.T) {
 	}
 	_ = srcFile.Close()
 
-	// Step 2: Initialize Receiver on loopback
+	// Step 2: Initialize Sender on loopback (Server Role)
 	listenAddr := "127.0.0.1:18899"
 	workers := 4
 	chunkSize := uint32(2 * 1024 * 1024) // 2 MB chunks (10 chunks total)
 
-	receiver := NewReceiver(dstDir, workers)
 	sender := NewSender(workers, chunkSize)
+	receiver := NewReceiver(dstDir, workers)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	// Start Receiver in background
+	// Start Sender in background
 	go func() {
 		defer wg.Done()
-		if rErr := receiver.ListenAndReceive(listenAddr, nil); rErr != nil {
-			t.Errorf("Receiver failed: %v", rErr)
+		if sErr := sender.ServeAndSend(listenAddr, srcFilePath, nil); sErr != nil {
+			t.Errorf("Sender failed: %v", sErr)
 		}
 	}()
 
-	// Give receiver time to bind
+	// Give sender time to bind socket
 	time.Sleep(100 * time.Millisecond)
 
-	// Step 3: Execute Transfer via Sender
-	err = sender.Transfer(srcFilePath, listenAddr, nil)
+	// Step 3: Execute Transfer via Receiver (Client Pull Role)
+	err = receiver.Pull(listenAddr, nil)
 	if err != nil {
-		t.Fatalf("Sender transfer failed: %v", err)
+		t.Fatalf("Receiver pull failed: %v", err)
 	}
 
 	wg.Wait()

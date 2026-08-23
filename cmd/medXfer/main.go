@@ -6,18 +6,22 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/engine"
+	"github.com/Medboy224/medXfer/pkg/hotspot"
 	"github.com/Medboy224/medXfer/pkg/ui"
 )
 
 const defaultPort = 18888
 
+// 1. Program Entry Point
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -36,19 +40,19 @@ func main() {
 	}
 }
 
+// 2. Sender Handler
 func handleSend(args []string) {
 	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
 	portFlag := sendCmd.Int("port", defaultPort, "TCP port to bind sender on")
 	workersFlag := sendCmd.Int("workers", 4, "Number of parallel TCP streams")
 	chunkSizeMB := sendCmd.Int("chunk", 4, "Chunk slice size in MB")
-	hotspotSSID := sendCmd.String("hotspot-ssid", "", "Print Wi-Fi Hotspot join QR code for this SSID")
-	hotspotPass := sendCmd.String("hotspot-pass", "", "Wi-Fi Hotspot password")
+	createNetwork := sendCmd.Bool("create-network", false, "Create a dedicated high-speed Wi-Fi Direct network (Windows)")
 
 	_ = sendCmd.Parse(args)
 
 	if sendCmd.NArg() < 1 {
 		fmt.Println("Error: Missing file path.")
-		fmt.Println("Usage: xfer send <file_path> [--port 18888]")
+		fmt.Println("Usage: xfer send <file_path> [--create-network] [--workers 4]")
 		os.Exit(1)
 	}
 
@@ -61,35 +65,82 @@ func handleSend(args []string) {
 
 	fileName := filepath.Base(filePath)
 	fileSize := info.Size()
-	primaryIP := discovery.GetPrimaryLocalIP()
-	bindAddr := fmt.Sprintf("0.0.0.0:%d", *portFlag)
 
-	// Launch decoupled discovery responder
+	var netInfo *hotspot.NetworkInfo
+	var hs hotspot.Controller
+
+	// Step A: Initialize Wi-Fi Direct if --create-network is requested
+	if *createNetwork {
+		hs = hotspot.New()
+		ssid, pass := hotspot.GenerateCredentials()
+
+		fmt.Println("[*] Creating dedicated 5 GHz Wi-Fi Direct network...")
+		var err error
+		netInfo, err = hs.Start(hotspot.Config{
+			SSID:     ssid,
+			Password: pass,
+			Band:     hotspot.Band5GHz,
+		})
+
+		if err != nil {
+			fmt.Printf("[-] Network Creation Failed: %v\n", err)
+			fmt.Println("[*] Falling back to existing network adapter.")
+		} else {
+			defer func() {
+				fmt.Println("\n[*] Tearing down Wi-Fi Direct network...")
+				_ = hs.Stop()
+			}()
+
+			fmt.Println("==================================================")
+			fmt.Printf(" [NETWORK READY] %s (%s)\n", netInfo.SSID, netInfo.Band)
+			fmt.Printf(" Password: %s\n", netInfo.Password)
+			fmt.Println("==================================================")
+			fmt.Println("Scan to connect your phone:")
+			discovery.PrintHotspotQR(netInfo.SSID, netInfo.Password)
+			fmt.Println()
+		}
+	}
+
+	// Step B: Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Println("\n[*] Cancellation received, stopping...")
+		cancel()
+		if hs != nil {
+			_ = hs.Stop()
+		}
+		os.Exit(0)
+	}()
+
+	// Step C: Start Discovery Server
 	offer := &discovery.TransferOffer{
 		FileName: fileName,
 		FileSize: fileSize,
 	}
-	server := discovery.NewDiscoveryServer("sender", *portFlag, offer)
-	server.Start(ctx)
+	discServer := discovery.NewDiscoveryServer("sender", *portFlag, offer)
+	discServer.Start(ctx)
+
+	bindAddr := fmt.Sprintf("0.0.0.0:%d", *portFlag)
 
 	fmt.Println("==================================================")
-	fmt.Printf(" [SENDER READY] Offering: %s (%.2f MB)\n", fileName, float64(fileSize)/(1024*1024))
-	fmt.Printf(" Primary IP: %s:%d\n", primaryIP, *portFlag)
+	fmt.Printf(" [OFFERING FILE] %s (%.2f MB)\n", fileName, float64(fileSize)/(1024*1024))
 	fmt.Println("==================================================")
 
-	if *hotspotSSID != "" {
-		fmt.Println("\nScan to join Wi-Fi Hotspot:")
-		discovery.PrintHotspotQR(*hotspotSSID, *hotspotPass)
-		fmt.Println()
+	if netInfo == nil {
+		primaryIP := discovery.GetPrimaryLocalIP()
+		fmt.Printf(" Listening on: %s:%d\n", primaryIP, *portFlag)
+		fmt.Println(" Pairing QR:")
+		discovery.PrintTerminalQR(fmt.Sprintf("%s:%d", primaryIP, *portFlag))
+	} else {
+		fmt.Println("[*] Waiting for phone to connect to Wi-Fi and discover sender...")
 	}
 
-	fmt.Println("Pairing QR Code:")
-	discovery.PrintTerminalQR(fmt.Sprintf("%s:%d", primaryIP, *portFlag))
-	fmt.Println("\n[*] Waiting for receiver to connect...")
-
+	// Step D: Stream File over Parallel Engine
 	chunkSize := uint32(*chunkSizeMB * 1024 * 1024)
 	sender := engine.NewSender(*workersFlag, chunkSize)
 	bar := ui.NewProgressBar()
@@ -105,9 +156,10 @@ func handleSend(args []string) {
 	bar.Finish()
 }
 
+// 3. Receiver Handler
 func handleRecv(args []string) {
 	recvCmd := flag.NewFlagSet("recv", flag.ExitOnError)
-	ipFlag := recvCmd.String("ip", "", "Direct sender address (e.g. 192.168.43.1:18888)")
+	ipFlag := recvCmd.String("ip", "", "Direct sender address (e.g. 192.168.137.1:18888)")
 	outDirFlag := recvCmd.String("out", ".", "Directory to save received files")
 	workersFlag := recvCmd.Int("workers", 4, "Number of parallel TCP streams")
 
@@ -129,7 +181,6 @@ func handleRecv(args []string) {
 				fmt.Printf("[-] Discovery error: %v\n", err)
 			}
 
-			// Filter to active senders with offers
 			var senders []discovery.Peer
 			for _, p := range peers {
 				if p.Role == "sender" && p.Offer != nil {
@@ -201,9 +252,10 @@ func handleRecv(args []string) {
 	bar.Finish()
 }
 
+// 4. Usage Documentation
 func printUsage() {
 	fmt.Printf("medXfer - High-Speed Peer-to-Peer CLI File Transfer\n\n")
 	fmt.Printf("Usage:\n")
-	fmt.Printf("  xfer send <file_path> [--port 18888] [--workers 4]\n")
+	fmt.Printf("  xfer send <file_path> [--create-network] [--workers 4]\n")
 	fmt.Printf("  xfer recv [--out ./downloads] [--ip <sender_ip:port>]\n\n")
 }
