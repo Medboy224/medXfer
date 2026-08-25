@@ -4,7 +4,7 @@ echo [*] Building medXfer for Windows (x64)...
 if not exist bin mkdir bin
 
 set CGO_ENABLED=0
-go build -ldflags="-s -w" -o bin\xfer.exe .\cmd\medXfer
+go build -ldflags="-s -w" -o bin\xfer.exe .\cmd\xfer
 
 if %ERRORLEVEL% equ 0 (
     echo [+] Build successful!
