@@ -40,71 +40,24 @@ func (w *windowsHotspot) Start(cfg Config) (*NetworkInfo, error) {
 		cfg.SSID, cfg.Password = GenerateCredentials()
 	}
 
-	// Embedded WinRT runner
+	// Proven, reliable Wi-Fi Direct API
 	script := fmt.Sprintf(`
 $ErrorActionPreference = 'Stop'
-$ssid = '%s'
-$pass = '%s'
-
-try {
-    # 1. Attempt WinRT Mobile Hotspot with explicit 5 GHz Band
-    Add-Type -AssemblyName System.Runtime.WindowsRuntime
-    
-    # FIXED: Replaced backtick with -match to prevent Go compiler crash
-    $asTaskGeneric = [System.WindowsRuntimeSystemExtensions].GetMethods() | ? { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -match 'IAsyncOperation' }
-    
-    function Await($WinRtTask, $ResultType) {
-        $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
-        $netTask = $asTask.Invoke($null, @($WinRtTask))
-        $netTask.Wait(-1) | Out-Null
-        $netTask.Result
-    }
-
-    [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType = WindowsRuntime] | Out-Null
-    [Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType = WindowsRuntime] | Out-Null
-
-    $profile = [Windows.Networking.Connectivity.NetworkInformation]::GetInternetConnectionProfile()
-    
-    if ($profile -ne $null) {
-        $tetheringManager = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]::CreateFromConnectionProfile($profile)
-        
-        if ($tetheringManager.TetheringCapability -eq [Windows.Networking.NetworkOperators.TetheringCapability]::Enabled) {
-            $tetheringConfig = $tetheringManager.GetCurrentAccessPointConfiguration()
-            $tetheringConfig.Ssid = $ssid
-            $tetheringConfig.Passphrase = $pass
-            
-            # Enforce 5 GHz band in WinRT
-            try {
-                $tetheringConfig.Band = [Windows.Networking.NetworkOperators.TetheringWiFiBand]::FiveGigahertz
-            } catch {}
-
-            Await ($tetheringManager.ConfigureAccessPointAsync($tetheringConfig)) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult]) | Out-Null
-            $result = Await ($tetheringManager.StartTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
-            
-            if ($result.Status -eq [Windows.Networking.NetworkOperators.TetheringOperationStatus]::Success) {
-                Write-Output "HOTSPOT_5GHZ_ONLINE"
-                [Console]::In.ReadLine() | Out-Null
-                Await ($tetheringManager.StopTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult]) | Out-Null
-                exit 0
-            }
-        }
-    }
-} catch {
-    # Proceed to fallback on failure
-}
-
-# 2. Fallback: WinRT Wi-Fi Direct Autonomous Group (Runs Offline)
 try {
     [Windows.Devices.WiFiDirect.WiFiDirectAdvertisementPublisher, Windows.Devices.WiFiDirect, ContentType = WindowsRuntime] | Out-Null
     $pub = New-Object Windows.Devices.WiFiDirect.WiFiDirectAdvertisementPublisher
     $pub.Advertisement.IsAutonomousGroupOwnerEnabled = $true
     $pub.Advertisement.LegacySettings.IsEnabled = $true
-    $pub.Advertisement.LegacySettings.Ssid = $ssid
-    $pub.Advertisement.LegacySettings.Passphrase.Password = $pass
+    $pub.Advertisement.LegacySettings.Ssid = '%s'
+    $pub.Advertisement.LegacySettings.Passphrase.Password = '%s'
+    
     $pub.Start()
-
-    Write-Output "HOTSPOT_P2P_ONLINE"
-    [Console]::In.ReadLine() | Out-Null
+    Write-Output "HOTSPOT_ONLINE"
+    
+    # Block until Go app sends termination signal
+    $reader = [System.IO.StreamReader]::new([System.Console]::OpenStandardInput())
+    $null = $reader.ReadLine()
+    
     $pub.Stop()
 } catch {
     Write-Error $_.Exception.Message
@@ -114,7 +67,7 @@ try {
 
 	w.cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
 	w.cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW (Silent execution)
+		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
 		HideWindow:    true,
 	}
 
@@ -148,7 +101,7 @@ try {
 				readyChan <- fmt.Errorf("failed to initialize wireless adapter")
 				return
 			}
-			if strings.Contains(line, "HOTSPOT_5GHZ_ONLINE") || strings.Contains(line, "HOTSPOT_P2P_ONLINE") {
+			if strings.Contains(line, "HOTSPOT_ONLINE") {
 				readyChan <- nil
 				return
 			}
@@ -166,7 +119,6 @@ try {
 		return nil, fmt.Errorf("timeout initializing wireless network")
 	}
 
-	// Settle adapter and inspect the actual hardware band/channel
 	time.Sleep(1200 * time.Millisecond)
 	actualBand, channel := queryActualAdapterBand()
 
@@ -214,7 +166,9 @@ func (w *windowsHotspot) Stop() error {
 	}
 	w.stopped = true
 
+	// Cleanly tell the background PowerShell script to terminate
 	if w.stdin != nil {
+		_, _ = w.stdin.Write([]byte("STOP\n"))
 		_ = w.stdin.Close()
 	}
 
@@ -244,8 +198,6 @@ func queryActualAdapterBand() (Band, int) {
 
 	for _, line := range lines {
 		lower := strings.ToLower(line)
-
-		// Handles English ("Channel") and French ("Canal") parsing
 		if strings.Contains(lower, "canal") || strings.Contains(lower, "channel") {
 			parts := strings.Split(line, ":")
 			if len(parts) >= 2 {
