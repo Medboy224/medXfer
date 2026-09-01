@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,9 +15,8 @@ import (
 )
 
 type Receiver struct {
-	OutputDir   string
-	SocketBuf   int
-	WorkerCount int
+	outputDir string
+	workers   int
 }
 
 func NewReceiver(outputDir string, workers int) *Receiver {
@@ -22,110 +24,325 @@ func NewReceiver(outputDir string, workers int) *Receiver {
 		workers = 4
 	}
 	return &Receiver{
-		OutputDir:   outputDir,
-		SocketBuf:   DefaultSocketBuffer,
-		WorkerCount: workers,
+		outputDir: outputDir,
+		workers:   workers,
 	}
 }
 
-func (r *Receiver) Pull(targetAddr string, progressCb ProgressCallback) error {
-	ctrlConn, err := net.Dial("tcp", targetAddr)
+type chunkTask struct {
+	index  uint32
+	offset uint64
+	length uint32
+}
+
+func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener TransferListener) error {
+	var dialer net.Dialer
+	handshakeConn, err := dialer.DialContext(ctx, "tcp4", senderAddr)
 	if err != nil {
-		return fmt.Errorf("could not connect to sender control port: %w", err)
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return fmt.Errorf("handshake connection failed: %w", err)
 	}
-	defer ctrlConn.Close()
-	_ = TuneConn(ctrlConn, r.SocketBuf)
+	TuneConn(handshakeConn)
 
-	meta, err := protocol.RecvMeta(ctrlConn)
+	var hsReq [8]byte
+	binary.BigEndian.PutUint16(hsReq[0:2], protocol.MagicBytes)
+	hsReq[2] = protocol.Version1
+	hsReq[3] = protocol.TypeHandshake
+	binary.BigEndian.PutUint32(hsReq[4:8], 0)
+
+	_ = handshakeConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if _, err := handshakeConn.Write(hsReq[:]); err != nil {
+		handshakeConn.Close()
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return fmt.Errorf("failed to send handshake request: %w", err)
+	}
+
+	_ = handshakeConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	header, err := protocol.ReadHeader(handshakeConn)
 	if err != nil {
-		return fmt.Errorf("failed to read metadata: %w", err)
+		handshakeConn.Close()
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return fmt.Errorf("failed to read protocol header: %w", err)
 	}
 
-	disk, err := CreateAndPreallocate(r.OutputDir, meta.FileName, meta.FileSize)
+	if header.Type != protocol.TypeHandshake {
+		handshakeConn.Close()
+		err := fmt.Errorf("unexpected frame type: expected handshake, got %d", header.Type)
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return err
+	}
+
+	meta, err := protocol.ReadHandshakePayload(handshakeConn, header.PayloadLen)
+	handshakeConn.Close()
 	if err != nil {
-		return fmt.Errorf("failed to create staging file: %w", err)
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return fmt.Errorf("failed to parse metadata: %w", err)
 	}
 
-	transferSuccess := false
-	defer func() {
-		if !transferSuccess {
-			disk.Cleanup()
+	safeFileName := filepath.Base(meta.FileName)
+
+	dm, err := CreateAndPreallocate(r.outputDir, safeFileName, meta.FileSize)
+	if err != nil {
+		if listener != nil {
+			listener.OnError(err)
 		}
-	}()
+		return fmt.Errorf("preallocation failed: %w", err)
+	}
+	defer dm.Cleanup()
 
-	var (
-		wg             sync.WaitGroup
-		completedBytes int64
-		chunksReceived uint32
-		errOnce        sync.Once
-		transferErr    error
-		startTime      = time.Now()
-	)
+	totalChunks := uint32((meta.FileSize + int64(meta.ChunkSize) - 1) / int64(meta.ChunkSize))
+	if listener != nil {
+		listener.OnStart(safeFileName, meta.FileSize, totalChunks)
+	}
 
-	for w := 0; w < r.WorkerCount; w++ {
-		wConn, cErr := net.Dial("tcp", targetAddr)
-		if cErr != nil {
-			return fmt.Errorf("worker %d dial failed: %w", w, cErr)
+	if meta.FileSize == 0 {
+		if listener != nil {
+			listener.OnComplete(dm.finalPath, 0)
 		}
-		_ = TuneConn(wConn, r.SocketBuf)
+		return dm.Finalize()
+	}
 
-		if hErr := protocol.WriteRawFrame(wConn, protocol.TypeHandshake, []byte(meta.SessionID)); hErr != nil {
-			wConn.Close()
-			return fmt.Errorf("worker %d handshake failed: %w", w, hErr)
+	taskQueue := make(chan chunkTask, totalChunks)
+	for i := uint32(0); i < totalChunks; i++ {
+		offset := uint64(i) * uint64(meta.ChunkSize)
+		length := meta.ChunkSize
+		if offset+uint64(length) > uint64(meta.FileSize) {
+			length = uint32(uint64(meta.FileSize) - offset)
 		}
+		taskQueue <- chunkTask{index: i, offset: offset, length: length}
+	}
+	close(taskQueue)
 
+	var transferredBytes int64
+	var completedChunks uint32
+	var activeStreams int32
+
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	defer cancelWorkers()
+
+	var wg sync.WaitGroup
+	errChan := make(chan error, r.workers)
+
+	startTime := time.Now()
+	lastSpeedTime := startTime
+	var lastSpeedBytes int64
+	var currentSpeed float64
+
+	for w := 0; w < r.workers; w++ {
 		wg.Add(1)
-		go func(workerID int, conn net.Conn) {
+		go func(workerID int) {
 			defer wg.Done()
-			defer conn.Close()
+			var conn net.Conn
 
-			chunkBuf := make([]byte, meta.ChunkSize)
+			connect := func() bool {
+				if conn != nil {
+					_ = conn.Close()
+				}
+				for attempt := 1; attempt <= 5; attempt++ {
+					select {
+					case <-workerCtx.Done():
+						return false
+					default:
+					}
+					var dialer net.Dialer
+					c, err := dialer.DialContext(workerCtx, "tcp4", senderAddr)
+					if err == nil {
+						conn = c
+						TuneConn(conn)
+						return true
+					}
+					time.Sleep(time.Duration(attempt*100) * time.Millisecond)
+				}
+				return false
+			}
+
+			if !connect() {
+				errChan <- fmt.Errorf("worker %d failed to connect", workerID)
+				return
+			}
+			defer func() {
+				if conn != nil {
+					_ = conn.Close()
+				}
+			}()
+
+			atomic.AddInt32(&activeStreams, 1)
+			defer atomic.AddInt32(&activeStreams, -1)
+
+			buf := make([]byte, meta.ChunkSize+4096)
 
 			for {
-				if atomic.LoadUint32(&chunksReceived) >= meta.TotalChunks {
+				select {
+				case <-workerCtx.Done():
 					return
-				}
-
-				header, rErr := protocol.ReadChunk(conn, chunkBuf)
-				if rErr != nil {
-					if rErr == io.EOF || atomic.LoadUint32(&chunksReceived) >= meta.TotalChunks {
+				case task, ok := <-taskQueue:
+					if !ok {
 						return
 					}
-					errOnce.Do(func() { transferErr = fmt.Errorf("chunk read failed: %w", rErr) })
-					return
-				}
 
-				sliceData := chunkBuf[:header.DataLen]
-				if _, wErr := disk.WriteChunkAt(sliceData, int64(header.Offset)); wErr != nil {
-					errOnce.Do(func() { transferErr = fmt.Errorf("disk write failed: %w", wErr) })
-					return
-				}
+					success := false
+					for retry := 0; retry < 4; retry++ {
+						if conn == nil {
+							if !connect() {
+								break
+							}
+						}
 
-				atomic.AddUint32(&chunksReceived, 1)
-				curBytes := atomic.AddInt64(&completedBytes, int64(header.DataLen))
+						err := r.fetchChunk(conn, task, buf, dm)
+						if err == nil {
+							success = true
+							atomic.AddInt64(&transferredBytes, int64(task.length))
+							atomic.AddUint32(&completedChunks, 1)
+							break
+						}
 
-				if progressCb != nil {
-					elapsed := time.Since(startTime).Seconds()
-					speedMBps := 0.0
-					if elapsed > 0 {
-						speedMBps = (float64(curBytes) / (1024 * 1024)) / elapsed
+						if listener != nil {
+							listener.OnChunkFailed(task.index, retry+1, err)
+						}
+
+						_ = conn.Close()
+						conn = nil
+						time.Sleep(150 * time.Millisecond)
 					}
-					progressCb(curBytes, meta.FileSize, speedMBps)
+
+					if !success {
+						select {
+						case taskQueue <- task:
+						default:
+							errChan <- fmt.Errorf("chunk %d aborted after max retries", task.index)
+							cancelWorkers()
+							return
+						}
+					}
 				}
 			}
-		}(w, wConn)
+		}(w)
 	}
 
-	wg.Wait()
-	if transferErr != nil {
-		return transferErr
+	doneChan := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(doneChan)
+	}()
+
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-doneChan:
+			if atomic.LoadUint32(&completedChunks) == totalChunks {
+				duration := time.Since(startTime)
+				if listener != nil {
+					speed := float64(meta.FileSize) / (1048576.0 * duration.Seconds())
+					listener.OnProgress(TransferStats{
+						BytesTransferred: meta.FileSize,
+						TotalBytes:       meta.FileSize,
+						SpeedMBps:        speed,
+						ActiveStreams:    0,
+						ProgressPercent:  100.0,
+					})
+					listener.OnComplete(dm.finalPath, duration)
+				}
+				return dm.Finalize()
+			}
+			return fmt.Errorf("transfer terminated prematurely")
+
+		case err := <-errChan:
+			cancelWorkers()
+			if listener != nil {
+				listener.OnError(err)
+			}
+			return err
+
+		case <-ctx.Done():
+			cancelWorkers()
+			return ctx.Err()
+
+		case <-ticker.C:
+			if listener != nil {
+				current := atomic.LoadInt64(&transferredBytes)
+				now := time.Now()
+				elapsedSpeed := now.Sub(lastSpeedTime).Seconds()
+
+				// Smooth speed over a 1-second window
+				if elapsedSpeed >= 1.0 {
+					delta := current - lastSpeedBytes
+					currentSpeed = (float64(delta) / 1048576.0) / elapsedSpeed
+					lastSpeedTime = now
+					lastSpeedBytes = current
+				} else if lastSpeedBytes == 0 && current > 0 {
+					// Fallback for the first second
+					currentSpeed = (float64(current) / 1048576.0) / now.Sub(startTime).Seconds()
+				}
+
+				percent := 0.0
+				if meta.FileSize > 0 {
+					percent = (float64(current) / float64(meta.FileSize)) * 100.0
+				}
+				listener.OnProgress(TransferStats{
+					BytesTransferred: current,
+					TotalBytes:       meta.FileSize,
+					SpeedMBps:        currentSpeed,
+					ActiveStreams:    int(atomic.LoadInt32(&activeStreams)),
+					ProgressPercent:  percent,
+				})
+			}
+		}
+	}
+}
+
+func (r *Receiver) fetchChunk(conn net.Conn, task chunkTask, buf []byte, dm *DiskManager) error {
+	var reqBuf [12]byte
+	binary.BigEndian.PutUint16(reqBuf[0:2], protocol.MagicBytes)
+	reqBuf[2] = protocol.Version1
+	reqBuf[3] = protocol.TypeRequest
+	binary.BigEndian.PutUint32(reqBuf[4:8], 4)
+	binary.BigEndian.PutUint32(reqBuf[8:12], task.index)
+
+	_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	if _, err := conn.Write(reqBuf[:]); err != nil {
+		return err
 	}
 
-	if err := disk.Finalize(); err != nil {
-		return fmt.Errorf("failed to finalize received file: %w", err)
+	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	header, err := protocol.ReadHeader(conn)
+	if err != nil {
+		return err
 	}
-	transferSuccess = true
 
-	_ = protocol.WriteRawFrame(ctrlConn, protocol.TypeAck, []byte("OK"))
-	return nil
+	if header.Type != protocol.TypeChunk {
+		return fmt.Errorf("unexpected frame type: %d", header.Type)
+	}
+
+	payloadLen := int(header.PayloadLen)
+	if payloadLen > len(buf) {
+		return fmt.Errorf("payload exceeds buffer size")
+	}
+
+	if _, err := io.ReadFull(conn, buf[:payloadLen]); err != nil {
+		return err
+	}
+
+	chunkMeta, data, err := protocol.ParseChunkPayload(buf[:payloadLen])
+	if err != nil {
+		return err
+	}
+
+	if chunkMeta.Index != task.index {
+		return fmt.Errorf("chunk index mismatch: expected %d, got %d", task.index, chunkMeta.Index)
+	}
+
+	_, err = dm.WriteChunkAt(data, int64(chunkMeta.Offset))
+	return err
 }

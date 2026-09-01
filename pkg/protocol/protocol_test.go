@@ -2,59 +2,73 @@ package protocol
 
 import (
 	"bytes"
-	"crypto/rand"
+	"encoding/binary"
 	"testing"
 )
 
-func TestMetaSerialization(t *testing.T) {
-	original := &Metadata{
-		SessionID:   "sess_test_1234",
-		FileName:    "ubuntu-24.04-desktop.iso",
-		FileSize:    5899345920,
-		ChunkSize:   DefaultChunkSize,
-		TotalChunks: 1407,
-	}
-
-	buf := new(bytes.Buffer)
-	if err := SendMeta(buf, original); err != nil {
-		t.Fatalf("SendMeta failed: %v", err)
-	}
-
-	decoded, err := RecvMeta(buf)
-	if err != nil {
-		t.Fatalf("RecvMeta failed: %v", err)
-	}
-
-	if decoded.SessionID != original.SessionID ||
-		decoded.FileName != original.FileName ||
-		decoded.FileSize != original.FileSize {
-		t.Fatalf("Metadata mismatch: expected %+v, got %+v", original, decoded)
+func TestCalculateChecksum(t *testing.T) {
+	data := []byte("medXfer test data")
+	crc := CalculateChecksum(data)
+	if crc == 0 {
+		t.Fatal("Expected non-zero checksum")
 	}
 }
 
-func TestChunkFramingAndChecksum(t *testing.T) {
-	payload := make([]byte, 1024*1024)
-	_, _ = rand.Read(payload)
-
-	index := uint32(42)
-	offset := uint64(42 * 1024 * 1024)
-
-	buf := new(bytes.Buffer)
-	if err := WriteChunk(buf, index, offset, payload); err != nil {
-		t.Fatalf("WriteChunk failed: %v", err)
+func TestHandshakeReadWrite(t *testing.T) {
+	meta := FileMetadata{
+		FileName:  "test_movie.mp4",
+		FileSize:  1024576,
+		ChunkSize: 2097152,
 	}
 
-	recvBuf := make([]byte, len(payload))
-	header, err := ReadChunk(buf, recvBuf)
+	var buf bytes.Buffer
+	err := WriteHandshake(&buf, meta)
 	if err != nil {
-		t.Fatalf("ReadChunk failed: %v", err)
+		t.Fatalf("WriteHandshake failed: %v", err)
 	}
 
-	if header.Index != index || header.Offset != offset || header.DataLen != uint32(len(payload)) {
-		t.Fatalf("ChunkHeader mismatch: %+v", header)
+	header, err := ReadHeader(&buf)
+	if err != nil {
+		t.Fatalf("ReadHeader failed: %v", err)
 	}
 
-	if !bytes.Equal(payload, recvBuf) {
-		t.Fatal("Payload content corrupted during transfer")
+	if header.Type != TypeHandshake {
+		t.Fatalf("Expected TypeHandshake, got %v", header.Type)
+	}
+
+	parsedMeta, err := ReadHandshakePayload(&buf, header.PayloadLen)
+	if err != nil {
+		t.Fatalf("ReadHandshakePayload failed: %v", err)
+	}
+
+	if parsedMeta.FileName != meta.FileName || parsedMeta.FileSize != meta.FileSize {
+		t.Fatalf("Metadata mismatch. Got: %+v, Want: %+v", parsedMeta, meta)
+	}
+}
+
+func TestParseChunkPayload(t *testing.T) {
+	data := []byte("dummy chunk data")
+	payload := make([]byte, ChunkHeaderSize+len(data))
+
+	// Mock 20-byte Chunk Header
+	binary.BigEndian.PutUint32(payload[0:4], 5)                         // Index
+	binary.BigEndian.PutUint64(payload[4:12], 4096)                     // Offset
+	binary.BigEndian.PutUint32(payload[12:16], uint32(len(data)))       // Length
+	binary.BigEndian.PutUint32(payload[16:20], CalculateChecksum(data)) // CRC32
+
+	// Append data
+	copy(payload[ChunkHeaderSize:], data)
+
+	meta, parsedData, err := ParseChunkPayload(payload)
+	if err != nil {
+		t.Fatalf("ParseChunkPayload failed: %v", err)
+	}
+
+	if meta.Index != 5 || meta.Offset != 4096 {
+		t.Fatalf("Chunk meta mismatch")
+	}
+
+	if string(parsedData) != string(data) {
+		t.Fatalf("Chunk data mismatch")
 	}
 }

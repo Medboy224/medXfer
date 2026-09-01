@@ -8,135 +8,73 @@ import (
 	"io"
 )
 
-func WriteRawFrame(w io.Writer, frameType byte, payload []byte) error {
-	header := make([]byte, FrameHeaderSize)
-	binary.BigEndian.PutUint16(header[0:2], MagicBytes)
-	header[2] = Version1
-	header[3] = frameType
-	binary.BigEndian.PutUint32(header[4:8], uint32(len(payload)))
-
-	if _, err := w.Write(header); err != nil {
-		return fmt.Errorf("failed to write frame header: %w", err)
+// ReadHeader reads the 8-byte frame from the wire
+func ReadHeader(r io.Reader) (Header, error) {
+	var buf [FrameHeaderSize]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return Header{}, err
 	}
-	if len(payload) > 0 {
-		if _, err := w.Write(payload); err != nil {
-			return fmt.Errorf("failed to write frame payload: %w", err)
-		}
+	if binary.BigEndian.Uint16(buf[0:2]) != MagicBytes {
+		return Header{}, fmt.Errorf("invalid magic bytes")
 	}
-	return nil
+	return Header{
+		Type:       buf[3],
+		PayloadLen: binary.BigEndian.Uint32(buf[4:8]),
+	}, nil
 }
 
-func ReadFrameHeader(r io.Reader) (frameType byte, length uint32, err error) {
-	header := make([]byte, FrameHeaderSize)
-	if _, err := io.ReadFull(r, header); err != nil {
-		return 0, 0, err
+// ReadHandshakePayload parses the JSON metadata sent by the sender
+func ReadHandshakePayload(r io.Reader, payloadLen uint32) (FileMetadata, error) {
+	buf := make([]byte, payloadLen)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return FileMetadata{}, err
 	}
-
-	magic := binary.BigEndian.Uint16(header[0:2])
-	if magic != MagicBytes {
-		return 0, 0, ErrInvalidMagic
+	var meta FileMetadata
+	if err := json.Unmarshal(buf, &meta); err != nil {
+		return FileMetadata{}, err
 	}
-
-	if header[2] != Version1 {
-		return 0, 0, ErrUnsupportedVersion
-	}
-
-	return header[3], binary.BigEndian.Uint32(header[4:8]), nil
+	return meta, nil
 }
 
-func SendMeta(w io.Writer, meta *Metadata) error {
+// WriteHandshake sends the JSON metadata to the receiver
+func WriteHandshake(w io.Writer, meta FileMetadata) error {
 	payload, err := json.Marshal(meta)
 	if err != nil {
-		return fmt.Errorf("failed to marshal metadata: %w", err)
-	}
-	return WriteRawFrame(w, TypeMeta, payload)
-}
-
-func RecvMeta(r io.Reader) (*Metadata, error) {
-	frameType, length, err := ReadFrameHeader(r)
-	if err != nil {
-		return nil, err
-	}
-	if frameType != TypeMeta {
-		return nil, fmt.Errorf("expected TypeMeta (0x02), received 0x%02x", frameType)
-	}
-
-	payload := make([]byte, length)
-	if _, err := io.ReadFull(r, payload); err != nil {
-		return nil, fmt.Errorf("failed to read metadata payload: %w", err)
-	}
-
-	var meta Metadata
-	if err := json.Unmarshal(payload, &meta); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal metadata JSON: %w", err)
-	}
-	return &meta, nil
-}
-
-func WriteChunk(w io.Writer, index uint32, offset uint64, data []byte) error {
-	checksum := crc32.ChecksumIEEE(data)
-	payloadLen := uint32(ChunkHeaderSize + len(data))
-
-	frameHeader := make([]byte, FrameHeaderSize)
-	binary.BigEndian.PutUint16(frameHeader[0:2], MagicBytes)
-	frameHeader[2] = Version1
-	frameHeader[3] = TypeChunk
-	binary.BigEndian.PutUint32(frameHeader[4:8], payloadLen)
-
-	if _, err := w.Write(frameHeader); err != nil {
 		return err
 	}
+	var buf [FrameHeaderSize]byte
+	binary.BigEndian.PutUint16(buf[0:2], MagicBytes)
+	buf[2] = Version1
+	buf[3] = TypeHandshake
+	binary.BigEndian.PutUint32(buf[4:8], uint32(len(payload)))
 
-	chunkHeader := make([]byte, ChunkHeaderSize)
-	binary.BigEndian.PutUint32(chunkHeader[0:4], index)
-	binary.BigEndian.PutUint64(chunkHeader[4:12], offset)
-	binary.BigEndian.PutUint32(chunkHeader[12:16], uint32(len(data)))
-	binary.BigEndian.PutUint32(chunkHeader[16:20], checksum)
-
-	if _, err := w.Write(chunkHeader); err != nil {
+	if _, err := w.Write(buf[:]); err != nil {
 		return err
 	}
-
-	_, err := w.Write(data)
+	_, err = w.Write(payload)
 	return err
 }
 
-func ReadChunk(r io.Reader, buf []byte) (ChunkHeader, error) {
-	var ch ChunkHeader
-
-	frameType, payloadLen, err := ReadFrameHeader(r)
-	if err != nil {
-		return ch, err
+// ParseChunkPayload separates the 20-byte chunk metadata from the raw file bytes
+func ParseChunkPayload(payload []byte) (ChunkMeta, []byte, error) {
+	if len(payload) < ChunkHeaderSize {
+		return ChunkMeta{}, nil, fmt.Errorf("payload too small for chunk header")
 	}
-	if frameType != TypeChunk {
-		return ch, fmt.Errorf("expected TypeChunk (0x03), got 0x%02x", frameType)
+	meta := ChunkMeta{
+		Index:  binary.BigEndian.Uint32(payload[0:4]),
+		Offset: binary.BigEndian.Uint64(payload[4:12]),
+		Length: binary.BigEndian.Uint32(payload[12:16]),
 	}
+	expectedCRC := binary.BigEndian.Uint32(payload[16:20])
+	data := payload[ChunkHeaderSize:]
 
-	headerBuf := make([]byte, ChunkHeaderSize)
-	if _, err := io.ReadFull(r, headerBuf); err != nil {
-		return ch, fmt.Errorf("failed to read chunk header: %w", err)
+	if CalculateChecksum(data) != expectedCRC {
+		return ChunkMeta{}, nil, fmt.Errorf("CRC checksum mismatch: data may be corrupted")
 	}
+	return meta, data, nil
+}
 
-	ch.Index = binary.BigEndian.Uint32(headerBuf[0:4])
-	ch.Offset = binary.BigEndian.Uint64(headerBuf[4:12])
-	ch.DataLen = binary.BigEndian.Uint32(headerBuf[12:16])
-	ch.Checksum = binary.BigEndian.Uint32(headerBuf[16:20])
-
-	if ch.DataLen > uint32(len(buf)) {
-		return ch, ErrPayloadTooLarge
-	}
-	if payloadLen != ChunkHeaderSize+ch.DataLen {
-		return ch, fmt.Errorf("frame payload length mismatch")
-	}
-
-	targetSlice := buf[:ch.DataLen]
-	if _, err := io.ReadFull(r, targetSlice); err != nil {
-		return ch, fmt.Errorf("failed to read chunk data: %w", err)
-	}
-
-	if crc32.ChecksumIEEE(targetSlice) != ch.Checksum {
-		return ch, ErrChecksumMismatch
-	}
-
-	return ch, nil
+// CalculateChecksum generates a rapid CRC32 hash for integrity checks
+func CalculateChecksum(data []byte) uint32 {
+	return crc32.ChecksumIEEE(data)
 }

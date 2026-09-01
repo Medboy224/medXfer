@@ -6,25 +6,16 @@ import (
 )
 
 const (
-	DefaultSocketBuffer = 2 * 1024 * 1024
-	SocketTimeout       = 15 * time.Second
+	SocketBufferSize = 2 * 1024 * 1024 // 2 MB TCP window buffer
 )
 
-func TuneConn(conn net.Conn, bufSize int) error {
-	tcpConn, ok := conn.(*net.TCPConn)
-	if !ok {
-		return nil
+// TuneConn applies TCP optimizations to the connection.
+func TuneConn(conn net.Conn) {
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetNoDelay(true)
+		_ = tcpConn.SetReadBuffer(SocketBufferSize)
+		_ = tcpConn.SetWriteBuffer(SocketBufferSize)
+		_ = tcpConn.SetKeepAlive(true)
+		_ = tcpConn.SetKeepAlivePeriod(3 * time.Second)
 	}
-
-	if bufSize <= 0 {
-		bufSize = DefaultSocketBuffer
-	}
-
-	_ = tcpConn.SetNoDelay(true)
-	_ = tcpConn.SetReadBuffer(bufSize)
-	_ = tcpConn.SetWriteBuffer(bufSize)
-	_ = tcpConn.SetKeepAlive(true)
-	_ = tcpConn.SetKeepAlivePeriod(SocketTimeout)
-
-	return nil
 }

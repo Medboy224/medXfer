@@ -16,37 +16,38 @@ func NewProgressBar() *ProgressBar {
 	}
 }
 
-func (p *ProgressBar) Render(currentBytes, totalBytes int64, speedMBps float64) {
-	const barWidth = 30
-	percent := float64(currentBytes) / float64(totalBytes)
-	if percent > 1.0 {
-		percent = 1.0
+func (p *ProgressBar) Render(current, total int64, speedMBps float64) {
+	percent := 0.0
+	if total > 0 {
+		percent = float64(current) / float64(total) * 100
 	}
 
-	filled := int(percent * float64(barWidth))
-	empty := barWidth - filled
-	if empty < 0 {
-		empty = 0
+	elapsed := time.Since(p.startTime).Seconds()
+
+	var timeStr string
+	if current >= total {
+		timeStr = fmt.Sprintf("%.1fs", elapsed)
+	} else if speedMBps > 0 {
+		remMB := float64(total-current) / (1024 * 1024)
+		etaSec := remMB / speedMBps
+		timeStr = fmt.Sprintf("%.0fs", etaSec)
+	} else {
+		timeStr = "--s"
 	}
 
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", empty)
-
-	currentMB := float64(currentBytes) / (1024 * 1024)
-	totalMB := float64(totalBytes) / (1024 * 1024)
-
-	etaStr := "--:--"
-	if speedMBps > 0.1 && currentBytes < totalBytes {
-		remainingBytes := totalBytes - currentBytes
-		remainingSecs := float64(remainingBytes) / (speedMBps * 1024 * 1024)
-		eta := time.Duration(remainingSecs) * time.Second
-		etaStr = fmt.Sprintf("%02d:%02d", int(eta.Minutes()), int(eta.Seconds())%60)
+	// Compact 15-block bar specifically designed to fit on Android Termux screens
+	barWidth := 15
+	completed := int((percent / 100) * float64(barWidth))
+	if completed > barWidth {
+		completed = barWidth
 	}
 
-	fmt.Printf("\r\033[K[%s] %5.1f%% | %7.1f/%7.1f MB | %6.1f MB/s | ETA: %s",
-		bar, percent*100, currentMB, totalMB, speedMBps, etaStr)
+	bar := strings.Repeat("█", completed) + strings.Repeat("░", barWidth-completed)
+
+	// \r returns cursor to start, \033[K strictly clears the rest of the line
+	fmt.Printf("\r\033[K[%s] %5.1f%% | %5.1f MB/s | %s", bar, percent, speedMBps, timeStr)
 }
 
 func (p *ProgressBar) Finish() {
-	elapsed := time.Since(p.startTime).Seconds()
-	fmt.Printf("\n[+] Transfer completed in %.2f seconds!\n", elapsed)
+	fmt.Println() // Lock in the final render on a new line
 }

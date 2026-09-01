@@ -11,7 +11,7 @@ fi
 mkdir -p bin
 
 export CGO_ENABLED=0
-go build -ldflags="-s -w" -o bin/xfer ./cmd/Xfer
+go build -ldflags="-s -w" -o bin/xfer ./cmd/xfer
 
 echo "[+] Build successful: ./bin/xfer"
 

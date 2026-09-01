@@ -30,8 +30,31 @@ type Peer struct {
 	HostIP     string         `json:"host_ip"`
 	Port       int            `json:"port"`
 	Version    string         `json:"version"`
-	Role       string         `json:"role"` // "sender", "receiver", "idle"
+	Role       string         `json:"role"` // "sender", "receiver", "idle", "node"
 	Offer      *TransferOffer `json:"offer,omitempty"`
+}
+
+// isLocalNetworkIP checks if an IP belongs to the local machine
+func isLocalNetworkIP(ipStr string) bool {
+	if ipStr == "127.0.0.1" || ipStr == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(ipStr)
+	if ip == nil || ip.IsLoopback() {
+		return true
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok {
+			if ipnet.IP.Equal(ip) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // DiscoveryServer handles incoming discovery queries and emits periodic beacons
@@ -181,9 +204,19 @@ func DiscoverPeers(timeout time.Duration) ([]Peer, error) {
 
 	<-udpDone
 
-	// If peers are found via primary UDP broadcast, return immediately
+	// CHECK FOR REMOTE PEERS
 	mu.Lock()
-	if len(discovered) > 0 {
+	hasRemote := false
+	for _, p := range discovered {
+		if !isLocalNetworkIP(p.HostIP) {
+			hasRemote = true
+			break
+		}
+	}
+
+	// FIX: If we found ACTUAL remote peers via UDP, return immediately.
+	// If we ONLY found ourselves, force the TCP sweep fallback!
+	if hasRemote {
 		var results []Peer
 		for _, p := range discovered {
 			results = append(results, p)
@@ -193,7 +226,7 @@ func DiscoverPeers(timeout time.Duration) ([]Peer, error) {
 	}
 	mu.Unlock()
 
-	// STEP 2: Fallback Bounded TCP Sweep (For AP-isolated hotspots)
+	// STEP 2: Fallback Bounded TCP Sweep (For AP-isolated hotspots / blocked UDP)
 	targets := GetActiveNetworkTargets()
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, 64) // Bounded concurrency limit
@@ -237,8 +270,10 @@ func DiscoverPeers(timeout time.Duration) ([]Peer, error) {
 	wg.Wait()
 
 	var results []Peer
+	mu.Lock()
 	for _, p := range discovered {
 		results = append(results, p)
 	}
+	mu.Unlock()
 	return results, nil
 }

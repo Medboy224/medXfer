@@ -1,8 +1,8 @@
 package engine
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -14,18 +14,9 @@ import (
 	"github.com/Medboy224/medXfer/pkg/protocol"
 )
 
-type ChunkJob struct {
-	Index  uint32
-	Offset uint64
-	Length uint32
-}
-
-type ProgressCallback func(bytesProcessed, totalBytes int64, speedMBps float64)
-
 type Sender struct {
-	WorkerCount int
-	ChunkSize   uint32
-	SocketBuf   int
+	workers   int
+	chunkSize uint32
 }
 
 func NewSender(workers int, chunkSize uint32) *Sender {
@@ -33,141 +24,188 @@ func NewSender(workers int, chunkSize uint32) *Sender {
 		workers = 4
 	}
 	if chunkSize == 0 {
-		chunkSize = protocol.DefaultChunkSize
+		chunkSize = 2 * 1024 * 1024
 	}
 	return &Sender{
-		WorkerCount: workers,
-		ChunkSize:   chunkSize,
-		SocketBuf:   DefaultSocketBuffer,
+		workers:   workers,
+		chunkSize: chunkSize,
 	}
 }
 
-func (s *Sender) ServeAndSend(bindAddr string, filePath string, progressCb ProgressCallback) error {
-	disk, err := OpenForReading(filePath)
+func (s *Sender) ServeAndSend(ctx context.Context, bindAddr, filePath string, listener TransferListener) error {
+	dm, err := OpenForReading(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to open source file: %w", err)
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return fmt.Errorf("failed to open file: %w", err)
 	}
-	defer disk.Close()
+	defer dm.Close()
 
-	fileSize := disk.Size()
-	fileName := filepath.Base(filePath)
+	fileSize := dm.Size()
+	fileName := filepath.Base(dm.finalPath)
 
-	totalChunks := uint32((fileSize + int64(s.ChunkSize) - 1) / int64(s.ChunkSize))
-	if totalChunks == 0 {
-		totalChunks = 1
-	}
-
-	sessionBytes := make([]byte, 8)
-	_, _ = rand.Read(sessionBytes)
-	sessionID := hex.EncodeToString(sessionBytes)
-
-	meta := &protocol.Metadata{
-		SessionID:   sessionID,
-		FileName:    fileName,
-		FileSize:    fileSize,
-		ChunkSize:   s.ChunkSize,
-		TotalChunks: totalChunks,
-	}
-
-	listener, err := net.Listen("tcp", bindAddr)
+	var lc net.ListenConfig
+	listenerTCP, err := lc.Listen(ctx, "tcp4", bindAddr)
 	if err != nil {
-		return fmt.Errorf("failed to bind sender listener: %w", err)
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return fmt.Errorf("failed to bind on %s: %w", bindAddr, err)
 	}
-	defer listener.Close()
+	defer listenerTCP.Close()
 
-	ctrlConn, err := listener.Accept()
-	if err != nil {
-		return fmt.Errorf("failed to accept receiver control connection: %w", err)
-	}
-	defer ctrlConn.Close()
-	_ = TuneConn(ctrlConn, s.SocketBuf)
-
-	if err := protocol.SendMeta(ctrlConn, meta); err != nil {
-		return fmt.Errorf("failed to send metadata: %w", err)
+	totalChunks := uint32((fileSize + int64(s.chunkSize) - 1) / int64(s.chunkSize))
+	if listener != nil {
+		listener.OnStart(fileName, fileSize, totalChunks)
 	}
 
-	jobs := make(chan ChunkJob, totalChunks)
-	for i := uint32(0); i < totalChunks; i++ {
-		offset := uint64(i) * uint64(s.ChunkSize)
-		length := s.ChunkSize
-		if offset+uint64(length) > uint64(fileSize) {
-			length = uint32(uint64(fileSize) - offset)
-		}
-		jobs <- ChunkJob{Index: i, Offset: offset, Length: length}
-	}
-	close(jobs)
+	var transferredBytes int64
+	var activeStreams int32
+	var wg sync.WaitGroup
 
-	var (
-		wg          sync.WaitGroup
-		bytesSent   int64
-		errOnce     sync.Once
-		transferErr error
-		startTime   = time.Now()
-		joined      = 0
-	)
+	startTime := time.Now()
+	lastSpeedTime := startTime
+	var lastSpeedBytes int64
+	var currentSpeed float64
 
-	for joined < s.WorkerCount {
-		wConn, aErr := listener.Accept()
-		if aErr != nil {
-			return fmt.Errorf("failed to accept worker connection: %w", aErr)
-		}
-		_ = TuneConn(wConn, s.SocketBuf)
+	go func() {
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if listener != nil {
+					current := atomic.LoadInt64(&transferredBytes)
+					streams := atomic.LoadInt32(&activeStreams)
 
-		fType, fLen, hErr := protocol.ReadFrameHeader(wConn)
-		if hErr != nil || fType != protocol.TypeHandshake {
-			wConn.Close()
-			continue
-		}
+					now := time.Now()
+					elapsedSpeed := now.Sub(lastSpeedTime).Seconds()
 
-		sessionPayload := make([]byte, fLen)
-		if _, rErr := io.ReadFull(wConn, sessionPayload); rErr != nil || string(sessionPayload) != sessionID {
-			wConn.Close()
-			continue
-		}
-
-		joined++
-		wg.Add(1)
-
-		go func(workerID int, conn net.Conn) {
-			defer wg.Done()
-			defer conn.Close()
-
-			readBuf := make([]byte, s.ChunkSize)
-
-			for job := range jobs {
-				sliceBuf := readBuf[:job.Length]
-				if _, rErr := disk.ReadChunkAt(sliceBuf, int64(job.Offset)); rErr != nil {
-					errOnce.Do(func() { transferErr = fmt.Errorf("disk read error: %w", rErr) })
-					return
-				}
-
-				if wErr := protocol.WriteChunk(conn, job.Index, job.Offset, sliceBuf); wErr != nil {
-					errOnce.Do(func() { transferErr = fmt.Errorf("socket write failed: %w", wErr) })
-					return
-				}
-
-				curSent := atomic.AddInt64(&bytesSent, int64(job.Length))
-				if progressCb != nil {
-					elapsed := time.Since(startTime).Seconds()
-					speedMBps := 0.0
-					if elapsed > 0 {
-						speedMBps = (float64(curSent) / (1024 * 1024)) / elapsed
+					// Smooth speed over a 1-second window
+					if elapsedSpeed >= 1.0 {
+						delta := current - lastSpeedBytes
+						currentSpeed = (float64(delta) / 1048576.0) / elapsedSpeed
+						lastSpeedTime = now
+						lastSpeedBytes = current
+					} else if lastSpeedBytes == 0 && current > 0 {
+						currentSpeed = (float64(current) / 1048576.0) / now.Sub(startTime).Seconds()
 					}
-					progressCb(curSent, fileSize, speedMBps)
+
+					if current > 0 || streams > 0 {
+						percent := 0.0
+						if fileSize > 0 {
+							percent = (float64(current) / float64(fileSize)) * 100.0
+						}
+						listener.OnProgress(TransferStats{
+							BytesTransferred: current,
+							TotalBytes:       fileSize,
+							SpeedMBps:        currentSpeed,
+							ActiveStreams:    int(streams),
+							ProgressPercent:  percent,
+						})
+					}
 				}
 			}
-		}(joined, wConn)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		_ = listenerTCP.Close()
+	}()
+
+	for {
+		conn, err := listenerTCP.Accept()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				wg.Wait()
+				return nil
+			default:
+				if listener != nil {
+					listener.OnError(err)
+				}
+				return err
+			}
+		}
+
+		TuneConn(conn)
+		wg.Add(1)
+		atomic.AddInt32(&activeStreams, 1)
+
+		go func(c net.Conn) {
+			defer wg.Done()
+			defer atomic.AddInt32(&activeStreams, -1)
+			defer c.Close()
+
+			buf := make([]byte, s.chunkSize)
+			frameBuf := make([]byte, protocol.FrameHeaderSize+protocol.ChunkHeaderSize+int(s.chunkSize))
+
+			for {
+				header, err := protocol.ReadHeader(c)
+				if err != nil {
+					return
+				}
+
+				switch header.Type {
+				case protocol.TypeHandshake:
+					meta := protocol.FileMetadata{
+						FileName:  fileName,
+						FileSize:  fileSize,
+						ChunkSize: s.chunkSize,
+					}
+					_ = protocol.WriteHandshake(c, meta)
+
+				case protocol.TypeRequest:
+					var reqIndex uint32
+					reqBytes := make([]byte, 4)
+					if _, err := io.ReadFull(c, reqBytes); err != nil {
+						return
+					}
+					reqIndex = binary.BigEndian.Uint32(reqBytes)
+
+					offset := int64(reqIndex) * int64(s.chunkSize)
+					toRead := int64(s.chunkSize)
+					if offset+toRead > fileSize {
+						toRead = fileSize - offset
+					}
+
+					if toRead > 0 {
+						n, err := dm.ReadChunkAt(buf[:toRead], offset)
+						// VITAL FIX: Allow io.EOF so the final file chunk is successfully sent!
+						if n > 0 && (err == nil || err == io.EOF) {
+							if err := writeContiguousChunk(c, frameBuf, reqIndex, uint64(offset), buf[:n]); err == nil {
+								atomic.AddInt64(&transferredBytes, int64(n))
+							}
+						}
+					}
+				}
+			}
+		}(conn)
+	}
+}
+
+func writeContiguousChunk(w io.Writer, outBuf []byte, index uint32, offset uint64, data []byte) error {
+	totalLen := protocol.FrameHeaderSize + protocol.ChunkHeaderSize + len(data)
+	if len(outBuf) < totalLen {
+		outBuf = make([]byte, totalLen)
 	}
 
-	wg.Wait()
-	if transferErr != nil {
-		return transferErr
-	}
+	binary.BigEndian.PutUint16(outBuf[0:2], protocol.MagicBytes)
+	outBuf[2] = protocol.Version1
+	outBuf[3] = protocol.TypeChunk
+	binary.BigEndian.PutUint32(outBuf[4:8], uint32(protocol.ChunkHeaderSize+len(data)))
 
-	frameType, _, aErr := protocol.ReadFrameHeader(ctrlConn)
-	if aErr != nil || frameType != protocol.TypeAck {
-		return fmt.Errorf("final confirmation ACK failed: %w", aErr)
-	}
+	binary.BigEndian.PutUint32(outBuf[8:12], index)
+	binary.BigEndian.PutUint64(outBuf[12:20], offset)
+	binary.BigEndian.PutUint32(outBuf[20:24], uint32(len(data)))
+	binary.BigEndian.PutUint32(outBuf[24:28], protocol.CalculateChecksum(data))
 
-	return nil
+	copy(outBuf[28:], data)
+
+	_, err := w.Write(outBuf[:totalLen])
+	return err
 }

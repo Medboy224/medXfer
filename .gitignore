@@ -1,0 +1,18 @@
+# Binaries and compiled executables
+/bin/
+*.exe
+*.out
+*.app
+
+# Deployment scripts and cross-compiled files
+deploy.bat
+xfer_termux
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# IDE and editor folders
+.vscode/
+.idea/
+*.swp
