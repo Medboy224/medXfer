@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,8 +17,9 @@ import (
 )
 
 type Receiver struct {
-	outputDir string
-	workers   int
+	outputDir       string
+	workers         int
+	collisionPolicy CollisionPolicy
 }
 
 func NewReceiver(outputDir string, workers int) *Receiver {
@@ -24,9 +27,14 @@ func NewReceiver(outputDir string, workers int) *Receiver {
 		workers = 4
 	}
 	return &Receiver{
-		outputDir: outputDir,
-		workers:   workers,
+		outputDir:       outputDir,
+		workers:         workers,
+		collisionPolicy: PolicyAutoRename,
 	}
+}
+
+func (r *Receiver) SetCollisionPolicy(p CollisionPolicy) {
+	r.collisionPolicy = p
 }
 
 type chunkTask struct {
@@ -35,14 +43,28 @@ type chunkTask struct {
 	length uint32
 }
 
-func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener TransferListener) error {
-	var dialer net.Dialer
-	handshakeConn, err := dialer.DialContext(ctx, "tcp4", senderAddr)
-	if err != nil {
+func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener TransferListener, fileID string) error {
+	var handshakeConn net.Conn
+	for attempt := 1; attempt <= 30; attempt++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		var dialer net.Dialer
+		c, err := dialer.DialContext(ctx, "tcp4", senderAddr)
+		if err == nil {
+			handshakeConn = c
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if handshakeConn == nil {
+		err := fmt.Errorf("failed to connect to sender on %s", senderAddr)
 		if listener != nil {
 			listener.OnError(err)
 		}
-		return fmt.Errorf("handshake connection failed: %w", err)
+		return err
 	}
 	TuneConn(handshakeConn)
 
@@ -89,9 +111,59 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 		return fmt.Errorf("failed to parse metadata: %w", err)
 	}
 
-	safeFileName := filepath.Base(meta.FileName)
+	// CRITICAL FILE INTEGRITY CHECK:
+	// If the receiver expects a specific fileID, verify that the sender is serving the exact same file!
+	if fileID != "" && meta.FileID != "" && fileID != meta.FileID {
+		err := fmt.Errorf("integrity error: sender is serving a different file (expected %s, got %s)", fileID, meta.FileID)
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return err
+	}
+	if fileID == "" && meta.FileID != "" {
+		fileID = meta.FileID
+	}
 
-	dm, err := CreateAndPreallocate(r.outputDir, safeFileName, meta.FileSize)
+	// Normalize path across OS boundaries (Windows <-> Android/Linux)
+	normPath := strings.ReplaceAll(meta.FileName, "\\", "/")
+	normPath = path.Clean("/" + normPath)
+	normPath = strings.TrimPrefix(normPath, "/")
+	if normPath == "." || normPath == "" || strings.HasPrefix(normPath, "..") {
+		normPath = filepath.Base(meta.FileName)
+	}
+	safeFileName := normPath
+
+	// Resolve collision: Smart-Skip, Resume, Auto-Rename, or Overwrite
+	res, err := ResolveCollision(r.outputDir, safeFileName, fileID, meta.FileSize, meta.ChunkSize, r.collisionPolicy)
+	if err != nil {
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return fmt.Errorf("collision resolution failed: %w", err)
+	}
+
+	// 1. SMART-SKIP: If identical file is already 100% complete on disk, skip network streaming!
+	if res.IsDuplicate {
+		totalChunks := uint32((meta.FileSize + int64(meta.ChunkSize) - 1) / int64(meta.ChunkSize))
+		if totalChunks == 0 {
+			totalChunks = 1
+		}
+		if listener != nil {
+			listener.OnStart(res.ResolvedName, meta.FileSize, totalChunks)
+			listener.OnProgress(TransferStats{
+				BytesTransferred: meta.FileSize,
+				TotalBytes:       meta.FileSize,
+				SpeedMBps:        0,
+				ActiveStreams:    0,
+				ProgressPercent:  100.0,
+			})
+			listener.OnComplete(filepath.Join(r.outputDir, res.ResolvedName), 0)
+		}
+		return nil
+	}
+
+	// 2. Preallocate with resolved name (e.g. "video (1).mp4" if auto-renamed)
+	dm, err := CreateAndPreallocate(r.outputDir, res.ResolvedName, meta.FileSize, meta.ChunkSize, fileID)
 	if err != nil {
 		if listener != nil {
 			listener.OnError(err)
@@ -102,7 +174,7 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 
 	totalChunks := uint32((meta.FileSize + int64(meta.ChunkSize) - 1) / int64(meta.ChunkSize))
 	if listener != nil {
-		listener.OnStart(safeFileName, meta.FileSize, totalChunks)
+		listener.OnStart(res.ResolvedName, meta.FileSize, totalChunks)
 	}
 
 	if meta.FileSize == 0 {
@@ -112,8 +184,17 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 		return dm.Finalize()
 	}
 
+	var completedChunks uint32
+	transferredBytes := dm.GetDownloadedBytes()
+
 	taskQueue := make(chan chunkTask, totalChunks)
 	for i := uint32(0); i < totalChunks; i++ {
+		// Resume Logic: Skip chunks that are already perfectly written to disk
+		if dm.IsChunkCompleted(i) {
+			completedChunks++
+			continue
+		}
+
 		offset := uint64(i) * uint64(meta.ChunkSize)
 		length := meta.ChunkSize
 		if offset+uint64(length) > uint64(meta.FileSize) {
@@ -123,19 +204,43 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 	}
 	close(taskQueue)
 
-	var transferredBytes int64
-	var completedChunks uint32
-	var activeStreams int32
+	// If fully resumed from disk, complete instantly
+	if completedChunks == totalChunks {
+		if listener != nil {
+			listener.OnProgress(TransferStats{
+				BytesTransferred: meta.FileSize,
+				TotalBytes:       meta.FileSize,
+				SpeedMBps:        0,
+				ActiveStreams:    0,
+				ProgressPercent:  100.0,
+			})
+			listener.OnComplete(dm.finalPath, 0)
+		}
+		return dm.Finalize()
+	}
 
+	var activeStreams int32
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	defer cancelWorkers()
+
+	var connsMu sync.Mutex
+	activeConns := make(map[net.Conn]struct{})
+
+	go func() {
+		<-workerCtx.Done()
+		connsMu.Lock()
+		for c := range activeConns {
+			_ = c.Close()
+		}
+		connsMu.Unlock()
+	}()
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, r.workers)
 
 	startTime := time.Now()
 	lastSpeedTime := startTime
-	var lastSpeedBytes int64
+	var lastSpeedBytes int64 = transferredBytes
 	var currentSpeed float64
 
 	for w := 0; w < r.workers; w++ {
@@ -144,10 +249,18 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 			defer wg.Done()
 			var conn net.Conn
 
-			connect := func() bool {
+			disconnect := func() {
 				if conn != nil {
+					connsMu.Lock()
+					delete(activeConns, conn)
+					connsMu.Unlock()
 					_ = conn.Close()
+					conn = nil
 				}
+			}
+
+			connect := func() bool {
+				disconnect()
 				for attempt := 1; attempt <= 5; attempt++ {
 					select {
 					case <-workerCtx.Done():
@@ -159,6 +272,30 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 					if err == nil {
 						conn = c
 						TuneConn(conn)
+						connsMu.Lock()
+						activeConns[conn] = struct{}{}
+						connsMu.Unlock()
+
+						// Send TypeResume containing FileID (32B) + DownloadedBytes (8B) to authenticate the stream
+						currentBytes := atomic.LoadInt64(&transferredBytes)
+						var resumeFrame [48]byte
+						binary.BigEndian.PutUint16(resumeFrame[0:2], protocol.MagicBytes)
+						resumeFrame[2] = protocol.Version1
+						resumeFrame[3] = protocol.TypeResume
+						binary.BigEndian.PutUint32(resumeFrame[4:8], 40) // 32 bytes FileID + 8 bytes offset
+
+						padFileID := fileID
+						if len(padFileID) != 32 {
+							padFileID = fmt.Sprintf("%-32s", padFileID)
+						}
+						copy(resumeFrame[8:40], []byte(padFileID))
+						binary.BigEndian.PutUint64(resumeFrame[40:48], uint64(currentBytes))
+
+						_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+						if _, err := conn.Write(resumeFrame[:]); err != nil {
+							disconnect()
+							continue
+						}
 						return true
 					}
 					time.Sleep(time.Duration(attempt*100) * time.Millisecond)
@@ -170,11 +307,7 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 				errChan <- fmt.Errorf("worker %d failed to connect", workerID)
 				return
 			}
-			defer func() {
-				if conn != nil {
-					_ = conn.Close()
-				}
-			}()
+			defer disconnect()
 
 			atomic.AddInt32(&activeStreams, 1)
 			defer atomic.AddInt32(&activeStreams, -1)
@@ -216,13 +349,9 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 					}
 
 					if !success {
-						select {
-						case taskQueue <- task:
-						default:
-							errChan <- fmt.Errorf("chunk %d aborted after max retries", task.index)
-							cancelWorkers()
-							return
-						}
+						errChan <- fmt.Errorf("chunk %d transfer failed after max retries", task.index)
+						cancelWorkers()
+						return
 					}
 				}
 			}
@@ -244,11 +373,10 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 			if atomic.LoadUint32(&completedChunks) == totalChunks {
 				duration := time.Since(startTime)
 				if listener != nil {
-					speed := float64(meta.FileSize) / (1048576.0 * duration.Seconds())
 					listener.OnProgress(TransferStats{
 						BytesTransferred: meta.FileSize,
 						TotalBytes:       meta.FileSize,
-						SpeedMBps:        speed,
+						SpeedMBps:        currentSpeed,
 						ActiveStreams:    0,
 						ProgressPercent:  100.0,
 					})
@@ -275,15 +403,13 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 				now := time.Now()
 				elapsedSpeed := now.Sub(lastSpeedTime).Seconds()
 
-				// Smooth speed over a 1-second window
 				if elapsedSpeed >= 1.0 {
 					delta := current - lastSpeedBytes
 					currentSpeed = (float64(delta) / 1048576.0) / elapsedSpeed
 					lastSpeedTime = now
 					lastSpeedBytes = current
-				} else if lastSpeedBytes == 0 && current > 0 {
-					// Fallback for the first second
-					currentSpeed = (float64(current) / 1048576.0) / now.Sub(startTime).Seconds()
+				} else if lastSpeedBytes == dm.GetDownloadedBytes() && current > dm.GetDownloadedBytes() {
+					currentSpeed = (float64(current-dm.GetDownloadedBytes()) / 1048576.0) / now.Sub(startTime).Seconds()
 				}
 
 				percent := 0.0
@@ -310,12 +436,12 @@ func (r *Receiver) fetchChunk(conn net.Conn, task chunkTask, buf []byte, dm *Dis
 	binary.BigEndian.PutUint32(reqBuf[4:8], 4)
 	binary.BigEndian.PutUint32(reqBuf[8:12], task.index)
 
-	_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if _, err := conn.Write(reqBuf[:]); err != nil {
 		return err
 	}
 
-	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	header, err := protocol.ReadHeader(conn)
 	if err != nil {
 		return err
@@ -340,9 +466,10 @@ func (r *Receiver) fetchChunk(conn net.Conn, task chunkTask, buf []byte, dm *Dis
 	}
 
 	if chunkMeta.Index != task.index {
-		return fmt.Errorf("chunk index mismatch: expected %d, got %d", task.index, chunkMeta.Index)
+		return fmt.Errorf("chunk index mismatch")
 	}
 
-	_, err = dm.WriteChunkAt(data, int64(chunkMeta.Offset))
+	// Update the `.medxfer` state map safely
+	_, err = dm.WriteChunkAt(data, int64(chunkMeta.Offset), task.index)
 	return err
 }

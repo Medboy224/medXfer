@@ -6,6 +6,7 @@ const (
 	TypeHandshake   byte   = 0x01
 	TypeRequest     byte   = 0x02
 	TypeChunk       byte   = 0x03
+	TypeResume      byte   = 0x04
 	FrameHeaderSize        = 8  // Untyped to prevent uint32/int math errors
 	ChunkHeaderSize        = 20 // Untyped to prevent uint32/int math errors
 )
@@ -19,6 +20,7 @@ type FileMetadata struct {
 	FileName  string `json:"fileName"`
 	FileSize  int64  `json:"fileSize"`
 	ChunkSize uint32 `json:"chunkSize"`
+	FileID    string `json:"fileID,omitempty"`
 }
 
 type ChunkMeta struct {

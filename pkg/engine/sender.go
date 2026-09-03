@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,7 +33,13 @@ func NewSender(workers int, chunkSize uint32) *Sender {
 	}
 }
 
-func (s *Sender) ServeAndSend(ctx context.Context, bindAddr, filePath string, listener TransferListener) error {
+// ServeAndSend accepts resumeOffset so the progress bar jumps accurately
+func (s *Sender) ServeAndSend(ctx context.Context, bindAddr, filePath string, listener TransferListener, resumeOffset int64) error {
+	return s.ServeAndSendWithRelPath(ctx, bindAddr, filePath, "", listener, resumeOffset)
+}
+
+// ServeAndSendWithRelPath allows specifying a relative path for batch/folder transfers
+func (s *Sender) ServeAndSendWithRelPath(ctx context.Context, bindAddr, filePath, relPath string, listener TransferListener, resumeOffset int64) error {
 	dm, err := OpenForReading(filePath)
 	if err != nil {
 		if listener != nil {
@@ -44,6 +51,10 @@ func (s *Sender) ServeAndSend(ctx context.Context, bindAddr, filePath string, li
 
 	fileSize := dm.Size()
 	fileName := filepath.Base(dm.finalPath)
+	if relPath != "" {
+		fileName = filepath.ToSlash(relPath)
+	}
+	fileID := GenerateFileID(filePath)
 
 	var lc net.ListenConfig
 	listenerTCP, err := lc.Listen(ctx, "tcp4", bindAddr)
@@ -60,13 +71,14 @@ func (s *Sender) ServeAndSend(ctx context.Context, bindAddr, filePath string, li
 		listener.OnStart(fileName, fileSize, totalChunks)
 	}
 
-	var transferredBytes int64
+	// Initialize the progress counter with the bytes already present on the receiver
+	var transferredBytes int64 = resumeOffset
 	var activeStreams int32
 	var wg sync.WaitGroup
 
 	startTime := time.Now()
 	lastSpeedTime := startTime
-	var lastSpeedBytes int64
+	var lastSpeedBytes int64 = transferredBytes
 	var currentSpeed float64
 
 	go func() {
@@ -84,14 +96,13 @@ func (s *Sender) ServeAndSend(ctx context.Context, bindAddr, filePath string, li
 					now := time.Now()
 					elapsedSpeed := now.Sub(lastSpeedTime).Seconds()
 
-					// Smooth speed over a 1-second window
 					if elapsedSpeed >= 1.0 {
 						delta := current - lastSpeedBytes
 						currentSpeed = (float64(delta) / 1048576.0) / elapsedSpeed
 						lastSpeedTime = now
 						lastSpeedBytes = current
-					} else if lastSpeedBytes == 0 && current > 0 {
-						currentSpeed = (float64(current) / 1048576.0) / now.Sub(startTime).Seconds()
+					} else if lastSpeedBytes == resumeOffset && current > resumeOffset {
+						currentSpeed = (float64(current-resumeOffset) / 1048576.0) / now.Sub(startTime).Seconds()
 					}
 
 					if current > 0 || streams > 0 {
@@ -112,9 +123,17 @@ func (s *Sender) ServeAndSend(ctx context.Context, bindAddr, filePath string, li
 		}
 	}()
 
+	var connsMu sync.Mutex
+	activeConns := make(map[net.Conn]struct{})
+
 	go func() {
 		<-ctx.Done()
 		_ = listenerTCP.Close()
+		connsMu.Lock()
+		for c := range activeConns {
+			_ = c.Close()
+		}
+		connsMu.Unlock()
 	}()
 
 	for {
@@ -136,10 +155,19 @@ func (s *Sender) ServeAndSend(ctx context.Context, bindAddr, filePath string, li
 		wg.Add(1)
 		atomic.AddInt32(&activeStreams, 1)
 
+		connsMu.Lock()
+		activeConns[conn] = struct{}{}
+		connsMu.Unlock()
+
 		go func(c net.Conn) {
 			defer wg.Done()
 			defer atomic.AddInt32(&activeStreams, -1)
-			defer c.Close()
+			defer func() {
+				connsMu.Lock()
+				delete(activeConns, c)
+				connsMu.Unlock()
+				_ = c.Close()
+			}()
 
 			buf := make([]byte, s.chunkSize)
 			frameBuf := make([]byte, protocol.FrameHeaderSize+protocol.ChunkHeaderSize+int(s.chunkSize))
@@ -156,8 +184,36 @@ func (s *Sender) ServeAndSend(ctx context.Context, bindAddr, filePath string, li
 						FileName:  fileName,
 						FileSize:  fileSize,
 						ChunkSize: s.chunkSize,
+						FileID:    fileID,
 					}
 					_ = protocol.WriteHandshake(c, meta)
+
+				case protocol.TypeResume:
+					resumeBuf := make([]byte, header.PayloadLen)
+					if _, err := io.ReadFull(c, resumeBuf); err != nil {
+						return
+					}
+					var offset int64
+					if len(resumeBuf) >= 40 {
+						reqFileID := strings.TrimSpace(string(resumeBuf[:32]))
+						if fileID != "" && reqFileID != "" && reqFileID != strings.TrimSpace(fileID) {
+							// Worker is requesting a DIFFERENT file! Drop connection immediately.
+							return
+						}
+						offset = int64(binary.BigEndian.Uint64(resumeBuf[32:40]))
+					} else if len(resumeBuf) >= 8 {
+						offset = int64(binary.BigEndian.Uint64(resumeBuf[:8]))
+					}
+
+					for {
+						current := atomic.LoadInt64(&transferredBytes)
+						if current >= offset {
+							break
+						}
+						if atomic.CompareAndSwapInt64(&transferredBytes, current, offset) {
+							break
+						}
+					}
 
 				case protocol.TypeRequest:
 					var reqIndex uint32
@@ -175,7 +231,7 @@ func (s *Sender) ServeAndSend(ctx context.Context, bindAddr, filePath string, li
 
 					if toRead > 0 {
 						n, err := dm.ReadChunkAt(buf[:toRead], offset)
-						// VITAL FIX: Allow io.EOF so the final file chunk is successfully sent!
+						// Allow io.EOF so the final file chunk completes successfully
 						if n > 0 && (err == nil || err == io.EOF) {
 							if err := writeContiguousChunk(c, frameBuf, reqIndex, uint64(offset), buf[:n]); err == nil {
 								atomic.AddInt64(&transferredBytes, int64(n))

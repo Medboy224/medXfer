@@ -3,25 +3,32 @@ package session
 import (
 	"encoding/json"
 	"net"
+
+	"github.com/Medboy224/medXfer/pkg/manifest"
 )
 
-// Message is the JSON payload sent over the persistent control channel
 type Message struct {
-	Type     string `json:"type"` // "offer", "accept", "reject", "disconnect"
-	FileName string `json:"file_name,omitempty"`
-	FileSize int64  `json:"file_size,omitempty"`
-	DataPort int    `json:"data_port,omitempty"` // The port where the high-speed engine is waiting
+	Type        string             `json:"type"`
+	FileName    string             `json:"file_name,omitempty"`
+	FileSize    int64              `json:"file_size,omitempty"`
+	FileID      string             `json:"file_id,omitempty"` // Unique Cryptographic Hash
+	DataPort    int                `json:"data_port,omitempty"`
+	ResumeBytes int64              `json:"resume_bytes,omitempty"` // Sent back by the receiver on accept
+	Batch       *manifest.Manifest `json:"batch,omitempty"`        // Batch/Folder manifest
+	ItemIndex   int                `json:"item_index,omitempty"`   // Current item in batch (0-indexed)
 }
 
-// Channel wraps the persistent TCP connection
 type Channel struct {
 	conn *net.TCPConn
 	dec  *json.Decoder
 	enc  *json.Encoder
 }
 
-// NewChannel creates a new session manager from an established connection
 func NewChannel(conn *net.TCPConn) *Channel {
+	if conn != nil {
+		_ = conn.SetNoDelay(true)
+		_ = conn.SetKeepAlive(true)
+	}
 	return &Channel{
 		conn: conn,
 		dec:  json.NewDecoder(conn),
@@ -29,22 +36,17 @@ func NewChannel(conn *net.TCPConn) *Channel {
 	}
 }
 
-func (c *Channel) Send(msg Message) error {
-	return c.enc.Encode(msg)
-}
-
+func (c *Channel) Send(msg Message) error { return c.enc.Encode(msg) }
 func (c *Channel) Read() (Message, error) {
 	var msg Message
 	err := c.dec.Decode(&msg)
 	return msg, err
 }
-
 func (c *Channel) Close() {
 	if c.conn != nil {
 		c.conn.Close()
 	}
 }
-
 func (c *Channel) RemoteIP() string {
 	if c.conn != nil {
 		host, _, _ := net.SplitHostPort(c.conn.RemoteAddr().String())

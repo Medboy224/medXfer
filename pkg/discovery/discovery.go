@@ -9,6 +9,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/Medboy224/medXfer/pkg/manifest"
 )
 
 const (
@@ -19,8 +21,11 @@ const (
 
 // TransferOffer represents an active file payload offered by a peer
 type TransferOffer struct {
-	FileName string `json:"file_name"`
-	FileSize int64  `json:"file_size"`
+	FileName string             `json:"file_name"`
+	FileSize int64              `json:"file_size"`
+	FileID   string             `json:"file_id,omitempty"` // Protects legacy mode integrity
+	IsBatch  bool               `json:"is_batch,omitempty"`
+	Batch    *manifest.Manifest `json:"batch,omitempty"`
 }
 
 // Peer represents an identified medXfer instance on the network

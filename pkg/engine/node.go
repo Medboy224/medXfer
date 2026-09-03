@@ -23,11 +23,11 @@ func NewNode(outputDir string, workers int, chunkSize uint32) *Node {
 // OfferFile keeps the port open for a single transfer session, then returns cleanly.
 func (n *Node) OfferFile(ctx context.Context, bindAddr, filePath string, listener TransferListener) error {
 	sender := NewSender(n.Workers, n.ChunkSize)
-	return sender.ServeAndSend(ctx, bindAddr, filePath, listener)
+	return sender.ServeAndSend(ctx, bindAddr, filePath, listener, 0)
 }
 
 // FetchFile connects to an offering peer, downloads the file, and returns cleanly.
 func (n *Node) FetchFile(ctx context.Context, targetAddr string, listener TransferListener) error {
 	receiver := NewReceiver(n.OutputDir, n.Workers)
-	return receiver.Pull(ctx, targetAddr, listener)
+	return receiver.Pull(ctx, targetAddr, listener, "")
 }

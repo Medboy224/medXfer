@@ -72,3 +72,35 @@ func TestParseChunkPayload(t *testing.T) {
 		t.Fatalf("Chunk data mismatch")
 	}
 }
+
+func TestTypeResumeFrame(t *testing.T) {
+	var buf bytes.Buffer
+	var frame [16]byte
+	binary.BigEndian.PutUint16(frame[0:2], MagicBytes)
+	frame[2] = Version1
+	frame[3] = TypeResume
+	binary.BigEndian.PutUint32(frame[4:8], 8)
+	binary.BigEndian.PutUint64(frame[8:16], 52428800)
+
+	buf.Write(frame[:])
+
+	header, err := ReadHeader(&buf)
+	if err != nil {
+		t.Fatalf("ReadHeader failed: %v", err)
+	}
+	if header.Type != TypeResume {
+		t.Fatalf("Expected TypeResume, got %v", header.Type)
+	}
+	if header.PayloadLen != 8 {
+		t.Fatalf("Expected payload length 8, got %d", header.PayloadLen)
+	}
+
+	payload := make([]byte, 8)
+	if _, err := buf.Read(payload); err != nil {
+		t.Fatalf("Read payload failed: %v", err)
+	}
+	offset := binary.BigEndian.Uint64(payload)
+	if offset != 52428800 {
+		t.Fatalf("Expected offset 52428800, got %d", offset)
+	}
+}
