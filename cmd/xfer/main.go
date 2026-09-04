@@ -219,13 +219,19 @@ func handleNode() {
 		if err != nil {
 			return
 		}
+		srvTLSConfig, _ := session.ServerTLSConfig()
 		for {
 			conn, err := l.Accept()
 			if err != nil {
 				continue
 			}
+			if srvTLSConfig != nil {
+				if upConn, _, err := session.UpgradeToTLSIfClientHello(conn, srvTLSConfig); err == nil {
+					conn = upConn
+				}
+			}
 			if activeSession == nil {
-				activeSession = session.NewChannel(conn.(*net.TCPConn))
+				activeSession = session.NewChannel(conn)
 				fmt.Printf("\n\n[+] Incoming pairing from %s! Press Enter to refresh prompt.\n", activeSession.RemoteIP())
 				go func(c *session.Channel) {
 					for {
@@ -359,12 +365,12 @@ func handleNode() {
 					targetIP = lastScannedPeers[num-1].HostIP
 				}
 				fmt.Printf("[*] Connecting to node at %s:18887...\n", targetIP)
-				conn, err := net.DialTimeout("tcp4", fmt.Sprintf("%s:18887", targetIP), 3*time.Second)
+				conn, err := session.DialTLSPeer(fmt.Sprintf("%s:18887", targetIP))
 				if err != nil {
 					fmt.Println("[-] Failed to pair:", err)
 					break
 				}
-				activeSession = session.NewChannel(conn.(*net.TCPConn))
+				activeSession = session.NewChannel(conn)
 				fmt.Println("[+] Paired successfully!")
 
 				go func(c *session.Channel) {
@@ -993,7 +999,7 @@ func selectOneShotSender() *discovery.Peer {
 func handleDaemon(args []string) {
 	daemonCmd := flag.NewFlagSet("daemon", flag.ExitOnError)
 	portFlag := daemonCmd.Int("port", 19999, "Port for Headless API (HTTP & WebSocket)")
-	outDirFlag := daemonCmd.String("out", ".", "Default directory to save incoming files")
+	outDirFlag := daemonCmd.String("out", "", "Default directory to save incoming files")
 	nameFlag := daemonCmd.String("name", "", "Custom device name for discovery")
 
 	_ = daemonCmd.Parse(args)

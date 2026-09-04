@@ -20,27 +20,137 @@ type Receiver struct {
 	outputDir       string
 	workers         int
 	collisionPolicy CollisionPolicy
+	pauseMu         sync.Mutex
+	isPaused        bool
+	pauseCond       *sync.Cond
 }
 
 func NewReceiver(outputDir string, workers int) *Receiver {
 	if workers <= 0 {
 		workers = 4
 	}
-	return &Receiver{
+	r := &Receiver{
 		outputDir:       outputDir,
 		workers:         workers,
 		collisionPolicy: PolicyAutoRename,
 	}
+	r.pauseCond = sync.NewCond(&r.pauseMu)
+	return r
 }
 
 func (r *Receiver) SetCollisionPolicy(p CollisionPolicy) {
 	r.collisionPolicy = p
 }
 
+func (r *Receiver) Pause() {
+	r.pauseMu.Lock()
+	r.isPaused = true
+	r.pauseMu.Unlock()
+}
+
+func (r *Receiver) Resume() {
+	r.pauseMu.Lock()
+	r.isPaused = false
+	r.pauseCond.Broadcast()
+	r.pauseMu.Unlock()
+}
+
+func (r *Receiver) IsPaused() bool {
+	r.pauseMu.Lock()
+	defer r.pauseMu.Unlock()
+	return r.isPaused
+}
+
 type chunkTask struct {
 	index  uint32
 	offset uint64
 	length uint32
+}
+
+type taskDispatcher struct {
+	mu    sync.Mutex
+	tasks []chunkTask
+}
+
+func newTaskDispatcher(totalChunks uint32, meta protocol.FileMetadata, dm *DiskManager) (*taskDispatcher, uint32) {
+	var completed uint32
+	tasks := make([]chunkTask, 0, totalChunks)
+	for i := uint32(0); i < totalChunks; i++ {
+		if dm.IsChunkCompleted(i) {
+			completed++
+			continue
+		}
+		offset := uint64(i) * uint64(meta.ChunkSize)
+		length := meta.ChunkSize
+		if offset+uint64(length) > uint64(meta.FileSize) {
+			length = uint32(uint64(meta.FileSize) - offset)
+		}
+		tasks = append(tasks, chunkTask{index: i, offset: offset, length: length})
+	}
+	return &taskDispatcher{tasks: tasks}, completed
+}
+
+func (td *taskDispatcher) Pop() (chunkTask, bool) {
+	td.mu.Lock()
+	defer td.mu.Unlock()
+	if len(td.tasks) == 0 {
+		return chunkTask{}, false
+	}
+	task := td.tasks[0]
+	td.tasks = td.tasks[1:]
+	return task, true
+}
+
+func (td *taskDispatcher) PushFront(tasks ...chunkTask) {
+	td.mu.Lock()
+	defer td.mu.Unlock()
+	td.tasks = append(tasks, td.tasks...)
+}
+
+func sendChunkRequest(conn net.Conn, task chunkTask) error {
+	var reqBuf [12]byte
+	binary.BigEndian.PutUint16(reqBuf[0:2], protocol.MagicBytes)
+	reqBuf[2] = protocol.Version1
+	reqBuf[3] = protocol.TypeRequest
+	binary.BigEndian.PutUint32(reqBuf[4:8], 4)
+	binary.BigEndian.PutUint32(reqBuf[8:12], task.index)
+
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_, err := conn.Write(reqBuf[:])
+	return err
+}
+
+func readAndWriteChunk(conn net.Conn, task chunkTask, buf []byte, dm *DiskManager) error {
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	header, err := protocol.ReadHeader(conn)
+	if err != nil {
+		return err
+	}
+
+	if header.Type != protocol.TypeChunk {
+		return fmt.Errorf("unexpected frame type: %d", header.Type)
+	}
+
+	payloadLen := int(header.PayloadLen)
+	if payloadLen > len(buf) {
+		return fmt.Errorf("payload exceeds buffer size")
+	}
+
+	if _, err := io.ReadFull(conn, buf[:payloadLen]); err != nil {
+		return err
+	}
+
+	chunkMeta, data, err := protocol.ParseChunkPayload(buf[:payloadLen])
+	if err != nil {
+		return err
+	}
+
+	if chunkMeta.Index != task.index {
+		return fmt.Errorf("chunk index mismatch: expected %d, got %d", task.index, chunkMeta.Index)
+	}
+
+	_, err = dm.WriteChunkAt(data, int64(chunkMeta.Offset), task.index)
+	return err
 }
 
 func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener TransferListener, fileID string) error {
@@ -184,25 +294,9 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 		return dm.Finalize()
 	}
 
-	var completedChunks uint32
+	dispatcher, initialCompleted := newTaskDispatcher(totalChunks, meta, dm)
+	var completedChunks uint32 = initialCompleted
 	transferredBytes := dm.GetDownloadedBytes()
-
-	taskQueue := make(chan chunkTask, totalChunks)
-	for i := uint32(0); i < totalChunks; i++ {
-		// Resume Logic: Skip chunks that are already perfectly written to disk
-		if dm.IsChunkCompleted(i) {
-			completedChunks++
-			continue
-		}
-
-		offset := uint64(i) * uint64(meta.ChunkSize)
-		length := meta.ChunkSize
-		if offset+uint64(length) > uint64(meta.FileSize) {
-			length = uint32(uint64(meta.FileSize) - offset)
-		}
-		taskQueue <- chunkTask{index: i, offset: offset, length: length}
-	}
-	close(taskQueue)
 
 	// If fully resumed from disk, complete instantly
 	if completedChunks == totalChunks {
@@ -228,6 +322,7 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 
 	go func() {
 		<-workerCtx.Done()
+		r.pauseCond.Broadcast()
 		connsMu.Lock()
 		for c := range activeConns {
 			_ = c.Close()
@@ -312,48 +407,102 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 			atomic.AddInt32(&activeStreams, 1)
 			defer atomic.AddInt32(&activeStreams, -1)
 
-			buf := make([]byte, meta.ChunkSize+4096)
+			bufPtr := getChunkBuffer()
+			defer putChunkBuffer(bufPtr)
+			buf := *bufPtr
+
+			var prefetched *chunkTask
+
+			taskRetry := make(map[uint32]int)
 
 			for {
 				select {
 				case <-workerCtx.Done():
 					return
-				case task, ok := <-taskQueue:
+				default:
+				}
+
+				// Check pause state
+				r.pauseMu.Lock()
+				for r.isPaused && workerCtx.Err() == nil {
+					r.pauseCond.Wait()
+				}
+				r.pauseMu.Unlock()
+				if workerCtx.Err() != nil {
+					return
+				}
+
+				if conn == nil {
+					if !connect() {
+						if prefetched != nil {
+							dispatcher.PushFront(*prefetched)
+							prefetched = nil
+						}
+						errChan <- fmt.Errorf("worker %d failed to connect", workerID)
+						cancelWorkers()
+						return
+					}
+					if prefetched != nil {
+						dispatcher.PushFront(*prefetched)
+						prefetched = nil
+					}
+				}
+
+				var task chunkTask
+				if prefetched != nil {
+					task = *prefetched
+					prefetched = nil
+				} else {
+					var ok bool
+					task, ok = dispatcher.Pop()
 					if !ok {
 						return
 					}
-
-					success := false
-					for retry := 0; retry < 4; retry++ {
-						if conn == nil {
-							if !connect() {
-								break
-							}
+					if err := sendChunkRequest(conn, task); err != nil {
+						taskRetry[task.index]++
+						if taskRetry[task.index] >= 4 {
+							errChan <- fmt.Errorf("chunk %d transfer failed after max retries", task.index)
+							cancelWorkers()
+							return
 						}
-
-						err := r.fetchChunk(conn, task, buf, dm)
-						if err == nil {
-							success = true
-							atomic.AddInt64(&transferredBytes, int64(task.length))
-							atomic.AddUint32(&completedChunks, 1)
-							break
-						}
-
-						if listener != nil {
-							listener.OnChunkFailed(task.index, retry+1, err)
-						}
-
-						_ = conn.Close()
-						conn = nil
-						time.Sleep(150 * time.Millisecond)
+						dispatcher.PushFront(task)
+						disconnect()
+						time.Sleep(100 * time.Millisecond)
+						continue
 					}
+				}
 
-					if !success {
+				// PIPELINE: Prefetch the next chunk request so the wire stays 100% saturated!
+				if nextTask, ok := dispatcher.Pop(); ok {
+					if err := sendChunkRequest(conn, nextTask); err == nil {
+						prefetched = &nextTask
+					} else {
+						dispatcher.PushFront(nextTask)
+					}
+				}
+
+				if err := readAndWriteChunk(conn, task, buf, dm); err != nil {
+					taskRetry[task.index]++
+					if taskRetry[task.index] >= 4 {
 						errChan <- fmt.Errorf("chunk %d transfer failed after max retries", task.index)
 						cancelWorkers()
 						return
 					}
+					if prefetched != nil {
+						dispatcher.PushFront(*prefetched)
+						prefetched = nil
+					}
+					dispatcher.PushFront(task)
+					if listener != nil {
+						listener.OnChunkFailed(task.index, taskRetry[task.index], err)
+					}
+					disconnect()
+					time.Sleep(100 * time.Millisecond)
+					continue
 				}
+
+				atomic.AddInt64(&transferredBytes, int64(task.length))
+				atomic.AddUint32(&completedChunks, 1)
 			}
 		}(w)
 	}
@@ -429,47 +578,8 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 }
 
 func (r *Receiver) fetchChunk(conn net.Conn, task chunkTask, buf []byte, dm *DiskManager) error {
-	var reqBuf [12]byte
-	binary.BigEndian.PutUint16(reqBuf[0:2], protocol.MagicBytes)
-	reqBuf[2] = protocol.Version1
-	reqBuf[3] = protocol.TypeRequest
-	binary.BigEndian.PutUint32(reqBuf[4:8], 4)
-	binary.BigEndian.PutUint32(reqBuf[8:12], task.index)
-
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if _, err := conn.Write(reqBuf[:]); err != nil {
+	if err := sendChunkRequest(conn, task); err != nil {
 		return err
 	}
-
-	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-	header, err := protocol.ReadHeader(conn)
-	if err != nil {
-		return err
-	}
-
-	if header.Type != protocol.TypeChunk {
-		return fmt.Errorf("unexpected frame type: %d", header.Type)
-	}
-
-	payloadLen := int(header.PayloadLen)
-	if payloadLen > len(buf) {
-		return fmt.Errorf("payload exceeds buffer size")
-	}
-
-	if _, err := io.ReadFull(conn, buf[:payloadLen]); err != nil {
-		return err
-	}
-
-	chunkMeta, data, err := protocol.ParseChunkPayload(buf[:payloadLen])
-	if err != nil {
-		return err
-	}
-
-	if chunkMeta.Index != task.index {
-		return fmt.Errorf("chunk index mismatch")
-	}
-
-	// Update the `.medxfer` state map safely
-	_, err = dm.WriteChunkAt(data, int64(chunkMeta.Offset), task.index)
-	return err
+	return readAndWriteChunk(conn, task, buf, dm)
 }

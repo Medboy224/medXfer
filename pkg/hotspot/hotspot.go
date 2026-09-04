@@ -39,7 +39,8 @@ type NetworkInfo struct {
 	LocalIP     net.IP
 	BroadcastIP net.IP
 	Band        Band
-	Channel     int // <-- This was the missing field causing the error
+	Channel     int
+	Warning     string
 }
 
 type Controller interface {
@@ -66,5 +67,5 @@ func GenerateCredentials() (string, string) {
 		password[i] = charset[num.Int64()]
 	}
 
-	return fmt.Sprintf("medXfer-%s", string(ssidSuffix)), string(password)
+	return fmt.Sprintf("DIRECT-medXfer-%s", string(ssidSuffix)), string(password)
 }

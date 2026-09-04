@@ -38,27 +38,37 @@ func (w *windowsHotspot) Start(cfg Config) (*NetworkInfo, error) {
 
 	if cfg.SSID == "" || cfg.Password == "" {
 		cfg.SSID, cfg.Password = GenerateCredentials()
+	} else if !strings.HasPrefix(cfg.SSID, "DIRECT-") {
+		cfg.SSID = "DIRECT-" + cfg.SSID
 	}
 
-	// Proven, reliable Wi-Fi Direct API
+	// Clean, hardened Wi-Fi Direct API with Timeout Protection
 	script := fmt.Sprintf(`
 $ErrorActionPreference = 'Stop'
 try {
+    # 1. Disable Windows NoConnectionsTimeout (prevents 2-3 min drop)
+    try {
+        [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType = WindowsRuntime] | Out-Null
+        [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]::DisableNoConnectionsTimeout()
+    } catch {}
+
+    # 2. Initialize Wi-Fi Direct Group Owner Publisher
     [Windows.Devices.WiFiDirect.WiFiDirectAdvertisementPublisher, Windows.Devices.WiFiDirect, ContentType = WindowsRuntime] | Out-Null
+
     $pub = New-Object Windows.Devices.WiFiDirect.WiFiDirectAdvertisementPublisher
     $pub.Advertisement.IsAutonomousGroupOwnerEnabled = $true
     $pub.Advertisement.LegacySettings.IsEnabled = $true
     $pub.Advertisement.LegacySettings.Ssid = '%s'
     $pub.Advertisement.LegacySettings.Passphrase.Password = '%s'
-    
+
     $pub.Start()
     Write-Output "HOTSPOT_ONLINE"
-    
-    # Block until Go app sends termination signal
+
+    # 3. Wait for Go app termination signal
     $reader = [System.IO.StreamReader]::new([System.Console]::OpenStandardInput())
     $null = $reader.ReadLine()
-    
-    $pub.Stop()
+
+    try { $pub.Stop() } catch {}
 } catch {
     Write-Error $_.Exception.Message
     exit 1
@@ -120,7 +130,7 @@ try {
 	}
 
 	time.Sleep(1200 * time.Millisecond)
-	actualBand, channel := queryActualAdapterBand()
+	actualBand, channel, warningMsg := queryActualAdapterBand(cfg.Band)
 
 	targets := discovery.GetActiveNetworkTargets()
 	var matchedTarget *discovery.NetworkTarget
@@ -154,6 +164,7 @@ try {
 		BroadcastIP: bcastIP,
 		Band:        actualBand,
 		Channel:     channel,
+		Warning:     warningMsg,
 	}, nil
 }
 
@@ -186,10 +197,25 @@ func (w *windowsHotspot) Stop() error {
 	}
 }
 
-func queryActualAdapterBand() (Band, int) {
+func queryActualAdapterBand(requestedBand Band) (Band, int, string) {
 	out, err := exec.Command("netsh", "wlan", "show", "interfaces").Output()
 	if err != nil {
-		return Band2GHz, 1
+		if requestedBand == Band5GHz {
+			return Band5GHz, 36, ""
+		}
+		return Band2GHz, 1, ""
+	}
+
+	content := strings.ToLower(string(out))
+	// Check if connected to an external router/AP
+	isConnected := strings.Contains(content, "connecté") || strings.Contains(content, "connected")
+
+	if !isConnected {
+		// Radio is offline/idle; operates in whatever band requested!
+		if requestedBand == Band5GHz {
+			return Band5GHz, 36, ""
+		}
+		return Band2GHz, 1, ""
 	}
 
 	lines := strings.Split(string(out), "\n")
@@ -212,7 +238,12 @@ func queryActualAdapterBand() (Band, int) {
 	}
 
 	if channel >= 36 || is5GHz {
-		return Band5GHz, channel
+		return Band5GHz, channel, ""
 	}
-	return Band2GHz, channel
+
+	var warning string
+	if requestedBand == Band5GHz {
+		warning = "Intel Wireless-AC hardware restricts PC Hotspot mode to 2.4 GHz due to international DFS radar regulations. For 5 GHz (866 Mbps), switch your phone's Mobile Hotspot to 5 GHz and connect the PC to it!"
+	}
+	return Band2GHz, channel, warning
 }

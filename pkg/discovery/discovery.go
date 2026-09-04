@@ -39,13 +39,13 @@ type Peer struct {
 	Offer      *TransferOffer `json:"offer,omitempty"`
 }
 
-// isLocalNetworkIP checks if an IP belongs to the local machine
-func isLocalNetworkIP(ipStr string) bool {
-	if ipStr == "127.0.0.1" || ipStr == "localhost" {
+// IsLocalNetworkIP checks if an IP belongs to the local machine
+func IsLocalNetworkIP(ipStr string) bool {
+	if ipStr == "" || ipStr == "127.0.0.1" || ipStr == "localhost" || ipStr == "::1" || ipStr == "0.0.0.0" {
 		return true
 	}
 	ip := net.ParseIP(ipStr)
-	if ip == nil || ip.IsLoopback() {
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
 		return true
 	}
 	addrs, err := net.InterfaceAddrs()
@@ -62,16 +62,26 @@ func isLocalNetworkIP(ipStr string) bool {
 	return false
 }
 
+func isLocalNetworkIP(ipStr string) bool {
+	return IsLocalNetworkIP(ipStr)
+}
+
 // DiscoveryServer handles incoming discovery queries and emits periodic beacons
 type DiscoveryServer struct {
+	mu   sync.RWMutex
 	peer Peer
 }
 
 // NewDiscoveryServer initializes a node's discovery responder
-func NewDiscoveryServer(role string, tcpPort int, offer *TransferOffer) *DiscoveryServer {
-	hostname, _ := os.Hostname()
-	if hostname == "" {
-		hostname = "medXfer-Node"
+func NewDiscoveryServer(role string, tcpPort int, offer *TransferOffer, customDeviceName ...string) *DiscoveryServer {
+	hostname := ""
+	if len(customDeviceName) > 0 && customDeviceName[0] != "" {
+		hostname = customDeviceName[0]
+	} else {
+		hostname, _ = os.Hostname()
+		if hostname == "" {
+			hostname = "medXfer-Node"
+		}
 	}
 
 	return &DiscoveryServer{
@@ -84,6 +94,27 @@ func NewDiscoveryServer(role string, tcpPort int, offer *TransferOffer) *Discove
 			Offer:      offer,
 		},
 	}
+}
+
+// SetDeviceName updates the advertised device name in real-time
+func (s *DiscoveryServer) SetDeviceName(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.peer.DeviceName = name
+}
+
+// SetOffer updates the active transfer offer in real-time
+func (s *DiscoveryServer) SetOffer(offer *TransferOffer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.peer.Offer = offer
+}
+
+// GetPeer returns a thread-safe snapshot of the peer metadata
+func (s *DiscoveryServer) GetPeer() Peer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.peer
 }
 
 // Start launches the UDP beacon broadcaster and TCP ingress-reflective responder
@@ -117,7 +148,7 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 					activeIP = localTCPAddr.IP.String()
 				}
 
-				respPeer := s.peer
+				respPeer := s.GetPeer()
 				respPeer.HostIP = activeIP
 
 				data, err := json.Marshal(respPeer)
@@ -150,7 +181,7 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 						continue
 					}
 
-					beaconPeer := s.peer
+					beaconPeer := s.GetPeer()
 					beaconPeer.HostIP = target.LocalIP.String()
 
 					data, err := json.Marshal(beaconPeer)
@@ -219,12 +250,13 @@ func DiscoverPeers(timeout time.Duration) ([]Peer, error) {
 		}
 	}
 
-	// FIX: If we found ACTUAL remote peers via UDP, return immediately.
-	// If we ONLY found ourselves, force the TCP sweep fallback!
+	// FIX: If we found ACTUAL remote peers via UDP, return immediately (excluding local machine).
 	if hasRemote {
 		var results []Peer
 		for _, p := range discovered {
-			results = append(results, p)
+			if !IsLocalNetworkIP(p.HostIP) {
+				results = append(results, p)
+			}
 		}
 		mu.Unlock()
 		return results, nil
@@ -237,6 +269,9 @@ func DiscoverPeers(timeout time.Duration) ([]Peer, error) {
 	semaphore := make(chan struct{}, 64) // Bounded concurrency limit
 
 	probeHost := func(ip string) {
+		if IsLocalNetworkIP(ip) {
+			return
+		}
 		target := fmt.Sprintf("%s:%d", ip, DiscoveryPort)
 		conn, err := net.DialTimeout("tcp4", target, 350*time.Millisecond)
 		if err != nil {
@@ -277,7 +312,9 @@ func DiscoverPeers(timeout time.Duration) ([]Peer, error) {
 	var results []Peer
 	mu.Lock()
 	for _, p := range discovered {
-		results = append(results, p)
+		if !IsLocalNetworkIP(p.HostIP) {
+			results = append(results, p)
+		}
 	}
 	mu.Unlock()
 	return results, nil

@@ -41,13 +41,13 @@ func TestCollisionSmartSkip(t *testing.T) {
 	_ = os.WriteFile(filePath, content, 0644)
 	fileID := GenerateFileID(filePath)
 
-	res, err := ResolveCollision(tmpDir, fileName, fileID, int64(len(content)), 64*1024, PolicyAutoRename)
+	res, err := ResolveCollision(tmpDir, fileName, fileID, int64(len(content)), 64*1024, PolicySkip)
 	if err != nil {
 		t.Fatalf("ResolveCollision failed: %v", err)
 	}
 
 	if !res.IsDuplicate {
-		t.Fatalf("Expected IsDuplicate = true for identical file, got false")
+		t.Fatalf("Expected IsDuplicate = true for PolicySkip, got false")
 	}
 	if res.ResolvedName != fileName {
 		t.Fatalf("Expected ResolvedName = %q, got %q", fileName, res.ResolvedName)

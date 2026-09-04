@@ -140,32 +140,20 @@ func ResolveCollision(outputDir, fileName, fileID string, fileSize int64, chunkS
 
 		// 2. Check for completed file on disk (target exists, no .medxfer)
 		if targetErr == nil && !targetInfo.IsDir() {
-			// Check if file on disk is an EXACT cryptographic match (Smart Skip)
-			if targetInfo.Size() == fileSize {
-				localFileID := GenerateFileID(targetPath)
-				if localFileID != "" && fileID != "" && strings.TrimSpace(localFileID) == strings.TrimSpace(fileID) {
-					// 100% Identical File Already Exists -> Zero-Byte Smart Skip
-					return CollisionResult{
-						ResolvedName: candidateRel,
-						IsDuplicate:  true,
-						IsResume:     false,
-						ResumeBytes:  fileSize,
-					}, nil
-				}
+			if policy == PolicySkip {
+				return CollisionResult{
+					ResolvedName: candidateRel,
+					IsDuplicate:  true,
+					IsResume:     false,
+					ResumeBytes:  fileSize,
+				}, nil
 			}
 
-			// File exists but has DIFFERENT content
 			if policy == PolicyOverwrite {
 				return CollisionResult{
 					ResolvedName: candidateRel,
 					IsDuplicate:  false,
 					IsResume:     false,
-					ResumeBytes:  0,
-				}, nil
-			} else if policy == PolicySkip {
-				return CollisionResult{
-					ResolvedName: candidateRel,
-					IsDuplicate:  true,
 					ResumeBytes:  0,
 				}, nil
 			}

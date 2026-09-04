@@ -695,6 +695,7 @@ func TestEndToEndSmartSkip(t *testing.T) {
 
 	// Receiver pulls file: should instantly Smart-Skip with 0 errors
 	receiver := NewReceiver(dstDir, 2)
+	receiver.SetCollisionPolicy(PolicySkip)
 	err := receiver.Pull(ctx, bindAddr, nil, fileID)
 	if err != nil {
 		t.Fatalf("Smart-skip Pull failed: %v", err)

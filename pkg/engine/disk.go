@@ -15,29 +15,28 @@ type DiskManager struct {
 	finalPath string
 	statePath string
 	fileSize  int64
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	completed []bool
 	downBytes int64
 }
 
-// GenerateFileID creates an unforgeable hash using Name, Size, and the first 4KB of data
+// GenerateFileID creates a fast unique hash from FileInfo metadata (Name, Size, ModTime)
+// without performing blocking disk reads or network seeks.
 func GenerateFileID(filePath string) string {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return ""
 	}
-	f, err := os.Open(filePath)
-	if err != nil {
+	return GenerateFileIDFromInfo(info)
+}
+
+// GenerateFileIDFromInfo generates a unique hash from already available os.FileInfo metadata
+func GenerateFileIDFromInfo(info os.FileInfo) string {
+	if info == nil {
 		return ""
 	}
-	defer f.Close()
-
-	buf := make([]byte, 4096)
-	n, _ := f.Read(buf)
-
 	h := md5.New()
-	_, _ = fmt.Fprintf(h, "%s-%d-", info.Name(), info.Size())
-	h.Write(buf[:n])
+	_, _ = fmt.Fprintf(h, "%s-%d-%d", info.Name(), info.Size(), info.ModTime().UnixNano())
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
@@ -209,8 +208,8 @@ func CreateAndPreallocate(outputDir, fileName string, fileSize int64, chunkSize 
 }
 
 func (dm *DiskManager) IsChunkCompleted(index uint32) bool {
-	dm.mu.Lock()
-	defer dm.mu.Unlock()
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
 	if int(index) < len(dm.completed) {
 		return dm.completed[index]
 	}
@@ -220,12 +219,17 @@ func (dm *DiskManager) IsChunkCompleted(index uint32) bool {
 func (dm *DiskManager) GetDownloadedBytes() int64 { return dm.downBytes }
 
 func (dm *DiskManager) WriteChunkAt(data []byte, offset int64, chunkIndex uint32) (int, error) {
-	dm.mu.Lock()
-	defer dm.mu.Unlock()
+	// 1. Lockless parallel write of 2MB data payload directly to disk!
 	n, err := dm.file.WriteAt(data, offset)
 	if err == nil {
-		dm.completed[chunkIndex] = true
-		dm.stateFile.WriteAt([]byte{1}, int64(32+chunkIndex))
+		dm.mu.Lock()
+		if int(chunkIndex) < len(dm.completed) {
+			dm.completed[chunkIndex] = true
+		}
+		if dm.stateFile != nil {
+			_, _ = dm.stateFile.WriteAt([]byte{1}, int64(32+chunkIndex))
+		}
+		dm.mu.Unlock()
 	}
 	return n, err
 }

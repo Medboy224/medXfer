@@ -169,8 +169,13 @@ func (s *Sender) ServeAndSendWithRelPath(ctx context.Context, bindAddr, filePath
 				_ = c.Close()
 			}()
 
-			buf := make([]byte, s.chunkSize)
-			frameBuf := make([]byte, protocol.FrameHeaderSize+protocol.ChunkHeaderSize+int(s.chunkSize))
+			bufPtr := getChunkBuffer()
+			defer putChunkBuffer(bufPtr)
+			buf := (*bufPtr)[:s.chunkSize]
+
+			framePtr := getChunkBuffer()
+			defer putChunkBuffer(framePtr)
+			frameBuf := *framePtr
 
 			for {
 				header, err := protocol.ReadHeader(c)

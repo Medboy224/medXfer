@@ -1,15 +1,24 @@
 package manifest
 
 import (
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-
-	"github.com/Medboy224/medXfer/pkg/engine"
 )
+
+// GenerateFileIDFromInfo generates a unique hash from os.FileInfo metadata
+func GenerateFileIDFromInfo(info os.FileInfo) string {
+	if info == nil {
+		return ""
+	}
+	h := md5.New()
+	_, _ = fmt.Fprintf(h, "%s-%d-%d", info.Name(), info.Size(), info.ModTime().UnixNano())
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
 
 // Item represents a single file entry in the batch manifest
 type Item struct {
@@ -77,7 +86,7 @@ func Build(paths []string) (*Manifest, error) {
 				}
 
 				normRelPath := filepath.ToSlash(relPath)
-				fileID := engine.GenerateFileID(path)
+				fileID := GenerateFileIDFromInfo(fileInfo)
 
 				items = append(items, Item{
 					RelPath:  normRelPath,
@@ -93,7 +102,7 @@ func Build(paths []string) (*Manifest, error) {
 			}
 		} else if info.Mode().IsRegular() {
 			normRelPath := filepath.ToSlash(filepath.Base(cleanPath))
-			fileID := engine.GenerateFileID(cleanPath)
+			fileID := GenerateFileIDFromInfo(info)
 
 			items = append(items, Item{
 				RelPath:  normRelPath,
