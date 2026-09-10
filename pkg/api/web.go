@@ -70,6 +70,15 @@ const IndexHTML = `<!DOCTYPE html>
     .dir-item:hover { background: rgba(59, 130, 246, 0.15); color: var(--primary); }
     .quick-chip { background: #0b1120; border: 1px solid var(--border); color: var(--text); border-radius: 9999px; padding: 3px 10px; font-size: 12px; cursor: pointer; transition: 0.15s; }
     .quick-chip:hover { border-color: var(--primary); color: var(--primary); }
+    
+    .drop-zone { border: 2px dashed var(--border); border-radius: 12px; padding: 24px 16px; text-align: center; background: #090d16; transition: all 0.2s ease; cursor: pointer; }
+    .drop-zone:hover, .drop-zone.dragover { border-color: var(--primary); background: #111a2e; }
+    .drop-icon { font-size: 32px; margin-bottom: 6px; }
+    .drop-title { font-size: 14px; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; }
+    .drop-subtitle { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+    .drop-buttons { display: flex; justify-content: center; gap: 12px; }
+    .btn-picker { background: #1e293b; color: #93c5fd; border: 1px solid #3b82f6; padding: 8px 18px; font-size: 13px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .btn-picker:hover { background: #2563eb; color: white; }
   </style>
 </head>
 <body>
@@ -78,6 +87,27 @@ const IndexHTML = `<!DOCTYPE html>
       <div class="logo">⚡ med<span>Xfer</span> <small id="headerDeviceName" style="font-size: 13px; color: var(--primary); font-weight: 600; margin-left: 8px; background: rgba(59, 130, 246, 0.15); padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.3);">Device: Loading...</small></div>
       <div id="connectionStatus" class="badge badge-offline">Connecting...</div>
     </header>
+
+    <!-- Incoming Web Share Upload Banner (Always visible at top when request arrives) -->
+    <div id="webUploadBanner" style="display: none; background: #1e3a8a; border: 2px solid #3b82f6; border-radius: 12px; padding: 14px 18px; margin-bottom: 20px; align-items: center; justify-content: space-between; gap: 16px; box-shadow: 0 4px 20px rgba(59, 130, 246, 0.4);">
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-weight: 700; color: #93c5fd; font-size: 15px; margin-bottom: 2px;">📲 Incoming Web Share Upload Request</div>
+        <div id="webUploadBannerText" style="font-size: 13px; color: #f8fafc; word-break: break-all;">A device wants to upload files.</div>
+      </div>
+      <div style="display: flex; gap: 10px; flex-shrink: 0;">
+        <button type="button" class="btn btn-danger" style="width: auto; padding: 8px 16px; font-size: 13px;" onclick="respondWebUpload(false)">✕ Reject</button>
+        <button type="button" class="btn btn-success" style="width: auto; padding: 8px 20px; font-size: 13px; font-weight: 700;" onclick="respondWebUpload(true)">✓ Accept & Save</button>
+      </div>
+    </div>
+
+    <!-- Security Alert Banner (For unauthorized / invalid PIN attempts) -->
+    <div id="webSecurityBanner" style="display: none; background: #7f1d1d; border: 2px solid #ef4444; border-radius: 12px; padding: 12px 18px; margin-bottom: 20px; align-items: center; justify-content: space-between; gap: 16px; box-shadow: 0 4px 20px rgba(239, 68, 68, 0.4);">
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-weight: 700; color: #fca5a5; font-size: 14px; margin-bottom: 2px;">⚠️ Web Share Security Alert</div>
+        <div id="webSecurityBannerText" style="font-size: 13px; color: #fef2f2; word-break: break-all;">Unauthorized connection attempt detected.</div>
+      </div>
+      <button type="button" class="btn btn-secondary" style="width: auto; padding: 6px 12px; font-size: 12px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2);" onclick="dismissSecurityAlert()">✕ Dismiss</button>
+    </div>
 
     <div class="grid">
       <!-- Device & Settings Card -->
@@ -119,20 +149,48 @@ const IndexHTML = `<!DOCTYPE html>
         </div>
 
         <!-- Connected Network Web Share Card -->
-        <div id="localPortalCard" style="display: none; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">
+        <div id="localPortalCard" style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <label style="margin: 0; font-weight: 600;">📲 Instant Web Share (Connected Wi-Fi)</label>
-            <span style="font-size: 11px; background: #0284c7; padding: 2px 8px; border-radius: 10px; color: white;">CONNECTED</span>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <label style="margin: 0; font-weight: 600;">📲 Instant Web Share</label>
+              <span id="webShareStatusBadge" class="badge badge-offline" style="font-size: 10px; padding: 2px 7px;">DISABLED</span>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <button id="toggleWebShareBtn" type="button" class="btn btn-success" style="width: auto; padding: 3px 10px; font-size: 11px; font-weight: 700;" onclick="toggleWebShare(true)">▶️ Turn ON</button>
+              <span id="webSharePINBadge" style="display: none; font-size: 11px; background: #3b82f6; padding: 2px 8px; border-radius: 10px; color: white; font-weight: 700;">PIN: ------</span>
+              <button id="webShare6DBtn" type="button" class="btn btn-secondary" style="display: none; width: auto; padding: 2px 6px; font-size: 10px;" onclick="regenerateSharePIN(6)" title="Generate new 6-digit PIN">🔄 6D</button>
+              <button id="webShare4DBtn" type="button" class="btn btn-secondary" style="display: none; width: auto; padding: 2px 6px; font-size: 10px;" onclick="regenerateSharePIN(4)" title="Generate new 4-digit PIN">🔄 4D</button>
+            </div>
           </div>
-          <div style="font-size: 11px; color: var(--muted); margin-bottom: 10px;">
-            Phone on the same Wi-Fi? Scan with phone camera to transfer files immediately (no hotspot needed):
+
+          <!-- Web Share Inactive Box -->
+          <div id="webShareInactiveBox" style="background: #0b1120; border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-top: 6px; text-align: center;">
+            <div style="font-size: 12px; color: var(--muted); margin-bottom: 8px;">
+              Web Share is currently <strong>turned off</strong>. Remote devices on your Wi-Fi cannot access or upload files.
+            </div>
+            <button type="button" class="btn btn-success" style="width: auto; display: inline-flex; padding: 6px 14px; font-size: 12px; font-weight: 700;" onclick="toggleWebShare(true)">⚡ Turn ON Web Share</button>
           </div>
-          <div style="display: flex; gap: 12px; align-items: center; background: #0b1120; border: 1px solid var(--border); border-radius: 8px; padding: 10px;">
-            <img id="localPortalQRImg" style="width: 85px; height: 85px; border-radius: 6px; background: white; padding: 4px;" alt="QR Code">
-            <div style="flex: 1; min-width: 0;">
-              <div style="font-size: 12px; font-weight: 600; color: #60a5fa; word-break: break-all;" id="localPortalURLText">http://...</div>
-              <div style="font-size: 10px; color: var(--muted); margin-top: 4px;">Zero-install: Safari / Chrome</div>
-              <a id="localPortalLink" href="/share" target="_blank" style="display: inline-block; margin-top: 6px; font-size: 11px; color: #34d399; text-decoration: none;">🔗 Open Portal</a>
+
+          <!-- Web Share Active Box -->
+          <div id="webShareActiveBox" style="display: none;">
+            <div style="font-size: 11px; color: var(--muted); margin-bottom: 10px;">
+              Other devices on the same Wi-Fi? Scan QR code or open link to download/upload:
+            </div>
+            <div style="display: flex; gap: 12px; align-items: center; background: #0b1120; border: 1px solid var(--border); border-radius: 8px; padding: 10px;">
+              <img id="localPortalQRImg" style="width: 85px; height: 85px; border-radius: 6px; background: white; padding: 4px;" alt="QR Code">
+              <div style="flex: 1; min-width: 0;">
+                <div style="font-size: 12px; font-weight: 600; color: #60a5fa; word-break: break-all;" id="localPortalURLText">http://...</div>
+                <div style="font-size: 10px; color: var(--muted); margin-top: 4px;">Zero-install: Chrome / Safari / Firefox</div>
+                <div style="display: flex; gap: 10px; align-items: center; margin-top: 6px;">
+                  <a id="localPortalLink" href="/share" target="_blank" style="font-size: 11px; color: #34d399; text-decoration: none;">🔗 Open Portal</a>
+                  <button type="button" class="btn btn-danger" style="width: auto; padding: 2px 8px; font-size: 10px;" onclick="toggleWebShare(false)">⏹️ Turn OFF</button>
+                </div>
+              </div>
+            </div>
+            <div style="margin-top: 8px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--muted);">
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; margin: 0;">
+                <input type="checkbox" id="webShareAutoAcceptCheck" onchange="toggleWebShareAutoAccept(this.checked)" style="width: auto;"> Auto-accept incoming web uploads
+              </label>
             </div>
           </div>
         </div>
@@ -182,26 +240,6 @@ const IndexHTML = `<!DOCTYPE html>
 
             <!-- Warning Banner when locked to 2.4GHz by connected router -->
             <div id="hotspotWarningBanner" style="display: none; background: #451a03; border: 1px solid #d97706; border-radius: 6px; padding: 8px; font-size: 11px; color: #fbbf24; margin-top: 10px;"></div>
-
-            <!-- Web Shared Files Status -->
-            <div id="webSharedFilesSummary" style="margin-top: 10px; padding: 8px; background: #111e38; border-radius: 6px; font-size: 11px; color: #34d399; display: none;">
-              📁 <strong>Web Portal Files:</strong> <span id="webSharedFilesCount">0 files</span>
-            </div>
-
-            <!-- Live Mobile Web Transfer Telemetry -->
-            <div id="webShareProgressCard" style="display: none; margin-top: 10px; background: #070d19; border: 1px solid #3b82f6; border-radius: 8px; padding: 10px;">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                <strong id="webShareProgressTitle" style="font-size: 12px; color: #60a5fa;">📱 Mobile Transfer Active</strong>
-                <span id="webShareSpeed" style="font-size: 12px; color: #34d399; font-weight: 600;">0.0 MB/s</span>
-              </div>
-              <div class="progress-bar-container" style="margin-bottom: 6px; height: 8px;">
-                <div class="progress-bar" id="webShareProgressBar" style="width: 0%; height: 100%; background: #3b82f6; transition: width 0.15s;"></div>
-              </div>
-              <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--muted);">
-                <span id="webShareBytes">0 MB / 0 MB</span>
-                <span id="webSharePercent" style="font-weight: 600; color: #60a5fa;">0%</span>
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -215,34 +253,73 @@ const IndexHTML = `<!DOCTYPE html>
 
         <h2 style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">Send Files or Folder</h2>
         
-        <!-- Hidden Universal Browser File Inputs (Android, iOS, Mac, Linux, Windows) -->
+        <!-- Hidden Universal Browser File Inputs -->
         <input type="file" id="browserFileInput" multiple style="display:none" onchange="onBrowserFilesSelected(this.files)">
         <input type="file" id="browserFolderInput" webkitdirectory directory multiple style="display:none" onchange="onBrowserFilesSelected(this.files)">
 
-        <div class="btn-group">
-          <button class="btn btn-secondary" onclick="pickFiles()">📄 Pick Files...</button>
-          <button class="btn btn-secondary" onclick="pickFolder()">📁 Pick Folder...</button>
-          <button class="btn btn-secondary" onclick="openFSPickerForSend()" title="Browse device storage directly">📁 Browse Device...</button>
-          <button class="btn btn-secondary" onclick="document.getElementById('browserFileInput').click()" title="Mobile/Browser Upload">📱 Browser Upload</button>
+        <!-- Unified Modern Drop & Pick Zone -->
+        <div id="dropZone" class="drop-zone" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+          <div class="drop-icon">📦</div>
+          <div class="drop-title">Drag & drop files or folders here</div>
+          <div class="drop-subtitle">or choose from your device:</div>
+          <div class="drop-buttons" onclick="event.stopPropagation()">
+            <button type="button" class="btn-picker" onclick="triggerPickFiles()">📄 Choose Files</button>
+            <button type="button" class="btn-picker" onclick="triggerPickFolder()">📁 Choose Folder</button>
+          </div>
         </div>
 
-        <!-- Selected browser files preview box -->
-        <div id="selectedFilesBox" style="display:none; background:#0b1120; border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-bottom:12px;">
+        <!-- Selected files preview box -->
+        <div id="selectedFilesBox" style="display:none; background:#0b1120; border:1px solid var(--border); border-radius:8px; padding:12px; margin-top:12px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
             <strong id="selectedFilesSummary" style="font-size:13px; color:var(--primary);">0 files selected</strong>
-            <button class="btn btn-secondary" style="width:auto; padding:2px 8px; font-size:11px;" onclick="clearBrowserFiles()">Clear</button>
+            <button type="button" class="btn btn-danger" style="width:auto; padding:3px 10px; font-size:11px;" onclick="clearAllSelected()">✕ Clear / Cancel</button>
           </div>
-          <div id="selectedFilesList" style="font-size:12px; color:var(--muted); max-height:80px; overflow-y:auto;"></div>
+          <!-- Real-time Staging Progress Bar -->
+          <div id="stagingProgressBarContainer" style="display:none; width: 100%; height: 6px; background: #1e293b; border-radius: 9999px; overflow: hidden; margin: 6px 0;">
+            <div id="stagingProgressBar" style="height: 100%; width: 0%; background: #3b82f6; transition: width 0.1s ease;"></div>
+          </div>
+          <div id="selectedFilesList" style="font-size:12px; color:var(--muted); max-height:100px; overflow-y:auto;"></div>
         </div>
 
-        <div class="form-group">
-          <label>Or Enter Local Path(s) (one per line)</label>
-          <textarea id="sendPathInput" rows="2" placeholder="e.g. /sdcard/Download/video.mp4 or C:\Downloads\folder"></textarea>
+        <!-- Advanced Manual Path Toggle -->
+        <div style="margin-top: 10px; text-align: right;">
+          <a href="javascript:void(0)" onclick="toggleManualPath()" id="togglePathLink" style="font-size: 11px; color: var(--muted); text-decoration: none;">✏️ Advanced: Enter local path manually</a>
         </div>
-        <div style="display: flex; gap: 8px; margin-top: 10px;">
+        <div id="manualPathGroup" class="form-group" style="display: none; margin-top: 8px;">
+          <div style="display: flex; gap: 8px;">
+            <textarea id="sendPathInput" rows="2" placeholder="e.g. C:\Users\name\Documents\file.zip" oninput="onManualPathInput()" style="flex: 1;"></textarea>
+            <button type="button" class="btn btn-secondary" style="width: auto; white-space: nowrap; padding: 0 12px; font-size: 12px;" onclick="openDirPicker('sendPathInput')">📁 Browse PC...</button>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-top: 14px;">
           <button id="sendTransferBtn" class="btn btn-success" style="flex: 1;" onclick="sendTransfer()">🚀 Send to Paired Device</button>
           <button id="shareWebBtn" class="btn" style="flex: 1; background: #0284c7;" onclick="shareToWebPortal()">🌐 Share to Web Portal</button>
         </div>
+
+        <!-- Web Shared Files Status -->
+        <div id="webSharedFilesSummary" style="margin-top: 10px; padding: 8px 12px; background: #111e38; border: 1px solid #1e3a8a; border-radius: 6px; font-size: 12px; color: #34d399; display: none;">
+          📁 <strong>Web Portal Files:</strong> <span id="webSharedFilesCount">0 files</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Real-Time Mobile Web Share Telemetry Card -->
+    <div class="card" id="webShareProgressCard" style="display: none; margin-bottom: 20px; border: 1px solid #3b82f6; background: #070d19;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <h2 style="margin: 0; font-size: 15px; color: #60a5fa;" id="webShareProgressTitle">📱 Mobile Web Transfer Active</h2>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span id="webShareSpeed" style="font-size: 13px; color: #34d399; font-weight: 600;">0.0 MB/s</span>
+          <button id="webSharePauseBtn" class="btn btn-secondary" style="width: auto; padding: 3px 10px; font-size: 11px;" onclick="toggleWebSharePause()">⏸️ Pause</button>
+          <button id="webShareCancelBtn" class="btn btn-danger" style="width: auto; padding: 3px 10px; font-size: 11px;" onclick="cancelWebShareTransfer()">⏹️ Stop</button>
+        </div>
+      </div>
+      <div class="progress-bar-container" style="margin-bottom: 8px; height: 10px;">
+        <div class="progress-bar" id="webShareProgressBar" style="width: 0%; height: 100%; background: #3b82f6; transition: width 0.15s;"></div>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--muted);">
+        <span id="webShareBytes">0 MB / 0 MB</span>
+        <span id="webSharePercent" style="font-weight: 600; color: #60a5fa;">0%</span>
       </div>
     </div>
 
@@ -332,6 +409,21 @@ const IndexHTML = `<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Web Share Upload Approval Modal -->
+  <div class="modal-overlay" id="webUploadModal" style="display: none; z-index: 99999;">
+    <div class="modal">
+      <h3 style="color: #60a5fa;">📲 Web Share Upload Request</h3>
+      <p id="webUploadDesc" style="margin-bottom: 14px;">A device wants to upload files to this device.</p>
+      
+      <div id="webUploadFilesList" style="background: #0b1120; border: 1px solid var(--border); border-radius: 8px; max-height: 140px; overflow-y: auto; padding: 8px; font-size: 12px; text-align: left; margin-bottom: 16px;"></div>
+
+      <div class="modal-btns">
+        <button type="button" class="btn btn-secondary" onclick="respondWebUpload(false)">✕ Reject</button>
+        <button type="button" class="btn btn-success" onclick="respondWebUpload(true)">✓ Accept & Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Universal Directory Picker Modal (Android, iOS, Linux, Mac, Windows) -->
   <div class="modal-overlay" id="dirPickerModal" style="display:none;">
     <div class="modal" style="max-width: 520px; width: 92%; text-align: left; padding: 20px;">
@@ -366,6 +458,7 @@ const IndexHTML = `<!DOCTYPE html>
     let isTransferPaused = false;
     let currentBatchFiles = [];
     let activeFileIndex = 0;
+    var pendingWebUploadTicket = null;
     const logBox = document.getElementById("logBox");
 
     function log(evt, data) {
@@ -606,6 +699,19 @@ const IndexHTML = `<!DOCTYPE html>
           setPausedUI(false);
           document.getElementById("nodeStatus").innerText = document.getElementById("pairedBox").style.display === "block" ? "PAIRED" : "IDLE";
           document.getElementById("nodeStatus").style.background = document.getElementById("pairedBox").style.display === "block" ? "var(--primary)" : "#334155";
+
+          // Clear and reset progress bars and clear staged/selected files from UI
+          const fpBar = document.getElementById("progressBar");
+          if (fpBar) fpBar.style.width = "0%";
+          const bpBar = document.getElementById("batchProgressBar");
+          if (bpBar) bpBar.style.width = "0%";
+          const fpText = document.getElementById("progressPercent");
+          if (fpText) fpText.innerText = "0%";
+          const bpText = document.getElementById("batchPercentSpan");
+          if (bpText) bpText.innerText = "0%";
+          const spText = document.getElementById("transferSpeed");
+          if (spText) spText.innerText = "0.0 MB/s";
+          clearAllSelected(true);
           break;
         case "action_error":
           const errPairBtn = document.getElementById("pairBtn");
@@ -616,6 +722,14 @@ const IndexHTML = `<!DOCTYPE html>
               b.disabled = false;
             }
           });
+          isSendingTransfer = false;
+          isSharingWeb = false;
+          const sBtn = document.getElementById("sendTransferBtn");
+          if (sBtn) { sBtn.innerText = "🚀 Send to Paired Device"; sBtn.disabled = false; }
+          const wBtn = document.getElementById("shareWebBtn");
+          if (wBtn) { wBtn.innerText = "🌐 Share to Web Portal"; wBtn.disabled = false; }
+          const errMsg = msg.data && msg.data.error ? msg.data.error : "Unknown error";
+          alert("Transfer Error: " + errMsg);
           break;
         case "hotspot_started":
         case "hotspot_status":
@@ -656,7 +770,6 @@ const IndexHTML = `<!DOCTYPE html>
         case "web_files_shared":
           document.getElementById("webSharedFilesSummary").style.display = "block";
           document.getElementById("webSharedFilesCount").innerText = msg.data.count + " item(s) (" + formatMB(msg.data.total_bytes || msg.data.size) + ")";
-          alert("✓ Successfully shared " + msg.data.count + " file(s) with Web Portal! Any connected phone can now download them.");
           break;
         case "web_share_progress":
           const shareCard = document.getElementById("webShareProgressCard");
@@ -667,9 +780,15 @@ const IndexHTML = `<!DOCTYPE html>
               : "📤 Sending " + msg.data.file + " to " + msg.data.client_ip;
             document.getElementById("webShareProgressTitle").innerText = pTitle;
             document.getElementById("webShareProgressBar").style.width = msg.data.percent + "%";
+            document.getElementById("webShareProgressBar").style.background = "#3b82f6";
             document.getElementById("webSharePercent").innerText = msg.data.percent + "%";
             document.getElementById("webShareBytes").innerText = formatMB(msg.data.bytes) + " / " + formatMB(msg.data.total_bytes);
-            document.getElementById("webShareSpeed").innerText = msg.data.speed_mbps + " MB/s";
+            const spdNum = parseFloat(msg.data.speed_mbps || "0");
+            if (spdNum > 0) {
+              document.getElementById("webShareSpeed").innerText = spdNum < 0.1 ? (spdNum * 1024).toFixed(0) + " KB/s" : spdNum.toFixed(1) + " MB/s";
+            } else {
+              document.getElementById("webShareSpeed").innerText = (msg.data.speed_mbps || "0.0") + " MB/s";
+            }
           }
           break;
         case "web_share_complete":
@@ -684,22 +803,267 @@ const IndexHTML = `<!DOCTYPE html>
             document.getElementById("webShareProgressTitle").innerText = cTitle;
             setTimeout(() => {
               cCard.style.display = "none";
-            }, 6000);
+              document.getElementById("webShareProgressBar").style.width = "0%";
+              document.getElementById("webSharePercent").innerText = "0%";
+              document.getElementById("webShareSpeed").innerText = "0.0 MB/s";
+              const pBtn = document.getElementById("webSharePauseBtn");
+              if (pBtn) {
+                pBtn.innerText = "⏸️ Pause";
+                pBtn.className = "btn btn-secondary";
+              }
+            }, 2500);
           }
           break;
+        case "web_share_paused":
+          const pBtn = document.getElementById("webSharePauseBtn");
+          if (pBtn) {
+            pBtn.innerText = "▶️ Resume";
+            pBtn.className = "btn btn-success";
+          }
+          const sTitle = document.getElementById("webShareProgressTitle");
+          if (sTitle && !sTitle.innerText.includes("(Paused)")) {
+            sTitle.innerText += " (Paused)";
+          }
+          document.getElementById("webShareSpeed").innerText = "⏸️ Paused";
+          break;
+        case "web_share_resumed":
+          const rBtn = document.getElementById("webSharePauseBtn");
+          if (rBtn) {
+            rBtn.innerText = "⏸️ Pause";
+            rBtn.className = "btn btn-secondary";
+          }
+          const resTitle = document.getElementById("webShareProgressTitle");
+          if (resTitle) {
+            resTitle.innerText = resTitle.innerText.replace(" (Paused)", "");
+          }
+          break;
+        case "web_share_canceled":
+          const cEl = document.getElementById("webShareProgressCard");
+          if (cEl) {
+            const who = msg.data && msg.data.client_ip ? " (" + msg.data.client_ip + ")" : "";
+            document.getElementById("webShareProgressTitle").innerText = "⏹️ Web Share Transfer Canceled" + who;
+            document.getElementById("webShareSpeed").innerText = "Canceled";
+            document.getElementById("webShareProgressBar").style.background = "var(--danger)";
+            setTimeout(() => {
+              cEl.style.display = "none";
+              document.getElementById("webShareProgressBar").style.width = "0%";
+              document.getElementById("webShareProgressBar").style.background = "#3b82f6";
+              document.getElementById("webSharePercent").innerText = "0%";
+              document.getElementById("webShareSpeed").innerText = "0.0 MB/s";
+              const pBtn = document.getElementById("webSharePauseBtn");
+              if (pBtn) {
+                pBtn.innerText = "⏸️ Pause";
+                pBtn.className = "btn btn-secondary";
+              }
+            }, 1200);
+          }
+          break;
+        case "web_files_cleared":
+          const summaryEl = document.getElementById("webSharedFilesSummary");
+          if (summaryEl) summaryEl.style.display = "none";
+          const countEl = document.getElementById("webSharedFilesCount");
+          if (countEl) countEl.innerText = "0 files";
+          break;
         case "mobile_files_uploaded":
-          alert("📥 Received " + (msg.data ? msg.data.count : 1) + " file(s) from mobile phone! Saved in downloads folder.");
+          console.log("Mobile files uploaded:", msg.data);
+          break;
+        case "web_share_upload_request":
+          showWebUploadModal(msg.data);
+          break;
+        case "web_share_upload_accepted":
+        case "web_share_upload_rejected":
+          closeWebUploadModal();
+          break;
+        case "web_share_auth_failed":
+          showSecurityAlert(msg.data);
+          break;
+        case "web_share_brute_force_blocked":
+          showBruteForceAlert(msg.data);
           break;
       }
     }
 
-    async function shareToWebPortal() {
-      const paths = await preparePathsForSend();
-      if (!paths || paths.length === 0) {
-        alert("Please select files/folders or enter path(s) first!");
-        return;
+    function showBruteForceAlert(data) {
+      if (!data) return;
+      const banner = document.getElementById("webSecurityBanner");
+      const bannerText = document.getElementById("webSecurityBannerText");
+      if (banner && bannerText) {
+        const ip = data.client_ip || "Unknown IP";
+        const fails = data.fail_count || 5;
+        const sec = data.locked_seconds || 60;
+        let msg = "🚨 BRUTE-FORCE ATTACK BLOCKED: IP " + ip + " failed " + fails + " times and is locked out for " + sec + "s.";
+        if (data.pin_regenerated) {
+          msg += " Web Share PIN was automatically rotated for security!";
+        }
+        bannerText.innerText = msg;
+        banner.style.background = "#991b1b";
+        banner.style.borderColor = "#f87171";
+        banner.style.display = "flex";
+
+        if (securityBannerTimeout) clearTimeout(securityBannerTimeout);
+        securityBannerTimeout = setTimeout(() => {
+          banner.style.display = "none";
+          banner.style.background = "#7f1d1d";
+          banner.style.borderColor = "#ef4444";
+        }, 15000);
       }
-      sendCmd("share_web_files", { paths: paths });
+
+      // Play emergency siren tone (3 rapid rising alarm tones)
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        for (let i = 0; i < 3; i++) {
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = "sawtooth";
+          osc.frequency.setValueAtTime(440 + i * 120, audioCtx.currentTime + i * 0.15);
+          gain.gain.setValueAtTime(0.25, audioCtx.currentTime + i * 0.15);
+          gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + (i + 1) * 0.15);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start(audioCtx.currentTime + i * 0.15);
+          osc.stop(audioCtx.currentTime + (i + 1) * 0.15);
+        }
+      } catch (e) {}
+    }
+
+    let securityBannerTimeout = null;
+    function showSecurityAlert(data) {
+      if (!data) return;
+      const banner = document.getElementById("webSecurityBanner");
+      const bannerText = document.getElementById("webSecurityBannerText");
+      if (banner && bannerText) {
+        const ip = data.client_ip || "Unknown IP";
+        const t = data.timestamp || new Date().toLocaleTimeString();
+        bannerText.innerText = "Device at " + ip + " attempted to unlock Web Share with an invalid PIN at " + t + ".";
+        banner.style.display = "flex";
+
+        if (securityBannerTimeout) clearTimeout(securityBannerTimeout);
+        securityBannerTimeout = setTimeout(() => {
+          banner.style.display = "none";
+        }, 8000);
+      }
+
+      // Play alert tone (two quick warning beeps)
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+        osc.frequency.setValueAtTime(200, audioCtx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.25);
+      } catch (e) {}
+    }
+
+    function dismissSecurityAlert() {
+      if (securityBannerTimeout) clearTimeout(securityBannerTimeout);
+      const banner = document.getElementById("webSecurityBanner");
+      if (banner) banner.style.display = "none";
+    }
+
+    function showWebUploadModal(data) {
+      if (!data) return;
+      pendingWebUploadTicket = data.ticket;
+      const count = data.file_count || (data.files ? data.files.length : 1);
+      const totalBytesStr = data.total_bytes ? formatMB(data.total_bytes) : "";
+      const desc = "Device " + (data.client_ip || "Peer") + " wants to send " + count + " file(s) " + (totalBytesStr ? "(" + totalBytesStr + ")" : "");
+
+      // 1. Show interactive top banner
+      const banner = document.getElementById("webUploadBanner");
+      const bannerText = document.getElementById("webUploadBannerText");
+      if (banner && bannerText) {
+        bannerText.innerText = desc + ". Do you accept this upload?";
+        banner.style.display = "flex";
+      }
+
+      // 2. Show modal overlay
+      const modal = document.getElementById("webUploadModal");
+      const descEl = document.getElementById("webUploadDesc");
+      const listDiv = document.getElementById("webUploadFilesList");
+      if (modal) {
+        if (descEl) descEl.innerText = desc + ":";
+        if (listDiv) {
+          listDiv.innerHTML = "";
+          if (data.files && data.files.length) {
+            data.files.forEach(f => {
+              const item = document.createElement("div");
+              item.style.padding = "4px 0";
+              item.style.borderBottom = "1px solid rgba(255,255,255,0.05)";
+              item.innerText = "📄 " + f.name + (f.size ? " (" + formatMB(f.size) + ")" : "");
+              listDiv.appendChild(item);
+            });
+          }
+        }
+        modal.style.display = "flex";
+      }
+
+      // 3. Audio chime if supported
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, audioCtx.currentTime);
+        osc.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.15);
+      } catch (e) {}
+    }
+
+    function closeWebUploadModal() {
+      const modal = document.getElementById("webUploadModal");
+      if (modal) modal.style.display = "none";
+      const banner = document.getElementById("webUploadBanner");
+      if (banner) banner.style.display = "none";
+    }
+
+    function respondWebUpload(accept) {
+      closeWebUploadModal();
+      if (!pendingWebUploadTicket) return;
+      if (accept) {
+        sendCmd("accept_web_upload", { ticket: pendingWebUploadTicket });
+      } else {
+        sendCmd("reject_web_upload", { ticket: pendingWebUploadTicket });
+      }
+      pendingWebUploadTicket = null;
+    }
+
+    function regenerateSharePIN(digits) {
+      sendCmd("regenerate_share_pin", { digits: digits || 6 });
+    }
+
+    function toggleWebShare(enable) {
+      sendCmd("toggle_web_share", { enabled: enable });
+    }
+
+    function toggleWebShareAutoAccept(checked) {
+      sendCmd("set_web_share_auto_accept", { auto_accept: checked });
+    }
+
+    let isSharingWeb = false;
+    async function shareToWebPortal() {
+      if (isSharingWeb) return;
+      isSharingWeb = true;
+      const btn = document.getElementById("shareWebBtn");
+      const origText = btn ? btn.innerText : "";
+      if (btn) btn.innerText = "⏳ Sharing...";
+      try {
+        const paths = await preparePathsForSend();
+        if (!paths || paths.length === 0) {
+          alert("Please select files/folders or enter path(s) first!");
+          return;
+        }
+        sendCmd("share_web_files", { paths: paths });
+      } finally {
+        setTimeout(() => {
+          isSharingWeb = false;
+          if (btn) btn.innerText = origText;
+        }, 800);
+      }
     }
 
     function toggleHotspot(start) {
@@ -761,12 +1125,46 @@ const IndexHTML = `<!DOCTYPE html>
         document.getElementById("nodeStatus").style.background = "#334155";
       }
 
-      if (st.portal_url) {
-        document.getElementById("localPortalCard").style.display = "block";
-        document.getElementById("localPortalURLText").innerText = st.portal_url;
-        document.getElementById("localPortalLink").href = st.portal_url;
+      // Update Web Share controls and visibility
+      const isWebShareOn = !!st.web_share_enabled;
+      const wsBadge = document.getElementById("webShareStatusBadge");
+      const wsToggleBtn = document.getElementById("toggleWebShareBtn");
+      const wsInactiveBox = document.getElementById("webShareInactiveBox");
+      const wsActiveBox = document.getElementById("webShareActiveBox");
+      const pinBadge = document.getElementById("webSharePINBadge");
+      const btn6D = document.getElementById("webShare6DBtn");
+      const btn4D = document.getElementById("webShare4DBtn");
+
+      if (wsBadge) {
+        wsBadge.innerText = isWebShareOn ? "ACTIVE" : "DISABLED";
+        wsBadge.className = isWebShareOn ? "badge badge-online" : "badge badge-offline";
+      }
+      if (wsToggleBtn) {
+        wsToggleBtn.innerText = isWebShareOn ? "⏹️ Turn OFF" : "▶️ Turn ON";
+        wsToggleBtn.className = isWebShareOn ? "btn btn-danger" : "btn btn-success";
+        wsToggleBtn.onclick = () => toggleWebShare(!isWebShareOn);
+      }
+      if (wsInactiveBox) wsInactiveBox.style.display = isWebShareOn ? "none" : "block";
+      if (wsActiveBox) wsActiveBox.style.display = isWebShareOn ? "block" : "none";
+      if (pinBadge) pinBadge.style.display = isWebShareOn ? "inline-block" : "none";
+      if (btn6D) btn6D.style.display = isWebShareOn ? "inline-block" : "none";
+      if (btn4D) btn4D.style.display = isWebShareOn ? "inline-block" : "none";
+
+      if (isWebShareOn) {
+        const host = window.location.host || ("localhost:" + (st.local_port || 19999));
+        const fallbackUrl = window.location.protocol + "//" + host + "/share" + (st.web_share_pin ? ("?pin=" + st.web_share_pin) : "");
+        const portalURL = st.portal_url || fallbackUrl;
+
+        document.getElementById("localPortalURLText").innerText = portalURL;
+        document.getElementById("localPortalLink").href = portalURL;
         if (st.portal_qr) {
           document.getElementById("localPortalQRImg").src = st.portal_qr;
+        }
+        if (st.web_share_pin && pinBadge) {
+          pinBadge.innerText = "PIN: " + st.web_share_pin;
+        }
+        if (document.getElementById("webShareAutoAcceptCheck")) {
+          document.getElementById("webShareAutoAcceptCheck").checked = !!st.web_share_auto_accept;
         }
       }
     }
@@ -816,19 +1214,90 @@ const IndexHTML = `<!DOCTYPE html>
       sendCmd("scan");
     }
 
+    let selectedNativePaths = [];
     let stagedBrowserFiles = [];
     let stagedServerPaths = null;
     let isStaging = false;
 
-    function onBrowserFilesSelected(fileList) {
-      if (!fileList || fileList.length === 0) return;
-      stagedBrowserFiles = Array.from(fileList);
-      stagedServerPaths = null;
-      
+    function onDragOver(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const zone = document.getElementById("dropZone");
+      if (zone) zone.classList.add("dragover");
+    }
+
+    function onDragLeave(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const zone = document.getElementById("dropZone");
+      if (zone) zone.classList.remove("dragover");
+    }
+
+    function onDrop(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const zone = document.getElementById("dropZone");
+      if (zone) zone.classList.remove("dragover");
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        onBrowserFilesSelected(e.dataTransfer.files);
+      }
+    }
+
+    function triggerPickFiles() {
+      const input = document.getElementById("browserFileInput");
+      if (input) {
+        input.value = "";
+        input.click();
+      }
+    }
+
+    function triggerPickFolder() {
+      const input = document.getElementById("browserFolderInput");
+      if (input) {
+        input.value = "";
+        input.click();
+      }
+    }
+
+    function setNativeSelection(paths) {
+      clearAllSelected(false);
+      selectedNativePaths = paths;
       const box = document.getElementById("selectedFilesBox");
       const summary = document.getElementById("selectedFilesSummary");
       const list = document.getElementById("selectedFilesList");
-      
+
+      list.innerHTML = "";
+      for (const p of paths) {
+        const item = document.createElement("div");
+        const cleanName = p.split('\\').pop().split('/').pop();
+        item.innerText = "• " + cleanName + " (" + p + ")";
+        list.appendChild(item);
+      }
+
+      summary.innerText = "✓ " + paths.length + (paths.length === 1 ? " item ready to send" : " items ready to send");
+      box.style.display = "block";
+      document.getElementById("sendPathInput").value = paths.join("\n");
+    }
+
+    function onBrowserFilesSelected(fileList) {
+      if (!fileList || fileList.length === 0) return;
+      const files = Array.from(fileList);
+      if (files.length === 0) return;
+
+      // Abort any existing background staging request
+      if (currentStagingXHR) {
+        currentStagingXHR.abort();
+        currentStagingXHR = null;
+      }
+      isStaging = false;
+      selectedNativePaths = [];
+      stagedServerPaths = null;
+      stagedBrowserFiles = files;
+
+      const box = document.getElementById("selectedFilesBox");
+      const summary = document.getElementById("selectedFilesSummary");
+      const list = document.getElementById("selectedFilesList");
+
       let totalBytes = 0;
       list.innerHTML = "";
       for (const f of stagedBrowserFiles) {
@@ -838,8 +1307,8 @@ const IndexHTML = `<!DOCTYPE html>
         item.innerText = "• " + name + " (" + formatMB(f.size) + ")";
         list.appendChild(item);
       }
-      
-      summary.innerText = stagedBrowserFiles.length + (stagedBrowserFiles.length === 1 ? " file selected (" : " files selected (") + formatMB(totalBytes) + ") - ⏳ Staging...";
+
+      summary.innerText = "⏳ Staging " + stagedBrowserFiles.length + " file" + (stagedBrowserFiles.length > 1 ? "s" : "") + " (" + formatMB(totalBytes) + ")...";
       box.style.display = "block";
       document.getElementById("sendPathInput").value = "";
 
@@ -847,91 +1316,151 @@ const IndexHTML = `<!DOCTYPE html>
       startBackgroundStaging();
     }
 
-    async function startBackgroundStaging() {
+    let currentStagingXHR = null;
+
+    function startBackgroundStaging() {
       if (stagedBrowserFiles.length === 0) return;
+      if (currentStagingXHR) {
+        currentStagingXHR.abort();
+        currentStagingXHR = null;
+      }
+
       isStaging = true;
-      try {
-        const formData = new FormData();
-        for (const file of stagedBrowserFiles) {
-          const relPath = file.webkitRelativePath || file.name;
-          formData.append("files", file, relPath);
-        }
-        const res = await fetch("/api/upload", { method: "POST", body: formData });
-        if (res.ok) {
-          const data = await res.json();
-          stagedServerPaths = data.paths || [];
-          const summary = document.getElementById("selectedFilesSummary");
+      const progressContainer = document.getElementById("stagingProgressBarContainer");
+      const progressBar = document.getElementById("stagingProgressBar");
+      if (progressContainer) progressContainer.style.display = "block";
+      if (progressBar) progressBar.style.width = "0%";
+
+      const formData = new FormData();
+      let totalBytes = 0;
+      for (const file of stagedBrowserFiles) {
+        const relPath = file.webkitRelativePath || file.name;
+        formData.append("files", file, relPath);
+        totalBytes += file.size;
+      }
+
+      const summary = document.getElementById("selectedFilesSummary");
+      if (summary) {
+        summary.innerText = "⏳ Staging " + stagedBrowserFiles.length + " file(s) (0%)...";
+      }
+
+      const xhr = new XMLHttpRequest();
+      currentStagingXHR = xhr;
+
+      xhr.upload.onprogress = function(e) {
+        if (e.lengthComputable) {
+          const pct = Math.min(99, Math.round((e.loaded / e.total) * 100));
+          if (progressBar) progressBar.style.width = pct + "%";
           if (summary) {
-            summary.innerText = "✓ Ready to send (" + stagedBrowserFiles.length + " files)";
+            summary.innerText = "⏳ Staging " + stagedBrowserFiles.length + " file(s) (" + pct + "% - " + formatMB(e.loaded) + " / " + formatMB(e.total) + ")";
+          }
+          const sendBtn = document.getElementById("sendTransferBtn");
+          if (sendBtn && sendBtn.disabled) {
+            sendBtn.innerText = "⏳ Staging (" + pct + "%)...";
+          }
+          const shareBtn = document.getElementById("shareWebBtn");
+          if (shareBtn && shareBtn.disabled) {
+            shareBtn.innerText = "⏳ Staging (" + pct + "%)...";
           }
         }
-      } catch (e) {
-      } finally {
+      };
+
+      xhr.onload = function() {
+        currentStagingXHR = null;
         isStaging = false;
-      }
+        if (progressContainer) progressContainer.style.display = "none";
+        if (xhr.status === 200) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            stagedServerPaths = data.paths || [];
+            if (summary) {
+              summary.innerText = "✓ Ready to send (" + stagedBrowserFiles.length + " files - " + formatMB(totalBytes) + ")";
+            }
+          } catch (err) {
+            if (summary) summary.innerText = "⚠️ Staging response parse error";
+          }
+        } else {
+          if (summary) summary.innerText = "⚠️ Staging failed (HTTP " + xhr.status + ")";
+        }
+      };
+
+      xhr.onerror = function() {
+        currentStagingXHR = null;
+        isStaging = false;
+        if (progressContainer) progressContainer.style.display = "none";
+        if (summary) summary.innerText = "⚠️ Staging network error";
+      };
+
+      xhr.onabort = function() {
+        currentStagingXHR = null;
+        isStaging = false;
+        if (progressContainer) progressContainer.style.display = "none";
+      };
+
+      xhr.open("POST", "/api/upload");
+      xhr.send(formData);
     }
 
-    function clearBrowserFiles() {
+    function clearAllSelected(clearInput = true) {
+      if (currentStagingXHR) {
+        currentStagingXHR.abort();
+        currentStagingXHR = null;
+      }
+      isStaging = false;
+      selectedNativePaths = [];
       stagedBrowserFiles = [];
       stagedServerPaths = null;
-      isStaging = false;
+
+      // Re-enable send and share buttons if they were disabled waiting
+      const sendBtn = document.getElementById("sendTransferBtn");
+      if (sendBtn) {
+        sendBtn.disabled = false;
+        sendBtn.innerText = "🚀 Send to Paired Device";
+      }
+      const shareBtn = document.getElementById("shareWebBtn");
+      if (shareBtn) {
+        shareBtn.disabled = false;
+        shareBtn.innerText = "🌐 Share to Web Portal";
+      }
+
+      const progressContainer = document.getElementById("stagingProgressBarContainer");
+      if (progressContainer) progressContainer.style.display = "none";
+
       document.getElementById("browserFileInput").value = "";
       document.getElementById("browserFolderInput").value = "";
       document.getElementById("selectedFilesBox").style.display = "none";
-    }
-
-    function openFSPickerForSend() {
-      openDirPicker('sendPathInput');
-    }
-
-    async function pickFiles() {
-      try {
-        const res = await fetch("/api/browse?type=file");
-        const data = await res.json();
-        if (data && data.paths && data.paths.length > 0) {
-          clearBrowserFiles();
-          document.getElementById("sendPathInput").value = data.paths.join("\n");
-          return;
-        }
-      } catch (e) {}
-      // Fallback for mobile / web: Open device browser picker modal directly
-      openFSPickerForSend();
-    }
-
-    async function pickFolder() {
-      try {
-        const res = await fetch("/api/browse?type=folder");
-        const data = await res.json();
-        if (data && data.paths && data.paths.length > 0) {
-          clearBrowserFiles();
-          document.getElementById("sendPathInput").value = data.paths.join("\n");
-          return;
-        }
-      } catch (e) {}
-      // Fallback for mobile / web: Open directory picker modal
-      openFSPickerForSend();
-    }
-
-    async function browseHost(type) {
-      try {
-        const res = await fetch("/api/browse?type=" + type);
-        const data = await res.json();
-        if (data && data.paths && data.paths.length > 0) {
-          clearBrowserFiles();
-          const input = document.getElementById("sendPathInput");
-          input.value = data.paths.join("\n");
-        } else {
-          openFSPickerForSend();
-        }
-      } catch (err) {
-        openFSPickerForSend();
+      if (clearInput) {
+        document.getElementById("sendPathInput").value = "";
       }
+      sendCmd("clear_web_files");
+    }
+
+    // Backwards compatibility alias
+    function clearBrowserFiles() {
+      clearAllSelected(true);
+    }
+
+    function toggleManualPath() {
+      const el = document.getElementById("manualPathGroup");
+      const link = document.getElementById("togglePathLink");
+      if (el.style.display === "none" || !el.style.display) {
+        el.style.display = "block";
+        link.innerText = "✕ Hide manual path input";
+      } else {
+        el.style.display = "none";
+        link.innerText = "✏️ Advanced: Enter local path manually";
+      }
+    }
+
+    function onManualPathInput() {
+      selectedNativePaths = [];
+      stagedBrowserFiles = [];
+      stagedServerPaths = null;
     }
 
     function parsePaths() {
       const raw = document.getElementById("sendPathInput").value.trim();
       if (!raw) return [];
-      // Split strictly by newline to safely support filenames with commas, spaces, etc.
       const parts = raw.split(/\r?\n+/);
       const paths = [];
       for (const p of parts) {
@@ -942,54 +1471,53 @@ const IndexHTML = `<!DOCTYPE html>
     }
 
     async function preparePathsForSend() {
+      // 1. If native paths were selected via OS dialog
+      if (selectedNativePaths && selectedNativePaths.length > 0) {
+        return selectedNativePaths;
+      }
+
+      // 2. If browser files were selected
       if (stagedBrowserFiles.length > 0) {
         if (stagedServerPaths && stagedServerPaths.length > 0) {
           return stagedServerPaths;
         }
 
         const btn = document.getElementById("sendTransferBtn");
-        const origText = btn.innerText;
-        btn.innerText = "⏳ Staging " + stagedBrowserFiles.length + " files...";
-        btn.disabled = true;
+        const origText = btn ? btn.innerText : "Send";
+        if (btn) {
+          btn.innerText = "⏳ Staging files...";
+          btn.disabled = true;
+        }
 
-        try {
-          while (isStaging) {
-            await new Promise(r => setTimeout(r, 100));
-          }
-          if (stagedServerPaths && stagedServerPaths.length > 0) {
+        // Wait up to 60s for staging to finish (with abort check)
+        const waitStart = Date.now();
+        while (isStaging && (Date.now() - waitStart < 60000)) {
+          await new Promise(r => setTimeout(r, 150));
+        }
+
+        if (stagedServerPaths && stagedServerPaths.length > 0) {
+          if (btn) {
             btn.innerText = origText;
             btn.disabled = false;
-            return stagedServerPaths;
           }
-
-          const formData = new FormData();
-          for (const file of stagedBrowserFiles) {
-            const relPath = file.webkitRelativePath || file.name;
-            formData.append("files", file, relPath);
-          }
-
-          const res = await fetch("/api/upload", {
-            method: "POST",
-            body: formData,
-          });
-
-          if (!res.ok) {
-            throw new Error("Upload staging failed with HTTP " + res.status);
-          }
-
-          const data = await res.json();
-          stagedServerPaths = data.paths || [];
-          btn.innerText = origText;
-          btn.disabled = false;
           return stagedServerPaths;
-        } catch (err) {
+        }
+
+        if (btn) {
           btn.innerText = origText;
           btn.disabled = false;
-          alert("Failed staging files: " + err);
-          return [];
         }
+
+        if (isStaging) {
+          if (currentStagingXHR) currentStagingXHR.abort();
+          alert("Staging timed out. Please try selecting the files again or use 'Choose Files' for instant local selection.");
+        } else {
+          alert("Failed to stage files for transfer. Please click '✕ Clear / Cancel' and select files again.");
+        }
+        return [];
       }
 
+      // 3. Fall back to manual path input
       return parsePaths();
     }
 
@@ -1025,21 +1553,34 @@ const IndexHTML = `<!DOCTYPE html>
       sendCmd("disconnect");
     }
 
+    let isSendingTransfer = false;
     async function sendTransfer() {
-      const paths = await preparePathsForSend();
-      if (!paths || paths.length === 0) {
-        alert("Please select files/folders or enter path(s).");
-        return;
-      }
-      const isPaired = document.getElementById("pairedBox").style.display === "block";
-      const inputIP = document.getElementById("pairIPInput").value.trim();
+      if (isSendingTransfer) return;
+      isSendingTransfer = true;
+      const btn = document.getElementById("sendTransferBtn");
+      const origText = btn ? btn.innerText : "";
+      if (btn) btn.innerText = "⏳ Preparing...";
+      try {
+        const paths = await preparePathsForSend();
+        if (!paths || paths.length === 0) {
+          alert("Please select files/folders or enter path(s).");
+          return;
+        }
+        const isPaired = document.getElementById("pairedBox").style.display === "block";
+        const inputIP = document.getElementById("pairIPInput").value.trim();
 
-      if (isPaired) {
-        sendCmd("send", { paths: paths });
-      } else if (inputIP) {
-        sendCmd("send", { paths: paths, target_ip: inputIP });
-      } else {
-        alert("Please pair with a device first, or click 'Send' next to a device in the Nearby Devices list below.");
+        if (isPaired) {
+          sendCmd("send", { paths: paths });
+        } else if (inputIP) {
+          sendCmd("send", { paths: paths, target_ip: inputIP });
+        } else {
+          alert("Please pair with a device first, or click 'Send' next to a device in the Nearby Devices list below.");
+        }
+      } finally {
+        setTimeout(() => {
+          isSendingTransfer = false;
+          if (btn) btn.innerText = origText;
+        }, 1000);
       }
     }
 
@@ -1073,6 +1614,24 @@ const IndexHTML = `<!DOCTYPE html>
     function cancelTransfer() {
       if (confirm("Are you sure you want to cancel the transfer?")) {
         sendCmd("cancel");
+      }
+    }
+
+    let isWebSharePaused = false;
+    function toggleWebSharePause() {
+      if (isWebSharePaused) {
+        isWebSharePaused = false;
+        sendCmd("web_share_resume");
+      } else {
+        isWebSharePaused = true;
+        sendCmd("web_share_pause");
+      }
+    }
+
+    function cancelWebShareTransfer() {
+      if (confirm("Stop and cancel the active Web Share transfer?")) {
+        isWebSharePaused = false;
+        sendCmd("web_share_cancel");
       }
     }
 

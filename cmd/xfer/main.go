@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -52,18 +53,7 @@ func isLocalIP(ipStr string) bool {
 }
 
 func getLocalIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "127.0.0.1"
-	}
-	for _, a := range addrs {
-		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String()
-			}
-		}
-	}
-	return "127.0.0.1"
+	return discovery.GetPrimaryLocalIP()
 }
 
 type cliListener struct {
@@ -129,6 +119,8 @@ func main() {
 	switch os.Args[1] {
 	case "daemon":
 		handleDaemon(os.Args[2:])
+	case "share":
+		handleShare(os.Args[2:])
 	case "send":
 		handleSend(os.Args[2:])
 	case "recv":
@@ -1011,6 +1003,81 @@ func handleDaemon(args []string) {
 	}
 }
 
+func handleShare(args []string) {
+	normalizedArgs := reorderArgs(args)
+	shareCmd := flag.NewFlagSet("share", flag.ExitOnError)
+	portFlag := shareCmd.Int("port", 19999, "Port for Web Share HTTP portal")
+	pinFlag := shareCmd.String("pin", "", "Custom 4-digit security PIN (default: random)")
+	autoAcceptFlag := shareCmd.Bool("auto-accept", false, "Auto-accept incoming uploads without terminal prompt")
+	outDirFlag := shareCmd.String("out", "", "Directory to save incoming uploaded files")
+	nameFlag := shareCmd.String("name", "", "Custom device name")
+
+	_ = shareCmd.Parse(normalizedArgs)
+	rawPaths := shareCmd.Args()
+
+	srv := api.NewDaemonServer(*portFlag, *outDirFlag, *nameFlag)
+	srv.SetWebShareEnabled(true)
+	if *pinFlag != "" {
+		srv.SetPIN(*pinFlag)
+	}
+	if *autoAcceptFlag {
+		srv.SetAutoAccept(true)
+	}
+
+	if len(rawPaths) > 0 {
+		if err := srv.SharePaths(rawPaths); err != nil {
+			fmt.Printf("[-] Failed to prepare files for sharing: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	ln, err := srv.Listen(*portFlag)
+	if err != nil {
+		fmt.Printf("[-] Failed to start Web Share listener: %v\n", err)
+		os.Exit(1)
+	}
+
+	st := srv.GetStatus()
+	portalURL := st.PortalURL
+	if portalURL == "" {
+		portalURL = fmt.Sprintf("http://%s:%d/share?pin=%s", discovery.GetPrimaryLocalIP(), st.LocalPort, st.WebSharePIN)
+	}
+
+	fmt.Println("==================================================")
+	fmt.Println("             medXfer Instant Web Share            ")
+	fmt.Println("==================================================")
+	if len(rawPaths) > 0 {
+		fmt.Printf(" [SHARING] %d file/folder path(s):\n", len(rawPaths))
+		for _, p := range rawPaths {
+			fmt.Printf("   • %s\n", p)
+		}
+	} else {
+		fmt.Println(" [SHARING] Portal ready for incoming uploads and downloads.")
+	}
+	fmt.Println("--------------------------------------------------")
+	fmt.Printf(" Access URL : %s\n", portalURL)
+	fmt.Printf(" Security PIN: %s\n", st.WebSharePIN)
+	fmt.Println("--------------------------------------------------")
+	fmt.Println(" Scan QR code with your phone / device camera:")
+	discovery.PrintTerminalQR(portalURL)
+	fmt.Println("--------------------------------------------------")
+	fmt.Println(" Web Share is running. Press Ctrl+C to stop.")
+
+	// Listen for OS signals to stop cleanly
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Println("\n[*] Stopping Web Share...")
+		srv.Stop()
+		os.Exit(0)
+	}()
+
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		fmt.Printf("[-] Server error: %v\n", err)
+	}
+}
+
 func printUsage() {
-	fmt.Printf("Usage:\n  xfer daemon [--port 19999] (Headless API for Flutter GUI)\n  xfer node                 (Persistent interactive mode)\n  xfer send <file_or_folder> [more...]\n  xfer recv                 (Auto-discover senders)\n  xfer recv --ip <addr>     (Direct connect)\n")
+	fmt.Printf("Usage:\n  xfer daemon [--port 19999] (Headless API for Flutter GUI)\n  xfer share <file_or_folder...> (Instant Web Share with QR code & PIN)\n  xfer node                 (Persistent interactive mode)\n  xfer send <file_or_folder> [more...]\n  xfer recv                 (Auto-discover senders)\n  xfer recv --ip <addr>     (Direct connect)\n")
 }

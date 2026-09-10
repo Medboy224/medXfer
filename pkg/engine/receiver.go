@@ -552,9 +552,14 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 				now := time.Now()
 				elapsedSpeed := now.Sub(lastSpeedTime).Seconds()
 
-				if elapsedSpeed >= 1.0 {
+				if elapsedSpeed >= 0.5 {
 					delta := current - lastSpeedBytes
-					currentSpeed = (float64(delta) / 1048576.0) / elapsedSpeed
+					instantSpeed := (float64(delta) / 1048576.0) / elapsedSpeed
+					if currentSpeed == 0 {
+						currentSpeed = instantSpeed
+					} else {
+						currentSpeed = 0.7*currentSpeed + 0.3*instantSpeed
+					}
 					lastSpeedTime = now
 					lastSpeedBytes = current
 				} else if lastSpeedBytes == dm.GetDownloadedBytes() && current > dm.GetDownloadedBytes() {

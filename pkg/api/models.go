@@ -172,20 +172,40 @@ func SaveConfig(cfg Config) error {
 
 // DaemonStatus represents the current state of the backend
 type DaemonStatus struct {
-	Status          string `json:"status"` // "idle", "paired", "transferring"
-	DeviceName      string `json:"device_name"`
-	DownloadDir     string `json:"download_dir"`
-	CollisionPolicy string `json:"collision_policy"`
-	Paired          bool   `json:"paired"`
-	PairedIP        string `json:"paired_ip,omitempty"`
-	PairedDevice    string `json:"paired_device,omitempty"`
-	ActiveTransfer  bool   `json:"active_transfer"`
-	IsPaused        bool   `json:"is_paused"`
-	Version         string `json:"version"`
-	LocalIP         string `json:"local_ip,omitempty"`
-	LocalPort       int    `json:"local_port,omitempty"`
-	PortalURL       string `json:"portal_url,omitempty"`
-	PortalQR        string `json:"portal_qr,omitempty"`
+	Status             string `json:"status"` // "idle", "paired", "transferring"
+	DeviceName         string `json:"device_name"`
+	DownloadDir        string `json:"download_dir"`
+	CollisionPolicy    string `json:"collision_policy"`
+	Paired             bool   `json:"paired"`
+	PairedIP           string `json:"paired_ip,omitempty"`
+	PairedDevice       string `json:"paired_device,omitempty"`
+	ActiveTransfer     bool   `json:"active_transfer"`
+	IsPaused           bool   `json:"is_paused"`
+	Version            string `json:"version"`
+	LocalIP            string `json:"local_ip,omitempty"`
+	LocalPort          int    `json:"local_port,omitempty"`
+	PortalURL          string `json:"portal_url,omitempty"`
+	PortalQR           string `json:"portal_qr,omitempty"`
+	WebShareEnabled    bool   `json:"web_share_enabled"`
+	WebSharePIN        string `json:"web_share_pin,omitempty"`
+	WebShareToken      string `json:"web_share_token,omitempty"`
+	WebShareAutoAccept bool   `json:"web_share_auto_accept"`
+}
+
+// WebUploadRequest represents a pending mobile file upload waiting for host approval
+type WebUploadRequest struct {
+	ID        string          `json:"id"`
+	ClientIP  string          `json:"client_ip"`
+	Files     []WebUploadFile `json:"files"`
+	Approved  bool            `json:"approved"`
+	ExpiresAt time.Time       `json:"expires_at"`
+	DoneChan  chan bool       `json:"-"`
+}
+
+// WebUploadFile represents file metadata in an upload request
+type WebUploadFile struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }
 
 // PairPayload parameters for "pair" action

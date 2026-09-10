@@ -72,6 +72,33 @@ func (s *DaemonServer) dispatch(conn *websocket.Conn, req RequestMessage) {
 	case "share_web_files":
 		s.handleShareWebFiles(conn, req)
 
+	case "clear_web_files":
+		s.handleClearWebFiles(conn, req)
+
+	case "toggle_web_share":
+		s.handleToggleWebShare(conn, req)
+
+	case "regenerate_share_pin":
+		s.handleRegenerateSharePIN(conn, req)
+
+	case "set_web_share_auto_accept":
+		s.handleSetWebShareAutoAccept(conn, req)
+
+	case "accept_web_upload":
+		s.handleAcceptWebUpload(conn, req)
+
+	case "reject_web_upload":
+		s.handleRejectWebUpload(conn, req)
+
+	case "web_share_pause":
+		s.PauseWebShareTransfer()
+
+	case "web_share_resume":
+		s.ResumeWebShareTransfer()
+
+	case "web_share_cancel":
+		s.CancelWebShareTransfer()
+
 	case "open_hotspot_settings":
 		go func() {
 			_ = exec.Command("cmd", "/c", "start", "ms-settings:network-mobilehotspot").Start()
@@ -1000,11 +1027,12 @@ func (s *DaemonServer) handleShareWebFiles(conn *websocket.Conn, req RequestMess
 	}
 
 	s.mu.Lock()
+	s.webShareEnabled = true
 	if len(payload.Paths) == 1 {
 		fi, err := os.Stat(payload.Paths[0])
 		if err == nil && !fi.IsDir() {
-			s.lastOfferedFile = payload.Paths[0]
-			s.lastOfferedManifest = nil
+			s.webSharedFile = payload.Paths[0]
+			s.webSharedManifest = nil
 			s.mu.Unlock()
 			s.Broadcast(NewEvent("web_files_shared", map[string]interface{}{
 				"count":       1,
@@ -1012,6 +1040,7 @@ func (s *DaemonServer) handleShareWebFiles(conn *websocket.Conn, req RequestMess
 				"size":        fi.Size(),
 				"total_bytes": fi.Size(),
 			}, req.ID))
+			s.Broadcast(NewEvent("status", s.getStatus(), req.ID))
 			return
 		}
 	}
@@ -1022,13 +1051,120 @@ func (s *DaemonServer) handleShareWebFiles(conn *websocket.Conn, req RequestMess
 		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 		return
 	}
-	s.lastOfferedManifest = m
-	s.lastOfferedFile = ""
+	s.webSharedManifest = m
+	s.webSharedFile = ""
 	s.mu.Unlock()
 
 	s.Broadcast(NewEvent("web_files_shared", map[string]interface{}{
 		"count":       len(m.Items),
 		"root_name":   m.RootName,
 		"total_bytes": m.TotalBytes,
+	}, req.ID))
+	s.Broadcast(NewEvent("status", s.getStatus(), req.ID))
+}
+
+func (s *DaemonServer) handleClearWebFiles(conn *websocket.Conn, req RequestMessage) {
+	s.mu.Lock()
+	s.webSharedManifest = nil
+	s.webSharedFile = ""
+	s.mu.Unlock()
+
+	s.Broadcast(NewEvent("web_files_cleared", map[string]interface{}{
+		"message": "Web portal files cleared",
+	}, req.ID))
+}
+
+func (s *DaemonServer) handleToggleWebShare(conn *websocket.Conn, req RequestMessage) {
+	s.mu.Lock()
+	var payload struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(req.Payload, &payload); err == nil && payload.Enabled != nil {
+		s.webShareEnabled = *payload.Enabled
+	} else {
+		s.webShareEnabled = !s.webShareEnabled
+	}
+	s.mu.Unlock()
+
+	s.Broadcast(NewEvent("status", s.getStatus(), req.ID))
+}
+
+func (s *DaemonServer) handleRegenerateSharePIN(conn *websocket.Conn, req RequestMessage) {
+	digits := 6
+	var payload struct {
+		Digits int `json:"digits"`
+	}
+	if err := json.Unmarshal(req.Payload, &payload); err == nil && payload.Digits > 0 {
+		digits = payload.Digits
+	}
+	s.regeneratePINInternal(digits)
+}
+
+func (s *DaemonServer) handleSetWebShareAutoAccept(conn *websocket.Conn, req RequestMessage) {
+	var payload struct {
+		AutoAccept bool `json:"auto_accept"`
+	}
+	if err := json.Unmarshal(req.Payload, &payload); err == nil {
+		s.mu.Lock()
+		s.webShareAutoAccept = payload.AutoAccept
+		s.mu.Unlock()
+	}
+
+	s.Broadcast(NewEvent("status", s.getStatus(), req.ID))
+}
+
+func (s *DaemonServer) handleAcceptWebUpload(conn *websocket.Conn, req RequestMessage) {
+	var payload struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.Unmarshal(req.Payload, &payload); err != nil || payload.Ticket == "" {
+		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid ticket"}, req.ID))
+		return
+	}
+
+	s.mu.Lock()
+	ticket, exists := s.pendingWebUploads[payload.Ticket]
+	if exists && ticket != nil {
+		ticket.Approved = true
+		select {
+		case ticket.DoneChan <- true:
+		default:
+		}
+	}
+	s.mu.Unlock()
+
+	if !exists {
+		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "ticket expired or not found"}, req.ID))
+		return
+	}
+
+	s.Broadcast(NewEvent("web_share_upload_accepted", map[string]interface{}{
+		"ticket": payload.Ticket,
+	}, req.ID))
+}
+
+func (s *DaemonServer) handleRejectWebUpload(conn *websocket.Conn, req RequestMessage) {
+	var payload struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.Unmarshal(req.Payload, &payload); err != nil || payload.Ticket == "" {
+		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid ticket"}, req.ID))
+		return
+	}
+
+	s.mu.Lock()
+	ticket, exists := s.pendingWebUploads[payload.Ticket]
+	if exists && ticket != nil {
+		ticket.Approved = false
+		select {
+		case ticket.DoneChan <- false:
+		default:
+		}
+		delete(s.pendingWebUploads, payload.Ticket)
+	}
+	s.mu.Unlock()
+
+	s.Broadcast(NewEvent("web_share_upload_rejected", map[string]interface{}{
+		"ticket": payload.Ticket,
 	}, req.ID))
 }

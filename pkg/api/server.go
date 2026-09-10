@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,6 +33,13 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// IPAuthRecord tracks failed PIN authentication attempts for brute-force defense
+type IPAuthRecord struct {
+	FailCount   int
+	LockedUntil time.Time
+	LastFail    time.Time
+}
+
 // DaemonServer manages the headless background engine and WebSocket connections
 type DaemonServer struct {
 	mu                  sync.RWMutex
@@ -42,6 +51,13 @@ type DaemonServer struct {
 	pendingOffer        *session.Message
 	lastOfferedManifest *manifest.Manifest
 	lastOfferedFile     string
+	webSharedManifest   *manifest.Manifest
+	webSharedFile       string
+	webShareEnabled     bool
+	webSharePIN         string
+	webShareToken       string
+	webShareAutoAccept  bool
+	pendingWebUploads   map[string]*WebUploadRequest
 	lastOfferedPort     int
 	transferCancel      context.CancelFunc
 	itemCancel          context.CancelFunc
@@ -66,6 +82,22 @@ type DaemonServer struct {
 	hotspotMu           sync.Mutex
 	httpPort            int
 
+	authFailMu   sync.Mutex
+	lastAuthFail map[string]time.Time
+	ipLockouts   map[string]*IPAuthRecord
+
+	webShareTransferMu        sync.Mutex
+	webShareTransferCancel    context.CancelFunc
+	webShareTransferPaused    bool
+	webShareTransferPauseCond *sync.Cond
+	webShareTransferDirection string // "upload" | "download"
+	webShareTransferFile      string
+	webShareTransferClientIP  string
+	webShareTransferDestPath  string
+	webShareTransferLastBytes int64
+	webShareTransferLastTime  time.Time
+	webShareTransferSpeed     float64
+
 	ctx     context.Context
 	cancel  context.CancelFunc
 	httpSrv *http.Server
@@ -78,17 +110,157 @@ func NewDaemonServer(port int, defaultOutDir, deviceName string) *DaemonServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg := LoadConfig(defaultOutDir, deviceName)
 
-	return &DaemonServer{
-		config:          cfg,
-		clients:         make(map[*websocket.Conn]bool),
-		activePort:      18888,
-		itemDoneChan:    make(chan bool, 1),
-		skippedFiles:    make(map[int]bool),
-		pausedFiles:     make(map[int]bool),
-		batchResumeChan: make(chan struct{}, 1),
-		ctx:             ctx,
-		cancel:          cancel,
+	// Generate 6-digit PIN (1,000,000 combinations) and 128-bit crypto token
+	pin := fmt.Sprintf("%06d", (time.Now().UnixNano()%900000)+100000)
+	tokenBytes := make([]byte, 16)
+	_, _ = rand.Read(tokenBytes)
+	token := hex.EncodeToString(tokenBytes)
+
+	srv := &DaemonServer{
+		config:             cfg,
+		clients:            make(map[*websocket.Conn]bool),
+		activePort:         18888,
+		itemDoneChan:       make(chan bool, 1),
+		skippedFiles:       make(map[int]bool),
+		pausedFiles:        make(map[int]bool),
+		batchResumeChan:    make(chan struct{}, 1),
+		webSharePIN:        pin,
+		webShareToken:      token,
+		webShareEnabled:    false,
+		webShareAutoAccept: false,
+		pendingWebUploads:  make(map[string]*WebUploadRequest),
+		lastAuthFail:       make(map[string]time.Time),
+		ipLockouts:         make(map[string]*IPAuthRecord),
+		ctx:                ctx,
+		cancel:             cancel,
 	}
+	srv.webShareTransferPauseCond = sync.NewCond(&srv.webShareTransferMu)
+	return srv
+}
+
+// CheckLockout returns true if the client IP is currently locked out from brute-force protection
+func (s *DaemonServer) CheckLockout(clientIP string) (bool, int) {
+	s.authFailMu.Lock()
+	defer s.authFailMu.Unlock()
+	if s.ipLockouts == nil {
+		return false, 0
+	}
+	rec, ok := s.ipLockouts[clientIP]
+	if !ok || rec == nil {
+		return false, 0
+	}
+	now := time.Now()
+	if now.Before(rec.LockedUntil) {
+		remaining := int(rec.LockedUntil.Sub(now).Seconds())
+		if remaining < 1 {
+			remaining = 1
+		}
+		return true, remaining
+	}
+	return false, 0
+}
+
+// RecordAuthFailure registers a failed PIN attempt, enforces progressive lockout,
+// and triggers emergency PIN rotation on 10 consecutive failures (Panic Mode)
+func (s *DaemonServer) RecordAuthFailure(clientIP, attemptedPIN string) (locked bool, remainingSec int, pinRegenerated bool) {
+	s.authFailMu.Lock()
+	if s.ipLockouts == nil {
+		s.ipLockouts = make(map[string]*IPAuthRecord)
+	}
+	rec, ok := s.ipLockouts[clientIP]
+	if !ok || rec == nil {
+		rec = &IPAuthRecord{}
+		s.ipLockouts[clientIP] = rec
+	}
+
+	now := time.Now()
+	if !rec.LastFail.IsZero() && now.Sub(rec.LastFail) > 15*time.Minute {
+		rec.FailCount = 0
+	}
+	rec.LastFail = now
+	rec.FailCount++
+
+	if rec.FailCount >= 10 {
+		rec.LockedUntil = now.Add(5 * time.Minute)
+		locked = true
+		remainingSec = 300
+		pinRegenerated = true
+	} else if rec.FailCount >= 5 {
+		rec.LockedUntil = now.Add(1 * time.Minute)
+		locked = true
+		remainingSec = 60
+	}
+	s.authFailMu.Unlock()
+
+	log.Printf("[Security] Web Share failed PIN attempt #%d from %s (PIN: %s)", rec.FailCount, clientIP, attemptedPIN)
+
+	if locked {
+		log.Printf("[Security] 🚨 Brute force lockout applied to IP %s for %d seconds", clientIP, remainingSec)
+		s.Broadcast(NewEvent("web_share_brute_force_blocked", map[string]interface{}{
+			"client_ip":       clientIP,
+			"fail_count":      rec.FailCount,
+			"locked_seconds":  remainingSec,
+			"pin_regenerated": pinRegenerated,
+			"timestamp":       now.Format("15:04:05"),
+		}))
+	} else {
+		s.notifyAuthFailure(clientIP, attemptedPIN)
+	}
+
+	if pinRegenerated {
+		s.regeneratePINInternal(6)
+	}
+
+	return locked, remainingSec, pinRegenerated
+}
+
+// RecordAuthSuccess resets the failed attempt counter for a client IP upon successful authentication
+func (s *DaemonServer) RecordAuthSuccess(clientIP string) {
+	s.authFailMu.Lock()
+	if s.ipLockouts != nil {
+		delete(s.ipLockouts, clientIP)
+	}
+	s.authFailMu.Unlock()
+}
+
+// regeneratePINInternal generates a new random PIN and crypto token, then broadcasts status
+func (s *DaemonServer) regeneratePINInternal(digits int) {
+	s.mu.Lock()
+	if digits == 4 {
+		s.webSharePIN = fmt.Sprintf("%04d", (time.Now().UnixNano()%9000)+1000)
+	} else {
+		s.webSharePIN = fmt.Sprintf("%06d", (time.Now().UnixNano()%900000)+100000)
+	}
+	tokenBytes := make([]byte, 16)
+	_, _ = rand.Read(tokenBytes)
+	s.webShareToken = hex.EncodeToString(tokenBytes)
+	s.mu.Unlock()
+
+	log.Printf("[Security] Web Share PIN rotated: %s (Token: %s...)", s.webSharePIN, s.webShareToken[:6])
+	s.Broadcast(NewEvent("status", s.getStatus()))
+}
+
+// notifyAuthFailure logs and broadcasts an authentication failure event, rate-limited per client IP
+func (s *DaemonServer) notifyAuthFailure(clientIP, attemptedPIN string) {
+	s.authFailMu.Lock()
+	if s.lastAuthFail == nil {
+		s.lastAuthFail = make(map[string]time.Time)
+	}
+	last, ok := s.lastAuthFail[clientIP]
+	now := time.Now()
+	if ok && now.Sub(last) < 3*time.Second {
+		s.authFailMu.Unlock()
+		return
+	}
+	s.lastAuthFail[clientIP] = now
+	s.authFailMu.Unlock()
+
+	log.Printf("[Security] Web Share invalid PIN attempt from %s (PIN: %s)", clientIP, attemptedPIN)
+	s.Broadcast(NewEvent("web_share_auth_failed", map[string]interface{}{
+		"client_ip":     clientIP,
+		"attempted_pin": attemptedPIN,
+		"timestamp":     now.Format("15:04:05"),
+	}))
 }
 
 func (s *DaemonServer) calculateCompletedBatchBytes() int64 {
@@ -101,10 +273,144 @@ func (s *DaemonServer) calculateCompletedBatchBytes() int64 {
 	return total
 }
 
-// Listen binds the HTTP listener synchronously
+func (s *DaemonServer) RegisterWebShareTransfer(direction, clientIP, fileName string, cancelFunc context.CancelFunc, destPath string) {
+	s.webShareTransferMu.Lock()
+	defer s.webShareTransferMu.Unlock()
+	s.webShareTransferDirection = direction
+	s.webShareTransferClientIP = clientIP
+	s.webShareTransferFile = fileName
+	s.webShareTransferCancel = cancelFunc
+	s.webShareTransferDestPath = destPath
+	s.webShareTransferPaused = false
+	s.webShareTransferLastBytes = 0
+	s.webShareTransferLastTime = time.Now()
+	s.webShareTransferSpeed = 0
+}
+
+func (s *DaemonServer) UnregisterWebShareTransfer() {
+	s.webShareTransferMu.Lock()
+	defer s.webShareTransferMu.Unlock()
+	s.webShareTransferDirection = ""
+	s.webShareTransferClientIP = ""
+	s.webShareTransferFile = ""
+	s.webShareTransferCancel = nil
+	s.webShareTransferDestPath = ""
+	s.webShareTransferPaused = false
+	s.webShareTransferLastBytes = 0
+	s.webShareTransferSpeed = 0
+	if s.webShareTransferPauseCond != nil {
+		s.webShareTransferPauseCond.Broadcast()
+	}
+}
+
+func (s *DaemonServer) PauseWebShareTransfer() bool {
+	s.webShareTransferMu.Lock()
+	defer s.webShareTransferMu.Unlock()
+	if s.webShareTransferDirection == "" {
+		return false
+	}
+	s.webShareTransferPaused = true
+	dir := s.webShareTransferDirection
+	file := s.webShareTransferFile
+	clientIP := s.webShareTransferClientIP
+
+	s.Broadcast(NewEvent("web_share_paused", map[string]interface{}{
+		"direction": dir,
+		"file":      file,
+		"client_ip": clientIP,
+		"message":   "Web Share transfer paused by host",
+	}))
+	return true
+}
+
+func (s *DaemonServer) ResumeWebShareTransfer() bool {
+	s.webShareTransferMu.Lock()
+	defer s.webShareTransferMu.Unlock()
+	if s.webShareTransferDirection == "" {
+		return false
+	}
+	s.webShareTransferPaused = false
+	if s.webShareTransferPauseCond != nil {
+		s.webShareTransferPauseCond.Broadcast()
+	}
+	dir := s.webShareTransferDirection
+	file := s.webShareTransferFile
+	clientIP := s.webShareTransferClientIP
+
+	s.Broadcast(NewEvent("web_share_resumed", map[string]interface{}{
+		"direction": dir,
+		"file":      file,
+		"client_ip": clientIP,
+		"message":   "Web Share transfer resumed by host",
+	}))
+	return true
+}
+
+func (s *DaemonServer) CancelWebShareTransfer() bool {
+	s.webShareTransferMu.Lock()
+	cancel := s.webShareTransferCancel
+	s.webShareTransferCancel = nil
+	destPath := s.webShareTransferDestPath
+	s.webShareTransferDestPath = ""
+	dir := s.webShareTransferDirection
+	file := s.webShareTransferFile
+	clientIP := s.webShareTransferClientIP
+	s.webShareTransferDirection = ""
+	s.webShareTransferFile = ""
+	s.webShareTransferClientIP = ""
+	s.webShareTransferPaused = false
+	s.webShareTransferLastBytes = 0
+	s.webShareTransferSpeed = 0
+	if s.webShareTransferPauseCond != nil {
+		s.webShareTransferPauseCond.Broadcast()
+	}
+	s.webShareTransferMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if destPath != "" {
+		_ = os.Remove(destPath)
+	}
+
+	s.Broadcast(NewEvent("web_share_canceled", map[string]interface{}{
+		"direction": dir,
+		"file":      file,
+		"client_ip": clientIP,
+		"message":   "Web Share transfer canceled",
+	}))
+	return true
+}
+
+func (s *DaemonServer) CheckWebSharePause(ctx context.Context) error {
+	s.webShareTransferMu.Lock()
+	defer s.webShareTransferMu.Unlock()
+	for s.webShareTransferPaused {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		s.webShareTransferPauseCond.Wait()
+	}
+	return ctx.Err()
+}
+
+func (s *DaemonServer) IsWebShareTransferPaused() bool {
+	s.webShareTransferMu.Lock()
+	defer s.webShareTransferMu.Unlock()
+	return s.webShareTransferPaused
+}
+
+// Listen binds the HTTP listener synchronously, falling back to next available port if busy
 func (s *DaemonServer) Listen(port int) (net.Listener, error) {
-	addr := fmt.Sprintf("0.0.0.0:%d", port)
-	return net.Listen("tcp4", addr)
+	for p := port; p < port+20; p++ {
+		addr := fmt.Sprintf("0.0.0.0:%d", p)
+		ln, err := net.Listen("tcp4", addr)
+		if err == nil {
+			s.httpPort = p
+			return ln, nil
+		}
+	}
+	return nil, fmt.Errorf("could not bind to any port in range %d-%d", port, port+19)
 }
 
 // Serve runs the daemon on an existing listener
@@ -139,7 +445,12 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 	mux.HandleFunc("/share", s.handleSharePortal)
 	mux.HandleFunc("/api/share/list", s.handleShareList)
 	mux.HandleFunc("/api/share/download", s.handleShareDownload)
+	mux.HandleFunc("/api/share/request_upload", s.handleShareRequestUpload)
 	mux.HandleFunc("/api/share/upload", s.handleShareUpload)
+	mux.HandleFunc("/api/share/upload_chunk", s.handleShareUploadChunk)
+	mux.HandleFunc("/api/share/pause", s.handleSharePause)
+	mux.HandleFunc("/api/share/resume", s.handleShareResume)
+	mux.HandleFunc("/api/share/cancel", s.handleShareCancel)
 	mux.HandleFunc("/ws", s.handleWebSocket)
 
 	s.httpSrv = &http.Server{
@@ -189,12 +500,43 @@ func (s *DaemonServer) Stop() {
 	s.hotspotMu.Unlock()
 }
 
+// isLoopbackRequest checks whether an incoming HTTP request originated from localhost
+func isLoopbackRequest(r *http.Request) bool {
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
+}
+
 func (s *DaemonServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
+
+	// Security check: External network devices MUST NOT access the full host dashboard!
+	// Redirect any non-loopback device to the secured Web Share portal (/share).
+	if !isLoopbackRequest(r) {
+		redirectURL := "/share"
+		if r.URL.RawQuery != "" {
+			redirectURL += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	_, _ = w.Write([]byte(IndexHTML))
 }
 
@@ -209,6 +551,11 @@ func (s *DaemonServer) handleHTTPStatus(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *DaemonServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		http.Error(w, "Forbidden: WebSocket control channel is restricted to localhost", http.StatusForbidden)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -251,6 +598,60 @@ func (s *DaemonServer) sendTo(conn *websocket.Conn, evt EventMessage) {
 	_ = conn.WriteJSON(evt)
 }
 
+// SharePaths configures files or directories to be immediately available on the Web Share portal
+func (s *DaemonServer) SharePaths(paths []string) error {
+	if len(paths) == 0 {
+		return fmt.Errorf("no paths provided")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(paths) == 1 {
+		fi, err := os.Stat(paths[0])
+		if err == nil && !fi.IsDir() {
+			s.webSharedFile = paths[0]
+			s.webSharedManifest = nil
+			return nil
+		}
+	}
+
+	m, err := manifest.Build(paths)
+	if err != nil {
+		return err
+	}
+	s.webSharedManifest = m
+	s.webSharedFile = ""
+	return nil
+}
+
+// SetPIN configures the 4-digit security PIN for Web Share
+func (s *DaemonServer) SetPIN(pin string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.webSharePIN = pin
+}
+
+// SetAutoAccept toggles automatic acceptance of Web Share incoming uploads
+func (s *DaemonServer) SetAutoAccept(autoAccept bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.webShareAutoAccept = autoAccept
+}
+
+// SetWebShareEnabled enables or disables Web Share access and broadcasts status
+func (s *DaemonServer) SetWebShareEnabled(enabled bool) {
+	s.mu.Lock()
+	s.webShareEnabled = enabled
+	s.mu.Unlock()
+	s.Broadcast(NewEvent("status", s.getStatus(), ""))
+}
+
+// GetStatus returns the current daemon status
+func (s *DaemonServer) GetStatus() DaemonStatus {
+	return s.getStatus()
+}
+
 func (s *DaemonServer) getStatus() DaemonStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -271,12 +672,14 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 		}
 	}
 
-	targets := discovery.GetActiveNetworkTargets()
-	localIP := ""
-	for _, t := range targets {
-		if !t.LocalIP.IsLoopback() && t.LocalIP.To4() != nil && !strings.HasPrefix(t.LocalIP.String(), "169.254.") {
-			localIP = t.LocalIP.String()
-			break
+	localIP := discovery.GetPrimaryLocalIP()
+	if localIP == "" || localIP == "127.0.0.1" {
+		targets := discovery.GetActiveNetworkTargets()
+		for _, t := range targets {
+			if !t.LocalIP.IsLoopback() && t.LocalIP.To4() != nil && !strings.HasPrefix(t.LocalIP.String(), "169.254.") {
+				localIP = t.LocalIP.String()
+				break
+			}
 		}
 	}
 	port := s.httpPort
@@ -286,25 +689,35 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 	portalURL := ""
 	portalQR := ""
 	if localIP != "" {
-		portalURL = fmt.Sprintf("http://%s:%d/share", localIP, port)
+		if s.webShareToken != "" && s.webSharePIN != "" {
+			portalURL = fmt.Sprintf("http://%s:%d/share?token=%s&pin=%s", localIP, port, s.webShareToken, s.webSharePIN)
+		} else if s.webSharePIN != "" {
+			portalURL = fmt.Sprintf("http://%s:%d/share?pin=%s", localIP, port, s.webSharePIN)
+		} else {
+			portalURL = fmt.Sprintf("http://%s:%d/share", localIP, port)
+		}
 		portalQR, _ = GenerateURLQRDataURI(portalURL, 220)
 	}
 
 	return DaemonStatus{
-		Status:          status,
-		DeviceName:      s.config.DeviceName,
-		DownloadDir:     s.config.DownloadDir,
-		CollisionPolicy: s.config.CollisionPolicy,
-		Paired:          paired,
-		PairedIP:        pairedIP,
-		PairedDevice:    pairedDevice,
-		ActiveTransfer:  s.transferCancel != nil || s.itemCancel != nil,
-		IsPaused:        s.isPaused,
-		Version:         "1.0.0",
-		LocalIP:         localIP,
-		LocalPort:       port,
-		PortalURL:       portalURL,
-		PortalQR:        portalQR,
+		Status:             status,
+		DeviceName:         s.config.DeviceName,
+		DownloadDir:        s.config.DownloadDir,
+		CollisionPolicy:    s.config.CollisionPolicy,
+		Paired:             paired,
+		PairedIP:           pairedIP,
+		PairedDevice:       pairedDevice,
+		ActiveTransfer:     s.transferCancel != nil || s.itemCancel != nil,
+		IsPaused:           s.isPaused,
+		Version:            "1.0.0",
+		LocalIP:            localIP,
+		LocalPort:          port,
+		PortalURL:          portalURL,
+		PortalQR:           portalQR,
+		WebShareEnabled:    s.webShareEnabled,
+		WebSharePIN:        s.webSharePIN,
+		WebShareToken:      s.webShareToken,
+		WebShareAutoAccept: s.webShareAutoAccept,
 	}
 }
 
@@ -1039,6 +1452,11 @@ func (s *DaemonServer) parseCollisionPolicy(p string) engine.CollisionPolicy {
 }
 
 func (s *DaemonServer) handleBrowse(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		http.Error(w, "Forbidden: Native file dialog is restricted to localhost", http.StatusForbidden)
+		return
+	}
+
 	browseType := r.URL.Query().Get("type")
 	w.Header().Set("Content-Type", "application/json")
 
@@ -1099,6 +1517,11 @@ return p`)
 }
 
 func (s *DaemonServer) handleUpload(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		http.Error(w, "Forbidden: Staging upload is restricted to localhost", http.StatusForbidden)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1265,6 +1688,11 @@ func getQuickDirs() []FSQuickDir {
 }
 
 func (s *DaemonServer) handleFSList(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		http.Error(w, "Forbidden: Filesystem browsing is restricted to localhost", http.StatusForbidden)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	targetDir := r.URL.Query().Get("dir")
 
@@ -1343,6 +1771,11 @@ func (s *DaemonServer) handleFSList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *DaemonServer) handleFSMkdir(w http.ResponseWriter, r *http.Request) {
+	if !isLoopbackRequest(r) {
+		http.Error(w, "Forbidden: Directory creation is restricted to localhost", http.StatusForbidden)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	parentDir := r.URL.Query().Get("dir")
 	folderName := r.URL.Query().Get("name")

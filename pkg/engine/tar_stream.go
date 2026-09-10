@@ -31,6 +31,7 @@ func StreamTar(ctx context.Context, w io.Writer, m *manifest.Manifest, listener 
 	lastSpeedTime := startTime
 	var totalTransferred int64
 	var lastSpeedBytes int64
+	var speed float64
 
 	bufPtr := getChunkBuffer()
 	defer putChunkBuffer(bufPtr)
@@ -90,9 +91,14 @@ func StreamTar(ctx context.Context, w io.Writer, m *manifest.Manifest, listener 
 
 				now := time.Now()
 				elapsed := now.Sub(lastSpeedTime).Seconds()
-				if elapsed >= 0.2 && listener != nil {
+				if elapsed >= 0.5 && listener != nil {
 					delta := totalTransferred - lastSpeedBytes
-					speed := (float64(delta) / 1048576.0) / elapsed
+					instantSpeed := (float64(delta) / 1048576.0) / elapsed
+					if speed == 0 {
+						speed = instantSpeed
+					} else {
+						speed = 0.7*speed + 0.3*instantSpeed
+					}
 					lastSpeedBytes = totalTransferred
 					lastSpeedTime = now
 
@@ -157,6 +163,7 @@ func ExtractTar(ctx context.Context, r io.Reader, destDir string, totalBytes int
 	lastSpeedTime := startTime
 	var totalTransferred int64
 	var lastSpeedBytes int64
+	var speed float64
 
 	bufPtr := getChunkBuffer()
 	defer putChunkBuffer(bufPtr)
@@ -229,9 +236,14 @@ func ExtractTar(ctx context.Context, r io.Reader, destDir string, totalBytes int
 
 					now := time.Now()
 					elapsed := now.Sub(lastSpeedTime).Seconds()
-					if elapsed >= 0.2 && listener != nil {
+					if elapsed >= 0.5 && listener != nil {
 						delta := totalTransferred - lastSpeedBytes
-						speed := (float64(delta) / 1048576.0) / elapsed
+						instantSpeed := (float64(delta) / 1048576.0) / elapsed
+						if speed == 0 {
+							speed = instantSpeed
+						} else {
+							speed = 0.7*speed + 0.3*instantSpeed
+						}
 						lastSpeedBytes = totalTransferred
 						lastSpeedTime = now
 
