@@ -85,7 +85,7 @@ func LoadConfig(explicitOutDir, explicitDeviceName string) Config {
 	cfg := Config{
 		CollisionPolicy: "auto_rename",
 		Workers:         4,
-		ChunkSizeMB:     2,
+		ChunkSizeMB:     4,
 	}
 
 	// 1. Read saved config from disk if available
@@ -190,6 +190,7 @@ type DaemonStatus struct {
 	WebSharePIN        string `json:"web_share_pin,omitempty"`
 	WebShareToken      string `json:"web_share_token,omitempty"`
 	WebShareAutoAccept bool   `json:"web_share_auto_accept"`
+	PairingCode        string `json:"pairing_code,omitempty"`
 }
 
 // WebUploadRequest represents a pending mobile file upload waiting for host approval
@@ -210,14 +211,17 @@ type WebUploadFile struct {
 
 // PairPayload parameters for "pair" action
 type PairPayload struct {
-	IP   string `json:"ip"`
+	IP   string `json:"ip,omitempty"`
 	Port int    `json:"port,omitempty"`
+	Code string `json:"code,omitempty"`
 }
 
 // SendPayload parameters for "send" action
 type SendPayload struct {
-	Paths    []string `json:"paths"`
-	TargetIP string   `json:"target_ip,omitempty"` // For one-shot send without pairing
+	Paths        []string `json:"paths"`
+	TargetIP     string   `json:"target_ip,omitempty"`      // For one-shot send without pairing
+	Code         string   `json:"code,omitempty"`           // Pairing code for one-shot direct send
+	UseTarStream bool     `json:"use_tar_stream,omitempty"` // Explicit opt-in for tar streaming
 }
 
 // RespondOfferPayload parameters for "respond_offer" action
@@ -244,19 +248,49 @@ type ResumeFilePayload struct {
 
 // TransferProgressData live progress telemetry for single files or folder batches
 type TransferProgressData struct {
-	CurrentFile     string  `json:"current_file"`
-	FileIndex       int     `json:"file_index"`
-	TotalFiles      int     `json:"total_files"`
-	FileBytes       int64   `json:"file_bytes"`
-	FileTotalBytes  int64   `json:"file_total_bytes"`
-	BatchBytes      int64   `json:"batch_bytes"`
-	BatchTotalBytes int64   `json:"batch_total_bytes"`
-	SpeedMBps       float64 `json:"speed_mbps"`
-	FilePercent     float64 `json:"file_percent"`
-	BatchPercent    float64 `json:"batch_percent"`
-	EtaSeconds      int     `json:"eta_seconds"`
-	IsSmartSkip     bool    `json:"is_smart_skip,omitempty"`
-	IsPaused        bool    `json:"is_paused"`
+	CurrentFile        string  `json:"current_file"`
+	FileIndex          int     `json:"file_index"`
+	TotalFiles         int     `json:"total_files"`
+	FileBytes          int64   `json:"file_bytes"`
+	FileTotalBytes     int64   `json:"file_total_bytes"`
+	BatchBytes         int64   `json:"batch_bytes"`
+	BatchTotalBytes    int64   `json:"batch_total_bytes"`
+	SpeedMBps          float64 `json:"speed_mbps"`
+	FilePercent        float64 `json:"file_percent"`
+	BatchPercent       float64 `json:"batch_percent"`
+	EtaSeconds         int     `json:"eta_seconds"`
+	IsSmartSkip        bool    `json:"is_smart_skip,omitempty"`
+	IsPaused           bool    `json:"is_paused"`
+	DiskWriteLatencyMs float64 `json:"disk_write_latency_ms"`
+	NetReadLatencyMs   float64 `json:"net_read_latency_ms"`
+	Bottleneck         string  `json:"bottleneck,omitempty"`
+	BottleneckReason   string  `json:"bottleneck_reason,omitempty"`
+}
+
+// TransferPhaseSample tracks performance in quartiles (e.g. 0-25%, 25-50%, 50-75%, 75-100%)
+type TransferPhaseSample struct {
+	Phase          string  `json:"phase"`
+	AvgSpeedMBps   float64 `json:"avg_speed_mbps"`
+	DiskLatencyMs  float64 `json:"avg_disk_latency_ms"`
+	NetLatencyMs   float64 `json:"avg_net_latency_ms"`
+	DominantFactor string  `json:"dominant_factor"`
+}
+
+// TransferSummaryReport aggregates diagnostic data at the end of a transfer
+type TransferSummaryReport struct {
+	TransferName      string                `json:"transfer_name"`
+	TotalBytes        int64                 `json:"total_bytes"`
+	TotalFiles        int                   `json:"total_files"`
+	DurationSec       float64               `json:"duration_sec"`
+	AvgSpeedMBps      float64               `json:"avg_speed_mbps"`
+	PeakSpeedMBps     float64               `json:"peak_speed_mbps"`
+	MinSpeedMBps      float64               `json:"min_speed_mbps"`
+	PrimaryBottleneck string                `json:"primary_bottleneck"` // "STORAGE", "NETWORK", "BALANCED"
+	AvgDiskLatencyMs  float64               `json:"avg_disk_latency_ms"`
+	AvgNetLatencyMs   float64               `json:"avg_net_latency_ms"`
+	PhaseSamples      []TransferPhaseSample `json:"phase_samples"`
+	DiagnosisText     string                `json:"diagnosis_text"`
+	FormattedReport   string                `json:"formatted_report"`
 }
 
 // IncomingOfferData payload sent when a remote peer wants to send a file/batch
@@ -277,4 +311,24 @@ type BatchFileInfo struct {
 	RelPath string `json:"rel_path"`
 	Size    int64  `json:"size"`
 	Status  string `json:"status"` // "pending", "transferring", "completed", "skipped"
+}
+
+// TestDiskPayload parameters for "test_disk" action
+type TestDiskPayload struct {
+	Dir       string `json:"dir,omitempty"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+}
+
+// TestNetworkPayload parameters for "test_network" action
+type TestNetworkPayload struct {
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+}
+
+// TransferPreflightData emitted before starting a transfer
+type TransferPreflightData struct {
+	TargetDir        string  `json:"target_dir"`
+	DiskWriteSpeed   float64 `json:"disk_write_speed"`
+	DiskRating       string  `json:"disk_rating"`
+	IsDiskBottleneck bool    `json:"is_disk_bottleneck"`
+	Warning          string  `json:"warning,omitempty"`
 }

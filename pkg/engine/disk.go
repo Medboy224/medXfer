@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type DiskManager struct {
@@ -18,6 +19,8 @@ type DiskManager struct {
 	mu        sync.RWMutex
 	completed []bool
 	downBytes int64
+	dirty     bool
+	lastSync  time.Time
 }
 
 // GenerateFileID creates a fast unique hash from FileInfo metadata (Name, Size, ModTime)
@@ -180,9 +183,9 @@ func CreateAndPreallocate(outputDir, fileName string, fileSize int64, chunkSize 
 		if err != nil {
 			return nil, err
 		}
-		if fileSize > 0 {
-			file.Truncate(fileSize)
-		}
+		// NOTE: Avoid file.Truncate(fileSize) here. On Windows NTFS (especially USB external HDDs),
+		// Truncate forces the OS to synchronously write zeroes across the entire file range before any chunk write,
+		// doubling disk write volume and stalling the transfer. File grows dynamically as chunks are written.
 
 		stateFile, err = os.Create(statePath)
 		if err != nil {
@@ -219,24 +222,45 @@ func (dm *DiskManager) IsChunkCompleted(index uint32) bool {
 func (dm *DiskManager) GetDownloadedBytes() int64 { return dm.downBytes }
 
 func (dm *DiskManager) WriteChunkAt(data []byte, offset int64, chunkIndex uint32) (int, error) {
-	// 1. Lockless parallel write of 2MB data payload directly to disk!
+	// 1. Lockless parallel write of data payload directly to disk!
 	n, err := dm.file.WriteAt(data, offset)
 	if err == nil {
 		dm.mu.Lock()
 		if int(chunkIndex) < len(dm.completed) {
 			dm.completed[chunkIndex] = true
+			dm.dirty = true
 		}
-		if dm.stateFile != nil {
-			_, _ = dm.stateFile.WriteAt([]byte{1}, int64(32+chunkIndex))
+		// Periodically flush metadata to disk (every 32 chunks or 2 seconds).
+		// Minimizes mechanical drive head seek thrashing between payload file and .medxfer!
+		if dm.dirty && (chunkIndex%32 == 0 || time.Since(dm.lastSync) >= 2*time.Second) {
+			dm.syncStateLocked()
 		}
 		dm.mu.Unlock()
 	}
 	return n, err
 }
 
+func (dm *DiskManager) syncStateLocked() {
+	if !dm.dirty || dm.stateFile == nil {
+		return
+	}
+	buf := make([]byte, len(dm.completed))
+	for i, c := range dm.completed {
+		if c {
+			buf[i] = 1
+		}
+	}
+	_, _ = dm.stateFile.WriteAt(buf, 32)
+	dm.dirty = false
+	dm.lastSync = time.Now()
+}
+
 func (dm *DiskManager) Close() error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
+	if dm.dirty && dm.stateFile != nil {
+		dm.syncStateLocked()
+	}
 	if dm.file != nil {
 		_ = dm.file.Close()
 		dm.file = nil
@@ -250,16 +274,29 @@ func (dm *DiskManager) Close() error {
 
 func (dm *DiskManager) Finalize() error {
 	dm.mu.Lock()
-	defer dm.mu.Unlock()
-	if dm.file != nil {
-		_ = dm.file.Close()
-		dm.file = nil
+	f := dm.file
+	sf := dm.stateFile
+	sp := dm.statePath
+	dm.file = nil
+	dm.stateFile = nil
+	dm.mu.Unlock()
+
+	// Clean up metadata immediately (fast 32-byte unlink)
+	if sf != nil {
+		_ = sf.Close()
 	}
-	if dm.stateFile != nil {
-		_ = dm.stateFile.Close()
-		dm.stateFile = nil
-		_ = os.Remove(dm.statePath)
+	if sp != "" {
+		_ = os.Remove(sp)
 	}
+
+	// Close payload file asynchronously so network batch pipeline doesn't block on OS buffer flush.
+	// Redundant Truncate is intentionally avoided to prevent Windows NTFS zeroing and lock contention.
+	go func(fileToClose *os.File) {
+		if fileToClose != nil {
+			_ = fileToClose.Close()
+		}
+	}(f)
+
 	return nil
 }
 

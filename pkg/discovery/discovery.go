@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	DiscoveryPort = 19998
-	ProtocolMagic = "MEDXFER_NODE_V3"
-	AppVersion    = "1.0.0"
+	DiscoveryPort  = 19998
+	MulticastGroup = "239.255.255.250"
+	ProtocolMagic  = "MEDXFER_NODE_V3"
+	AppVersion     = "1.0.0"
 )
 
 // TransferOffer represents an active file payload offered by a peer
@@ -28,15 +29,21 @@ type TransferOffer struct {
 	Batch    *manifest.Manifest `json:"batch,omitempty"`
 }
 
+// DiscoveryQuery represents an authenticated request sent to a peer's discovery port
+type DiscoveryQuery struct {
+	PairingCode string `json:"pairing_code,omitempty"`
+}
+
 // Peer represents an identified medXfer instance on the network
 type Peer struct {
-	ID         string         `json:"id"`
-	DeviceName string         `json:"device_name"`
-	HostIP     string         `json:"host_ip"`
-	Port       int            `json:"port"`
-	Version    string         `json:"version"`
-	Role       string         `json:"role"` // "sender", "receiver", "idle", "node"
-	Offer      *TransferOffer `json:"offer,omitempty"`
+	ID          string         `json:"id"`
+	DeviceName  string         `json:"device_name"`
+	HostIP      string         `json:"host_ip"`
+	Port        int            `json:"port"`
+	Version     string         `json:"version"`
+	Role        string         `json:"role"` // "sender", "receiver", "idle", "node"
+	PairingCode string         `json:"pairing_code,omitempty"`
+	Offer       *TransferOffer `json:"offer,omitempty"`
 }
 
 // IsLocalNetworkIP checks if an IP belongs to the local machine
@@ -84,14 +91,17 @@ func NewDiscoveryServer(role string, tcpPort int, offer *TransferOffer, customDe
 		}
 	}
 
+	code, _, _ := GeneratePairingCode("")
+
 	return &DiscoveryServer{
 		peer: Peer{
-			ID:         hostname + fmt.Sprintf("-%d", tcpPort),
-			DeviceName: hostname,
-			Port:       tcpPort,
-			Version:    AppVersion,
-			Role:       role,
-			Offer:      offer,
+			ID:          hostname + fmt.Sprintf("-%d", tcpPort),
+			DeviceName:  hostname,
+			Port:        tcpPort,
+			Version:     AppVersion,
+			Role:        role,
+			PairingCode: code,
+			Offer:       offer,
 		},
 	}
 }
@@ -101,6 +111,20 @@ func (s *DiscoveryServer) SetDeviceName(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.peer.DeviceName = name
+}
+
+// SetPairingCode updates the advertised 6-digit pairing code in real-time
+func (s *DiscoveryServer) SetPairingCode(code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.peer.PairingCode = code
+}
+
+// GetPairingCode returns the current pairing code
+func (s *DiscoveryServer) GetPairingCode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.peer.PairingCode
 }
 
 // SetOffer updates the active transfer offer in real-time
@@ -148,8 +172,31 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 					activeIP = localTCPAddr.IP.String()
 				}
 
+				// Read optional client query with pairing code
+				var query DiscoveryQuery
+				_ = c.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+				_ = json.NewDecoder(c).Decode(&query)
+
 				respPeer := s.GetPeer()
 				respPeer.HostIP = activeIP
+
+				// Pairing code validation: unmask only if code matches or no code required
+				normExpected, _ := NormalizePairingCode(respPeer.PairingCode)
+				normProvided, _ := NormalizePairingCode(query.PairingCode)
+
+				authenticated := (respPeer.PairingCode == "") || (normExpected != "" && normExpected == normProvided)
+				if !authenticated {
+					// Hide sensitive transfer details from unauthenticated probes
+					respPeer.PairingCode = ""
+					if respPeer.Offer != nil {
+						masked := *respPeer.Offer
+						masked.FileName = "[🔒 Private Transfer]"
+						masked.FileSize = 0
+						masked.FileID = ""
+						masked.Batch = nil
+						respPeer.Offer = &masked
+					}
+				}
 
 				data, err := json.Marshal(respPeer)
 				if err == nil {
@@ -160,7 +207,7 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 		}
 	}()
 
-	// 2. Interface-Bound UDP Broadcaster
+	// 2. Interface-Bound UDP & Multicast Broadcaster (Zero-Leak Beacons)
 	go func() {
 		ticker := time.NewTicker(600 * time.Millisecond)
 		defer ticker.Stop()
@@ -173,22 +220,42 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 				targets := GetActiveNetworkTargets()
 				for _, target := range targets {
 					lAddr := &net.UDPAddr{IP: target.LocalIP, Port: 0}
-					rAddr := &net.UDPAddr{IP: target.BroadcastIP, Port: DiscoveryPort}
-
-					// Explicitly bind the socket to the source interface IP
-					conn, err := net.DialUDP("udp4", lAddr, rAddr)
+					beaconPeer := s.GetPeer()
+					beaconPeer.HostIP = target.LocalIP.String()
+					beaconPeer.PairingCode = "" // NEVER broadcast secret pairing code
+					if beaconPeer.Offer != nil {
+						masked := *beaconPeer.Offer
+						masked.FileName = "[🔒 Private Transfer]"
+						masked.FileSize = 0
+						masked.FileID = ""
+						masked.Batch = nil
+						beaconPeer.Offer = &masked
+					}
+					data, err := json.Marshal(beaconPeer)
 					if err != nil {
 						continue
 					}
 
-					beaconPeer := s.GetPeer()
-					beaconPeer.HostIP = target.LocalIP.String()
-
-					data, err := json.Marshal(beaconPeer)
-					if err == nil {
+					// Vector A: Subnet Broadcast
+					rAddr := &net.UDPAddr{IP: target.BroadcastIP, Port: DiscoveryPort}
+					if conn, err := net.DialUDP("udp4", lAddr, rAddr); err == nil {
 						_, _ = conn.Write(data)
+						_ = conn.Close()
 					}
-					_ = conn.Close()
+
+					// Vector B: SSDP-Style Local Multicast
+					mAddr := &net.UDPAddr{IP: net.ParseIP(MulticastGroup), Port: DiscoveryPort}
+					if mConn, err := net.DialUDP("udp4", lAddr, mAddr); err == nil {
+						_, _ = mConn.Write(data)
+						_ = mConn.Close()
+					}
+
+					// Vector C: Limited Local Broadcast (for ad-hoc / direct Ethernet cable links)
+					bcastAddr := &net.UDPAddr{IP: net.IPv4bcast, Port: DiscoveryPort}
+					if bConn, err := net.DialUDP("udp4", lAddr, bcastAddr); err == nil {
+						_, _ = bConn.Write(data)
+						_ = bConn.Close()
+					}
 				}
 			}
 		}
@@ -227,8 +294,9 @@ func DiscoverPeers(timeout time.Duration) ([]Peer, error) {
 
 			var p Peer
 			if err := json.Unmarshal(buf[:n], &p); err == nil && p.Version == AppVersion {
-				if p.HostIP == "" || p.HostIP == "127.0.0.1" {
-					p.HostIP = srcAddr.IP.String()
+				srcIPStr := srcAddr.IP.String()
+				if p.HostIP == "" || p.HostIP == "127.0.0.1" || !IsSubnetReachable(p.HostIP) {
+					p.HostIP = srcIPStr
 				}
 				key := fmt.Sprintf("%s:%d", p.HostIP, p.Port)
 				mu.Lock()

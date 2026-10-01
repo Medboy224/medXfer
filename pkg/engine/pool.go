@@ -11,8 +11,8 @@ import (
 // multi-gigabyte file transfers.
 var chunkBufferPool = sync.Pool{
 	New: func() interface{} {
-		// Maximum chunk frame: FrameHeaderSize (8) + ChunkHeaderSize (20) + up to 4MB chunk data
-		b := make([]byte, protocol.FrameHeaderSize+protocol.ChunkHeaderSize+4*1024*1024)
+		// Maximum chunk frame: FrameHeaderSize (8) + ChunkHeaderSize (20) + up to 8MB chunk data
+		b := make([]byte, protocol.FrameHeaderSize+protocol.ChunkHeaderSize+8*1024*1024)
 		return &b
 	},
 }

@@ -18,7 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/manifest"
+	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/gorilla/websocket"
 )
 
@@ -393,12 +395,13 @@ func TestInstantOfferAndSessionDispatch(t *testing.T) {
 	defer sendWS.Close()
 	_ = sendWS.ReadJSON(&initEvt)
 
-	// Dispatch "send" from Sender specifying target_ip = 127.0.0.1:<recvNodePort>
+	recvCode := recvServer.GetStatus().PairingCode
+	// Dispatch "send" from Sender specifying target_ip = 127.0.0.1:<recvNodePort> and code = recvCode
 	startOffer := time.Now()
 	_ = sendWS.WriteJSON(RequestMessage{
 		ID:      "send_test",
 		Action:  "send",
-		Payload: json.RawMessage(fmt.Sprintf(`{"paths":[%q],"target_ip":"127.0.0.1:%d"}`, testFile, recvNodePort)),
+		Payload: json.RawMessage(fmt.Sprintf(`{"paths":[%q],"target_ip":"127.0.0.1:%d","code":%q}`, testFile, recvNodePort, recvCode)),
 	})
 
 	// Receiver WS must receive "paired" then "incoming_offer"
@@ -583,14 +586,16 @@ func TestBatchQueueDynamicAdvanceOnPause(t *testing.T) {
 	_ = sendWS.ReadJSON(&initEvt)
 
 	// 4. Sender initiates 5-file batch send
+	recvCode := recvServer.GetStatus().PairingCode
 	pathsJSON, _ := json.Marshal(filePaths)
 	_ = sendWS.WriteJSON(RequestMessage{
 		ID:     "send_batch_5",
 		Action: "send",
 		Payload: json.RawMessage(fmt.Sprintf(`{
 			"paths": %s,
-			"target_ip": "127.0.0.1:%d"
-		}`, string(pathsJSON), recvNodePort)),
+			"target_ip": "127.0.0.1:%d",
+			"code": %q
+		}`, string(pathsJSON), recvNodePort, recvCode)),
 	})
 
 	// 5. Receiver accepts offer
@@ -767,11 +772,12 @@ func TestFolderTarStreamingBatch(t *testing.T) {
 	defer sendWS.Close()
 	_ = sendWS.ReadJSON(&initEvt)
 
-	// Send folder
+	// Send folder with explicit tar streaming
+	recvCode := recvServer.GetStatus().PairingCode
 	_ = sendWS.WriteJSON(RequestMessage{
 		ID:      "send_folder",
 		Action:  "send",
-		Payload: json.RawMessage(fmt.Sprintf(`{"paths":[%q],"target_ip":"127.0.0.1:%d"}`, folderToShare, recvNodePort)),
+		Payload: json.RawMessage(fmt.Sprintf(`{"paths":[%q],"target_ip":"127.0.0.1:%d","code":%q,"use_tar_stream":true}`, folderToShare, recvNodePort, recvCode)),
 	})
 
 	// Receiver accepts offer
@@ -821,6 +827,143 @@ func TestFolderTarStreamingBatch(t *testing.T) {
 	}
 
 	t.Logf("VERIFIED: All 30 files extracted bit-for-bit via on-the-fly Tar stream!")
+}
+
+func TestFolderGranularBatchTransfer(t *testing.T) {
+	recvDir := t.TempDir()
+	recvServer := NewDaemonServer(0, recvDir, "ReceiverNode")
+	recvHTTP, err := recvServer.Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recvHTTPPort := recvHTTP.Addr().(*net.TCPAddr).Port
+
+	recvNodeLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recvNodePort := recvNodeLn.Addr().(*net.TCPAddr).Port
+	go recvServer.listenForIncomingPairings(recvNodeLn)
+
+	go func() {
+		_ = recvServer.Serve(recvHTTP)
+	}()
+	defer recvServer.Stop()
+	defer recvNodeLn.Close()
+
+	// Sender Daemon
+	sendDir := t.TempDir()
+	folderToShare := filepath.Join(sendDir, "my_granular_folder")
+	_ = os.MkdirAll(folderToShare, 0755)
+
+	// Create 5 files in subdirectories
+	expectedFiles := make(map[string][]byte)
+	for i := 0; i < 5; i++ {
+		subDir := filepath.Join(folderToShare, fmt.Sprintf("sub_%d", i%2))
+		_ = os.MkdirAll(subDir, 0755)
+		filePath := filepath.Join(subDir, fmt.Sprintf("file_%d.bin", i))
+		data := bytes.Repeat([]byte(fmt.Sprintf("content of file %d\n", i)), 100)
+		_ = os.WriteFile(filePath, data, 0644)
+
+		rel, _ := filepath.Rel(sendDir, filePath)
+		expectedFiles[filepath.ToSlash(rel)] = data
+	}
+
+	sendServer := NewDaemonServer(0, sendDir, "SenderNode")
+	sendHTTP, err := sendServer.Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendHTTPPort := sendHTTP.Addr().(*net.TCPAddr).Port
+	go func() {
+		_ = sendServer.Serve(sendHTTP)
+	}()
+	defer sendServer.Stop()
+
+	// Connect WebSocket to Receiver
+	recvWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", recvHTTPPort)
+	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to dial receiver ws: %v", err)
+	}
+	defer recvWS.Close()
+
+	var initEvt EventMessage
+	_ = recvWS.ReadJSON(&initEvt)
+
+	// Connect WebSocket to Sender and continuously drain events so buffer never blocks
+	sendWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", sendHTTPPort)
+	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to dial sender ws: %v", err)
+	}
+	defer sendWS.Close()
+	_ = sendWS.ReadJSON(&initEvt)
+
+	go func() {
+		for {
+			var evt EventMessage
+			if err := sendWS.ReadJSON(&evt); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Send folder without use_tar_stream (defaults to Granular Batch)
+	recvCode := recvServer.GetStatus().PairingCode
+	_ = sendWS.WriteJSON(RequestMessage{
+		ID:      "send_folder_granular",
+		Action:  "send",
+		Payload: json.RawMessage(fmt.Sprintf(`{"paths":[%q],"target_ip":"127.0.0.1:%d","code":%q}`, folderToShare, recvNodePort, recvCode)),
+	})
+
+	// Receiver accepts offer
+	for {
+		var evt EventMessage
+		if err := recvWS.ReadJSON(&evt); err != nil {
+			t.Fatalf("Receiver read error: %v", err)
+		}
+		if evt.Event == "incoming_offer" {
+			_ = recvWS.WriteJSON(RequestMessage{
+				ID:      "accept_folder",
+				Action:  "respond_offer",
+				Payload: json.RawMessage(`{"accept":true}`),
+			})
+			break
+		}
+	}
+
+	// Wait for transfer_complete on receiver
+	deadline := time.Now().Add(10 * time.Second)
+	completed := false
+	for time.Now().Before(deadline) {
+		var evt EventMessage
+		if err := recvWS.ReadJSON(&evt); err != nil {
+			break
+		}
+		if evt.Event == "transfer_complete" {
+			completed = true
+			break
+		}
+	}
+
+	if !completed {
+		t.Fatalf("Granular folder batch transfer did not complete within timeout")
+	}
+
+	// Verify all 5 files are in recvDir with preserved relative paths
+	for relPath, expected := range expectedFiles {
+		targetFile := filepath.Join(recvDir, filepath.FromSlash(relPath))
+		actual, err := os.ReadFile(targetFile)
+		if err != nil {
+			t.Fatalf("Missing extracted file '%s': %v", relPath, err)
+		}
+		if !bytes.Equal(actual, expected) {
+			t.Fatalf("Data mismatch in extracted file '%s'", relPath)
+		}
+	}
+
+	t.Logf("VERIFIED: Granular folder batch transfer successfully transferred and verified all 5 files!")
 }
 
 func TestQRGeneration(t *testing.T) {
@@ -2273,4 +2416,436 @@ func TestWebSharePortalNoDuplicateDeclarations(t *testing.T) {
 		}
 	}
 	t.Logf("VERIFIED: No duplicate top-level let/const declarations in SharePortalHTML (%d declarations checked)", len(seen))
+}
+
+func TestDaemonPairingCode(t *testing.T) {
+	server := NewDaemonServer(0, t.TempDir(), "TestPairingNode")
+	ln, err := server.Listen(0)
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		_ = server.Serve(ln)
+	}()
+	defer server.Stop()
+
+	st := server.GetStatus()
+	if st.PairingCode == "" {
+		t.Fatal("Expected non-empty PairingCode in DaemonStatus")
+	}
+
+	// Verify pairing code format
+	parts := strings.Split(st.PairingCode, "-")
+	if len(parts) != 2 || len(parts[0]) != 3 || len(parts[1]) != 3 {
+		t.Fatalf("Expected pairing code format XXX-YYY, got %q", st.PairingCode)
+	}
+	t.Logf("VERIFIED: Daemon initialized with pairing code: %s", st.PairingCode)
+}
+
+func TestDaemonNodePairingHandshake(t *testing.T) {
+	server := NewDaemonServer(0, t.TempDir(), "DaemonPairTest")
+	ln, err := server.Listen(0)
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		_ = server.Serve(ln)
+	}()
+	defer server.Stop()
+
+	st := server.GetStatus()
+	validCode := st.PairingCode
+	invalidCode := "999-999"
+	if validCode == invalidCode {
+		invalidCode = "111-111"
+	}
+
+	nodeAddr := server.GetNodeAddr()
+	if strings.HasPrefix(nodeAddr, "0.0.0.0:") {
+		nodeAddr = "127.0.0.1:" + strings.TrimPrefix(nodeAddr, "0.0.0.0:")
+	}
+
+	// 1. Connect with invalid code -> expect pair_reject
+	conn1, err := session.DialTLSPeer(nodeAddr)
+	if err == nil {
+		defer conn1.Close()
+		ch1 := session.NewChannel(conn1)
+		_ = ch1.Send(session.Message{
+			Type:        "pair_request",
+			DeviceName:  "TestNodeClient",
+			PairingCode: invalidCode,
+		})
+		_ = conn1.SetReadDeadline(time.Now().Add(2 * time.Second))
+		resp1, err := ch1.Read()
+		if err != nil || resp1.Type != "pair_reject" {
+			t.Fatalf("Expected pair_reject for invalid code, got %v (err: %v)", resp1, err)
+		}
+		t.Logf("VERIFIED: Invalid code properly rejected with %s", resp1.Type)
+	}
+
+	// 2. Connect with valid code -> expect pair_accept
+	conn2, err := session.DialTLSPeer(nodeAddr)
+	if err != nil {
+		t.Fatalf("Failed to connect to daemon node listener at %s: %v", nodeAddr, err)
+	}
+	defer conn2.Close()
+	ch2 := session.NewChannel(conn2)
+	_ = ch2.Send(session.Message{
+		Type:        "pair_request",
+		DeviceName:  "TestNodeClient",
+		PairingCode: validCode,
+	})
+	_ = conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	resp2, err := ch2.Read()
+	if err != nil || resp2.Type != "pair_accept" {
+		t.Fatalf("Expected pair_accept for valid code, got %v (err: %v)", resp2, err)
+	}
+	t.Logf("VERIFIED: Valid code accepted! Device name: %s", resp2.DeviceName)
+}
+
+func TestDaemonDiskBenchmarkAction(t *testing.T) {
+	tempDir := t.TempDir()
+	server := NewDaemonServer(0, tempDir, "BenchDevice")
+	ln, err := server.Listen(0)
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	go func() {
+		_ = server.Serve(ln)
+	}()
+
+	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect WS: %v", err)
+	}
+	defer ws.Close()
+
+	// Read initial status event
+	var initEvt EventMessage
+	_ = ws.ReadJSON(&initEvt)
+
+	// Send test_disk action
+	req := RequestMessage{
+		ID:     "bench_test_1",
+		Action: "test_disk",
+		Payload: json.RawMessage(fmt.Sprintf(`{
+			"dir": %q,
+			"size_bytes": 4194304
+		}`, tempDir)),
+	}
+
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Failed to send test_disk request: %v", err)
+	}
+
+	// Read events until benchmark_disk_result
+	var benchResult EventMessage
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var evt EventMessage
+		_ = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if err := ws.ReadJSON(&evt); err != nil {
+			break
+		}
+		if evt.Event == "benchmark_disk_result" {
+			benchResult = evt
+			break
+		}
+	}
+
+	if benchResult.Event != "benchmark_disk_result" {
+		t.Fatalf("Expected benchmark_disk_result event, got: %v", benchResult)
+	}
+
+	dataBytes, _ := json.Marshal(benchResult.Data)
+	var diskRes engine.DiskBenchResult
+	if err := json.Unmarshal(dataBytes, &diskRes); err != nil {
+		t.Fatalf("Failed unmarshaling benchmark data: %v", err)
+	}
+
+	if diskRes.WriteSpeedMBps <= 0 {
+		t.Errorf("Expected positive write speed, got %f", diskRes.WriteSpeedMBps)
+	}
+	if diskRes.Rating == "" {
+		t.Errorf("Expected rating to be set")
+	}
+
+	t.Logf("WebSocket Disk Benchmark: Write=%.2f MB/s, Read=%.2f MB/s, Rating=%s",
+		diskRes.WriteSpeedMBps, diskRes.ReadSpeedMBps, diskRes.Rating)
+}
+
+func TestBatchMultiFileResilienceAndErrorRecovery(t *testing.T) {
+	recvDir := t.TempDir()
+	recvServer := NewDaemonServer(0, recvDir, "ReceiverNode")
+	recvHTTP, err := recvServer.Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recvHTTPPort := recvHTTP.Addr().(*net.TCPAddr).Port
+
+	recvNodeLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recvNodePort := recvNodeLn.Addr().(*net.TCPAddr).Port
+	go recvServer.listenForIncomingPairings(recvNodeLn)
+
+	go func() {
+		_ = recvServer.Serve(recvHTTP)
+	}()
+	defer recvServer.Stop()
+	defer recvNodeLn.Close()
+
+	// Sender Daemon
+	sendDir := t.TempDir()
+	folderToShare := filepath.Join(sendDir, "resilience_folder")
+	_ = os.MkdirAll(folderToShare, 0755)
+
+	// Create 20 files in subdirectories
+	expectedFiles := make(map[string][]byte)
+	for i := 0; i < 20; i++ {
+		subDir := filepath.Join(folderToShare, fmt.Sprintf("sub_%d", i%4))
+		_ = os.MkdirAll(subDir, 0755)
+		filePath := filepath.Join(subDir, fmt.Sprintf("video_%d.mp4", i))
+		data := bytes.Repeat([]byte(fmt.Sprintf("media payload block %d\n", i)), 500)
+		_ = os.WriteFile(filePath, data, 0644)
+
+		rel, _ := filepath.Rel(sendDir, filePath)
+		expectedFiles[filepath.ToSlash(rel)] = data
+	}
+
+	sendServer := NewDaemonServer(0, sendDir, "SenderNode")
+	sendHTTP, err := sendServer.Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendHTTPPort := sendHTTP.Addr().(*net.TCPAddr).Port
+	go func() {
+		_ = sendServer.Serve(sendHTTP)
+	}()
+	defer sendServer.Stop()
+
+	// Connect WebSocket to Receiver
+	recvWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", recvHTTPPort)
+	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to dial receiver ws: %v", err)
+	}
+	defer recvWS.Close()
+
+	var initEvt EventMessage
+	_ = recvWS.ReadJSON(&initEvt)
+
+	// Connect WebSocket to Sender and drain events in background
+	sendWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", sendHTTPPort)
+	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to dial sender ws: %v", err)
+	}
+	defer sendWS.Close()
+	_ = sendWS.ReadJSON(&initEvt)
+
+	go func() {
+		for {
+			var evt EventMessage
+			if err := sendWS.ReadJSON(&evt); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Send folder
+	recvCode := recvServer.GetStatus().PairingCode
+	_ = sendWS.WriteJSON(RequestMessage{
+		ID:      "send_resilience_batch",
+		Action:  "send",
+		Payload: json.RawMessage(fmt.Sprintf(`{"paths":[%q],"target_ip":"127.0.0.1:%d","code":%q}`, folderToShare, recvNodePort, recvCode)),
+	})
+
+	// Receiver accepts offer
+	for {
+		var evt EventMessage
+		if err := recvWS.ReadJSON(&evt); err != nil {
+			t.Fatalf("Receiver read error: %v", err)
+		}
+		if evt.Event == "incoming_offer" {
+			_ = recvWS.WriteJSON(RequestMessage{
+				ID:      "accept_resilience_batch",
+				Action:  "respond_offer",
+				Payload: json.RawMessage(`{"accept":true}`),
+			})
+			break
+		}
+	}
+
+	// Wait for transfer_complete on receiver
+	deadline := time.Now().Add(15 * time.Second)
+	completed := false
+	for time.Now().Before(deadline) {
+		var evt EventMessage
+		_ = recvWS.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if err := recvWS.ReadJSON(&evt); err != nil {
+			break
+		}
+		if evt.Event == "transfer_complete" {
+			completed = true
+			break
+		}
+	}
+
+	if !completed {
+		t.Fatalf("Multi-file batch transfer did not complete within timeout (potential freeze/deadlock)")
+	}
+
+	// Verify all 20 files are in recvDir with preserved paths
+	for relPath, expected := range expectedFiles {
+		targetFile := filepath.Join(recvDir, filepath.FromSlash(relPath))
+		actual, err := os.ReadFile(targetFile)
+		if err != nil {
+			t.Fatalf("Missing transferred file '%s': %v", relPath, err)
+		}
+		if !bytes.Equal(actual, expected) {
+			t.Fatalf("Data mismatch in transferred file '%s'", relPath)
+		}
+	}
+}
+
+func TestBatchItemFailedAdvance(t *testing.T) {
+	recvDir := t.TempDir()
+	recvServer := NewDaemonServer(0, recvDir, "ReceiverNode")
+	recvHTTP, err := recvServer.Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recvHTTPPort := recvHTTP.Addr().(*net.TCPAddr).Port
+
+	recvNodeLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recvNodePort := recvNodeLn.Addr().(*net.TCPAddr).Port
+	go recvServer.listenForIncomingPairings(recvNodeLn)
+
+	go func() {
+		_ = recvServer.Serve(recvHTTP)
+	}()
+	defer recvServer.Stop()
+	defer recvNodeLn.Close()
+
+	// Sender Daemon
+	sendDir := t.TempDir()
+	folderToShare := filepath.Join(sendDir, "batch_with_skip")
+	_ = os.MkdirAll(folderToShare, 0755)
+
+	// Create 3 files
+	for i := 0; i < 3; i++ {
+		filePath := filepath.Join(folderToShare, fmt.Sprintf("file_%d.txt", i))
+		_ = os.WriteFile(filePath, []byte(fmt.Sprintf("file content %d", i)), 0644)
+	}
+
+	sendServer := NewDaemonServer(0, sendDir, "SenderNode")
+	sendHTTP, err := sendServer.Listen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendHTTPPort := sendHTTP.Addr().(*net.TCPAddr).Port
+	go func() {
+		_ = sendServer.Serve(sendHTTP)
+	}()
+	defer sendServer.Stop()
+
+	// Connect WebSocket to Receiver
+	recvWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", recvHTTPPort)
+	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to dial receiver ws: %v", err)
+	}
+	defer recvWS.Close()
+
+	var initEvt EventMessage
+	_ = recvWS.ReadJSON(&initEvt)
+
+	// Connect WebSocket to Sender and track events
+	sendWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", sendHTTPPort)
+	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to dial sender ws: %v", err)
+	}
+	defer sendWS.Close()
+	_ = sendWS.ReadJSON(&initEvt)
+
+	go func() {
+		for {
+			var evt EventMessage
+			if err := sendWS.ReadJSON(&evt); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Mark item 1 as skipped on receiver before transfer to trigger item_skipped / error advance
+	recvServer.mu.Lock()
+	recvServer.skippedFiles[1] = true
+	recvServer.mu.Unlock()
+
+	// Send folder
+	recvCode := recvServer.GetStatus().PairingCode
+	_ = sendWS.WriteJSON(RequestMessage{
+		ID:      "send_skip_batch",
+		Action:  "send",
+		Payload: json.RawMessage(fmt.Sprintf(`{"paths":[%q],"target_ip":"127.0.0.1:%d","code":%q}`, folderToShare, recvNodePort, recvCode)),
+	})
+
+	// Receiver accepts offer
+	for {
+		var evt EventMessage
+		if err := recvWS.ReadJSON(&evt); err != nil {
+			t.Fatalf("Receiver read error: %v", err)
+		}
+		if evt.Event == "incoming_offer" {
+			_ = recvWS.WriteJSON(RequestMessage{
+				ID:      "accept_skip_batch",
+				Action:  "respond_offer",
+				Payload: json.RawMessage(`{"accept":true}`),
+			})
+			break
+		}
+	}
+
+	// Wait for transfer_complete on receiver
+	deadline := time.Now().Add(10 * time.Second)
+	completed := false
+	for time.Now().Before(deadline) {
+		var evt EventMessage
+		_ = recvWS.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if err := recvWS.ReadJSON(&evt); err != nil {
+			break
+		}
+		if evt.Event == "transfer_complete" {
+			completed = true
+			break
+		}
+	}
+
+	if !completed {
+		t.Fatalf("Batch transfer with skipped file deadlocked instead of completing remaining files")
+	}
+
+	// Verify file 0 and file 2 exist, while file 1 was skipped
+	f0 := filepath.Join(recvDir, "batch_with_skip", "file_0.txt")
+	f2 := filepath.Join(recvDir, "batch_with_skip", "file_2.txt")
+	if _, err := os.Stat(f0); err != nil {
+		t.Fatalf("Expected file_0.txt to exist: %v", err)
+	}
+	if _, err := os.Stat(f2); err != nil {
+		t.Fatalf("Expected file_2.txt to exist: %v", err)
+	}
 }

@@ -120,35 +120,53 @@ func sendChunkRequest(conn net.Conn, task chunkTask) error {
 	return err
 }
 
-func readAndWriteChunk(conn net.Conn, task chunkTask, buf []byte, dm *DiskManager) error {
-	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+type sequencedChunk struct {
+	index       uint32
+	offset      int64
+	data        []byte
+	bufPtr      *[]byte
+	netDuration time.Duration
+}
+
+func readChunkPayload(conn net.Conn, task chunkTask, buf []byte) (protocol.ChunkMeta, []byte, time.Duration, error) {
+	_ = conn.SetReadDeadline(time.Now().Add(6 * time.Second))
 	header, err := protocol.ReadHeader(conn)
 	if err != nil {
-		return err
+		return protocol.ChunkMeta{}, nil, 0, err
 	}
 
 	if header.Type != protocol.TypeChunk {
-		return fmt.Errorf("unexpected frame type: %d", header.Type)
+		return protocol.ChunkMeta{}, nil, 0, fmt.Errorf("unexpected frame type: %d", header.Type)
 	}
 
 	payloadLen := int(header.PayloadLen)
 	if payloadLen > len(buf) {
-		return fmt.Errorf("payload exceeds buffer size")
+		return protocol.ChunkMeta{}, nil, 0, fmt.Errorf("payload exceeds buffer size")
 	}
 
+	netStart := time.Now()
 	if _, err := io.ReadFull(conn, buf[:payloadLen]); err != nil {
-		return err
+		return protocol.ChunkMeta{}, nil, 0, err
 	}
+	netDuration := time.Since(netStart)
 
 	chunkMeta, data, err := protocol.ParseChunkPayload(buf[:payloadLen])
 	if err != nil {
-		return err
+		return protocol.ChunkMeta{}, nil, 0, err
 	}
 
 	if chunkMeta.Index != task.index {
-		return fmt.Errorf("chunk index mismatch: expected %d, got %d", task.index, chunkMeta.Index)
+		return protocol.ChunkMeta{}, nil, 0, fmt.Errorf("chunk index mismatch: expected %d, got %d", task.index, chunkMeta.Index)
 	}
 
+	return chunkMeta, data, netDuration, nil
+}
+
+func readAndWriteChunk(conn net.Conn, task chunkTask, buf []byte, dm *DiskManager) error {
+	chunkMeta, data, _, err := readChunkPayload(conn, task, buf)
+	if err != nil {
+		return err
+	}
 	_, err = dm.WriteChunkAt(data, int64(chunkMeta.Offset), task.index)
 	return err
 }
@@ -193,7 +211,8 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 		return fmt.Errorf("failed to send handshake request: %w", err)
 	}
 
-	_ = handshakeConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	// Allow sufficient time (60s) for interactive sender authorization prompts (-i)
+	_ = handshakeConn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	header, err := protocol.ReadHeader(handshakeConn)
 	if err != nil {
 		handshakeConn.Close()
@@ -221,8 +240,16 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 		return fmt.Errorf("failed to parse metadata: %w", err)
 	}
 
+	return r.PullWithMetadata(ctx, senderAddr, listener, meta, fileID)
+}
+
+// PullWithMetadata connects workers directly to stream chunks when metadata is already known (e.g. in batches)
+func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, listener TransferListener, meta protocol.FileMetadata, fileID string) error {
+	if meta.ChunkSize == 0 {
+		meta.ChunkSize = 4 * 1024 * 1024
+	}
+
 	// CRITICAL FILE INTEGRITY CHECK:
-	// If the receiver expects a specific fileID, verify that the sender is serving the exact same file!
 	if fileID != "" && meta.FileID != "" && fileID != meta.FileID {
 		err := fmt.Errorf("integrity error: sender is serving a different file (expected %s, got %s)", fileID, meta.FileID)
 		if listener != nil {
@@ -338,6 +365,100 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 	var lastSpeedBytes int64 = transferredBytes
 	var currentSpeed float64
 
+	writerQueue := make(chan sequencedChunk, 16)
+	writerDone := make(chan struct{})
+
+	var rollingNetMs float64
+	var rollingDiskMs float64
+	var rollingMu sync.RWMutex
+
+	go func() {
+		defer close(writerDone)
+		nextExpected := uint32(0)
+		for nextExpected < totalChunks && dm.IsChunkCompleted(nextExpected) {
+			nextExpected++
+		}
+		pending := make(map[uint32]sequencedChunk)
+
+		writeChunk := func(ch sequencedChunk) error {
+			diskStart := time.Now()
+			_, err := dm.WriteChunkAt(ch.data, ch.offset, ch.index)
+			diskDuration := time.Since(diskStart)
+			putChunkBuffer(ch.bufPtr)
+
+			if err != nil {
+				return err
+			}
+
+			netMs := float64(ch.netDuration.Milliseconds())
+			diskMs := float64(diskDuration.Milliseconds())
+			rollingMu.Lock()
+			if rollingNetMs == 0 {
+				rollingNetMs = netMs
+				rollingDiskMs = diskMs
+			} else {
+				rollingNetMs = 0.85*rollingNetMs + 0.15*netMs
+				rollingDiskMs = 0.85*rollingDiskMs + 0.15*diskMs
+			}
+			rollingMu.Unlock()
+
+			atomic.AddInt64(&transferredBytes, int64(len(ch.data)))
+			atomic.AddUint32(&completedChunks, 1)
+			return nil
+		}
+
+		for ch := range writerQueue {
+			if workerCtx.Err() != nil {
+				putChunkBuffer(ch.bufPtr)
+				continue
+			}
+
+			if ch.index == nextExpected {
+				if err := writeChunk(ch); err != nil {
+					select {
+					case errChan <- fmt.Errorf("disk write error on chunk %d: %w", ch.index, err):
+					default:
+					}
+					cancelWorkers()
+					break
+				}
+				nextExpected++
+				for nextExpected < totalChunks && dm.IsChunkCompleted(nextExpected) {
+					nextExpected++
+				}
+
+				// Flush any consecutive chunks that were waiting in pending map
+				for {
+					nextCh, ok := pending[nextExpected]
+					if !ok {
+						break
+					}
+					delete(pending, nextExpected)
+					if err := writeChunk(nextCh); err != nil {
+						select {
+						case errChan <- fmt.Errorf("disk write error on chunk %d: %w", nextCh.index, err):
+						default:
+						}
+						cancelWorkers()
+						break
+					}
+					nextExpected++
+					for nextExpected < totalChunks && dm.IsChunkCompleted(nextExpected) {
+						nextExpected++
+					}
+				}
+			} else {
+				// Out-of-order chunk: buffer until nextExpected arrives
+				pending[ch.index] = ch
+			}
+		}
+
+		// Clean up any remaining pending buffers on exit/cancel
+		for _, ch := range pending {
+			putChunkBuffer(ch.bufPtr)
+		}
+	}()
+
 	for w := 0; w < r.workers; w++ {
 		wg.Add(1)
 		go func(workerID int) {
@@ -356,7 +477,17 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 
 			connect := func() bool {
 				disconnect()
-				for attempt := 1; attempt <= 5; attempt++ {
+				delays := []time.Duration{
+					50 * time.Millisecond,
+					100 * time.Millisecond,
+					150 * time.Millisecond,
+					250 * time.Millisecond,
+					400 * time.Millisecond,
+					500 * time.Millisecond,
+					750 * time.Millisecond,
+					1000 * time.Millisecond,
+				}
+				for attempt := 0; attempt < len(delays); attempt++ {
 					select {
 					case <-workerCtx.Done():
 						return false
@@ -393,7 +524,7 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 						}
 						return true
 					}
-					time.Sleep(time.Duration(attempt*100) * time.Millisecond)
+					time.Sleep(delays[attempt])
 				}
 				return false
 			}
@@ -407,12 +538,7 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 			atomic.AddInt32(&activeStreams, 1)
 			defer atomic.AddInt32(&activeStreams, -1)
 
-			bufPtr := getChunkBuffer()
-			defer putChunkBuffer(bufPtr)
-			buf := *bufPtr
-
 			var prefetched *chunkTask
-
 			taskRetry := make(map[uint32]int)
 
 			for {
@@ -481,7 +607,10 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 					}
 				}
 
-				if err := readAndWriteChunk(conn, task, buf, dm); err != nil {
+				bufPtr := getChunkBuffer()
+				chunkMeta, data, netDuration, err := readChunkPayload(conn, task, *bufPtr)
+				if err != nil {
+					putChunkBuffer(bufPtr)
 					taskRetry[task.index]++
 					if taskRetry[task.index] >= 4 {
 						errChan <- fmt.Errorf("chunk %d transfer failed after max retries", task.index)
@@ -501,8 +630,18 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 					continue
 				}
 
-				atomic.AddInt64(&transferredBytes, int64(task.length))
-				atomic.AddUint32(&completedChunks, 1)
+				select {
+				case <-workerCtx.Done():
+					putChunkBuffer(bufPtr)
+					return
+				case writerQueue <- sequencedChunk{
+					index:       chunkMeta.Index,
+					offset:      int64(chunkMeta.Offset),
+					data:        data,
+					bufPtr:      bufPtr,
+					netDuration: netDuration,
+				}:
+				}
 			}
 		}(w)
 	}
@@ -510,6 +649,8 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 	doneChan := make(chan struct{})
 	go func() {
 		wg.Wait()
+		close(writerQueue)
+		<-writerDone
 		close(doneChan)
 	}()
 
@@ -522,12 +663,31 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 			if atomic.LoadUint32(&completedChunks) == totalChunks {
 				duration := time.Since(startTime)
 				if listener != nil {
+					rollingMu.RLock()
+					curNetMs := rollingNetMs
+					curDiskMs := rollingDiskMs
+					rollingMu.RUnlock()
+
+					bottleneck := "BALANCED"
+					reason := "Balanced network link and storage write throughput"
+					if curDiskMs > 1.8*curNetMs && curDiskMs > 15 {
+						bottleneck = "STORAGE"
+						reason = fmt.Sprintf("Storage write latency is elevated (%.0f ms/chunk). Target drive speed is the bottleneck.", curDiskMs)
+					} else if curNetMs > 1.8*curDiskMs && curNetMs > 25 {
+						bottleneck = "NETWORK"
+						reason = fmt.Sprintf("Network read latency is elevated (%.0f ms/chunk). Link throughput is the bottleneck.", curNetMs)
+					}
+
 					listener.OnProgress(TransferStats{
-						BytesTransferred: meta.FileSize,
-						TotalBytes:       meta.FileSize,
-						SpeedMBps:        currentSpeed,
-						ActiveStreams:    0,
-						ProgressPercent:  100.0,
+						BytesTransferred:   meta.FileSize,
+						TotalBytes:         meta.FileSize,
+						SpeedMBps:          currentSpeed,
+						ActiveStreams:      0,
+						ProgressPercent:    100.0,
+						DiskWriteLatencyMs: curDiskMs,
+						NetReadLatencyMs:   curNetMs,
+						Bottleneck:         bottleneck,
+						BottleneckReason:   reason,
 					})
 					listener.OnComplete(dm.finalPath, duration)
 				}
@@ -570,12 +730,32 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 				if meta.FileSize > 0 {
 					percent = (float64(current) / float64(meta.FileSize)) * 100.0
 				}
+
+				rollingMu.RLock()
+				curNetMs := rollingNetMs
+				curDiskMs := rollingDiskMs
+				rollingMu.RUnlock()
+
+				bottleneck := "BALANCED"
+				reason := "Balanced network link and storage write throughput"
+				if curDiskMs > 1.8*curNetMs && curDiskMs > 15 {
+					bottleneck = "STORAGE"
+					reason = fmt.Sprintf("Storage write latency is elevated (%.0f ms/chunk). Target drive speed is the bottleneck.", curDiskMs)
+				} else if curNetMs > 1.8*curDiskMs && curNetMs > 25 {
+					bottleneck = "NETWORK"
+					reason = fmt.Sprintf("Network read latency is elevated (%.0f ms/chunk). Link throughput is the bottleneck.", curNetMs)
+				}
+
 				listener.OnProgress(TransferStats{
-					BytesTransferred: current,
-					TotalBytes:       meta.FileSize,
-					SpeedMBps:        currentSpeed,
-					ActiveStreams:    int(atomic.LoadInt32(&activeStreams)),
-					ProgressPercent:  percent,
+					BytesTransferred:   current,
+					TotalBytes:         meta.FileSize,
+					SpeedMBps:          currentSpeed,
+					ActiveStreams:      int(atomic.LoadInt32(&activeStreams)),
+					ProgressPercent:    percent,
+					DiskWriteLatencyMs: curDiskMs,
+					NetReadLatencyMs:   curNetMs,
+					Bottleneck:         bottleneck,
+					BottleneckReason:   reason,
 				})
 			}
 		}

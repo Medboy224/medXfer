@@ -104,6 +104,15 @@ func (s *DaemonServer) dispatch(conn *websocket.Conn, req RequestMessage) {
 			_ = exec.Command("cmd", "/c", "start", "ms-settings:network-mobilehotspot").Start()
 		}()
 
+	case "test_disk":
+		s.handleTestDisk(conn, req)
+
+	case "test_network":
+		s.handleTestNetwork(conn, req)
+
+	case "get_transfer_summary":
+		s.handleGetTransferSummary(conn, req)
+
 	default:
 		s.sendTo(conn, NewEvent("action_error", map[string]string{
 			"error": fmt.Sprintf("unknown action '%s'", req.Action),
@@ -170,8 +179,25 @@ func (s *DaemonServer) handleScan(conn *websocket.Conn, req RequestMessage) {
 
 func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
 	var payload PairPayload
-	if err := json.Unmarshal(req.Payload, &payload); err != nil || payload.IP == "" {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid pair payload"}, req.ID))
+	if err := json.Unmarshal(req.Payload, &payload); err != nil || (payload.IP == "" && payload.Code == "") {
+		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid pair payload (IP or Code required)"}, req.ID))
+		return
+	}
+
+	if payload.Code != "" && payload.IP == "" {
+		peer, err := discovery.ResolvePairingCode(s.ctx, payload.Code, 3*time.Second)
+		if err != nil {
+			s.sendTo(conn, NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to resolve pairing code '%s': %v", payload.Code, err)}, req.ID))
+			return
+		}
+		payload.IP = peer.HostIP
+		if payload.Port <= 0 && peer.Port > 0 {
+			payload.Port = peer.Port
+		}
+	}
+
+	if payload.Code == "" {
+		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "pairing code is required to pair with device"}, req.ID))
 		return
 	}
 
@@ -187,6 +213,42 @@ func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
 		return
 	}
 
+	ch := session.NewChannel(connPeer)
+	s.mu.RLock()
+	devName := s.config.DeviceName
+	s.mu.RUnlock()
+
+	_ = ch.Send(session.Message{
+		Type:        "pair_request",
+		DeviceName:  devName,
+		PairingCode: payload.Code,
+	})
+
+	// Wait for peer response (5s deadline)
+	_ = connPeer.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := ch.Read()
+	_ = connPeer.SetReadDeadline(time.Time{})
+
+	if err != nil || resp.Type != "pair_accept" {
+		reason := "pairing rejected by peer"
+		if resp.Type == "pair_reject" {
+			reason = "invalid pairing code"
+			if resp.FileName != "" {
+				reason = resp.FileName
+			}
+		} else if err != nil {
+			reason = err.Error()
+		}
+		ch.Close()
+		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %s", target, reason)}, req.ID))
+		return
+	}
+
+	peerDevName := resp.DeviceName
+	if peerDevName == "" {
+		peerDevName = payload.IP
+	}
+
 	s.mu.Lock()
 	if s.sessionGraceTimer != nil {
 		s.sessionGraceTimer.Stop()
@@ -196,22 +258,16 @@ func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
 	if s.activeSession != nil {
 		s.activeSession.Close()
 	}
-	s.activeSession = session.NewChannel(connPeer)
-	devName := s.config.DeviceName
-	sess := s.activeSession
+	s.activeSession = ch
+	s.pairedDeviceName = peerDevName
 	s.mu.Unlock()
-
-	_ = sess.Send(session.Message{
-		Type:       "pair_hello",
-		DeviceName: devName,
-	})
 
 	s.Broadcast(NewEvent("paired", map[string]string{
 		"ip":          payload.IP,
-		"device_name": "Connecting...",
+		"device_name": peerDevName,
 	}, req.ID))
 
-	go s.listenToSession(sess)
+	go s.listenToSession(ch)
 }
 
 func (s *DaemonServer) handleDisconnect(conn *websocket.Conn, req RequestMessage) {
@@ -254,17 +310,21 @@ func (s *DaemonServer) handleSend(conn *websocket.Conn, req RequestMessage) {
 
 	// If a specific target IP was provided and we have no session or session is with someone else:
 	if payload.TargetIP != "" && (sess == nil || sess.RemoteIP() != cleanTarget) {
-		go s.connectAndSend(payload.TargetIP, payload.Paths, req.ID)
+		if payload.Code == "" {
+			s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "pairing code is required for direct send"}, req.ID))
+			return
+		}
+		go s.connectAndSend(payload.TargetIP, payload.Code, payload.Paths, req.ID, payload.UseTarStream)
 		return
 	}
 
 	// If we have an active session, send over it
 	if sess != nil {
 		go func() {
-			err := s.sendOverSession(payload.Paths, req.ID)
+			err := s.sendOverSession(payload.Paths, req.ID, payload.UseTarStream)
 			if err != nil && payload.TargetIP != "" {
 				// Old session failed (stale/broken connection), immediately reconnect and retry!
-				s.connectAndSend(payload.TargetIP, payload.Paths, req.ID)
+				s.connectAndSend(payload.TargetIP, payload.Code, payload.Paths, req.ID, payload.UseTarStream)
 			} else if err != nil {
 				s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 			}
@@ -273,14 +333,18 @@ func (s *DaemonServer) handleSend(conn *websocket.Conn, req RequestMessage) {
 	}
 
 	if payload.TargetIP != "" {
-		go s.connectAndSend(payload.TargetIP, payload.Paths, req.ID)
+		if payload.Code == "" {
+			s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "pairing code is required for direct send"}, req.ID))
+			return
+		}
+		go s.connectAndSend(payload.TargetIP, payload.Code, payload.Paths, req.ID, payload.UseTarStream)
 		return
 	}
 
 	s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "not paired with any device and no target_ip specified"}, req.ID))
 }
 
-func (s *DaemonServer) connectAndSend(targetIP string, paths []string, id string) {
+func (s *DaemonServer) connectAndSend(targetIP, code string, paths []string, id string, useTarStream ...bool) {
 	target := targetIP
 	if !strings.Contains(target, ":") {
 		target = fmt.Sprintf("%s:18887", targetIP)
@@ -291,32 +355,60 @@ func (s *DaemonServer) connectAndSend(targetIP string, paths []string, id string
 		return
 	}
 
+	ch := session.NewChannel(connPeer)
+	s.mu.RLock()
+	devName := s.config.DeviceName
+	s.mu.RUnlock()
+
+	_ = ch.Send(session.Message{
+		Type:        "pair_request",
+		DeviceName:  devName,
+		PairingCode: code,
+	})
+
+	_ = connPeer.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := ch.Read()
+	_ = connPeer.SetReadDeadline(time.Time{})
+
+	if err != nil || resp.Type != "pair_accept" {
+		reason := "pairing rejected by peer"
+		if resp.Type == "pair_reject" {
+			reason = "invalid pairing code"
+			if resp.FileName != "" {
+				reason = resp.FileName
+			}
+		}
+		ch.Close()
+		s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %s", target, reason)}, id))
+		return
+	}
+
+	cleanIP := strings.Split(targetIP, ":")[0]
+	peerDevName := resp.DeviceName
+	if peerDevName == "" {
+		peerDevName = cleanIP
+	}
+
 	s.mu.Lock()
 	if s.activeSession != nil {
 		s.activeSession.Close()
 	}
-	s.activeSession = session.NewChannel(connPeer)
-	devName := s.config.DeviceName
-	sess := s.activeSession
+	s.activeSession = ch
+	s.pairedDeviceName = peerDevName
 	s.mu.Unlock()
 
-	_ = sess.Send(session.Message{
-		Type:       "pair_hello",
-		DeviceName: devName,
-	})
-
-	cleanIP := strings.Split(targetIP, ":")[0]
 	s.Broadcast(NewEvent("paired", map[string]string{
 		"ip":          cleanIP,
-		"device_name": "Connecting...",
+		"device_name": peerDevName,
 	}))
-	go s.listenToSession(sess)
+	go s.listenToSession(ch)
 
 	// Dispatch offer immediately
-	_ = s.sendOverSession(paths, id)
+	tarOpt := len(useTarStream) > 0 && useTarStream[0]
+	_ = s.sendOverSession(paths, id, tarOpt)
 }
 
-func (s *DaemonServer) sendOverSession(paths []string, reqID string) error {
+func (s *DaemonServer) sendOverSession(paths []string, reqID string, useTarStream ...bool) error {
 	s.mu.RLock()
 	sess := s.activeSession
 	devName := s.config.DeviceName
@@ -351,13 +443,19 @@ func (s *DaemonServer) sendOverSession(paths []string, reqID string) error {
 			})
 		}
 
+		// Tar streaming is used when explicitly requested via "Raw Archive Stream"
+		isStream := false
+		if len(useTarStream) > 0 && useTarStream[0] {
+			isStream = true
+		}
+
 		s.mu.Lock()
 		s.lastOfferedManifest = m
 		s.currentBatchItems = batchItems
 		s.skippedFiles = make(map[int]bool)
 		s.batchCanceled = false
 		s.isPaused = false
-		s.lastOfferedIsStream = isFolder
+		s.lastOfferedIsStream = isStream
 		s.activePort++
 		s.mu.Unlock()
 
@@ -365,7 +463,7 @@ func (s *DaemonServer) sendOverSession(paths []string, reqID string) error {
 			Type:       "batch_offer",
 			DeviceName: devName,
 			Batch:      m,
-			IsStream:   isFolder,
+			IsStream:   isStream,
 		})
 		if err != nil {
 			s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed sending batch offer: %v", err)}, reqID))
@@ -467,7 +565,9 @@ func (s *DaemonServer) sendOneShot(paths []string, targetIP, reqID string) {
 			baseBytes += item.Size
 		}
 
-		s.Broadcast(NewEvent("transfer_complete", map[string]string{"message": "Folder batch transfer complete"}))
+		s.broadcastTransferComplete(map[string]interface{}{
+			"message": "Folder batch transfer complete",
+		})
 	} else {
 		filePath := paths[0]
 		fi, err := os.Stat(filePath)
@@ -531,6 +631,39 @@ func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessa
 	policyStr := s.config.CollisionPolicy
 	s.mu.Unlock()
 
+	// Trigger non-blocking Pre-Flight disk probe
+	go func(targetDir string) {
+		probeSpeed, isSlow, err := engine.QuickDiskProbe(targetDir)
+		if err == nil {
+			rating := "High-Speed SSD (Optimal)"
+			if isSlow {
+				rating = "Slow Storage / Potential Bottleneck"
+			}
+			s.Broadcast(NewEvent("log", map[string]string{
+				"level":   "DIAG",
+				"message": fmt.Sprintf("Pre-Flight Storage Probe on \"%s\" -> %.1f MB/s [%s]", targetDir, probeSpeed, rating),
+			}))
+			if isSlow {
+				s.Broadcast(NewEvent("log", map[string]string{
+					"level":   "WARNING",
+					"message": fmt.Sprintf("Physical write speed to \"%s\" is %.1f MB/s. Transfer rate will be limited by drive write speed.", targetDir, probeSpeed),
+				}))
+			}
+			s.Broadcast(NewEvent("transfer_preflight", TransferPreflightData{
+				TargetDir:        targetDir,
+				DiskWriteSpeed:   probeSpeed,
+				DiskRating:       rating,
+				IsDiskBottleneck: isSlow,
+				Warning: func() string {
+					if isSlow {
+						return fmt.Sprintf("Target drive writes at %.1f MB/s and may bottleneck transfer.", probeSpeed)
+					}
+					return ""
+				}(),
+			}))
+		}
+	}(saveDir)
+
 	policy := s.parseCollisionPolicy(policyStr)
 
 	if offer.Type == "batch_offer" {
@@ -561,6 +694,9 @@ func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessa
 			err := receiver.Pull(ctx, targetAddr, listener, offer.FileID)
 			if err == nil {
 				sess.Send(session.Message{Type: "complete"})
+				s.broadcastTransferComplete(map[string]interface{}{
+					"message": "File received successfully",
+				})
 			} else if ctx.Err() == nil {
 				s.Broadcast(NewEvent("transfer_error", map[string]string{"error": err.Error()}))
 			}
@@ -811,19 +947,25 @@ func (l *daemonListener) OnProgress(stats engine.TransferStats) {
 		eta = 0
 	}
 
+	l.server.RecordTransferSample(stats, batchPercent, l.currentFile, l.totalFiles, l.totalBatchBytes)
+
 	l.server.Broadcast(NewEvent("transfer_progress", TransferProgressData{
-		CurrentFile:     l.currentFile,
-		FileIndex:       l.fileIndex + 1,
-		TotalFiles:      l.totalFiles,
-		FileBytes:       fileBytes,
-		FileTotalBytes:  fileTotal,
-		BatchBytes:      cumulativeBatchBytes,
-		BatchTotalBytes: l.totalBatchBytes,
-		SpeedMBps:       speed,
-		FilePercent:     stats.ProgressPercent,
-		BatchPercent:    batchPercent,
-		EtaSeconds:      eta,
-		IsPaused:        isPaused,
+		CurrentFile:        l.currentFile,
+		FileIndex:          l.fileIndex + 1,
+		TotalFiles:         l.totalFiles,
+		FileBytes:          fileBytes,
+		FileTotalBytes:     fileTotal,
+		BatchBytes:         cumulativeBatchBytes,
+		BatchTotalBytes:    l.totalBatchBytes,
+		SpeedMBps:          speed,
+		FilePercent:        stats.ProgressPercent,
+		BatchPercent:       batchPercent,
+		EtaSeconds:         eta,
+		IsPaused:           isPaused,
+		DiskWriteLatencyMs: stats.DiskWriteLatencyMs,
+		NetReadLatencyMs:   stats.NetReadLatencyMs,
+		Bottleneck:         stats.Bottleneck,
+		BottleneckReason:   stats.BottleneckReason,
 	}))
 }
 
@@ -1166,5 +1308,195 @@ func (s *DaemonServer) handleRejectWebUpload(conn *websocket.Conn, req RequestMe
 
 	s.Broadcast(NewEvent("web_share_upload_rejected", map[string]interface{}{
 		"ticket": payload.Ticket,
+	}, req.ID))
+}
+
+func (s *DaemonServer) handleTestDisk(conn *websocket.Conn, req RequestMessage) {
+	var payload TestDiskPayload
+	if len(req.Payload) > 0 {
+		_ = json.Unmarshal(req.Payload, &payload)
+	}
+
+	targetDir := payload.Dir
+	if targetDir == "" {
+		s.mu.RLock()
+		targetDir = s.config.DownloadDir
+		s.mu.RUnlock()
+	}
+	if targetDir == "" {
+		targetDir = "."
+	}
+
+	sizeBytes := payload.SizeBytes
+	if sizeBytes <= 0 {
+		sizeBytes = 32 * 1024 * 1024 // 32 MB default
+	}
+
+	s.Broadcast(NewEvent("log", map[string]string{
+		"level":   "DIAG",
+		"message": fmt.Sprintf("Starting disk benchmark on \"%s\" (%d MB)...", targetDir, sizeBytes/(1024*1024)),
+	}))
+
+	go func() {
+		res, err := engine.BenchmarkDisk(targetDir, sizeBytes)
+		if err != nil {
+			s.sendTo(conn, NewEvent("action_error", map[string]string{
+				"error": fmt.Sprintf("disk benchmark failed: %v", err),
+			}, req.ID))
+			return
+		}
+
+		s.Broadcast(NewEvent("log", map[string]string{
+			"level": "DIAG",
+			"message": fmt.Sprintf("Disk Benchmark on \"%s\" -> Write: %.1f MB/s | Read: %.1f MB/s [%s]",
+				res.TargetDir, res.WriteSpeedMBps, res.ReadSpeedMBps, res.Rating),
+		}))
+
+		if res.Warning != "" {
+			s.Broadcast(NewEvent("log", map[string]string{
+				"level":   "WARNING",
+				"message": fmt.Sprintf("Storage warning: %s", res.Warning),
+			}))
+		}
+
+		s.sendTo(conn, NewEvent("benchmark_disk_result", res, req.ID))
+	}()
+}
+
+func (s *DaemonServer) handleTestNetwork(conn *websocket.Conn, req RequestMessage) {
+	s.mu.RLock()
+	sess := s.activeSession
+	pairedName := s.pairedDeviceName
+	s.mu.RUnlock()
+
+	if sess == nil {
+		s.sendTo(conn, NewEvent("action_error", map[string]string{
+			"error": "Not paired with any device. Please pair with your phone or PC before running network benchmark.",
+		}, req.ID))
+		return
+	}
+
+	var payload TestNetworkPayload
+	if len(req.Payload) > 0 {
+		_ = json.Unmarshal(req.Payload, &payload)
+	}
+	sizeBytes := payload.SizeBytes
+	if sizeBytes <= 0 {
+		sizeBytes = 8 * 1024 * 1024 // 8 MB default burst
+	}
+
+	remoteIP := sess.RemoteIP()
+	s.Broadcast(NewEvent("log", map[string]string{
+		"level":   "DIAG",
+		"message": fmt.Sprintf("Starting network link benchmark to %s (%s)...", remoteIP, pairedName),
+	}))
+
+	go func() {
+		// 1. RTT Ping Probe (4 iterations)
+		var rtts []float64
+		for i := 0; i < 4; i++ {
+			t0 := time.Now()
+			_ = sess.Send(session.Message{
+				Type:        "bench_ping",
+				BenchPingTS: t0.UnixNano(),
+			})
+
+			select {
+			case pong := <-s.benchPongChan:
+				rttMs := float64(time.Now().UnixNano()-pong.BenchPingTS) / 1e6
+				rtts = append(rtts, rttMs)
+			case <-time.After(1 * time.Second):
+				// timeout on ping
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+
+		minRTT := 9999.0
+		maxRTT := 0.0
+		sumRTT := 0.0
+		for _, r := range rtts {
+			if r < minRTT {
+				minRTT = r
+			}
+			if r > maxRTT {
+				maxRTT = r
+			}
+			sumRTT += r
+		}
+		avgRTT := 0.0
+		if len(rtts) > 0 {
+			avgRTT = sumRTT / float64(len(rtts))
+		} else {
+			minRTT = 0.0
+		}
+
+		// 2. Bandwidth Burst Probe
+		_ = sess.Send(session.Message{
+			Type:      "bench_burst_req",
+			BenchSize: sizeBytes,
+		})
+
+		var throughput float64
+		select {
+		case readyMsg := <-s.benchBurstAckChan:
+			if readyMsg.Type == "bench_burst_ready" && readyMsg.DataPort > 0 {
+				targetAddr := fmt.Sprintf("%s:%d", remoteIP, readyMsg.DataPort)
+				clientSpeed, cErr := engine.RunNetworkBurstClient(targetAddr, sizeBytes, 4*time.Second)
+				if cErr == nil {
+					throughput = clientSpeed
+				}
+				// Wait for peer ack or timeout
+				select {
+				case ackMsg := <-s.benchBurstAckChan:
+					if ackMsg.Type == "bench_burst_ack" && ackMsg.FileSize > 0 {
+						peerSpeed := float64(ackMsg.FileSize) / 100.0
+						if peerSpeed > 0 {
+							throughput = peerSpeed // Receiver side measurement is most accurate
+						}
+					}
+				case <-time.After(1 * time.Second):
+				}
+			}
+		case <-time.After(3 * time.Second):
+		}
+
+		linkType, rating := engine.ClassifyNetworkLink(avgRTT, throughput)
+
+		result := engine.NetBenchResult{
+			RemoteIP:       remoteIP,
+			MinRTTMs:       minRTT,
+			AvgRTTMs:       avgRTT,
+			MaxRTTMs:       maxRTT,
+			ThroughputMBps: throughput,
+			DurationMs:     int64(sumRTT),
+			LinkType:       linkType,
+			Rating:         rating,
+		}
+
+		speedStr := "N/A"
+		if throughput > 0 {
+			speedStr = fmt.Sprintf("%.1f MB/s", throughput)
+		}
+		s.Broadcast(NewEvent("log", map[string]string{
+			"level": "DIAG",
+			"message": fmt.Sprintf("Network benchmark to %s -> Throughput: %s | RTT: %.2fms (min: %.2fms, max: %.2fms) [%s]",
+				remoteIP, speedStr, avgRTT, minRTT, maxRTT, linkType),
+		}))
+
+		s.sendTo(conn, NewEvent("benchmark_network_result", result, req.ID))
+	}()
+}
+
+func (s *DaemonServer) handleGetTransferSummary(conn *websocket.Conn, req RequestMessage) {
+	rep := s.GetLastSummaryReport()
+	if rep == nil {
+		s.sendTo(conn, NewEvent("last_transfer_summary", map[string]interface{}{
+			"summary_report": nil,
+		}, req.ID))
+		return
+	}
+	s.sendTo(conn, NewEvent("last_transfer_summary", map[string]interface{}{
+		"summary_report":   rep,
+		"formatted_report": rep.FormattedReport,
 	}, req.ID))
 }

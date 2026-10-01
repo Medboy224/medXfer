@@ -15,9 +15,13 @@ import (
 	"github.com/Medboy224/medXfer/pkg/protocol"
 )
 
+// AuthorizerFunc is invoked when a receiver connects to authorize or decline the transfer
+type AuthorizerFunc func(remoteAddr net.Addr, fileName string, fileSize int64) bool
+
 type Sender struct {
-	workers   int
-	chunkSize uint32
+	workers    int
+	chunkSize  uint32
+	authorizer AuthorizerFunc
 }
 
 func NewSender(workers int, chunkSize uint32) *Sender {
@@ -25,12 +29,17 @@ func NewSender(workers int, chunkSize uint32) *Sender {
 		workers = 4
 	}
 	if chunkSize == 0 {
-		chunkSize = 2 * 1024 * 1024
+		chunkSize = 4 * 1024 * 1024
 	}
 	return &Sender{
 		workers:   workers,
 		chunkSize: chunkSize,
 	}
+}
+
+// SetAuthorizer attaches a callback that is invoked when a receiver attempts to connect
+func (s *Sender) SetAuthorizer(fn AuthorizerFunc) {
+	s.authorizer = fn
 }
 
 // ServeAndSend accepts resumeOffset so the progress bar jumps accurately
@@ -40,10 +49,22 @@ func (s *Sender) ServeAndSend(ctx context.Context, bindAddr, filePath string, li
 
 // ServeAndSendWithRelPath allows specifying a relative path for batch/folder transfers
 func (s *Sender) ServeAndSendWithRelPath(ctx context.Context, bindAddr, filePath, relPath string, listener TransferListener, resumeOffset int64) error {
+	return s.ServeAndSendWithRelPathReady(ctx, bindAddr, filePath, relPath, listener, resumeOffset, nil)
+}
+
+// ServeAndSendWithRelPathReady accepts a ready channel that is notified with nil immediately after
+// the TCP listener is bound and ready to accept client connections, or notified with an error if setup fails.
+func (s *Sender) ServeAndSendWithRelPathReady(ctx context.Context, bindAddr, filePath, relPath string, listener TransferListener, resumeOffset int64, ready chan<- error) error {
 	dm, err := OpenForReading(filePath)
 	if err != nil {
 		if listener != nil {
 			listener.OnError(err)
+		}
+		if ready != nil {
+			select {
+			case ready <- fmt.Errorf("failed to open file: %w", err):
+			default:
+			}
 		}
 		return fmt.Errorf("failed to open file: %w", err)
 	}
@@ -62,9 +83,23 @@ func (s *Sender) ServeAndSendWithRelPath(ctx context.Context, bindAddr, filePath
 		if listener != nil {
 			listener.OnError(err)
 		}
+		if ready != nil {
+			select {
+			case ready <- fmt.Errorf("failed to bind on %s: %w", bindAddr, err):
+			default:
+			}
+		}
 		return fmt.Errorf("failed to bind on %s: %w", bindAddr, err)
 	}
 	defer listenerTCP.Close()
+
+	// Signal caller that the listener is bound and ready for incoming peer connections
+	if ready != nil {
+		select {
+		case ready <- nil:
+		default:
+		}
+	}
 
 	totalChunks := uint32((fileSize + int64(s.chunkSize) - 1) / int64(s.chunkSize))
 	if listener != nil {
@@ -141,6 +176,9 @@ func (s *Sender) ServeAndSendWithRelPath(ctx context.Context, bindAddr, filePath
 		connsMu.Unlock()
 	}()
 
+	var authOnce sync.Once
+	var authAllowed bool = true
+
 	for {
 		conn, err := listenerTCP.Accept()
 		if err != nil {
@@ -153,6 +191,20 @@ func (s *Sender) ServeAndSendWithRelPath(ctx context.Context, bindAddr, filePath
 					listener.OnError(err)
 				}
 				return err
+			}
+		}
+
+		if s.authorizer != nil {
+			authOnce.Do(func() {
+				authAllowed = s.authorizer(conn.RemoteAddr(), fileName, fileSize)
+			})
+			if !authAllowed {
+				_ = conn.Close()
+				errDeclined := fmt.Errorf("transfer declined by sender")
+				if listener != nil {
+					listener.OnError(errDeclined)
+				}
+				return errDeclined
 			}
 		}
 

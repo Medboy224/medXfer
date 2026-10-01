@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/hotspot"
 	"github.com/Medboy224/medXfer/pkg/manifest"
+	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/Medboy224/medXfer/pkg/ui"
 )
@@ -134,7 +136,16 @@ func main() {
 }
 
 func reorderArgs(args []string) []string {
-	valFlags := map[string]bool{"-port": true, "--port": true, "-workers": true, "--workers": true, "-chunk": true, "--chunk": true, "-out": true, "--out": true, "-ip": true, "--ip": true}
+	valFlags := map[string]bool{
+		"-port": true, "--port": true,
+		"-workers": true, "--workers": true,
+		"-chunk": true, "--chunk": true,
+		"-out": true, "--out": true,
+		"-ip": true, "--ip": true,
+		"-code": true, "--code": true,
+		"-pin": true, "--pin": true,
+		"-name": true, "--name": true,
+	}
 	var flags, positionals []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -154,12 +165,25 @@ func reorderArgs(args []string) []string {
 }
 
 func handleNode() {
+	nodePairingCode, _, _ := discovery.GeneratePairingCode(getLocalIP())
+
+	ctxDisc, cancelDisc := context.WithCancel(context.Background())
+	defer cancelDisc()
+	discOffer := &discovery.TransferOffer{FileName: "medXfer-Node", FileSize: 0}
+	discServer := discovery.NewDiscoveryServer("node", 18887, discOffer)
+	discServer.SetPairingCode(nodePairingCode)
+	discServer.Start(ctxDisc)
+
 	fmt.Println("==================================================")
 	fmt.Println("             medXfer Persistent Node              ")
 	fmt.Println("==================================================")
+	fmt.Printf(" Device Name : %s\n", discServer.GetPeer().DeviceName)
+	fmt.Printf(" Local IP    : %s\n", getLocalIP())
+	fmt.Printf(" Pairing Code: %s\n", nodePairingCode)
+	fmt.Println("--------------------------------------------------")
 	fmt.Println(" Commands:")
 	fmt.Println("   scan              - Find devices on the network")
-	fmt.Println("   pair <index/ip>   - Connect to a device")
+	fmt.Println("   pair <code/ip>    - Connect using 6-digit code or IP")
 	fmt.Println("   send <filepath>   - Send file/folder to paired device")
 	fmt.Println("   stop              - Cancel an active transfer gracefully")
 	fmt.Println("   disconnect        - End pairing session")
@@ -174,6 +198,7 @@ func handleNode() {
 	var lastOfferedPort int
 	var lastOfferedManifest *manifest.Manifest
 	var transferCancel context.CancelFunc
+	var printPrompt func()
 	itemDoneChan := make(chan bool, 1)
 
 	// Global gracefully shutdown trap for Ctrl+C
@@ -222,32 +247,62 @@ func handleNode() {
 					conn = upConn
 				}
 			}
-			if activeSession == nil {
-				activeSession = session.NewChannel(conn)
-				fmt.Printf("\n\n[+] Incoming pairing from %s! Press Enter to refresh prompt.\n", activeSession.RemoteIP())
-				go func(c *session.Channel) {
-					for {
-						msg, err := c.Read()
-						if err != nil {
-							disconnectChan <- true
-							return
-						}
-						msgChan <- msg
-					}
-				}(activeSession)
-			} else {
-				conn.Close()
+
+			ch := session.NewChannel(conn)
+
+			if activeSession != nil {
+				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "node already paired with another device"})
+				ch.Close()
+				continue
 			}
+
+			// Read incoming pairing authentication message (5s timeout)
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			msg, err := ch.Read()
+			_ = conn.SetReadDeadline(time.Time{})
+			if err != nil {
+				ch.Close()
+				continue
+			}
+
+			// Verify pairing code
+			normExpected, _ := discovery.NormalizePairingCode(nodePairingCode)
+			normProvided, _ := discovery.NormalizePairingCode(msg.PairingCode)
+
+			if normExpected == "" || normProvided == "" || normExpected != normProvided {
+				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "invalid pairing code"})
+				ch.Close()
+				fmt.Printf("\n[-] Rejected pairing attempt from %s: invalid pairing code '%s'.\n", ch.RemoteIP(), msg.PairingCode)
+				printPrompt()
+				continue
+			}
+
+			// Valid pairing code!
+			_ = ch.Send(session.Message{
+				Type:       "pair_accept",
+				DeviceName: discServer.GetPeer().DeviceName,
+			})
+			activeSession = ch
+			devLabel := msg.DeviceName
+			if devLabel == "" {
+				devLabel = "Remote Node"
+			}
+			fmt.Printf("\n\n[+] Device '%s' (%s) paired successfully with code %s! Press Enter to refresh prompt.\n", devLabel, activeSession.RemoteIP(), normProvided)
+
+			go func(c *session.Channel) {
+				for {
+					m, err := c.Read()
+					if err != nil {
+						disconnectChan <- true
+						return
+					}
+					msgChan <- m
+				}
+			}(activeSession)
 		}
 	}()
 
-	ctxDisc, cancelDisc := context.WithCancel(context.Background())
-	defer cancelDisc()
-	discOffer := &discovery.TransferOffer{FileName: "medXfer-Node", FileSize: 0}
-	discServer := discovery.NewDiscoveryServer("node", 18887, discOffer)
-	discServer.Start(ctxDisc)
-
-	printPrompt := func() {
+	printPrompt = func() {
 		if pendingOffer != nil {
 			if pendingOffer.Type == "batch_offer" && pendingOffer.Batch != nil {
 				fmt.Printf("\n[?] Accept folder %s? [Y/n]: ", pendingOffer.Batch.SummaryString())
@@ -344,26 +399,110 @@ func handleNode() {
 					fmt.Println("  (No other devices discovered on Wi-Fi)")
 				} else {
 					for i, p := range lastScannedPeers {
-						fmt.Printf("  [%d] %s (%s:%d)\n", i+1, p.DeviceName, p.HostIP, p.Port)
+						codeStr := ""
+						if p.PairingCode != "" {
+							codeStr = fmt.Sprintf(" [Code: %s]", p.PairingCode)
+						}
+						fmt.Printf("  [%d] %s (%s:%d)%s\n", i+1, p.DeviceName, p.HostIP, p.Port, codeStr)
 					}
 				}
 			case "pair":
 				if len(parts) < 2 {
-					fmt.Println("[-] Usage: pair <index|IP>")
+					fmt.Println("[-] Usage: pair <6-digit code | index | IP>")
 					break
 				}
-				targetIP := parts[1]
-				if num, err := strconv.Atoi(parts[1]); err == nil && num >= 1 && num <= len(lastScannedPeers) {
+				rawArg := strings.TrimSpace(parts[1])
+				targetIP := rawArg
+				targetPort := 18887
+				targetDeviceName := ""
+				pairingCode := ""
+
+				if normCode, err := discovery.NormalizePairingCode(rawArg); err == nil {
+					pairingCode = normCode
+					fmt.Printf("[*] Searching for device with pairing code '%s'...\n", normCode)
+					ctxPair, cancelPair := context.WithTimeout(context.Background(), 4*time.Second)
+					peer, err := discovery.ResolvePairingCode(ctxPair, normCode, 4*time.Second)
+					cancelPair()
+					if err != nil {
+						fmt.Printf("[-] Failed to find device: %v\n", err)
+						break
+					}
+					targetIP = peer.HostIP
+					targetDeviceName = peer.DeviceName
+					if peer.Port > 0 {
+						targetPort = peer.Port
+					}
+					fmt.Printf("[+] Located node '%s' at %s:%d\n", peer.DeviceName, targetIP, targetPort)
+				} else if num, err := strconv.Atoi(rawArg); err == nil && num >= 1 && num <= len(lastScannedPeers) {
 					targetIP = lastScannedPeers[num-1].HostIP
+					targetDeviceName = lastScannedPeers[num-1].DeviceName
+					if lastScannedPeers[num-1].Port > 0 {
+						targetPort = lastScannedPeers[num-1].Port
+					}
 				}
-				fmt.Printf("[*] Connecting to node at %s:18887...\n", targetIP)
-				conn, err := session.DialTLSPeer(fmt.Sprintf("%s:18887", targetIP))
-				if err != nil {
-					fmt.Println("[-] Failed to pair:", err)
+
+				if targetIP == "" {
+					fmt.Println("[-] Target address could not be resolved.")
 					break
 				}
-				activeSession = session.NewChannel(conn)
-				fmt.Println("[+] Paired successfully!")
+
+				// If pairing code was NOT specified in the pair argument, prompt for it!
+				if pairingCode == "" {
+					promptTarget := targetDeviceName
+					if promptTarget == "" {
+						promptTarget = targetIP
+					}
+					fmt.Printf("[?] Enter 6-digit pairing code for '%s': ", promptTarget)
+					codeIn := <-inputChan
+					codeIn = strings.TrimSpace(codeIn)
+					norm, err := discovery.NormalizePairingCode(codeIn)
+					if err != nil {
+						fmt.Printf("[-] %v\n", err)
+						break
+					}
+					pairingCode = norm
+				}
+
+				fmt.Printf("[*] Connecting to node at %s:%d...\n", targetIP, targetPort)
+				conn, err := session.DialTLSPeer(fmt.Sprintf("%s:%d", targetIP, targetPort))
+				if err != nil {
+					fmt.Println("[-] Failed to connect:", err)
+					break
+				}
+
+				ch := session.NewChannel(conn)
+
+				// Authenticate by sending the secret pairing code
+				_ = ch.Send(session.Message{
+					Type:        "pair_request",
+					DeviceName:  discServer.GetPeer().DeviceName,
+					PairingCode: pairingCode,
+				})
+
+				// Wait for target node response (5s deadline)
+				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+				resp, err := ch.Read()
+				_ = conn.SetReadDeadline(time.Time{})
+
+				if err != nil || (resp.Type != "pair_accept" && resp.Type != "pair_hello_ack") {
+					reason := "invalid pairing code"
+					if resp.FileName != "" {
+						reason = resp.FileName
+					}
+					fmt.Printf("[-] Pairing rejected: %s\n", reason)
+					ch.Close()
+					break
+				}
+
+				activeSession = ch
+				remoteName := resp.DeviceName
+				if remoteName == "" {
+					remoteName = targetDeviceName
+				}
+				if remoteName == "" {
+					remoteName = targetIP
+				}
+				fmt.Printf("[+] Paired successfully with '%s' (%s)!\n", remoteName, targetIP)
 
 				go func(c *session.Channel) {
 					for {
@@ -537,14 +676,28 @@ func handleNode() {
 						default:
 						}
 
-						// Start sender listener FIRST before notifying receiver
+						// Start sender listener FIRST and confirm it is bound before notifying receiver
 						itemCtx, itemCancel := context.WithCancel(ctx)
+						readyChan := make(chan error, 1)
 						go func(fPath, rPath string, p int) {
-							runNodeSendWithRelPath(itemCtx, fPath, rPath, p, 4, 2*1024*1024, activeSession, 0)
+							_ = runNodeSendWithRelPath(itemCtx, fPath, rPath, p, 4, 2*1024*1024, activeSession, 0, readyChan)
 						}(item.FullPath, item.RelPath, port)
 
-						// Give listener a moment to bind
-						time.Sleep(30 * time.Millisecond)
+						var bindErr error
+						select {
+						case <-ctx.Done():
+							itemCancel()
+							return
+						case bindErr = <-readyChan:
+						case <-time.After(5 * time.Second):
+							bindErr = fmt.Errorf("sender port bind timeout after 5s")
+						}
+
+						if bindErr != nil {
+							fmt.Printf("\n[-] Failed to serve '%s': %v (skipping)\n", item.RelPath, bindErr)
+							itemCancel()
+							continue
+						}
 
 						activeSession.Send(session.Message{
 							Type:      "batch_item",
@@ -553,15 +706,21 @@ func handleNode() {
 							FileID:    item.FileID,
 							DataPort:  port,
 							ItemIndex: idx,
+							ChunkSize: 2 * 1024 * 1024,
 						})
 
 						select {
 						case <-ctx.Done():
 							itemCancel()
 							return
-						case <-itemDoneChan:
+						case success := <-itemDoneChan:
 							itemCancel()
-							// Item completed, advance to next
+							if !success {
+								fmt.Printf("\n[-] Peer failed to download '%s'\n", item.RelPath)
+							}
+						case <-time.After(60 * time.Second):
+							itemCancel()
+							fmt.Printf("\n[-] Timeout on '%s' (no response after 60s, skipping)\n", item.RelPath)
 						}
 					}
 					fmt.Printf("\n[+] Batch transfer complete! All %d files mirrored successfully.\n", m.TotalFiles)
@@ -586,16 +745,35 @@ func handleNode() {
 				var itemRecvCtx context.Context
 				itemRecvCtx, transferCancel = context.WithCancel(context.Background())
 
-				go func(ctx context.Context, ip string, port int, fileID string, itemIdx int) {
-					err := runNodeRecv(ctx, ip, port, ".", activeSession, fileID)
+				go func(ctx context.Context, ip string, port int, fileID string, itemIdx int, meta protocol.FileMetadata) {
+					err := runNodeRecv(ctx, ip, port, ".", activeSession, fileID, meta)
 					if err == nil {
 						activeSession.Send(session.Message{Type: "item_complete", ItemIndex: itemIdx})
+					} else {
+						fmt.Printf("\n[-] Failed to receive '%s': %v\n", meta.FileName, err)
+						activeSession.Send(session.Message{
+							Type:      "item_failed",
+							ItemIndex: itemIdx,
+							FileName:  meta.FileName,
+							Error:     err.Error(),
+						})
 					}
-				}(itemRecvCtx, activeSession.RemoteIP(), msg.DataPort, msg.FileID, msg.ItemIndex)
+				}(itemRecvCtx, activeSession.RemoteIP(), msg.DataPort, msg.FileID, msg.ItemIndex, protocol.FileMetadata{
+					FileName:  msg.FileName,
+					FileSize:  msg.FileSize,
+					FileID:    msg.FileID,
+					ChunkSize: msg.ChunkSize,
+				})
 
 			case "item_complete":
 				select {
 				case itemDoneChan <- true:
+				default:
+				}
+
+			case "item_failed":
+				select {
+				case itemDoneChan <- false:
 				default:
 				}
 
@@ -656,24 +834,31 @@ func handleNode() {
 }
 
 func runNodeSend(parentCtx context.Context, filePath string, port int, workers int, chunkSize uint32, s *session.Channel, resumeOffset int64) {
-	runNodeSendWithRelPath(parentCtx, filePath, "", port, workers, chunkSize, s, resumeOffset)
+	_ = runNodeSendWithRelPath(parentCtx, filePath, "", port, workers, chunkSize, s, resumeOffset)
 }
 
-func runNodeSendWithRelPath(parentCtx context.Context, filePath, relPath string, port int, workers int, chunkSize uint32, s *session.Channel, resumeOffset int64) {
+func runNodeSendWithRelPath(parentCtx context.Context, filePath, relPath string, port int, workers int, chunkSize uint32, s *session.Channel, resumeOffset int64, ready ...chan<- error) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 	sender := engine.NewSender(workers, chunkSize)
 	listener := &cliListener{cancel: cancel, isSender: true}
 	bindAddr := fmt.Sprintf("0.0.0.0:%d", port)
-	_ = sender.ServeAndSendWithRelPath(ctx, bindAddr, filePath, relPath, listener, resumeOffset)
+	var rChan chan<- error
+	if len(ready) > 0 {
+		rChan = ready[0]
+	}
+	return sender.ServeAndSendWithRelPathReady(ctx, bindAddr, filePath, relPath, listener, resumeOffset, rChan)
 }
 
-func runNodeRecv(parentCtx context.Context, ip string, port int, outDir string, s *session.Channel, fileID string) error {
+func runNodeRecv(parentCtx context.Context, ip string, port int, outDir string, s *session.Channel, fileID string, meta ...protocol.FileMetadata) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 	targetAddr := fmt.Sprintf("%s:%d", ip, port)
 	receiver := engine.NewReceiver(outDir, 4)
 	listener := &cliListener{cancel: cancel, isSender: false}
+	if len(meta) > 0 && meta[0].ChunkSize > 0 {
+		return receiver.PullWithMetadata(ctx, targetAddr, listener, meta[0], fileID)
+	}
 	return receiver.Pull(ctx, targetAddr, listener, fileID)
 }
 
@@ -687,10 +872,13 @@ func handleSend(args []string) {
 	workersFlag := sendCmd.Int("workers", 4, "Number of parallel TCP streams")
 	chunkSizeMB := sendCmd.Int("chunk", 2, "Chunk slice size in MB")
 	createNetwork := sendCmd.Bool("create-network", false, "Create a dedicated Wi-Fi Direct network")
+	var interactive bool
+	sendCmd.BoolVar(&interactive, "i", false, "Require confirmation before sending")
+	sendCmd.BoolVar(&interactive, "interactive", false, "Require confirmation before sending")
 
 	_ = sendCmd.Parse(normalizedArgs)
 	if sendCmd.NArg() < 1 {
-		fmt.Println("Error: Missing file or folder path. Usage: xfer send <path> [additional_paths...]")
+		fmt.Println("Error: Missing file or folder path. Usage: xfer send [-i] <path> [additional_paths...]")
 		os.Exit(1)
 	}
 	chunkSize := uint32(*chunkSizeMB * 1024 * 1024)
@@ -712,13 +900,13 @@ func handleSend(args []string) {
 			fmt.Printf("[-] Failed to scan folder/files: %v\n", err)
 			return
 		}
-		runOneShotBatchSend(m, *portFlag, *workersFlag, chunkSize, *createNetwork)
+		runOneShotBatchSend(m, *portFlag, *workersFlag, chunkSize, *createNetwork, interactive)
 	} else {
-		runOneShotSingleSend(rawPaths[0], *portFlag, *workersFlag, chunkSize, *createNetwork)
+		runOneShotSingleSend(rawPaths[0], *portFlag, *workersFlag, chunkSize, *createNetwork, interactive)
 	}
 }
 
-func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize uint32, createHotspot bool) {
+func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize uint32, createHotspot bool, interactive bool) {
 	var hs hotspot.Controller
 	if createHotspot {
 		hs = hotspot.New()
@@ -756,10 +944,26 @@ func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize 
 		IsBatch:  true,
 		Batch:    m,
 	}
+	pCode, _, _ := discovery.GeneratePairingCode(getLocalIP())
 	discServer := discovery.NewDiscoveryServer("sender", port, offer)
+	discServer.SetPairingCode(pCode)
 	discServer.Start(ctx)
 
-	fmt.Printf(" [OFFERING FOLDER] %s\n Listening on: %s:%d\n[*] Waiting for receiver to connect...\n", m.SummaryString(), getLocalIP(), port)
+	fmt.Println("==================================================")
+	fmt.Println("             medXfer Secure Sender                ")
+	fmt.Println("==================================================")
+	fmt.Printf(" Batch        : %s\n", m.SummaryString())
+	fmt.Printf(" Pairing Code : %s\n", pCode)
+	fmt.Printf(" Direct IP    : %s:%d\n", getLocalIP(), port)
+	fmt.Println("--------------------------------------------------")
+	fmt.Println(" On receiving device, run:")
+	fmt.Printf("   xfer recv %s\n", pCode)
+	fmt.Println("==================================================")
+	fmt.Println("[*] Waiting for receiver to connect...")
+
+	var batchMu sync.Mutex
+	var batchPrompted bool
+	var batchAllowed bool = true
 
 	for idx, item := range m.Items {
 		if ctx.Err() != nil {
@@ -770,6 +974,26 @@ func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize 
 
 		itemCtx, itemCancel := context.WithCancel(ctx)
 		sender := engine.NewSender(workers, chunkSize)
+		if interactive {
+			sender.SetAuthorizer(func(remoteAddr net.Addr, fileName string, fileSize int64) bool {
+				batchMu.Lock()
+				defer batchMu.Unlock()
+				if batchPrompted {
+					return batchAllowed
+				}
+				batchPrompted = true
+				host, _, _ := net.SplitHostPort(remoteAddr.String())
+				fmt.Printf("\n[?] Receiver at %s connected.\n    Authorize sending folder '%s' (%d files, %.2f MB)? [Y/n]: ", host, m.SummaryString(), m.TotalFiles, float64(m.TotalBytes)/(1024*1024))
+				reader := bufio.NewReader(os.Stdin)
+				ans, _ := reader.ReadString('\n')
+				ans = strings.TrimSpace(strings.ToLower(ans))
+				batchAllowed = (ans == "" || ans == "y" || ans == "yes" || ans == "o" || ans == "oui")
+				if !batchAllowed {
+					fmt.Println("[-] Transfer aborted: declined by sender.")
+				}
+				return batchAllowed
+			})
+		}
 		listener := &cliListener{cancel: itemCancel, isSender: true}
 		bindAddr := fmt.Sprintf("0.0.0.0:%d", itemPort)
 		err := sender.ServeAndSendWithRelPath(itemCtx, bindAddr, item.FullPath, item.RelPath, listener, 0)
@@ -782,7 +1006,7 @@ func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize 
 	fmt.Printf("\n[+] Folder transfer complete! All %d files sent successfully.\n", m.TotalFiles)
 }
 
-func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint32, createHotspot bool) {
+func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint32, createHotspot bool, interactive bool) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		fmt.Printf("[-] Cannot access file '%s': %v\n", filePath, err)
@@ -823,11 +1047,38 @@ func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint
 		FileName: filepath.Base(filePath), FileSize: info.Size(),
 		FileID: engine.GenerateFileID(filePath),
 	}
+	pCode, _, _ := discovery.GeneratePairingCode(getLocalIP())
 	discServer := discovery.NewDiscoveryServer("sender", port, offer)
+	discServer.SetPairingCode(pCode)
 	discServer.Start(ctx)
-	fmt.Printf(" [OFFERING FILE] %s (%.2f MB)\n Listening on: %s:%d\n[*] Waiting for receiver to connect...\n", offer.FileName, float64(offer.FileSize)/(1024*1024), getLocalIP(), port)
+
+	fmt.Println("==================================================")
+	fmt.Println("             medXfer Secure Sender                ")
+	fmt.Println("==================================================")
+	fmt.Printf(" File         : %s (%.2f MB)\n", offer.FileName, float64(offer.FileSize)/(1024*1024))
+	fmt.Printf(" Pairing Code : %s\n", pCode)
+	fmt.Printf(" Direct IP    : %s:%d\n", getLocalIP(), port)
+	fmt.Println("--------------------------------------------------")
+	fmt.Println(" On receiving device, run:")
+	fmt.Printf("   xfer recv %s\n", pCode)
+	fmt.Println("==================================================")
+	fmt.Println("[*] Waiting for receiver to connect...")
 
 	sender := engine.NewSender(workers, chunkSize)
+	if interactive {
+		sender.SetAuthorizer(func(remoteAddr net.Addr, fileName string, fileSize int64) bool {
+			host, _, _ := net.SplitHostPort(remoteAddr.String())
+			fmt.Printf("\n[?] Receiver at %s connected.\n    Authorize sending '%s' (%.2f MB)? [Y/n]: ", host, fileName, float64(fileSize)/(1024*1024))
+			reader := bufio.NewReader(os.Stdin)
+			ans, _ := reader.ReadString('\n')
+			ans = strings.TrimSpace(strings.ToLower(ans))
+			allowed := (ans == "" || ans == "y" || ans == "yes" || ans == "o" || ans == "oui")
+			if !allowed {
+				fmt.Println("[-] Transfer aborted: declined by sender.")
+			}
+			return allowed
+		})
+	}
 	listener := &cliListener{cancel: cancel, isSender: true}
 	bindAddr := fmt.Sprintf("0.0.0.0:%d", port)
 	err = sender.ServeAndSend(ctx, bindAddr, filePath, listener, 0)
@@ -840,6 +1091,7 @@ func handleRecv(args []string) {
 	normalizedArgs := reorderArgs(args)
 	recvCmd := flag.NewFlagSet("recv", flag.ExitOnError)
 	ipFlag := recvCmd.String("ip", "", "Direct sender address")
+	codeFlag := recvCmd.String("code", "", "6-digit pairing code (e.g. 229-481)")
 	outDirFlag := recvCmd.String("out", ".", "Directory to save files")
 	workersFlag := recvCmd.Int("workers", 4, "Number of parallel TCP streams")
 
@@ -849,8 +1101,38 @@ func handleRecv(args []string) {
 		targetAddr = fmt.Sprintf("%s:%d", targetAddr, defaultPort)
 	}
 
+	pairingCode := ""
+	if *codeFlag != "" {
+		norm, err := discovery.NormalizePairingCode(*codeFlag)
+		if err != nil {
+			fmt.Printf("[-] Invalid pairing code '%s': %v\n", *codeFlag, err)
+			return
+		}
+		pairingCode = norm
+	} else if recvCmd.NArg() > 0 {
+		candidate := recvCmd.Arg(0)
+		norm, err := discovery.NormalizePairingCode(candidate)
+		if err != nil {
+			fmt.Printf("[-] Invalid pairing code '%s': %v\n", candidate, err)
+			return
+		}
+		pairingCode = norm
+	}
+
 	var selectedPeer *discovery.Peer
-	if targetAddr == "" {
+	if targetAddr == "" && pairingCode != "" {
+		fmt.Printf("[*] Searching local network for sender with pairing code '%s'...\n", pairingCode)
+		ctxResolve, cancelResolve := context.WithTimeout(context.Background(), 4*time.Second)
+		peer, err := discovery.ResolvePairingCode(ctxResolve, pairingCode, 4*time.Second)
+		cancelResolve()
+		if err != nil {
+			fmt.Printf("[-] Failed to find sender: %v\n", err)
+			return
+		}
+		selectedPeer = peer
+		targetAddr = fmt.Sprintf("%s:%d", peer.HostIP, peer.Port)
+		fmt.Printf("[+] Located sender: %s (%s)\n", peer.DeviceName, targetAddr)
+	} else if targetAddr == "" {
 		selectedPeer = selectOneShotSender()
 		if selectedPeer == nil {
 			return
@@ -858,7 +1140,40 @@ func handleRecv(args []string) {
 		targetAddr = fmt.Sprintf("%s:%d", selectedPeer.HostIP, selectedPeer.Port)
 	} else {
 		host, _, _ := net.SplitHostPort(targetAddr)
-		selectedPeer = fetchPeerOffer(host)
+		selectedPeer = fetchPeerOffer(host, pairingCode)
+		if selectedPeer == nil {
+			return
+		}
+	}
+
+	// Interactive receiver confirmation
+	if selectedPeer != nil && selectedPeer.Offer != nil {
+		fmt.Println("\n==================================================")
+		fmt.Println("             medXfer Incoming Transfer            ")
+		fmt.Println("==================================================")
+		if selectedPeer.Offer.IsBatch {
+			fileCount := 0
+			if selectedPeer.Offer.Batch != nil {
+				fileCount = selectedPeer.Offer.Batch.TotalFiles
+			}
+			fmt.Printf(" Folder : %s\n", selectedPeer.Offer.FileName)
+			if fileCount > 0 {
+				fmt.Printf(" Files  : %d\n", fileCount)
+			}
+			fmt.Printf(" Size   : %.2f MB\n", float64(selectedPeer.Offer.FileSize)/(1024*1024))
+		} else {
+			fmt.Printf(" File   : %s (%.2f MB)\n", selectedPeer.Offer.FileName, float64(selectedPeer.Offer.FileSize)/(1024*1024))
+		}
+		fmt.Printf(" From   : %s (%s)\n", selectedPeer.DeviceName, targetAddr)
+		fmt.Println("--------------------------------------------------")
+		fmt.Print("[?] Confirm download? [Y/n]: ")
+		reader := bufio.NewReader(os.Stdin)
+		ans, _ := reader.ReadString('\n')
+		ans = strings.TrimSpace(strings.ToLower(ans))
+		if ans != "" && ans != "y" && ans != "yes" && ans != "o" && ans != "oui" {
+			fmt.Println("[-] Download cancelled by user.")
+			return
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -928,21 +1243,55 @@ func runOneShotBatchRecv(ctx context.Context, targetAddr, outDir string, workers
 	fmt.Printf("\n[+] Folder download complete! All %d files saved successfully.\n", m.TotalFiles)
 }
 
-func fetchPeerOffer(hostIP string) *discovery.Peer {
-	conn, err := net.DialTimeout("tcp4", fmt.Sprintf("%s:%d", hostIP, discovery.DiscoveryPort), 800*time.Millisecond)
-	if err != nil {
+func fetchPeerOffer(hostIP string, code string) *discovery.Peer {
+	queryOffer := func(cStr string) *discovery.Peer {
+		conn, err := net.DialTimeout("tcp4", fmt.Sprintf("%s:%d", hostIP, discovery.DiscoveryPort), 800*time.Millisecond)
+		if err != nil {
+			return nil
+		}
+		defer conn.Close()
+		if cStr != "" {
+			q := discovery.DiscoveryQuery{PairingCode: cStr}
+			data, _ := json.Marshal(q)
+			_ = conn.SetWriteDeadline(time.Now().Add(800 * time.Millisecond))
+			_, _ = conn.Write(append(data, '\n'))
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
+		data, err := io.ReadAll(conn)
+		if err != nil {
+			return nil
+		}
+		var p discovery.Peer
+		if err := json.Unmarshal(data, &p); err == nil && p.Offer != nil {
+			p.HostIP = hostIP
+			return &p
+		}
 		return nil
 	}
-	defer conn.Close()
-	data, err := io.ReadAll(conn)
-	if err != nil {
+
+	p := queryOffer(code)
+	if p == nil {
 		return nil
 	}
-	var p discovery.Peer
-	if err := json.Unmarshal(data, &p); err == nil && p.Offer != nil {
-		return &p
+
+	// If offer is masked, sender requires a pairing code
+	if p.Offer != nil && p.Offer.FileName == "[🔒 Private Transfer]" {
+		fmt.Printf("[?] Device at %s requires a 6-digit pairing code: ", hostIP)
+		reader := bufio.NewReader(os.Stdin)
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+		normCode, err := discovery.NormalizePairingCode(input)
+		if err != nil {
+			fmt.Printf("[-] %v\n", err)
+			return nil
+		}
+		p = queryOffer(normCode)
+		if p == nil || p.Offer == nil || p.Offer.FileName == "[🔒 Private Transfer]" {
+			fmt.Println("[-] Invalid pairing code. Access denied.")
+			return nil
+		}
 	}
-	return nil
+	return p
 }
 
 func selectOneShotSender() *discovery.Peer {
@@ -965,14 +1314,16 @@ func selectOneShotSender() *discovery.Peer {
 			fmt.Println("  (No active senders found)")
 		} else {
 			for i, s := range senders {
-				if s.Offer.IsBatch {
+				if s.Offer.IsBatch && s.Offer.FileName != "[🔒 Private Transfer]" {
 					fmt.Printf("  [%d] %s (%s:%d) - Folder: %s\n", i+1, s.DeviceName, s.HostIP, s.Port, s.Offer.FileName)
-				} else {
+				} else if s.Offer.FileName != "[🔒 Private Transfer]" {
 					fmt.Printf("  [%d] %s (%s:%d) - File: %s (%.2f MB)\n", i+1, s.DeviceName, s.HostIP, s.Port, s.Offer.FileName, float64(s.Offer.FileSize)/(1024*1024))
+				} else {
+					fmt.Printf("  [%d] %s (%s:%d) - [🔒 Private Transfer]\n", i+1, s.DeviceName, s.HostIP, s.Port)
 				}
 			}
 		}
-		fmt.Print("Select an option [r to refresh, q to quit]: ")
+		fmt.Print("Select an option or enter pairing code [r to refresh, q to quit]: ")
 		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
 		if strings.EqualFold(input, "q") {
@@ -983,7 +1334,32 @@ func selectOneShotSender() *discovery.Peer {
 		}
 		if num, err := strconv.Atoi(input); err == nil && num >= 1 && num <= len(senders) {
 			selected := senders[num-1]
-			return &selected
+			fmt.Printf("[?] Enter 6-digit pairing code for '%s': ", selected.DeviceName)
+			codeIn, _ := reader.ReadString('\n')
+			codeIn = strings.TrimSpace(codeIn)
+			normCode, err := discovery.NormalizePairingCode(codeIn)
+			if err != nil {
+				fmt.Printf("[-] %v\n", err)
+				continue
+			}
+			ctxQuery, cancelQuery := context.WithTimeout(context.Background(), 3*time.Second)
+			unmaskedPeer, err := discovery.QueryPeerWithCode(ctxQuery, selected.HostIP, normCode, 3*time.Second)
+			cancelQuery()
+			if err != nil || unmaskedPeer == nil || unmaskedPeer.Offer == nil || unmaskedPeer.Offer.FileName == "[🔒 Private Transfer]" {
+				fmt.Println("[-] Invalid pairing code. Access denied.")
+				continue
+			}
+			return unmaskedPeer
+		}
+		if normCode, err := discovery.NormalizePairingCode(input); err == nil {
+			fmt.Printf("[*] Searching for sender with pairing code '%s'...\n", normCode)
+			ctxResolve, cancelResolve := context.WithTimeout(context.Background(), 3*time.Second)
+			peer, err := discovery.ResolvePairingCode(ctxResolve, normCode, 3*time.Second)
+			cancelResolve()
+			if err == nil {
+				return peer
+			}
+			fmt.Printf("[-] Could not find device with pairing code '%s'\n", normCode)
 		}
 	}
 }
@@ -1079,5 +1455,5 @@ func handleShare(args []string) {
 }
 
 func printUsage() {
-	fmt.Printf("Usage:\n  xfer daemon [--port 19999] (Headless API for Flutter GUI)\n  xfer share <file_or_folder...> (Instant Web Share with QR code & PIN)\n  xfer node                 (Persistent interactive mode)\n  xfer send <file_or_folder> [more...]\n  xfer recv                 (Auto-discover senders)\n  xfer recv --ip <addr>     (Direct connect)\n")
+	fmt.Printf("Usage:\n  xfer daemon [--port 19999]                     (Headless API for Flutter GUI)\n  xfer share <file_or_folder...>                 (Instant Web Share with QR code & PIN)\n  xfer node                                      (Persistent interactive mode with pairing code)\n  xfer send [-i] <file_or_folder> [more...]      (Direct transfer with pairing code; -i prompts before sending)\n  xfer recv [pairing_code]                       (Receive via 6-digit code or auto-discover)\n  xfer recv --ip <addr>                          (Direct connect by IP)\n")
 }

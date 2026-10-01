@@ -973,6 +973,11 @@ func (s *DaemonServer) handleShareUploadChunk(w http.ResponseWriter, r *http.Req
 	speedVal := s.webShareTransferSpeed
 	s.webShareTransferMu.Unlock()
 
+	speedStr := fmt.Sprintf("%.1f", speedVal)
+	if speedVal > 0 && speedStr == "0.0" {
+		speedStr = "0.1"
+	}
+
 	s.Broadcast(NewEvent("web_share_progress", map[string]interface{}{
 		"direction":   "upload",
 		"client_ip":   clientIP,
@@ -980,7 +985,7 @@ func (s *DaemonServer) handleShareUploadChunk(w http.ResponseWriter, r *http.Req
 		"bytes":       currentBytes,
 		"total_bytes": totalSize,
 		"percent":     pct,
-		"speed_mbps":  fmt.Sprintf("%.1f", speedVal),
+		"speed_mbps":  speedStr,
 	}))
 
 	isLast := (chunkIdx+1 >= totalChunks) || (totalSize > 0 && currentBytes >= totalSize)

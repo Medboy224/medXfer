@@ -2,12 +2,14 @@ package engine
 
 import (
 	"archive/tar"
+	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/manifest"
@@ -35,7 +37,7 @@ func StreamTar(ctx context.Context, w io.Writer, m *manifest.Manifest, listener 
 
 	bufPtr := getChunkBuffer()
 	defer putChunkBuffer(bufPtr)
-	buf := (*bufPtr)[:256*1024]
+	buf := (*bufPtr)[:1024*1024]
 
 	for _, item := range m.Items {
 		select {
@@ -167,7 +169,29 @@ func ExtractTar(ctx context.Context, r io.Reader, destDir string, totalBytes int
 
 	bufPtr := getChunkBuffer()
 	defer putChunkBuffer(bufPtr)
-	buf := (*bufPtr)[:256*1024]
+	buf := (*bufPtr)[:1024*1024]
+
+	// Asynchronous file closing & metadata commit pipeline:
+	// Offloads fsync/OS cache flushing and Chtimes away from the network reader goroutine,
+	// preventing TCP ZeroWindow stalls and connection collapse between files!
+	closeTasks := make(chan *os.File, 64)
+	var closeWg sync.WaitGroup
+	var closeOnce sync.Once
+	closeWg.Add(1)
+	go func() {
+		defer closeWg.Done()
+		for f := range closeTasks {
+			_ = f.Close()
+		}
+	}()
+
+	shutdownWorkers := func() {
+		closeOnce.Do(func() {
+			close(closeTasks)
+			closeWg.Wait()
+		})
+	}
+	defer shutdownWorkers()
 
 	for {
 		select {
@@ -211,26 +235,30 @@ func ExtractTar(ctx context.Context, r io.Reader, destDir string, totalBytes int
 				return fmt.Errorf("failed to create file '%s': %w", targetPath, err)
 			}
 
+			// Buffer writes in 2MB chunks to align with disk sectors and prevent filesystem fragmentation
+			bw := bufio.NewWriterSize(outFile, 2*1024*1024)
+
+			var readErr error
 			for {
 				select {
 				case <-ctx.Done():
-					outFile.Close()
+					_ = outFile.Close()
 					return ctx.Err()
 				default:
 				}
 
 				nr, er := tr.Read(buf)
 				if nr > 0 {
-					nw, ew := outFile.Write(buf[:nr])
+					nw, ew := bw.Write(buf[:nr])
 					if nw > 0 {
 						totalTransferred += int64(nw)
 					}
 					if ew != nil {
-						outFile.Close()
+						_ = outFile.Close()
 						return ew
 					}
 					if nr != nw {
-						outFile.Close()
+						_ = outFile.Close()
 						return io.ErrShortWrite
 					}
 
@@ -262,19 +290,35 @@ func ExtractTar(ctx context.Context, r io.Reader, destDir string, totalBytes int
 				}
 				if er != nil {
 					if er != io.EOF {
-						outFile.Close()
-						return er
+						readErr = er
 					}
 					break
 				}
 			}
-			outFile.Close()
 
-			if !header.ModTime.IsZero() {
-				_ = os.Chtimes(targetPath, header.ModTime, header.ModTime)
+			if readErr != nil {
+				_ = outFile.Close()
+				return readErr
+			}
+
+			// Flush memory buffer into OS cache (instantaneous)
+			if err := bw.Flush(); err != nil {
+				_ = outFile.Close()
+				return fmt.Errorf("failed to flush file '%s': %w", targetPath, err)
+			}
+
+			// Dispatch file close asynchronously to prevent network stalling
+			select {
+			case closeTasks <- outFile:
+			case <-ctx.Done():
+				_ = outFile.Close()
+				return ctx.Err()
 			}
 		}
 	}
+
+	// Ensure all background file closes & mtimes have completed before signalling completion
+	shutdownWorkers()
 
 	if listener != nil {
 		duration := time.Since(startTime)

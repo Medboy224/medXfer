@@ -23,6 +23,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/hotspot"
 	"github.com/Medboy224/medXfer/pkg/manifest"
+	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/gorilla/websocket"
 )
@@ -98,11 +99,19 @@ type DaemonServer struct {
 	webShareTransferLastTime  time.Time
 	webShareTransferSpeed     float64
 
-	ctx     context.Context
-	cancel  context.CancelFunc
-	httpSrv *http.Server
-	nodeLn  net.Listener
-	discSrv *discovery.DiscoveryServer
+	ctx         context.Context
+	cancel      context.CancelFunc
+	httpSrv     *http.Server
+	nodeLn      net.Listener
+	discSrv     *discovery.DiscoveryServer
+	pairingCode string
+
+	benchPongChan     chan session.Message
+	benchBurstAckChan chan session.Message
+
+	trackerMu         sync.Mutex
+	activeTracker     *TransferSessionTracker
+	lastSummaryReport *TransferSummaryReport
 }
 
 // NewDaemonServer initializes a daemon with default configurations
@@ -116,6 +125,8 @@ func NewDaemonServer(port int, defaultOutDir, deviceName string) *DaemonServer {
 	_, _ = rand.Read(tokenBytes)
 	token := hex.EncodeToString(tokenBytes)
 
+	pCode, _, _ := discovery.GeneratePairingCode("")
+
 	srv := &DaemonServer{
 		config:             cfg,
 		clients:            make(map[*websocket.Conn]bool),
@@ -128,9 +139,12 @@ func NewDaemonServer(port int, defaultOutDir, deviceName string) *DaemonServer {
 		webShareToken:      token,
 		webShareEnabled:    false,
 		webShareAutoAccept: false,
+		pairingCode:        pCode,
 		pendingWebUploads:  make(map[string]*WebUploadRequest),
 		lastAuthFail:       make(map[string]time.Time),
 		ipLockouts:         make(map[string]*IPAuthRecord),
+		benchPongChan:      make(chan session.Message, 10),
+		benchBurstAckChan:  make(chan session.Message, 10),
 		ctx:                ctx,
 		cancel:             cancel,
 	}
@@ -421,16 +435,26 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 		s.httpPort = 18888
 	}
 
-	// 1. Start Node Pairing TCP Listener (port 18887)
+	// 1. Start Node Pairing TCP Listener (port 18887 or fallback)
+	nodePort := 18887
 	ln, err := net.Listen("tcp4", "0.0.0.0:18887")
+	if err != nil {
+		ln, err = net.Listen("tcp4", "0.0.0.0:0")
+	}
 	if err == nil {
 		s.nodeLn = ln
+		if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
+			nodePort = tcpAddr.Port
+		}
 		go s.listenForIncomingPairings(ln)
 	}
 
 	// 2. Start Discovery Broadcast Server
 	discOffer := &discovery.TransferOffer{FileName: s.config.DeviceName, FileSize: 0}
-	s.discSrv = discovery.NewDiscoveryServer("node", 18887, discOffer, s.config.DeviceName)
+	s.discSrv = discovery.NewDiscoveryServer("node", nodePort, discOffer, s.config.DeviceName)
+	if s.pairingCode != "" {
+		s.discSrv.SetPairingCode(s.pairingCode)
+	}
 	s.discSrv.Start(s.ctx)
 
 	// 3. Start HTTP/WebSocket Router
@@ -589,13 +613,21 @@ func (s *DaemonServer) Broadcast(evt EventMessage) {
 	s.clientsMu.Lock()
 	defer s.clientsMu.Unlock()
 	for client := range s.clients {
-		_ = client.WriteJSON(evt)
+		_ = client.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		err := client.WriteJSON(evt)
+		_ = client.SetWriteDeadline(time.Time{})
+		if err != nil {
+			_ = client.Close()
+			delete(s.clients, client)
+		}
 	}
 }
 
 // SendTo sends a JSON event to a specific client connection
 func (s *DaemonServer) sendTo(conn *websocket.Conn, evt EventMessage) {
+	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	_ = conn.WriteJSON(evt)
+	_ = conn.SetWriteDeadline(time.Time{})
 }
 
 // SharePaths configures files or directories to be immediately available on the Web Share portal
@@ -718,7 +750,18 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 		WebSharePIN:        s.webSharePIN,
 		WebShareToken:      s.webShareToken,
 		WebShareAutoAccept: s.webShareAutoAccept,
+		PairingCode:        s.pairingCode,
 	}
+}
+
+// GetNodeAddr returns the network address the daemon's node listener is bound to
+func (s *DaemonServer) GetNodeAddr() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.nodeLn != nil {
+		return s.nodeLn.Addr().String()
+	}
+	return "127.0.0.1:18887"
 }
 
 func (s *DaemonServer) listenForIncomingPairings(ln net.Listener) {
@@ -728,11 +771,51 @@ func (s *DaemonServer) listenForIncomingPairings(ln net.Listener) {
 		if err != nil {
 			return
 		}
+		engine.TuneConn(conn)
 
 		if srvTLSConfig != nil {
 			if upConn, _, err := session.UpgradeToTLSIfClientHello(conn, srvTLSConfig); err == nil {
 				conn = upConn
 			}
+		}
+
+		ch := session.NewChannel(conn)
+
+		// Read incoming authentication / handshake message with 5s deadline
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		msg, err := ch.Read()
+		_ = conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			ch.Close()
+			continue
+		}
+
+		s.mu.RLock()
+		expectedCode := s.pairingCode
+		devName := s.config.DeviceName
+		s.mu.RUnlock()
+
+		if msg.Type == "pair_request" {
+			normExpected, _ := discovery.NormalizePairingCode(expectedCode)
+			normProvided, _ := discovery.NormalizePairingCode(msg.PairingCode)
+			if normExpected == "" || normProvided == "" || normExpected != normProvided {
+				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "invalid pairing code"})
+				ch.Close()
+				continue
+			}
+			_ = ch.Send(session.Message{
+				Type:       "pair_accept",
+				DeviceName: devName,
+			})
+		} else {
+			_ = ch.Send(session.Message{Type: "pair_reject", FileName: "pairing code required"})
+			ch.Close()
+			continue
+		}
+
+		peerName := msg.DeviceName
+		if peerName == "" {
+			peerName = ch.RemoteIP()
 		}
 
 		s.mu.Lock()
@@ -744,23 +827,17 @@ func (s *DaemonServer) listenForIncomingPairings(ln net.Listener) {
 		if s.activeSession != nil {
 			s.activeSession.Close()
 		}
-		s.activeSession = session.NewChannel(conn)
-		remoteIP := s.activeSession.RemoteIP()
-		devName := s.config.DeviceName
-		sess := s.activeSession
+		s.activeSession = ch
+		s.pairedDeviceName = peerName
+		remoteIP := ch.RemoteIP()
 		s.mu.Unlock()
-
-		_ = sess.Send(session.Message{
-			Type:       "pair_hello",
-			DeviceName: devName,
-		})
 
 		s.Broadcast(NewEvent("paired", map[string]string{
 			"ip":          remoteIP,
-			"device_name": "Connecting...",
+			"device_name": peerName,
 		}))
 
-		go s.listenToSession(sess)
+		go s.listenToSession(ch)
 	}
 }
 
@@ -798,6 +875,37 @@ func (s *DaemonServer) listenToSession(sess *session.Channel) {
 
 func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 	switch msg.Type {
+	case "pair_request":
+		s.mu.Lock()
+		s.pairedDeviceName = msg.DeviceName
+		devName := s.config.DeviceName
+		sess := s.activeSession
+		expectedCode := s.pairingCode
+		s.mu.Unlock()
+
+		if sess != nil {
+			normExpected, _ := discovery.NormalizePairingCode(expectedCode)
+			normProvided, _ := discovery.NormalizePairingCode(msg.PairingCode)
+			if normExpected == "" || normProvided == "" || normExpected != normProvided {
+				_ = sess.Send(session.Message{Type: "pair_reject", FileName: "invalid pairing code"})
+				sess.Close()
+				s.mu.Lock()
+				if s.activeSession == sess {
+					s.activeSession = nil
+				}
+				s.mu.Unlock()
+				return
+			}
+			_ = sess.Send(session.Message{
+				Type:       "pair_accept",
+				DeviceName: devName,
+			})
+			s.Broadcast(NewEvent("paired", map[string]string{
+				"ip":          sess.RemoteIP(),
+				"device_name": msg.DeviceName,
+			}))
+		}
+
 	case "pair_hello":
 		s.mu.Lock()
 		s.pairedDeviceName = msg.DeviceName
@@ -829,6 +937,35 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			}))
 		}
 
+	case "pair_accept":
+		s.mu.Lock()
+		if msg.DeviceName != "" {
+			s.pairedDeviceName = msg.DeviceName
+		}
+		sess := s.activeSession
+		s.mu.Unlock()
+
+		if sess != nil {
+			s.Broadcast(NewEvent("paired", map[string]string{
+				"ip":          sess.RemoteIP(),
+				"device_name": s.pairedDeviceName,
+			}))
+		}
+
+	case "pair_reject":
+		s.mu.Lock()
+		if s.activeSession != nil {
+			s.activeSession.Close()
+			s.activeSession = nil
+		}
+		s.pairedDeviceName = ""
+		s.mu.Unlock()
+		reason := "pairing rejected by peer"
+		if msg.FileName != "" {
+			reason = msg.FileName
+		}
+		s.Broadcast(NewEvent("disconnected", map[string]string{"reason": reason}))
+
 	case "disconnect":
 		s.mu.Lock()
 		if s.sessionGraceTimer != nil {
@@ -847,6 +984,61 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		}
 		s.mu.Unlock()
 		s.Broadcast(NewEvent("disconnected", map[string]string{"reason": "peer requested disconnect"}))
+
+	case "bench_ping":
+		s.mu.RLock()
+		sess := s.activeSession
+		s.mu.RUnlock()
+		if sess != nil {
+			_ = sess.Send(session.Message{
+				Type:        "bench_pong",
+				BenchPingTS: msg.BenchPingTS,
+			})
+		}
+
+	case "bench_pong":
+		select {
+		case s.benchPongChan <- msg:
+		default:
+		}
+
+	case "bench_burst_req":
+		s.mu.RLock()
+		sess := s.activeSession
+		s.mu.RUnlock()
+		if sess != nil {
+			benchSize := msg.BenchSize
+			if benchSize <= 0 {
+				benchSize = 8 * 1024 * 1024
+			}
+			port, waitFn, err := engine.RunNetworkBurstServer(0, benchSize, 4*time.Second)
+			if err == nil {
+				_ = sess.Send(session.Message{
+					Type:      "bench_burst_ready",
+					DataPort:  port,
+					BenchSize: benchSize,
+				})
+				go func() {
+					speed, _ := waitFn()
+					s.mu.RLock()
+					sCur := s.activeSession
+					s.mu.RUnlock()
+					if sCur != nil {
+						_ = sCur.Send(session.Message{
+							Type:      "bench_burst_ack",
+							FileSize:  int64(speed * 100), // Speed encoded in hundredths of MB/s
+							BenchSize: benchSize,
+						})
+					}
+				}()
+			}
+		}
+
+	case "bench_burst_ready", "bench_burst_ack":
+		select {
+		case s.benchBurstAckChan <- msg:
+		default:
+		}
 
 	case "offer":
 		s.mu.Lock()
@@ -1070,6 +1262,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 						return
 					}
 					defer conn.Close()
+					engine.TuneConn(conn)
 
 					srvTLS, _ := session.ServerTLSConfig()
 					if srvTLS != nil {
@@ -1078,15 +1271,15 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 						}
 					}
 
-					listener := newDaemonListener(s, m.RootName, m.TotalBytes, 0, m.TotalFiles, 0, m.TotalBytes)
+					listener := newDaemonListener(s, m.RootName, m.TotalBytes, 0, 1, 0, m.TotalBytes)
 					_ = engine.StreamTar(streamCtx, conn, m, listener)
 
 					if s.activeSession != nil {
 						s.activeSession.Send(session.Message{Type: "batch_complete"})
 					}
-					s.Broadcast(NewEvent("transfer_complete", map[string]interface{}{
+					s.broadcastTransferComplete(map[string]interface{}{
 						"message": "Folder stream transfer complete",
-					}))
+					})
 				}(streamPort, m)
 
 				if s.activeSession != nil {
@@ -1104,11 +1297,6 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		}
 
 		go func(m *manifest.Manifest) {
-			s.mu.Lock()
-			s.activePort++
-			batchPort := s.activePort
-			s.mu.Unlock()
-
 			for {
 				s.mu.Lock()
 				if s.batchCanceled {
@@ -1167,7 +1355,8 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 						s.currentBatchItems[i].Status = "transferring"
 					}
 				}
-				port := batchPort
+				s.activePort++
+				port := s.activePort
 				baseBytes := s.calculateCompletedBatchBytes()
 				items := s.currentBatchItems
 				s.mu.Unlock()
@@ -1183,14 +1372,41 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 				s.transferCancel = itemCancel
 				s.mu.Unlock()
 
+				readyChan := make(chan error, 1)
 				go func(fPath, rPath string, p int, bBase int64) {
 					sender := engine.NewSender(s.config.Workers, uint32(s.config.ChunkSizeMB*1024*1024))
 					listener := newDaemonListener(s, rPath, item.Size, idx, m.TotalFiles, bBase, m.TotalBytes)
 					bindAddr := fmt.Sprintf("0.0.0.0:%d", p)
-					_ = sender.ServeAndSendWithRelPath(itemCtx, bindAddr, fPath, rPath, listener, 0)
+					_ = sender.ServeAndSendWithRelPathReady(itemCtx, bindAddr, fPath, rPath, listener, 0, readyChan)
 				}(item.FullPath, item.RelPath, port, baseBytes)
 
-				time.Sleep(30 * time.Millisecond)
+				var bindErr error
+				select {
+				case <-itemCtx.Done():
+					return
+				case bindErr = <-readyChan:
+				case <-time.After(5 * time.Second):
+					bindErr = fmt.Errorf("sender port bind timeout after 5s")
+				}
+
+				if bindErr != nil {
+					itemCancel()
+					s.mu.Lock()
+					for i := range s.currentBatchItems {
+						if s.currentBatchItems[i].Index == idx {
+							s.currentBatchItems[i].Status = "failed"
+						}
+					}
+					failedItems := s.currentBatchItems
+					s.mu.Unlock()
+
+					s.Broadcast(NewEvent("item_failed", map[string]interface{}{
+						"item_index": idx,
+						"items":      failedItems,
+						"error":      bindErr.Error(),
+					}))
+					continue
+				}
 
 				if s.activeSession != nil {
 					s.activeSession.Send(session.Message{
@@ -1200,6 +1416,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 						FileID:    item.FileID,
 						DataPort:  port,
 						ItemIndex: idx,
+						ChunkSize: uint32(s.config.ChunkSizeMB * 1024 * 1024),
 					})
 				}
 
@@ -1211,20 +1428,39 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 					if isCanceled {
 						return
 					}
-				case <-s.itemDoneChan:
+				case success := <-s.itemDoneChan:
+					itemCancel()
+					if success {
+						s.mu.Lock()
+						for i := range s.currentBatchItems {
+							if s.currentBatchItems[i].Index == idx && s.currentBatchItems[i].Status != "skipped" && s.currentBatchItems[i].Status != "paused" && s.currentBatchItems[i].Status != "failed" {
+								s.currentBatchItems[i].Status = "completed"
+							}
+						}
+						completedItems := s.currentBatchItems
+						s.mu.Unlock()
+
+						s.Broadcast(NewEvent("item_completed", map[string]interface{}{
+							"item_index": idx,
+							"items":      completedItems,
+						}))
+					}
+				case <-time.After(60 * time.Second):
+					// Watchdog: If an item transfer is completely silent for 60s without progress/complete, advance safely
 					itemCancel()
 					s.mu.Lock()
 					for i := range s.currentBatchItems {
-						if s.currentBatchItems[i].Index == idx && s.currentBatchItems[i].Status != "skipped" && s.currentBatchItems[i].Status != "paused" {
-							s.currentBatchItems[i].Status = "completed"
+						if s.currentBatchItems[i].Index == idx {
+							s.currentBatchItems[i].Status = "failed"
 						}
 					}
-					completedItems := s.currentBatchItems
+					failedItems := s.currentBatchItems
 					s.mu.Unlock()
 
-					s.Broadcast(NewEvent("item_completed", map[string]interface{}{
+					s.Broadcast(NewEvent("item_failed", map[string]interface{}{
 						"item_index": idx,
-						"items":      completedItems,
+						"items":      failedItems,
+						"error":      "item transfer timed out after 60s with no response from peer",
 					}))
 				}
 			}
@@ -1238,10 +1474,10 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			if s.activeSession != nil {
 				s.activeSession.Send(session.Message{Type: "batch_complete"})
 			}
-			s.Broadcast(NewEvent("transfer_complete", map[string]interface{}{
+			s.broadcastTransferComplete(map[string]interface{}{
 				"message": "All batch files sent successfully",
 				"items":   finalItems,
-			}))
+			})
 		}(m)
 
 	case "batch_stream":
@@ -1257,8 +1493,10 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		s.Broadcast(NewEvent("transfer_start", map[string]interface{}{
 			"current_file": msg.FileName,
 			"file_index":   1,
-			"total_files":  msg.ItemIndex,
+			"total_files":  1,
 			"total_bytes":  msg.FileSize,
+			"is_stream":    true,
+			"is_folder":    true,
 		}))
 
 		go func(msg session.Message) {
@@ -1271,12 +1509,12 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			}
 			defer conn.Close()
 
-			listener := newDaemonListener(s, msg.FileName, msg.FileSize, 0, msg.ItemIndex, 0, msg.FileSize)
+			listener := newDaemonListener(s, msg.FileName, msg.FileSize, 0, 1, 0, msg.FileSize)
 			err = engine.ExtractTar(streamCtx, conn, outDir, msg.FileSize, msg.ItemIndex, listener)
 			if err == nil {
-				s.Broadcast(NewEvent("transfer_complete", map[string]interface{}{
+				s.broadcastTransferComplete(map[string]interface{}{
 					"message": "Directory stream transfer complete",
-				}))
+				})
 			}
 		}(msg)
 
@@ -1291,8 +1529,15 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		bBaseBytes := s.calculateCompletedBatchBytes()
 
 		s.mu.Lock()
-		if s.batchCanceled || s.skippedFiles[msg.ItemIndex] {
+		if s.batchCanceled {
 			s.mu.Unlock()
+			return
+		}
+		if s.skippedFiles[msg.ItemIndex] {
+			s.mu.Unlock()
+			if s.activeSession != nil {
+				s.activeSession.Send(session.Message{Type: "item_skipped", ItemIndex: msg.ItemIndex})
+			}
 			return
 		}
 		// Sender is sending this item: unpause on receiver
@@ -1329,7 +1574,18 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			listener := newDaemonListener(s, msg.FileName, msg.FileSize, msg.ItemIndex, bCount, bBase, bTotal)
 			targetAddr := fmt.Sprintf("%s:%d", s.activeSession.RemoteIP(), msg.DataPort)
 
-			err := receiver.Pull(ctx, targetAddr, listener, msg.FileID)
+			var err error
+			if msg.ChunkSize > 0 {
+				meta := protocol.FileMetadata{
+					FileName:  msg.FileName,
+					FileSize:  msg.FileSize,
+					FileID:    msg.FileID,
+					ChunkSize: msg.ChunkSize,
+				}
+				err = receiver.PullWithMetadata(ctx, targetAddr, listener, meta, msg.FileID)
+			} else {
+				err = receiver.Pull(ctx, targetAddr, listener, msg.FileID)
+			}
 			s.mu.Lock()
 			isSkipped := s.skippedFiles[msg.ItemIndex]
 			isPaused := s.pausedFiles[msg.ItemIndex]
@@ -1356,10 +1612,33 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 					s.activeSession.Send(session.Message{Type: "item_complete", ItemIndex: msg.ItemIndex})
 				}
 			} else if !isSkipped && !isPaused && !isCanceled && ctx.Err() == nil {
+				s.mu.Lock()
+				for i := range s.currentBatchItems {
+					if s.currentBatchItems[i].Index == msg.ItemIndex {
+						s.currentBatchItems[i].Status = "failed"
+					}
+				}
+				failedItems := s.currentBatchItems
+				s.mu.Unlock()
+
 				s.Broadcast(NewEvent("transfer_error", map[string]string{
 					"file":  msg.FileName,
 					"error": err.Error(),
 				}))
+				s.Broadcast(NewEvent("item_failed", map[string]interface{}{
+					"item_index": msg.ItemIndex,
+					"items":      failedItems,
+					"error":      err.Error(),
+				}))
+
+				if s.activeSession != nil {
+					s.activeSession.Send(session.Message{
+						Type:      "item_failed",
+						ItemIndex: msg.ItemIndex,
+						FileName:  msg.FileName,
+						Error:     err.Error(),
+					})
+				}
 			}
 		}(msg, bBaseBytes, bTotalBytes, bTotalFiles)
 
@@ -1383,6 +1662,47 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		default:
 		}
 
+	case "item_failed":
+		s.mu.Lock()
+		for i := range s.currentBatchItems {
+			if s.currentBatchItems[i].Index == msg.ItemIndex {
+				s.currentBatchItems[i].Status = "failed"
+			}
+		}
+		failedItems := s.currentBatchItems
+		s.mu.Unlock()
+
+		s.Broadcast(NewEvent("item_failed", map[string]interface{}{
+			"item_index": msg.ItemIndex,
+			"items":      failedItems,
+			"error":      msg.Error,
+		}))
+
+		select {
+		case s.itemDoneChan <- false:
+		default:
+		}
+
+	case "item_skipped":
+		s.mu.Lock()
+		for i := range s.currentBatchItems {
+			if s.currentBatchItems[i].Index == msg.ItemIndex {
+				s.currentBatchItems[i].Status = "skipped"
+			}
+		}
+		skippedItems := s.currentBatchItems
+		s.mu.Unlock()
+
+		s.Broadcast(NewEvent("file_skipped", map[string]interface{}{
+			"item_index": msg.ItemIndex,
+			"items":      skippedItems,
+		}))
+
+		select {
+		case s.itemDoneChan <- false:
+		default:
+		}
+
 	case "batch_complete":
 		s.mu.Lock()
 		if s.itemCancel != nil {
@@ -1395,10 +1715,10 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		}
 		finalItems := s.currentBatchItems
 		s.mu.Unlock()
-		s.Broadcast(NewEvent("transfer_complete", map[string]interface{}{
+		s.broadcastTransferComplete(map[string]interface{}{
 			"message": "All batch files mirrored successfully",
 			"items":   finalItems,
-		}))
+		})
 
 	case "accept":
 		s.mu.Lock()
@@ -1436,7 +1756,9 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			s.transferCancel = nil
 		}
 		s.mu.Unlock()
-		s.Broadcast(NewEvent("transfer_complete", map[string]string{"message": "Receiver confirmed transfer complete"}))
+		s.broadcastTransferComplete(map[string]interface{}{
+			"message": "Receiver confirmed transfer complete",
+		})
 	}
 }
 
@@ -1795,4 +2117,59 @@ func (s *DaemonServer) handleFSMkdir(w http.ResponseWriter, r *http.Request) {
 		"status": "ok",
 		"path":   target,
 	})
+}
+
+// StartTransferTracker initializes an active telemetry tracker
+func (s *DaemonServer) StartTransferTracker(name string, totalFiles int, totalBytes int64) *TransferSessionTracker {
+	s.trackerMu.Lock()
+	defer s.trackerMu.Unlock()
+	tracker := NewTransferSessionTracker(name, totalFiles, totalBytes)
+	s.activeTracker = tracker
+	return tracker
+}
+
+// RecordTransferSample records a live progress measurement
+func (s *DaemonServer) RecordTransferSample(stats engine.TransferStats, progressPercent float64, fallbackName string, totalFiles int, totalBytes int64) {
+	s.trackerMu.Lock()
+	if s.activeTracker == nil {
+		s.activeTracker = NewTransferSessionTracker(fallbackName, totalFiles, totalBytes)
+	}
+	tracker := s.activeTracker
+	s.trackerMu.Unlock()
+
+	tracker.RecordSample(stats, progressPercent)
+}
+
+// FinishTransferTracker compiles the final diagnostic summary report
+func (s *DaemonServer) FinishTransferTracker() *TransferSummaryReport {
+	s.trackerMu.Lock()
+	defer s.trackerMu.Unlock()
+	if s.activeTracker == nil {
+		return s.lastSummaryReport
+	}
+	report := s.activeTracker.GenerateReport()
+	s.lastSummaryReport = report
+	s.activeTracker = nil
+	return report
+}
+
+// GetLastSummaryReport returns the latest completed transfer report
+func (s *DaemonServer) GetLastSummaryReport() *TransferSummaryReport {
+	s.trackerMu.Lock()
+	defer s.trackerMu.Unlock()
+	return s.lastSummaryReport
+}
+
+// broadcastTransferComplete completes telemetry tracker and broadcasts transfer_complete with report
+func (s *DaemonServer) broadcastTransferComplete(extra map[string]interface{}) {
+	rep := s.FinishTransferTracker()
+	payload := make(map[string]interface{})
+	for k, v := range extra {
+		payload[k] = v
+	}
+	if rep != nil {
+		payload["summary_report"] = rep
+		payload["formatted_report"] = rep.FormattedReport
+	}
+	s.Broadcast(NewEvent("transfer_complete", payload))
 }

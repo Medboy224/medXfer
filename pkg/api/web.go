@@ -84,7 +84,10 @@ const IndexHTML = `<!DOCTYPE html>
 <body>
   <div class="container">
     <header>
-      <div class="logo">⚡ med<span>Xfer</span> <small id="headerDeviceName" style="font-size: 13px; color: var(--primary); font-weight: 600; margin-left: 8px; background: rgba(59, 130, 246, 0.15); padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.3);">Device: Loading...</small></div>
+      <div class="logo">⚡ med<span>Xfer</span> 
+        <small id="headerDeviceName" style="font-size: 13px; color: var(--primary); font-weight: 600; margin-left: 8px; background: rgba(59, 130, 246, 0.15); padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(59, 130, 246, 0.3);">Device: Loading...</small>
+        <small id="headerPairingCode" style="font-size: 13px; color: #34d399; font-weight: 700; font-family: monospace; margin-left: 6px; background: rgba(16, 185, 129, 0.15); padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.3);" title="Your pairing code to connect from other devices">Pairing Code: ---</small>
+      </div>
       <div id="connectionStatus" class="badge badge-offline">Connecting...</div>
     </header>
 
@@ -133,6 +136,11 @@ const IndexHTML = `<!DOCTYPE html>
           </select>
         </div>
         <button id="saveSettingsBtn" class="btn btn-secondary" onclick="saveSettings()">Save Settings</button>
+        <div style="margin-top: 10px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--muted);">
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; margin: 0;">
+            <input type="checkbox" id="devModeToggle" onchange="toggleDevMode(this.checked)" style="width: auto;"> 🛠️ Diagnostics & Speedtest (Dev Tools)
+          </label>
+        </div>
 
         <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">
           <div id="pairedBox" style="display: none;">
@@ -140,11 +148,13 @@ const IndexHTML = `<!DOCTYPE html>
             <button class="btn btn-danger" onclick="disconnectNode()">Disconnect</button>
           </div>
           <div id="unpairedBox">
-            <label>Direct Connect / Pair IP</label>
-            <div style="display: flex; gap: 8px;">
-              <input type="text" id="pairIPInput" placeholder="192.168.1.50">
-              <button id="pairBtn" class="btn" style="width: auto;" onclick="pairNode()">Pair</button>
+            <label>Direct Connect / Pair with Device</label>
+            <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+              <input type="text" id="pairIPInput" placeholder="IP (e.g. 192.168.1.50) or 6-digit Code" style="flex: 2;">
+              <input type="text" id="pairCodeInput" placeholder="Code (XXX-YYY)" style="flex: 1; max-width: 140px; font-family: monospace; text-align: center; font-weight: 700; letter-spacing: 1px;">
+              <button id="pairBtn" class="btn btn-primary" style="width: auto; padding: 0 16px;" onclick="pairNode()">Pair</button>
             </div>
+            <div style="font-size: 11px; color: var(--muted);">Enter the target device's IP and 6-digit pairing code (shown on its screen).</div>
           </div>
         </div>
 
@@ -296,6 +306,10 @@ const IndexHTML = `<!DOCTYPE html>
           <button id="sendTransferBtn" class="btn btn-success" style="flex: 1;" onclick="sendTransfer()">🚀 Send to Paired Device</button>
           <button id="shareWebBtn" class="btn" style="flex: 1; background: #0284c7;" onclick="shareToWebPortal()">🌐 Share to Web Portal</button>
         </div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted);">
+          <input type="checkbox" id="useTarStreamCheck" style="width: auto; cursor: pointer;">
+          <label for="useTarStreamCheck" style="margin: 0; cursor: pointer; color: var(--muted);" title="Packs all folder contents into a single raw TAR stream without per-file resume. Only recommended for folders with thousands of tiny files.">⚡ Raw Archive Stream (StreamTar, no per-file resume)</label>
+        </div>
 
         <!-- Web Shared Files Status -->
         <div id="webSharedFilesSummary" style="margin-top: 10px; padding: 8px 12px; background: #111e38; border: 1px solid #1e3a8a; border-radius: 6px; font-size: 12px; color: #34d399; display: none;">
@@ -378,6 +392,152 @@ const IndexHTML = `<!DOCTYPE html>
       <div class="stats-row">
         <div>Speed: <strong id="transferSpeed" style="color: var(--text);">0 MB/s</strong></div>
         <div>ETA: <strong id="transferETA" style="color: var(--text);">0s</strong></div>
+        <div id="transferBottleneckContainer" style="display: flex; align-items: center; gap: 6px;">
+          <span style="color: var(--muted); font-size: 11px;">Bottleneck:</span>
+          <span id="transferBottleneckBadge" class="badge" style="background: #334155; color: #94a3b8; font-size: 11px; font-weight: 600;">Detecting...</span>
+        </div>
+      </div>
+      <div id="transferTelemetryDetail" style="margin-top: 8px; font-size: 11px; color: var(--muted); display: flex; gap: 16px; justify-content: space-between; border-top: 1px dotted var(--border); padding-top: 6px;">
+        <span>💾 Disk Write Latency: <strong id="transferDiskLatency" style="color: #cbd5e1;">- ms</strong></span>
+        <span>🌐 Net Read Latency: <strong id="transferNetLatency" style="color: #cbd5e1;">- ms</strong></span>
+        <span>⚡ Pipeline: <strong style="color: #38bdf8;">Ordered Sequential (Zero-Seek)</strong></span>
+      </div>
+    </div>
+
+    <!-- Completed Transfer Diagnostic Summary Card -->
+    <div class="card" id="transferSummaryCard" style="display: none; margin-bottom: 20px; border: 1px solid #10b981; background: #071912;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h2 style="margin: 0; font-size: 16px; color: #34d399; display: flex; align-items: center; gap: 8px;">
+          <span>🎉 Transfert Terminé avec Succès !</span>
+          <span id="summaryBottleneckBadge" class="badge" style="font-size: 11px;">-</span>
+        </h2>
+        <div style="display: flex; gap: 8px;">
+          <button id="copySummaryBtn" class="btn btn-primary" style="width: auto; padding: 4px 14px; font-size: 12px; background: #059669; font-weight: 600;" onclick="copyTransferSummary()">📋 Copier le Résumé Diagnostic</button>
+          <button class="btn btn-secondary" style="width: auto; padding: 4px 10px; font-size: 12px;" onclick="closeTransferSummary()">✕</button>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 12px; font-size: 12px;">
+        <div style="background: #062319; border: 1px solid #0f4937; border-radius: 6px; padding: 8px;">
+          <div style="color: var(--muted); font-size: 11px;">Taille / Éléments</div>
+          <strong id="summaryTotalSize" style="color: #e2e8f0; font-size: 13px;">-</strong>
+        </div>
+        <div style="background: #062319; border: 1px solid #0f4937; border-radius: 6px; padding: 8px;">
+          <div style="color: var(--muted); font-size: 11px;">Durée Totale</div>
+          <strong id="summaryDuration" style="color: #e2e8f0; font-size: 13px;">-</strong>
+        </div>
+        <div style="background: #062319; border: 1px solid #0f4937; border-radius: 6px; padding: 8px;">
+          <div style="color: var(--muted); font-size: 11px;">Vitesse Moyenne</div>
+          <strong id="summaryAvgSpeed" style="color: #34d399; font-size: 13px;">- MB/s</strong>
+        </div>
+        <div style="background: #062319; border: 1px solid #0f4937; border-radius: 6px; padding: 8px;">
+          <div style="color: var(--muted); font-size: 11px;">Vitesse Crête (Peak)</div>
+          <strong id="summaryPeakSpeed" style="color: #60a5fa; font-size: 13px;">- MB/s</strong>
+        </div>
+      </div>
+
+      <div id="summaryDiagnosisText" style="padding: 10px 12px; background: #092e21; border-left: 4px solid #10b981; border-radius: 4px; font-size: 12px; color: #a7f3d0; margin-bottom: 12px;">
+      </div>
+
+      <!-- Quartile Breakdown Table -->
+      <div style="background: #062319; border: 1px solid #0f4937; border-radius: 6px; padding: 10px; font-size: 12px;">
+        <div style="font-weight: 600; color: #6ee7b7; margin-bottom: 6px;">📊 Décomposition par Quartiles (Stabilité de Vitesse) :</div>
+        <div id="summaryPhasesList" style="display: flex; flex-direction: column; gap: 4px;"></div>
+      </div>
+    </div>
+
+    <!-- Diagnostics & Performance Benchmark Card -->
+    <div class="card" id="diagnosticsCard" style="display: none; border: 1px solid #3b82f6; background: #070d19; margin-bottom: 20px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h2 style="margin: 0; font-size: 15px; color: #60a5fa; display: flex; align-items: center; gap: 8px;">
+          <span>🧪 Diagnostics & Benchmarks</span>
+          <span class="badge" style="background: #1e3a8a; color: #93c5fd; font-size: 10px;">HARDWARE PROBE</span>
+        </h2>
+        <div style="display: flex; gap: 6px; align-items: center;">
+          <button type="button" class="btn btn-secondary" style="width: auto; padding: 3px 8px; font-size: 11px;" onclick="toggleDiagnosticsCollapse()" id="diagnosticsCollapseBtn">▲ Minimize</button>
+        </div>
+      </div>
+
+      <div id="diagnosticsBody">
+        <!-- Dual Column Grid: Disk Benchmark & Network Benchmark -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-bottom: 12px;">
+          
+          <!-- Disk Write/Read Benchmark -->
+          <div style="background: #0b1120; border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+            <div style="font-weight: 600; font-size: 13px; color: #60a5fa; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+              <span>💾 Storage Speed Test</span>
+              <span id="diskRatingBadge" class="badge" style="display:none; font-size: 10px;">-</span>
+            </div>
+            
+            <div class="form-group" style="margin-bottom: 8px;">
+              <div style="display: flex; gap: 6px;">
+                <input type="text" id="benchDiskPathInput" placeholder="Target folder (e.g. M:\medXfer or D:\)" style="font-size: 12px; padding: 6px;">
+                <button type="button" class="btn btn-secondary" style="width: auto; padding: 0 10px; font-size: 11px;" onclick="openDirPicker('benchDiskPathInput')">📁</button>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 8px;">
+              <select id="benchDiskSizeSelect" style="padding: 5px 8px; font-size: 11px; flex: 1;">
+                <option value="16">Quick Probe (16 MB)</option>
+                <option value="32" selected>Standard Test (32 MB)</option>
+                <option value="64">Deep Test (64 MB)</option>
+              </select>
+              <button id="runDiskBenchBtn" type="button" class="btn btn-primary" style="flex: 1; padding: 5px 10px; font-size: 11px; font-weight: 600;" onclick="runDiskBenchmark()">⚡ Test Storage</button>
+            </div>
+
+            <div id="diskBenchResults" style="display: none; background: #070d19; border: 1px solid #1e293b; border-radius: 6px; padding: 10px; font-size: 12px;">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="color: var(--muted);">Direct Write Speed:</span>
+                <strong id="diskBenchWriteSpeed" style="color: #34d399; font-size: 13px;">0.0 MB/s</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="color: var(--muted);">Direct Read Speed:</span>
+                <strong id="diskBenchReadSpeed" style="color: #60a5fa; font-size: 13px;">0.0 MB/s</strong>
+              </div>
+              <div id="diskBenchWarning" style="display: none; color: #fbbf24; font-size: 11px; margin-top: 6px; border-top: 1px solid #334155; padding-top: 6px; line-height: 1.4;"></div>
+            </div>
+          </div>
+
+          <!-- Network Link & Latency Benchmark -->
+          <div style="background: #0b1120; border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+            <div style="font-weight: 600; font-size: 13px; color: #a78bfa; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+              <span>🌐 Network Link Speed</span>
+              <span id="netRatingBadge" class="badge" style="display:none; font-size: 10px;">-</span>
+            </div>
+
+            <div style="font-size: 11px; color: var(--muted); margin-bottom: 8px;" id="netBenchPeerStatus">
+              Pair with phone or PC to test wire speed.
+            </div>
+
+            <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 8px;">
+              <select id="benchNetSizeSelect" style="padding: 5px 8px; font-size: 11px; flex: 1;">
+                <option value="4">Burst 4 MB</option>
+                <option value="8" selected>Burst 8 MB</option>
+                <option value="16">Burst 16 MB</option>
+              </select>
+              <button id="runNetBenchBtn" type="button" class="btn btn-primary" style="flex: 1; padding: 5px 10px; font-size: 11px; font-weight: 600; background: #7c3aed;" onclick="runNetworkBenchmark()">🚀 Test Link</button>
+            </div>
+
+            <div id="netBenchResults" style="display: none; background: #070d19; border: 1px solid #1e293b; border-radius: 6px; padding: 10px; font-size: 12px;">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="color: var(--muted);">Link Wire Throughput:</span>
+                <strong id="netBenchSpeed" style="color: #34d399; font-size: 13px;">0.0 MB/s</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="color: var(--muted);">Round-Trip Latency (RTT):</span>
+                <strong id="netBenchRTT" style="color: #60a5fa; font-size: 13px;">0.0 ms</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between;">
+                <span style="color: var(--muted);">Interface Detection:</span>
+                <strong id="netBenchType" style="color: #cbd5e1; font-size: 11px;">Unknown</strong>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- System Bottleneck Predictor Banner -->
+        <div id="bottleneckBanner" style="display: none; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-top: 4px;"></div>
       </div>
     </div>
 
@@ -514,9 +674,22 @@ const IndexHTML = `<!DOCTYPE html>
     }
 
     function handleEvent(msg) {
+      if (msg.event === "log" && msg.data && msg.data.level && msg.data.message) {
+        log(msg.data.level, msg.data.message);
+        return;
+      }
       log("RECV:" + msg.event, msg.data);
 
       switch (msg.event) {
+        case "benchmark_disk_result":
+          onBenchmarkDiskResult(msg.data);
+          break;
+        case "benchmark_network_result":
+          onBenchmarkNetworkResult(msg.data);
+          break;
+        case "transfer_preflight":
+          onTransferPreflight(msg.data);
+          break;
         case "status":
           updateStatusUI(msg.data);
           break;
@@ -540,6 +713,10 @@ const IndexHTML = `<!DOCTYPE html>
           document.getElementById("pairedIP").innerText = pLabel;
           document.getElementById("nodeStatus").innerText = "PAIRED";
           document.getElementById("nodeStatus").style.background = "var(--primary)";
+          const netStatEl = document.getElementById("netBenchPeerStatus");
+          if (netStatEl) netStatEl.innerText = "Paired with: " + pLabel;
+          const runNBtn = document.getElementById("runNetBenchBtn");
+          if (runNBtn) runNBtn.disabled = false;
           break;
         case "reconnecting":
           document.getElementById("nodeStatus").innerText = "RECONNECTING";
@@ -551,6 +728,10 @@ const IndexHTML = `<!DOCTYPE html>
           document.getElementById("nodeStatus").innerText = "IDLE";
           document.getElementById("nodeStatus").style.background = "#334155";
           document.getElementById("offerModal").style.display = "none";
+          const netStatDis = document.getElementById("netBenchPeerStatus");
+          if (netStatDis) netStatDis.innerText = "Requires an active paired device.";
+          const runNDis = document.getElementById("runNetBenchBtn");
+          if (runNDis) runNDis.disabled = true;
           break;
         case "incoming_offer":
           if (msg.data && msg.data.items) {
@@ -569,12 +750,13 @@ const IndexHTML = `<!DOCTYPE html>
         case "transfer_start":
           document.getElementById("offerModal").style.display = "none";
           document.getElementById("transferCard").style.display = "block";
-          document.getElementById("transferFileName").innerText = "File: " + msg.data.current_file;
-          document.getElementById("fileIndexSpan").innerText = "File " + msg.data.file_index + " of " + msg.data.total_files;
+          const isStartFolder = (msg.data.total_files === 1 && (msg.data.is_folder || msg.data.is_stream || (msg.data.current_file && msg.data.current_file.indexOf(".") === -1)));
+          document.getElementById("transferFileName").innerText = (isStartFolder ? "📁 Folder: " : "File: ") + msg.data.current_file;
+          document.getElementById("fileIndexSpan").innerText = msg.data.total_files > 1 ? ("File " + msg.data.file_index + " of " + msg.data.total_files) : (isStartFolder ? "Folder Stream" : "");
           activeFileIndex = msg.data.file_index - 1;
           setPausedUI(false);
           
-          if (msg.data.total_files > 1) {
+          if (msg.data.total_files > 1 && !msg.data.is_stream) {
             document.getElementById("batchProgressBox").style.display = "block";
             document.getElementById("pauseCurrentFileBtn").style.display = "inline-block";
             document.getElementById("skipCurrentFileBtn").style.display = "inline-block";
@@ -599,15 +781,16 @@ const IndexHTML = `<!DOCTYPE html>
             setPausedUI(false);
           }
 
-          // Current File Bar
+          // Current File / Folder Bar
           document.getElementById("progressBar").style.width = msg.data.file_percent.toFixed(1) + "%";
           document.getElementById("progressPercent").innerText = msg.data.file_percent.toFixed(1) + "%";
-          document.getElementById("transferFileName").innerText = "File: " + msg.data.current_file;
-          document.getElementById("fileIndexSpan").innerText = "File " + msg.data.file_index + " of " + msg.data.total_files;
+          const isProgFolder = (msg.data.total_files === 1 && (msg.data.is_folder || msg.data.is_stream || (msg.data.current_file && msg.data.current_file.indexOf(".") === -1)));
+          document.getElementById("transferFileName").innerText = (isProgFolder ? "📁 Folder: " : "File: ") + msg.data.current_file;
+          document.getElementById("fileIndexSpan").innerText = msg.data.total_files > 1 ? ("File " + msg.data.file_index + " of " + msg.data.total_files) : (isProgFolder ? "Folder Stream" : "");
           document.getElementById("fileBytesSpan").innerText = formatMB(msg.data.file_bytes) + " / " + formatMB(msg.data.file_total_bytes);
 
           // Batch Bar (Only if multiple files)
-          if (msg.data.total_files > 1) {
+          if (msg.data.total_files > 1 && !msg.data.is_stream) {
             document.getElementById("batchProgressBox").style.display = "block";
             document.getElementById("pauseCurrentFileBtn").style.display = "inline-block";
             document.getElementById("skipCurrentFileBtn").style.display = "inline-block";
@@ -628,6 +811,34 @@ const IndexHTML = `<!DOCTYPE html>
           } else {
             document.getElementById("transferSpeed").innerText = msg.data.speed_mbps.toFixed(1) + " MB/s";
             document.getElementById("transferETA").innerText = formatETA(msg.data.eta_seconds);
+          }
+
+          if (msg.data.bottleneck) {
+            const bBadge = document.getElementById("transferBottleneckBadge");
+            if (bBadge) {
+              if (msg.data.bottleneck === "STORAGE") {
+                bBadge.innerText = "⚠️ STORAGE BOUND";
+                bBadge.style.background = "#7f1d1d";
+                bBadge.style.color = "#fca5a5";
+                bBadge.title = msg.data.bottleneck_reason || "Storage write latency is elevated";
+              } else if (msg.data.bottleneck === "NETWORK") {
+                bBadge.innerText = "⚡ NETWORK BOUND";
+                bBadge.style.background = "#1e3a8a";
+                bBadge.style.color = "#93c5fd";
+                bBadge.title = msg.data.bottleneck_reason || "Network link throughput is the limiting factor";
+              } else {
+                bBadge.innerText = "✓ BALANCED";
+                bBadge.style.background = "#064e3b";
+                bBadge.style.color = "#6ee7b7";
+                bBadge.title = "Storage and network pipeline are evenly matched";
+              }
+            }
+          }
+          if (msg.data.disk_write_latency_ms !== undefined) {
+            const dLat = document.getElementById("transferDiskLatency");
+            if (dLat) dLat.innerText = msg.data.disk_write_latency_ms.toFixed(1) + " ms";
+            const nLat = document.getElementById("transferNetLatency");
+            if (nLat) nLat.innerText = msg.data.net_read_latency_ms.toFixed(1) + " ms";
           }
           break;
         case "item_completed":
@@ -654,6 +865,14 @@ const IndexHTML = `<!DOCTYPE html>
             currentBatchFiles = msg.data.items;
           } else if (currentBatchFiles && currentBatchFiles[msg.data.item_index]) {
             currentBatchFiles[msg.data.item_index].status = "skipped";
+          }
+          renderBatchQueue();
+          break;
+        case "item_failed":
+          if (msg.data && msg.data.items) {
+            currentBatchFiles = msg.data.items;
+          } else if (msg.data && msg.data.item_index !== undefined && currentBatchFiles && currentBatchFiles[msg.data.item_index]) {
+            currentBatchFiles[msg.data.item_index].status = "failed";
           }
           renderBatchQueue();
           break;
@@ -688,8 +907,6 @@ const IndexHTML = `<!DOCTYPE html>
           setPausedUI(false);
           break;
         case "transfer_complete":
-        case "transfer_canceled":
-        case "transfer_rejected":
           document.getElementById("offerModal").style.display = "none";
           document.getElementById("transferCard").style.display = "none";
           document.getElementById("pauseCurrentFileBtn").style.display = "none";
@@ -699,6 +916,11 @@ const IndexHTML = `<!DOCTYPE html>
           setPausedUI(false);
           document.getElementById("nodeStatus").innerText = document.getElementById("pairedBox").style.display === "block" ? "PAIRED" : "IDLE";
           document.getElementById("nodeStatus").style.background = document.getElementById("pairedBox").style.display === "block" ? "var(--primary)" : "#334155";
+
+          // Render diagnostic summary report if available
+          if (msg.data && (msg.data.summary_report || msg.data.formatted_report)) {
+            renderTransferSummary(msg.data.summary_report, msg.data.formatted_report);
+          }
 
           // Clear and reset progress bars and clear staged/selected files from UI
           const fpBar = document.getElementById("progressBar");
@@ -711,6 +933,26 @@ const IndexHTML = `<!DOCTYPE html>
           if (bpText) bpText.innerText = "0%";
           const spText = document.getElementById("transferSpeed");
           if (spText) spText.innerText = "0.0 MB/s";
+          clearAllSelected(true);
+          break;
+        case "last_transfer_summary":
+          if (msg.data && (msg.data.summary_report || msg.data.formatted_report)) {
+            renderTransferSummary(msg.data.summary_report, msg.data.formatted_report);
+          }
+          break;
+        case "transfer_canceled":
+        case "transfer_rejected":
+          document.getElementById("offerModal").style.display = "none";
+          document.getElementById("transferCard").style.display = "none";
+          document.getElementById("pauseCurrentFileBtn").style.display = "none";
+          document.getElementById("skipCurrentFileBtn").style.display = "none";
+          document.getElementById("batchFilesQueueBox").style.display = "none";
+          const sc = document.getElementById("transferSummaryCard");
+          if (sc) sc.style.display = "none";
+          currentBatchFiles = [];
+          setPausedUI(false);
+          document.getElementById("nodeStatus").innerText = document.getElementById("pairedBox").style.display === "block" ? "PAIRED" : "IDLE";
+          document.getElementById("nodeStatus").style.background = document.getElementById("pairedBox").style.display === "block" ? "var(--primary)" : "#334155";
           clearAllSelected(true);
           break;
         case "action_error":
@@ -1105,6 +1347,10 @@ const IndexHTML = `<!DOCTYPE html>
       if (st.device_name) {
         document.getElementById("headerDeviceName").innerText = "Device: " + st.device_name;
       }
+      if (st.pairing_code) {
+        const codeEl = document.getElementById("headerPairingCode");
+        if (codeEl) codeEl.innerText = "Pairing Code: " + st.pairing_code;
+      }
       document.getElementById("deviceNameInput").value = st.device_name || "";
       document.getElementById("downloadDirInput").value = st.download_dir || "";
       document.getElementById("collisionPolicySelect").value = st.collision_policy || "auto_rename";
@@ -1185,7 +1431,7 @@ const IndexHTML = `<!DOCTYPE html>
             <div class="peer-sub">Role: ${p.role} | Port: ${p.port}</div>
           </div>
           <div class="peer-actions">
-            <button class="btn btn-secondary" onclick="directPair('${p.host_ip}', this)">Pair</button>
+            <button class="btn btn-secondary" onclick="directPair('${p.host_ip}', this, '${(p.device_name || 'Device').replace(/'/g, "\\\'")}')">Pair</button>
             <button class="btn btn-success" onclick="directSend('${p.host_ip}')">Send</button>
           </div>
         ` + "`" + `;
@@ -1522,22 +1768,47 @@ const IndexHTML = `<!DOCTYPE html>
     }
 
     function pairNode() {
-      const ip = document.getElementById("pairIPInput").value.trim();
-      if (!ip) { alert("Please enter IP"); return; }
+      const raw = document.getElementById("pairIPInput").value.trim();
+      let code = document.getElementById("pairCodeInput").value.trim();
+      if (!raw && !code) { 
+        alert("Please enter a Target IP address or a 6-digit Pairing Code."); 
+        return; 
+      }
+
+      // Check if user entered a 6-digit pairing code directly into the IP box
+      const cleanDigits = raw.replace(/\D/g, "");
+      if (cleanDigits.length === 6 && (!code || code === "")) {
+        code = raw;
+        const btn = document.getElementById("pairBtn");
+        if (btn) { btn.innerText = "⏳ Pairing..."; btn.disabled = true; }
+        sendCmd("pair", { code: code });
+        return;
+      }
+
+      if (raw && !code) {
+        code = prompt("Enter the 6-digit pairing code shown on " + raw + ":");
+        if (!code) return;
+        code = code.trim();
+      }
+
       const btn = document.getElementById("pairBtn");
       if (btn) {
         btn.innerText = "⏳ Pairing...";
         btn.disabled = true;
       }
-      sendCmd("pair", { ip: ip });
+      sendCmd("pair", { ip: raw, code: code });
     }
 
-    function directPair(ip, btnEl) {
+    function directPair(ip, btnEl, devName) {
+      const label = devName ? (devName + " (" + ip + ")") : ip;
+      let code = prompt("Enter the 6-digit pairing code shown on " + label + ":");
+      if (!code) return;
+      code = code.trim();
       if (btnEl) {
         btnEl.innerText = "⏳ Pairing...";
         btnEl.disabled = true;
       }
-      sendCmd("pair", { ip: ip });
+      sendCmd("pair", { ip: ip, code: code });
     }
 
     async function directSend(ip) {
@@ -1546,7 +1817,14 @@ const IndexHTML = `<!DOCTYPE html>
         alert("Please select files/folders or enter path(s) first!");
         return;
       }
-      sendCmd("send", { paths: paths, target_ip: ip });
+      let code = "";
+      if (document.getElementById("unpairedBox").style.display !== "none") {
+        code = prompt("Enter the 6-digit pairing code for " + ip + ":");
+        if (!code) return;
+        code = code.trim();
+      }
+      const useTar = document.getElementById("useTarStreamCheck") ? document.getElementById("useTarStreamCheck").checked : false;
+      sendCmd("send", { paths: paths, target_ip: ip, code: code, use_tar_stream: useTar });
     }
 
     function disconnectNode() {
@@ -1568,11 +1846,12 @@ const IndexHTML = `<!DOCTYPE html>
         }
         const isPaired = document.getElementById("pairedBox").style.display === "block";
         const inputIP = document.getElementById("pairIPInput").value.trim();
+        const useTar = document.getElementById("useTarStreamCheck") ? document.getElementById("useTarStreamCheck").checked : false;
 
         if (isPaired) {
-          sendCmd("send", { paths: paths });
+          sendCmd("send", { paths: paths, use_tar_stream: useTar });
         } else if (inputIP) {
-          sendCmd("send", { paths: paths, target_ip: inputIP });
+          sendCmd("send", { paths: paths, target_ip: inputIP, use_tar_stream: useTar });
         } else {
           alert("Please pair with a device first, or click 'Send' next to a device in the Nearby Devices list below.");
         }
@@ -1692,6 +1971,9 @@ const IndexHTML = `<!DOCTYPE html>
         } else if (it.status === "skipped") {
           statusPill = '<span style="color:#94a3b8; text-decoration:line-through; font-size:11px;">⊘ Skipped</span>';
           actionBtn = "";
+        } else if (it.status === "failed") {
+          statusPill = '<span style="color:#ef4444; font-weight:600; font-size:11px;">✗ Failed</span>';
+          actionBtn = '<button class="btn btn-secondary" style="width:auto; padding:2px 6px; font-size:11px;" onclick="resumeSpecificFile(' + it.index + ')">🔄 Retry</button>';
         }
 
         row.innerHTML =
@@ -1860,8 +2142,260 @@ const IndexHTML = `<!DOCTYPE html>
       sendCmd("respond_offer", { accept: accept, collision_policy: policy, save_dir: dir });
     }
 
-    // Initialize WebSocket on page load
-    window.addEventListener("DOMContentLoaded", connectWS);
+    // === DIAGNOSTICS & BENCHMARK FUNCTIONS ===
+    let isDevModeEnabled = localStorage.getItem("medxfer_dev_mode") !== "false";
+
+    function initDevMode() {
+      const toggle = document.getElementById("devModeToggle");
+      const card = document.getElementById("diagnosticsCard");
+      if (toggle) toggle.checked = isDevModeEnabled;
+      if (card) card.style.display = isDevModeEnabled ? "block" : "none";
+      const diskInput = document.getElementById("benchDiskPathInput");
+      if (diskInput && !diskInput.value) {
+        diskInput.value = document.getElementById("downloadDirInput").value || "";
+      }
+    }
+
+    function toggleDevMode(checked) {
+      isDevModeEnabled = checked;
+      localStorage.setItem("medxfer_dev_mode", checked ? "true" : "false");
+      const card = document.getElementById("diagnosticsCard");
+      if (card) card.style.display = checked ? "block" : "none";
+    }
+
+    function toggleDiagnosticsCollapse() {
+      const body = document.getElementById("diagnosticsBody");
+      const btn = document.getElementById("diagnosticsCollapseBtn");
+      if (body.style.display === "none") {
+        body.style.display = "block";
+        btn.innerText = "▲ Minimize";
+      } else {
+        body.style.display = "none";
+        btn.innerText = "▼ Expand";
+      }
+    }
+
+    let isRunningDiskBench = false;
+    function runDiskBenchmark() {
+      if (isRunningDiskBench) return;
+      const path = document.getElementById("benchDiskPathInput").value.trim() || document.getElementById("downloadDirInput").value.trim() || ".";
+      const sizeMB = parseInt(document.getElementById("benchDiskSizeSelect").value, 10) || 32;
+      const sizeBytes = sizeMB * 1024 * 1024;
+
+      isRunningDiskBench = true;
+      const btn = document.getElementById("runDiskBenchBtn");
+      btn.innerText = "⏳ Testing...";
+      btn.disabled = true;
+
+      sendCmd("test_disk", { dir: path, size_bytes: sizeBytes });
+    }
+
+    function onBenchmarkDiskResult(data) {
+      isRunningDiskBench = false;
+      const btn = document.getElementById("runDiskBenchBtn");
+      if (btn) {
+        btn.innerText = "⚡ Test Storage";
+        btn.disabled = false;
+      }
+      if (!data) return;
+
+      document.getElementById("diskBenchResults").style.display = "block";
+      document.getElementById("diskBenchWriteSpeed").innerText = data.write_speed_mbps.toFixed(1) + " MB/s";
+      document.getElementById("diskBenchReadSpeed").innerText = data.read_speed_mbps.toFixed(1) + " MB/s";
+
+      const badge = document.getElementById("diskRatingBadge");
+      if (badge) {
+        badge.style.display = "inline-block";
+        badge.innerText = data.rating || "Tested";
+        if (data.write_speed_mbps >= 150) {
+          badge.style.background = "var(--success)";
+        } else if (data.write_speed_mbps >= 40) {
+          badge.style.background = "var(--primary)";
+        } else {
+          badge.style.background = "#d97706";
+        }
+      }
+
+      const warnEl = document.getElementById("diskBenchWarning");
+      if (warnEl) {
+        if (data.warning) {
+          warnEl.innerText = "⚠️ " + data.warning;
+          warnEl.style.display = "block";
+        } else {
+          warnEl.style.display = "none";
+        }
+      }
+
+      updateBottleneckAnalysis();
+    }
+
+    let isRunningNetBench = false;
+    function runNetworkBenchmark() {
+      if (isRunningNetBench) return;
+      const sizeMB = parseInt(document.getElementById("benchNetSizeSelect").value, 10) || 8;
+      const sizeBytes = sizeMB * 1024 * 1024;
+
+      isRunningNetBench = true;
+      const btn = document.getElementById("runNetBenchBtn");
+      btn.innerText = "⏳ Probing...";
+      btn.disabled = true;
+
+      sendCmd("test_network", { size_bytes: sizeBytes });
+    }
+
+    function onBenchmarkNetworkResult(data) {
+      isRunningNetBench = false;
+      const btn = document.getElementById("runNetBenchBtn");
+      if (btn) {
+        btn.innerText = "🚀 Test Link";
+        btn.disabled = false;
+      }
+      if (!data) return;
+
+      document.getElementById("netBenchResults").style.display = "block";
+      document.getElementById("netBenchSpeed").innerText = data.throughput_mbps > 0 ? (data.throughput_mbps.toFixed(1) + " MB/s") : "Burst Complete";
+      document.getElementById("netBenchRTT").innerText = data.avg_rtt_ms.toFixed(2) + " ms (min: " + data.min_rtt_ms.toFixed(1) + "ms)";
+      document.getElementById("netBenchType").innerText = data.link_type || "Direct Link";
+
+      const badge = document.getElementById("netRatingBadge");
+      if (badge) {
+        badge.style.display = "inline-block";
+        badge.innerText = data.rating || "Active";
+        if (data.avg_rtt_ms <= 2.0) {
+          badge.style.background = "var(--success)";
+        } else if (data.avg_rtt_ms <= 10.0) {
+          badge.style.background = "var(--primary)";
+        } else {
+          badge.style.background = "#d97706";
+        }
+      }
+
+      updateBottleneckAnalysis();
+    }
+
+    function updateBottleneckAnalysis() {
+      const writeSpeedEl = document.getElementById("diskBenchWriteSpeed");
+      const netSpeedEl = document.getElementById("netBenchSpeed");
+      const banner = document.getElementById("bottleneckBanner");
+      if (!banner) return;
+
+      const diskSpeed = parseFloat(writeSpeedEl.innerText) || 0;
+      const netSpeed = parseFloat(netSpeedEl.innerText) || 0;
+
+      if (diskSpeed > 0 && netSpeed > 0) {
+        banner.style.display = "block";
+        if (diskSpeed < netSpeed * 0.8) {
+          banner.style.background = "#451a03";
+          banner.style.border = "1px solid #d97706";
+          banner.style.color = "#fbbf24";
+          banner.innerHTML = "⚠️ <strong>Storage Bottleneck Detected:</strong> Target drive (" + diskSpeed.toFixed(1) + " MB/s) is slower than the network link (" + netSpeed.toFixed(1) + " MB/s). Expected transfer speed will cap around " + diskSpeed.toFixed(1) + " MB/s.";
+        } else {
+          banner.style.background = "#064e3b";
+          banner.style.border = "1px solid #10b981";
+          banner.style.color = "#a7f3d0";
+          banner.innerHTML = "✅ <strong>Optimal Pipeline:</strong> Storage write speed (" + diskSpeed.toFixed(1) + " MB/s) easily exceeds network link speed (" + netSpeed.toFixed(1) + " MB/s). Expected transfer will sustain full wire speed (~" + netSpeed.toFixed(1) + " MB/s)!";
+        }
+      }
+    }
+
+    function onTransferPreflight(data) {
+      if (!data) return;
+      log("DIAG", "Pre-flight storage probe: " + data.target_dir + " writes at " + data.disk_write_speed.toFixed(1) + " MB/s [" + data.disk_rating + "]");
+      if (data.is_disk_bottleneck) {
+        log("WARNING", "⚠️ Storage Bottleneck: " + data.warning);
+      }
+    }
+
+    let latestFormattedReport = "";
+    let latestSummaryReport = null;
+
+    function renderTransferSummary(rep, formatted) {
+      if (!rep) return;
+      latestSummaryReport = rep;
+      latestFormattedReport = formatted || rep.formatted_report || "";
+
+      const card = document.getElementById("transferSummaryCard");
+      if (!card) return;
+
+      document.getElementById("summaryTotalSize").innerText = formatMB(rep.total_bytes) + " (" + rep.total_files + " files)";
+      const mins = Math.floor(rep.duration_sec / 60);
+      const secs = Math.floor(rep.duration_sec % 60);
+      document.getElementById("summaryDuration").innerText = (mins > 0 ? (mins + "m ") : "") + secs + "s";
+      document.getElementById("summaryAvgSpeed").innerText = rep.avg_speed_mbps.toFixed(1) + " MB/s";
+      document.getElementById("summaryPeakSpeed").innerText = rep.peak_speed_mbps.toFixed(1) + " MB/s";
+
+      const bBadge = document.getElementById("summaryBottleneckBadge");
+      if (rep.primary_bottleneck === "STORAGE") {
+        bBadge.innerText = "⚠️ Stockage (HDD / Tampon Saturé)";
+        bBadge.style.background = "#7f1d1d";
+        bBadge.style.color = "#fca5a5";
+      } else if (rep.primary_bottleneck === "NETWORK") {
+        bBadge.innerText = "⚡ Réseau (Limite Liaison Wire)";
+        bBadge.style.background = "#1e3a8a";
+        bBadge.style.color = "#93c5fd";
+      } else {
+        bBadge.innerText = "✓ Flux Équilibré";
+        bBadge.style.background = "#064e3b";
+        bBadge.style.color = "#6ee7b7";
+      }
+
+      document.getElementById("summaryDiagnosisText").innerText = rep.diagnosis_text || "";
+
+      const phasesList = document.getElementById("summaryPhasesList");
+      phasesList.innerHTML = "";
+      if (rep.phase_samples && rep.phase_samples.length > 0) {
+        rep.phase_samples.forEach(ps => {
+          const row = document.createElement("div");
+          row.style.cssText = "display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; background: #071c14; border-radius: 4px;";
+          const badgeBg = ps.dominant_factor === 'STORAGE' ? '#7f1d1d' : (ps.dominant_factor === 'NETWORK' ? '#1e3a8a' : '#064e3b');
+          row.innerHTML = '<span style="color: #cbd5e1; font-weight: 500; min-width: 60px;">' + ps.phase + ':</span>' +
+                          '<span style="color: #34d399; font-weight: 600; min-width: 90px;">' + ps.avg_speed_mbps.toFixed(1) + ' MB/s</span>' +
+                          '<span style="color: var(--muted); font-size: 11px;">Latence disque: <strong style="color: #e2e8f0;">' + ps.avg_disk_latency_ms.toFixed(1) + 'ms</strong> | réseau: <strong style="color: #e2e8f0;">' + ps.avg_net_latency_ms.toFixed(1) + 'ms</strong></span>' +
+                          '<span class="badge" style="font-size: 10px; background: ' + badgeBg + ';">' + ps.dominant_factor + '</span>';
+          phasesList.appendChild(row);
+        });
+      }
+
+      card.style.display = "block";
+      try {
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } catch (e) {}
+    }
+
+    function copyTransferSummary() {
+      const textToCopy = latestFormattedReport || (latestSummaryReport ? latestSummaryReport.formatted_report : "");
+      if (!textToCopy) {
+        alert("Aucun résumé disponible à copier.");
+        return;
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(textToCopy).then(() => {
+          const btn = document.getElementById("copySummaryBtn");
+          const orig = btn.innerText;
+          btn.innerText = "✓ Copié dans le presse-papier !";
+          btn.style.background = "#15803d";
+          setTimeout(() => {
+            btn.innerText = orig;
+            btn.style.background = "#059669";
+          }, 3000);
+        }).catch(err => {
+          prompt("Copiez le résumé ci-dessous :", textToCopy);
+        });
+      } else {
+        prompt("Copiez le résumé ci-dessous :", textToCopy);
+      }
+    }
+
+    function closeTransferSummary() {
+      const card = document.getElementById("transferSummaryCard");
+      if (card) card.style.display = "none";
+    }
+
+    // Initialize WebSocket and Dev Mode on page load
+    window.addEventListener("DOMContentLoaded", () => {
+      connectWS();
+      initDevMode();
+    });
   </script>
 </body>
 </html>

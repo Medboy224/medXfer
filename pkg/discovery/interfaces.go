@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"net"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -23,11 +24,13 @@ func scoreInterface(name string, ip net.IP) int {
 		return -1
 	}
 	ip4 := ip.To4()
-	if ip4.IsLoopback() || ip4.IsUnspecified() || ip4.IsLinkLocalUnicast() || strings.HasPrefix(ip4.String(), "169.254.") {
+	if ip4.IsLoopback() || ip4.IsUnspecified() {
 		return -1
 	}
 
+	isLinkLocal := ip4.IsLinkLocalUnicast() || strings.HasPrefix(ip4.String(), "169.254.")
 	lower := strings.ToLower(name)
+
 	// Hypervisor / virtual container bridges
 	if strings.Contains(lower, "vethernet") || strings.Contains(lower, "virtualbox") ||
 		strings.Contains(lower, "vmnet") || strings.Contains(lower, "docker") ||
@@ -38,6 +41,21 @@ func scoreInterface(name string, ip net.IP) int {
 	if strings.HasPrefix(lower, "rmnet") || strings.HasPrefix(lower, "ccmni") ||
 		strings.HasPrefix(lower, "pdp") || strings.HasPrefix(lower, "wwan") {
 		return 20
+	}
+
+	// Wi-Fi Direct P2P interfaces (192.168.49.x) - lower priority than primary Wi-Fi / Hotspot / LAN
+	if (ip4[0] == 192 && ip4[1] == 168 && ip4[2] == 49) || strings.Contains(lower, "p2p") {
+		return 45
+	}
+
+	// Link-Local (APIPA / IPv4LL) ad-hoc direct cable links
+	if isLinkLocal {
+		score := 25
+		if strings.Contains(lower, "eth") || strings.Contains(lower, "en") ||
+			strings.Contains(lower, "lan") || strings.Contains(lower, "ethernet") {
+			score += 15 // Score 40: Prioritize direct physical Ethernet link-local cable
+		}
+		return score
 	}
 
 	score := 50
@@ -293,7 +311,113 @@ func GetActiveNetworkTargets() []NetworkTarget {
 		targets = append(targets, st.target)
 	}
 
+	// Harvest active neighbor IPs from OS ARP cache and prioritize them
+	arpIPs := GetARPTableIPs()
+	for i := range targets {
+		var prioritized []string
+		seen := make(map[string]bool)
+
+		targetIsLL := targets[i].LocalIP[0] == 169 && targets[i].LocalIP[1] == 254
+		for _, aip := range arpIPs {
+			parsed := net.ParseIP(aip)
+			if parsed == nil || parsed.To4() == nil {
+				continue
+			}
+			p4 := parsed.To4()
+			isMatch := false
+			if targetIsLL && p4[0] == 169 && p4[1] == 254 {
+				isMatch = true
+			} else if targets[i].LocalIP[0] == p4[0] && targets[i].LocalIP[1] == p4[1] && targets[i].LocalIP[2] == p4[2] {
+				isMatch = true
+			}
+
+			if isMatch && !seen[aip] && !IsLocalNetworkIP(aip) {
+				seen[aip] = true
+				prioritized = append(prioritized, aip)
+			}
+		}
+
+		// Append existing sweep IPs (avoiding duplicates)
+		for _, s := range targets[i].SweepIPs {
+			if !seen[s] {
+				seen[s] = true
+				prioritized = append(prioritized, s)
+			}
+		}
+		targets[i].SweepIPs = prioritized
+	}
+
 	return targets
+}
+
+// GetARPTableIPs harvests active neighbor IPv4 addresses from the OS ARP / neighbor table
+func GetARPTableIPs() []string {
+	var ips []string
+	seen := make(map[string]bool)
+
+	// 1. Linux / Android: Read /proc/net/arp if available (instant, zero subprocess)
+	if data, err := os.ReadFile("/proc/net/arp"); err == nil {
+		scanner := bufio.NewScanner(bytes.NewReader(data))
+		if scanner.Scan() { // skip header
+			for scanner.Scan() {
+				fields := strings.Fields(scanner.Text())
+				// Format: IP HW_type Flags HW_address Mask Device
+				if len(fields) >= 4 {
+					ipStr := fields[0]
+					flags := fields[2]
+					hw := fields[3]
+					if flags != "0x0" && hw != "00:00:00:00:00:00" && !strings.HasPrefix(hw, "00:00:00") {
+						ip := net.ParseIP(ipStr)
+						if ip != nil && ip.To4() != nil {
+							ip4 := ip.To4()
+							if !ip4.IsLoopback() && !ip4.IsMulticast() && !ip.Equal(net.IPv4bcast) && ip4[3] != 255 {
+								if !seen[ipStr] {
+									seen[ipStr] = true
+									ips = append(ips, ipStr)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if len(ips) > 0 {
+			return ips
+		}
+	}
+
+	// 2. Windows / macOS / fallback: Run `arp -a`
+	out, err := exec.Command("arp", "-a").Output()
+	if err != nil {
+		return ips
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			ipStr := fields[0]
+			ip := net.ParseIP(ipStr)
+			if ip != nil && ip.To4() != nil {
+				ip4 := ip.To4()
+				if !ip4.IsLoopback() && !ip4.IsMulticast() && !ip.Equal(net.IPv4bcast) && ip4[3] != 255 {
+					if len(fields) >= 2 {
+						hw := strings.ToLower(fields[1])
+						if strings.Contains(hw, "ff-ff-ff-ff-ff-ff") || strings.HasPrefix(hw, "01-00-5e") || hw == "00-00-00-00-00-00" {
+							continue
+						}
+					}
+					if !seen[ipStr] {
+						seen[ipStr] = true
+						ips = append(ips, ipStr)
+					}
+				}
+			}
+		}
+	}
+
+	return ips
 }
 
 // calculateSweepRange computes host IPs bounded safely to a local /24 slice
@@ -358,4 +482,40 @@ func GetPrimaryLocalIP() string {
 	}
 
 	return bestIP
+}
+
+// IsSubnetReachable checks whether the given IPv4 address belongs to a subnet directly
+// routable on any of the local system's active interfaces.
+func IsSubnetReachable(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil || ip.To4() == nil {
+		return false
+	}
+	ip4 := ip.To4()
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok {
+			if ipNet.IP.To4() != nil && ipNet.Contains(ip4) {
+				return true
+			}
+		}
+	}
+
+	// Link-Local fallback (169.254.x.x) if we have any link-local interface
+	if ip4[0] == 169 && ip4[1] == 254 {
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok {
+				if l4 := ipNet.IP.To4(); l4 != nil && l4[0] == 169 && l4[1] == 254 {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
 }
