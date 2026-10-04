@@ -113,23 +113,51 @@ func (l *cliListener) OnError(err error) {
 	}
 }
 
-func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+func normalizeCommand(arg string) string {
+	arg = strings.Trim(arg, " \t\r\n\"'\u00a0\ufeff")
+	arg = strings.TrimLeft(arg, "-")
+	return strings.ToLower(arg)
+}
+
+func getEffectiveArgs() []string {
+	args := os.Args[1:]
+	if len(args) > 0 {
+		base0 := filepath.Base(os.Args[0])
+		base1 := filepath.Base(args[0])
+		if args[0] == os.Args[0] || base0 == base1 || filepath.Clean(args[0]) == filepath.Clean(os.Args[0]) {
+			args = args[1:]
+		}
 	}
-	switch os.Args[1] {
-	case "daemon":
-		handleDaemon(os.Args[2:])
-	case "share":
-		handleShare(os.Args[2:])
-	case "send":
-		handleSend(os.Args[2:])
-	case "recv":
-		handleRecv(os.Args[2:])
-	case "node":
+	return args
+}
+
+func main() {
+	args := getEffectiveArgs()
+	if len(args) < 1 {
+		printUsage()
+		os.Exit(0)
+	}
+	cmd := normalizeCommand(args[0])
+	switch cmd {
+	case "daemon", "d", "server", "srv":
+		handleDaemon(args[1:])
+	case "share", "web":
+		handleShare(args[1:])
+	case "send", "s":
+		handleSend(args[1:])
+	case "recv", "receive", "r":
+		handleRecv(args[1:])
+	case "node", "n", "cli":
 		handleNode()
+	case "help", "h", "?":
+		printUsage()
+		os.Exit(0)
 	default:
+		fmt.Printf("[-] Commande inconnue : '%s'\n", args[0])
+		if len(args) > 1 {
+			fmt.Printf("    Arguments reçus : %v\n", args[1:])
+		}
+		fmt.Println()
 		printUsage()
 		os.Exit(1)
 	}
@@ -1365,17 +1393,64 @@ func selectOneShotSender() *discovery.Peer {
 }
 
 func handleDaemon(args []string) {
+	normalizedArgs := reorderArgs(args)
 	daemonCmd := flag.NewFlagSet("daemon", flag.ExitOnError)
 	portFlag := daemonCmd.Int("port", 19999, "Port for Headless API (HTTP & WebSocket)")
 	outDirFlag := daemonCmd.String("out", "", "Default directory to save incoming files")
 	nameFlag := daemonCmd.String("name", "", "Custom device name for discovery")
 
-	_ = daemonCmd.Parse(args)
+	_ = daemonCmd.Parse(normalizedArgs)
 
 	srv := api.NewDaemonServer(*portFlag, *outDirFlag, *nameFlag)
-	if err := srv.Start(*portFlag); err != nil {
-		fmt.Printf("[-] Daemon error: %v\n", err)
+	srv.SetWebShareEnabled(true)
+
+	ln, err := srv.Listen(*portFlag)
+	if err != nil {
+		fmt.Printf("[-] Failed to start Daemon listener: %v\n", err)
 		os.Exit(1)
+	}
+
+	st := srv.GetStatus()
+	localIP := st.LocalIP
+	if localIP == "" || localIP == "127.0.0.1" {
+		localIP = getLocalIP()
+	}
+	if localIP == "" {
+		localIP = "127.0.0.1"
+	}
+	localURL := fmt.Sprintf("http://localhost:%d", st.LocalPort)
+	remoteURL := fmt.Sprintf("http://%s:%d", localIP, st.LocalPort)
+
+	fmt.Println("==================================================")
+	fmt.Println("             medXfer Daemon & Server              ")
+	fmt.Println("==================================================")
+	fmt.Printf(" Device Name  : %s\n", st.DeviceName)
+	fmt.Printf(" Local IP     : %s\n", localIP)
+	fmt.Printf(" Port         : %d\n", st.LocalPort)
+	fmt.Printf(" Pairing Code : %s\n", st.PairingCode)
+	fmt.Printf(" Web Share PIN: %s\n", st.WebSharePIN)
+	fmt.Println("--------------------------------------------------")
+	fmt.Println(" Web Dashboard & Remote Access:")
+	fmt.Printf("   👉 Sur cet appareil: %s\n", localURL)
+	fmt.Printf("   👉 Depuis un PC    : %s\n", remoteURL)
+	fmt.Println("--------------------------------------------------")
+	fmt.Println(" Scan QR code to connect from phone / PC:")
+	discovery.PrintTerminalQR(remoteURL)
+	fmt.Println("--------------------------------------------------")
+	fmt.Println(" Daemon is running. Press Ctrl+C to stop.")
+
+	// Listen for OS signals to stop cleanly
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Println("\n[*] Stopping Daemon...")
+		srv.Stop()
+		os.Exit(0)
+	}()
+
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		fmt.Printf("[-] Server error: %v\n", err)
 	}
 }
 
@@ -1455,5 +1530,20 @@ func handleShare(args []string) {
 }
 
 func printUsage() {
-	fmt.Printf("Usage:\n  xfer daemon [--port 19999]                     (Headless API for Flutter GUI)\n  xfer share <file_or_folder...>                 (Instant Web Share with QR code & PIN)\n  xfer node                                      (Persistent interactive mode with pairing code)\n  xfer send [-i] <file_or_folder> [more...]      (Direct transfer with pairing code; -i prompts before sending)\n  xfer recv [pairing_code]                       (Receive via 6-digit code or auto-discover)\n  xfer recv --ip <addr>                          (Direct connect by IP)\n")
+	fmt.Printf("==================================================\n" +
+		"               medXfer - Fast P2P Transfer        \n" +
+		"==================================================\n" +
+		"Usage:\n" +
+		"  xfer daemon [--port 19999]                     (Web UI Dashboard & WebSocket server)\n" +
+		"  xfer node                                      (Persistent interactive CLI mode with pairing code)\n" +
+		"  xfer share <file_or_folder...>                 (Instant Web Share with QR code & PIN)\n" +
+		"  xfer send [-i] <file_or_folder> [more...]      (Direct transfer with pairing code; -i prompts)\n" +
+		"  xfer recv [pairing_code]                       (Receive via 6-digit code or auto-discover)\n" +
+		"  xfer recv --ip <addr>                          (Direct connect by IP)\n" +
+		"\n" +
+		"Examples on Android / Termux:\n" +
+		"  ./xfer-android-arm64 daemon                    -> Starts Web UI on http://localhost:19999\n" +
+		"  ./xfer-android-arm64 node                      -> Interactive CLI (scan, pair, send, recv)\n" +
+		"  ./xfer-android-arm64 share /sdcard/video.mp4   -> Instant Web Share with QR Code\n" +
+		"==================================================\n")
 }
