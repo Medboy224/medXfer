@@ -2849,3 +2849,31 @@ func TestBatchItemFailedAdvance(t *testing.T) {
 		t.Fatalf("Expected file_2.txt to exist: %v", err)
 	}
 }
+
+func TestLinuxMountDiscovery(t *testing.T) {
+	// Test isSystemMount filtering
+	if !isSystemMount("/sys/kernel") {
+		t.Errorf("Expected /sys/kernel to be identified as system mount")
+	}
+	if !isSystemMount("/proc/sys") {
+		t.Errorf("Expected /proc/sys to be identified as system mount")
+	}
+	if !isSystemMount("/apex/com.android") {
+		t.Errorf("Expected /apex to be identified as system mount")
+	}
+	if isSystemMount("/media/user/Drive") {
+		t.Errorf("Expected /media/user/Drive NOT to be identified as system mount")
+	}
+	if isSystemMount("/run/media/user/External") {
+		t.Errorf("Expected /run/media/user/External NOT to be identified as system mount")
+	}
+	if isSystemMount("/mnt/external_hdd") {
+		t.Errorf("Expected /mnt/external_hdd NOT to be identified as system mount")
+	}
+
+	// Verify getQuickDirs contains at least home/downloads or mounts
+	qd := getQuickDirs()
+	if len(qd) == 0 {
+		t.Errorf("Expected getQuickDirs to return at least one quick directory")
+	}
+}

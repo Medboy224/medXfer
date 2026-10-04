@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -1961,6 +1963,156 @@ type FSListResponse struct {
 	Files      []FSFileEntry `json:"files"`
 }
 
+func isSystemMount(p string) bool {
+	p = filepath.ToSlash(filepath.Clean(p))
+	if p == "/" {
+		return false
+	}
+	systemPrefixes := []string{
+		"/apex", "/bootstrap-apex", "/data", "/dev", "/proc", "/sys",
+		"/system", "/vendor", "/product", "/omr", "/efs", "/cache",
+		"/etc", "/bin", "/sbin", "/lib", "/lib64", "/usr", "/var", "/tmp",
+		"/run/user", "/run/lock", "/run/systemd", "/snap",
+		"/mnt/androidwritable", "/mnt/appfuse", "/mnt/asec", "/mnt/installer",
+		"/mnt/knox", "/mnt/obb", "/mnt/runtime", "/mnt/secure", "/mnt/shell", "/mnt/user",
+	}
+	for _, sp := range systemPrefixes {
+		if p == sp || strings.HasPrefix(p, sp+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func getLinuxMounts() []FSQuickDir {
+	var mounts []FSQuickDir
+	seenPaths := make(map[string]bool)
+
+	addMount := func(name, path string) {
+		path = filepath.Clean(path)
+		if seenPaths[path] || isSystemMount(path) {
+			return
+		}
+		if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+			seenPaths[path] = true
+			mounts = append(mounts, FSQuickDir{Name: name, Path: path})
+		}
+	}
+
+	// 1. Inspect /proc/mounts and /etc/mtab for active storage mounts
+	mountFiles := []string{"/proc/mounts", "/etc/mtab"}
+	for _, mf := range mountFiles {
+		data, err := os.ReadFile(mf)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(bytes.NewReader(data))
+		for scanner.Scan() {
+			fields := strings.Fields(scanner.Text())
+			if len(fields) < 3 {
+				continue
+			}
+			device := fields[0]
+			mountPoint := fields[1]
+			fstype := fields[2]
+
+			if isSystemMount(mountPoint) {
+				continue
+			}
+
+			isBlockDev := strings.HasPrefix(device, "/dev/sd") ||
+				strings.HasPrefix(device, "/dev/nvme") ||
+				strings.HasPrefix(device, "/dev/mmcblk") ||
+				strings.HasPrefix(device, "/dev/vd") ||
+				strings.HasPrefix(device, "/dev/mapper/") ||
+				strings.HasPrefix(device, "/dev/disk/") ||
+				strings.HasPrefix(device, "/dev/block/") ||
+				device == "fuseblk" || strings.HasPrefix(fstype, "fuse")
+
+			isMediaMount := strings.HasPrefix(mountPoint, "/media/") ||
+				strings.HasPrefix(mountPoint, "/run/media/") ||
+				strings.HasPrefix(mountPoint, "/mnt/") ||
+				(strings.HasPrefix(mountPoint, "/storage/") && !strings.HasPrefix(mountPoint, "/storage/emulated"))
+
+			isStorageFS := fstype == "ext4" || fstype == "ext3" || fstype == "ext2" ||
+				fstype == "vfat" || fstype == "fat" || fstype == "exfat" ||
+				fstype == "ntfs" || fstype == "ntfs3" || fstype == "fuseblk" ||
+				fstype == "btrfs" || fstype == "xfs" || fstype == "f2fs" ||
+				fstype == "iso9660" || fstype == "udf" || fstype == "cifs" || fstype == "nfs"
+
+			if (isMediaMount || isBlockDev) && isStorageFS {
+				baseName := filepath.Base(mountPoint)
+				label := fmt.Sprintf("💾 %s", baseName)
+				if strings.HasPrefix(mountPoint, "/media/") || strings.HasPrefix(mountPoint, "/run/media/") {
+					label = fmt.Sprintf("🔌 %s", baseName)
+				} else if strings.HasPrefix(mountPoint, "/mnt/") {
+					label = fmt.Sprintf("💾 %s (mnt)", baseName)
+				}
+				addMount(label, mountPoint)
+			}
+		}
+	}
+
+	// 2. Direct directory scan of /media, /run/media, and /mnt
+	scanDir := func(baseDir string, icon string) {
+		entries, err := os.ReadDir(baseDir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			p := filepath.Join(baseDir, e.Name())
+			if isSystemMount(p) {
+				continue
+			}
+
+			// If it's a user directory (like /media/username or /run/media/username), inspect its subdirectories
+			subEntries, subErr := os.ReadDir(p)
+			if subErr == nil && len(subEntries) > 0 {
+				hasSubDirs := false
+				for _, se := range subEntries {
+					if se.IsDir() && !strings.HasPrefix(se.Name(), ".") {
+						hasSubDirs = true
+						subPath := filepath.Join(p, se.Name())
+						addMount(fmt.Sprintf("%s %s", icon, se.Name()), subPath)
+					}
+				}
+				if hasSubDirs {
+					continue
+				}
+			}
+
+			addMount(fmt.Sprintf("%s %s", icon, e.Name()), p)
+		}
+	}
+
+	scanDir("/media", "🔌")
+	scanDir("/run/media", "🔌")
+	if user := os.Getenv("USER"); user != "" {
+		scanDir(filepath.Join("/media", user), "🔌")
+		scanDir(filepath.Join("/run/media", user), "🔌")
+	}
+	scanDir("/mnt", "💾")
+
+	// 3. Android external SD card or USB OTG storage (/storage/XXXX-XXXX)
+	if entries, err := os.ReadDir("/storage"); err == nil {
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() && name != "self" && name != "emulated" && !strings.HasPrefix(name, ".") {
+				p := filepath.Join("/storage", name)
+				addMount(fmt.Sprintf("💾 SD/USB: %s", name), p)
+			}
+		}
+	}
+
+	// 4. Always add Root (/) for easy navigation on Unix
+	addMount("🖥️ Racine (/)", "/")
+
+	return mounts
+}
+
 func getQuickDirs() []FSQuickDir {
 	var quick []FSQuickDir
 	home, _ := os.UserHomeDir()
@@ -2004,6 +2156,11 @@ func getQuickDirs() []FSQuickDir {
 				quick = append(quick, FSQuickDir{Name: "💾 " + string(drive) + ":", Path: dPath})
 			}
 		}
+	}
+
+	// 4. Linux & Android External Drives and Mounted Partitions
+	if runtime.GOOS == "linux" || runtime.GOOS == "android" {
+		quick = append(quick, getLinuxMounts()...)
 	}
 
 	return quick
