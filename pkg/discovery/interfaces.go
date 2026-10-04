@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 )
 
 type NetworkTarget struct {
@@ -84,26 +85,36 @@ func scoreInterface(name string, ip net.IP) int {
 func parseIfconfigTargets() []NetworkTarget {
 	var targets []NetworkTarget
 
-	// Find ifconfig binary path
-	var cmdPath string
-	candidates := []string{
-		"ifconfig",
-		"/data/data/com.termux/files/usr/bin/ifconfig",
-		"/system/bin/ifconfig",
-		"/system/xbin/ifconfig",
-		"/sbin/ifconfig",
-	}
-	for _, c := range candidates {
-		if p, err := exec.LookPath(c); err == nil {
-			cmdPath = p
-			break
-		}
-	}
-	if cmdPath == "" {
-		cmdPath = "ifconfig"
+	var out []byte
+	var err error
+
+	// 1. Try running ifconfig via /system/bin/sh (bypasses Android SELinux exec restrictions)
+	if _, shErr := os.Stat("/system/bin/sh"); shErr == nil {
+		out, err = exec.Command("/system/bin/sh", "-c", "ifconfig").CombinedOutput()
 	}
 
-	out, err := exec.Command(cmdPath).CombinedOutput()
+	// 2. Fallback to direct candidate execution if /system/bin/sh failed or returned no output
+	if len(out) == 0 {
+		var cmdPath string
+		candidates := []string{
+			"ifconfig",
+			"/data/data/com.termux/files/usr/bin/ifconfig",
+			"/system/bin/ifconfig",
+			"/system/xbin/ifconfig",
+			"/sbin/ifconfig",
+		}
+		for _, c := range candidates {
+			if p, lookErr := exec.LookPath(c); lookErr == nil {
+				cmdPath = p
+				break
+			}
+		}
+		if cmdPath == "" {
+			cmdPath = "ifconfig"
+		}
+		out, err = exec.Command(cmdPath).CombinedOutput()
+	}
+
 	if err != nil && len(out) == 0 {
 		return targets
 	}
@@ -478,6 +489,21 @@ func GetPrimaryLocalIP() string {
 					}
 				}
 			}
+		}
+	}
+
+	if bestIP != "127.0.0.1" {
+		return bestIP
+	}
+
+	// Active kernel routing table fallback via UDP dial (zero network packets sent)
+	for _, target := range []string{"192.168.1.1:80", "10.0.0.1:80", "172.16.0.1:80", "8.8.8.8:80"} {
+		if conn, err := net.DialTimeout("udp4", target, 100*time.Millisecond); err == nil {
+			if lAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok && lAddr.IP.To4() != nil && !lAddr.IP.IsLoopback() {
+				conn.Close()
+				return lAddr.IP.To4().String()
+			}
+			conn.Close()
 		}
 	}
 
