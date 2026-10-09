@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -206,7 +207,7 @@ func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
 		port = 18887
 	}
 
-	target := fmt.Sprintf("%s:%d", payload.IP, port)
+	target := net.JoinHostPort(payload.IP, strconv.Itoa(int(port)))
 	connPeer, err := session.DialTLSPeer(target)
 	if err != nil {
 		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", target, err)}, req.ID))
@@ -689,7 +690,7 @@ func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessa
 
 		go func(offer *session.Message, resume int64) {
 			listener := newDaemonListener(s, offer.FileName, offer.FileSize, 0, 1, 0, offer.FileSize)
-			targetAddr := fmt.Sprintf("%s:%d", sess.RemoteIP(), offer.DataPort)
+			targetAddr := net.JoinHostPort(sess.RemoteIP(), strconv.Itoa(int(offer.DataPort)))
 
 			err := receiver.Pull(ctx, targetAddr, listener, offer.FileID)
 			if err == nil {
@@ -1440,7 +1441,7 @@ func (s *DaemonServer) handleTestNetwork(conn *websocket.Conn, req RequestMessag
 		select {
 		case readyMsg := <-s.benchBurstAckChan:
 			if readyMsg.Type == "bench_burst_ready" && readyMsg.DataPort > 0 {
-				targetAddr := fmt.Sprintf("%s:%d", remoteIP, readyMsg.DataPort)
+				targetAddr := net.JoinHostPort(remoteIP, strconv.Itoa(int(readyMsg.DataPort)))
 				clientSpeed, cErr := engine.RunNetworkBurstClient(targetAddr, sizeBytes, 4*time.Second)
 				if cErr == nil {
 					throughput = clientSpeed

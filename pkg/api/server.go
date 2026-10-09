@@ -46,8 +46,8 @@ type IPAuthRecord struct {
 
 // DaemonServer manages the headless background engine and WebSocket connections
 type DaemonServer struct {
-	controlToken    string // 256-bit secret required on every control route (API-04)
-	controlDisabled bool   // share-only mode: no dashboard, /ws, /status or /api/fs/*
+	controlToken        string // 256-bit secret required on every control route (API-04)
+	controlDisabled     bool   // share-only mode: no dashboard, /ws, /status or /api/fs/*
 	mu                  sync.RWMutex
 	config              Config
 	clients             map[*websocket.Conn]bool
@@ -1654,7 +1654,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 
 		go func(msg session.Message) {
 			defer streamCancel()
-			targetAddr := fmt.Sprintf("%s:%d", s.activeSession.RemoteIP(), msg.DataPort)
+			targetAddr := net.JoinHostPort(s.activeSession.RemoteIP(), strconv.Itoa(int(msg.DataPort)))
 			conn, err := session.DialTLSPeer(targetAddr)
 			if err != nil {
 				s.Broadcast(NewEvent("action_error", map[string]string{"error": err.Error()}))
@@ -1725,7 +1725,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 
 		go func(msg session.Message, bBase, bTotal int64, bCount int) {
 			listener := newDaemonListener(s, msg.FileName, msg.FileSize, msg.ItemIndex, bCount, bBase, bTotal)
-			targetAddr := fmt.Sprintf("%s:%d", s.activeSession.RemoteIP(), msg.DataPort)
+			targetAddr := net.JoinHostPort(s.activeSession.RemoteIP(), strconv.Itoa(int(msg.DataPort)))
 
 			var err error
 			if msg.ChunkSize > 0 {

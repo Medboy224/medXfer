@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -340,7 +341,7 @@ func DiscoverPeers(timeout time.Duration) ([]Peer, error) {
 		if IsLocalNetworkIP(ip) {
 			return
 		}
-		target := fmt.Sprintf("%s:%d", ip, DiscoveryPort)
+		target := net.JoinHostPort(ip, strconv.Itoa(int(DiscoveryPort)))
 		conn, err := net.DialTimeout("tcp4", target, 350*time.Millisecond)
 		if err != nil {
 			return

@@ -291,7 +291,7 @@ func ResolvePairingCode(ctx context.Context, code string, timeout time.Duration)
 // probePeerForCode connects to `ip:DiscoveryPort` via TCP and verifies pairing code
 func probePeerForCode(ctx context.Context, ip, expectedCode string, timeout time.Duration) *Peer {
 	d := net.Dialer{Timeout: timeout}
-	target := fmt.Sprintf("%s:%d", ip, DiscoveryPort)
+	target := net.JoinHostPort(ip, strconv.Itoa(int(DiscoveryPort)))
 	conn, err := d.DialContext(ctx, "tcp4", target)
 	if err != nil {
 		return nil

@@ -492,7 +492,7 @@ func handleNode() {
 				}
 
 				fmt.Printf("[*] Connecting to node at %s:%d...\n", targetIP, targetPort)
-				conn, err := session.DialTLSPeer(fmt.Sprintf("%s:%d", targetIP, targetPort))
+				conn, err := session.DialTLSPeer(net.JoinHostPort(targetIP, strconv.Itoa(int(targetPort))))
 				if err != nil {
 					fmt.Println("[-] Failed to connect:", err)
 					break
@@ -881,7 +881,7 @@ func runNodeSendWithRelPath(parentCtx context.Context, filePath, relPath string,
 func runNodeRecv(parentCtx context.Context, ip string, port int, outDir string, s *session.Channel, fileID string, meta ...protocol.FileMetadata) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
-	targetAddr := fmt.Sprintf("%s:%d", ip, port)
+	targetAddr := net.JoinHostPort(ip, strconv.Itoa(int(port)))
 	receiver := engine.NewReceiver(outDir, 4)
 	listener := &cliListener{cancel: cancel, isSender: false}
 	if len(meta) > 0 && meta[0].ChunkSize > 0 {
@@ -1127,7 +1127,7 @@ func handleRecv(args []string) {
 	_ = recvCmd.Parse(normalizedArgs)
 	targetAddr := *ipFlag
 	if targetAddr != "" && !strings.Contains(targetAddr, ":") {
-		targetAddr = fmt.Sprintf("%s:%d", targetAddr, defaultPort)
+		targetAddr = net.JoinHostPort(targetAddr, strconv.Itoa(int(defaultPort)))
 	}
 
 	pairingCode := ""
@@ -1159,14 +1159,14 @@ func handleRecv(args []string) {
 			return
 		}
 		selectedPeer = peer
-		targetAddr = fmt.Sprintf("%s:%d", peer.HostIP, peer.Port)
+		targetAddr = net.JoinHostPort(peer.HostIP, strconv.Itoa(int(peer.Port)))
 		fmt.Printf("[+] Located sender: %s (%s)\n", peer.DeviceName, targetAddr)
 	} else if targetAddr == "" {
 		selectedPeer = selectOneShotSender()
 		if selectedPeer == nil {
 			return
 		}
-		targetAddr = fmt.Sprintf("%s:%d", selectedPeer.HostIP, selectedPeer.Port)
+		targetAddr = net.JoinHostPort(selectedPeer.HostIP, strconv.Itoa(int(selectedPeer.Port)))
 	} else {
 		host, _, _ := net.SplitHostPort(targetAddr)
 		selectedPeer = fetchPeerOffer(host, pairingCode)
@@ -1255,7 +1255,7 @@ func runOneShotBatchRecv(ctx context.Context, targetAddr, outDir string, workers
 			return
 		}
 		itemPort := basePort + idx
-		itemTargetAddr := fmt.Sprintf("%s:%d", host, itemPort)
+		itemTargetAddr := net.JoinHostPort(host, strconv.Itoa(int(itemPort)))
 
 		fmt.Printf("\n[%d/%d] Receiving '%s' (%.2f MB)...\n", idx+1, m.TotalFiles, item.RelPath, float64(item.Size)/(1024*1024))
 
@@ -1274,7 +1274,7 @@ func runOneShotBatchRecv(ctx context.Context, targetAddr, outDir string, workers
 
 func fetchPeerOffer(hostIP string, code string) *discovery.Peer {
 	queryOffer := func(cStr string) *discovery.Peer {
-		conn, err := net.DialTimeout("tcp4", fmt.Sprintf("%s:%d", hostIP, discovery.DiscoveryPort), 800*time.Millisecond)
+		conn, err := net.DialTimeout("tcp4", net.JoinHostPort(hostIP, strconv.Itoa(int(discovery.DiscoveryPort))), 800*time.Millisecond)
 		if err != nil {
 			return nil
 		}
