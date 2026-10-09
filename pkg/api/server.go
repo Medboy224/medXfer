@@ -1654,7 +1654,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 
 		go func(msg session.Message) {
 			defer streamCancel()
-			targetAddr := fmt.Sprintf("%s:%d", s.activeSession.RemoteIP(), msg.DataPort)
+			targetAddr := net.JoinHostPort(s.activeSession.RemoteIP(), strconv.Itoa(int(msg.DataPort)))
 			conn, err := session.DialTLSPeer(targetAddr)
 			if err != nil {
 				s.Broadcast(NewEvent("action_error", map[string]string{"error": err.Error()}))
@@ -1725,7 +1725,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 
 		go func(msg session.Message, bBase, bTotal int64, bCount int) {
 			listener := newDaemonListener(s, msg.FileName, msg.FileSize, msg.ItemIndex, bCount, bBase, bTotal)
-			targetAddr := fmt.Sprintf("%s:%d", s.activeSession.RemoteIP(), msg.DataPort)
+			targetAddr := net.JoinHostPort(s.activeSession.RemoteIP(), strconv.Itoa(int(msg.DataPort)))
 
 			var err error
 			if msg.ChunkSize > 0 {
