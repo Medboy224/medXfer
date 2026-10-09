@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,12 @@ func NewSender(workers int, chunkSize uint32) *Sender {
 		workers = 4
 	}
 	if chunkSize == 0 {
+		chunkSize = 4 * 1024 * 1024
+	}
+	// Chunk buffers hold 8 MiB of data: a larger size would panic when serving a chunk,
+	// and the receiver rejects sizes outside [minChunkSize, maxChunkSize].
+	if chunkSize < minChunkSize || chunkSize > maxChunkSize {
+		log.Printf("[engine] chunk size %d outside [%d, %d], using 4 MiB", chunkSize, minChunkSize, maxChunkSize)
 		chunkSize = 4 * 1024 * 1024
 	}
 	return &Sender{

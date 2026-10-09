@@ -199,6 +199,9 @@ func TestEndToEndTransferResume(t *testing.T) {
 	// 1. First transfer - cancel after 2 chunks
 	sender1 := NewSender(1, chunkSize)
 	receiver1 := NewReceiver(dstDir, 1)
+	// Commit every chunk so partial progress reaches the state file before the
+	// 64 MiB file completes (default group commit is 64 MiB / 2 s).
+	receiver1.SetCommitPolicy(int64(chunkSize), 2*time.Second)
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	senderListener1 := &recordingListener{}
