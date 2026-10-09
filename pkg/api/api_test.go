@@ -1395,11 +1395,8 @@ func TestWebShareInvalidPINNotification(t *testing.T) {
 	// Verify WebSocket received web_share_auth_failed
 	_ = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var eventMsg struct {
-		Event string `json:"event"`
-		Data  struct {
-			ClientIP     string `json:"client_ip"`
-			AttemptedPIN string `json:"attempted_pin"`
-		} `json:"data"`
+		Event string                 `json:"event"`
+		Data  map[string]interface{} `json:"data"`
 	}
 	if err := ws.ReadJSON(&eventMsg); err != nil {
 		t.Fatalf("Failed to read WS event: %v", err)
@@ -1407,11 +1404,12 @@ func TestWebShareInvalidPINNotification(t *testing.T) {
 	if eventMsg.Event != "web_share_auth_failed" {
 		t.Fatalf("Expected event 'web_share_auth_failed', got %s", eventMsg.Event)
 	}
-	if eventMsg.Data.ClientIP != "192.168.1.105" {
-		t.Fatalf("Expected client IP 192.168.1.105, got %s", eventMsg.Data.ClientIP)
+	if eventMsg.Data["client_ip"] != "192.168.1.105" {
+		t.Fatalf("Expected client IP 192.168.1.105, got %v", eventMsg.Data["client_ip"])
 	}
-	if eventMsg.Data.AttemptedPIN != "9999" {
-		t.Fatalf("Expected attempted PIN 9999, got %s", eventMsg.Data.AttemptedPIN)
+	// WEB-04: the attempted PIN must never leave the server, not even towards the host UI
+	if _, leaked := eventMsg.Data["attempted_pin"]; leaked {
+		t.Fatalf("web_share_auth_failed leaks the attempted PIN: %v", eventMsg.Data)
 	}
 
 	// 3. Test rate limiting: rapid second bad attempt does not emit a second WS event immediately

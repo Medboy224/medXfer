@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,7 +20,8 @@ import (
 // checkAuth checks if the request supplies either:
 // 1. A valid 128-bit crypto token (from QR code scan or persistent cookie)
 // 2. A valid PIN (from manual input, query, header, or cookie)
-func (s *DaemonServer) checkAuth(r *http.Request) (valid bool, attempted bool, attemptedVal string) {
+// Comparisons are constant-time; the attempted value is never returned so it cannot be logged (WEB-04).
+func (s *DaemonServer) checkAuth(r *http.Request) (valid bool, attempted bool) {
 	s.mu.RLock()
 	enabled := s.webShareEnabled
 	expectedPIN := s.webSharePIN
@@ -27,41 +29,53 @@ func (s *DaemonServer) checkAuth(r *http.Request) (valid bool, attempted bool, a
 	s.mu.RUnlock()
 
 	if !enabled {
-		return false, false, ""
+		return false, false
 	}
 	if expectedPIN == "" && expectedToken == "" {
-		return true, false, ""
+		return true, false
 	}
+	tokenOK := func(v string) bool { return expectedToken != "" && secureEq(v, expectedToken) }
+	pinOK := func(v string) bool { return expectedPIN != "" && secureEq(v, expectedPIN) }
 
 	// 1. Check high-entropy crypto token
-	if token := r.URL.Query().Get("token"); token != "" {
-		if expectedToken != "" && token == expectedToken {
-			return true, true, token
-		}
+	if token := r.URL.Query().Get("token"); token != "" && tokenOK(token) {
+		return true, true
 	}
-	if token := r.Header.Get("X-Share-Token"); token != "" {
-		if expectedToken != "" && token == expectedToken {
-			return true, true, token
-		}
+	if token := r.Header.Get("X-Share-Token"); token != "" && tokenOK(token) {
+		return true, true
 	}
-	if cookie, err := r.Cookie("medxfer_token"); err == nil && cookie.Value != "" {
-		if expectedToken != "" && cookie.Value == expectedToken {
-			return true, true, cookie.Value
-		}
+	if cookie, err := r.Cookie("medxfer_token"); err == nil && cookie.Value != "" && tokenOK(cookie.Value) {
+		return true, true
 	}
 
 	// 2. Check PIN
 	if pin := r.URL.Query().Get("pin"); pin != "" {
-		return pin == expectedPIN, true, pin
+		return pinOK(pin), true
 	}
 	if pin := r.Header.Get("X-Share-PIN"); pin != "" {
-		return pin == expectedPIN, true, pin
+		return pinOK(pin), true
 	}
 	if cookie, err := r.Cookie("medxfer_pin"); err == nil && cookie.Value != "" {
-		return cookie.Value == expectedPIN, true, cookie.Value
+		return pinOK(cookie.Value), true
 	}
 
-	return false, false, ""
+	return false, false
+}
+
+// shareHeaders sets security headers on every Web Share route (WEB-05, partial: the CSP
+// needs the portal's inline JavaScript moved out, phase 5). The URL can carry the token,
+// so no Referer may leak it.
+func shareHeaders(next http.HandlerFunc, noStore bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		if noStore {
+			h.Set("Cache-Control", "no-store")
+		}
+		next(w, r)
+	}
 }
 
 // verifyWebShareAccess performs lockout checks, token/PIN authentication,
@@ -102,7 +116,7 @@ func (s *DaemonServer) verifyWebShareAccess(w http.ResponseWriter, r *http.Reque
 	}
 
 	// 2. Validate token or PIN
-	valid, attempted, attemptedVal := s.checkAuth(r)
+	valid, attempted := s.checkAuth(r)
 	if valid {
 		s.RecordAuthSuccess(clientIP)
 		return true
@@ -112,7 +126,7 @@ func (s *DaemonServer) verifyWebShareAccess(w http.ResponseWriter, r *http.Reque
 	if attempted {
 		time.Sleep(500 * time.Millisecond)
 
-		locked, remainingSec, _ := s.RecordAuthFailure(clientIP, attemptedVal)
+		locked, remainingSec, _ := s.RecordAuthFailure(clientIP)
 		if locked {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", strconv.Itoa(remainingSec))
@@ -154,14 +168,14 @@ func (s *DaemonServer) validatePIN(r *http.Request) bool {
 	if locked, _ := s.CheckLockout(clientIP); locked {
 		return false
 	}
-	valid, attempted, attemptedVal := s.checkAuth(r)
+	valid, attempted := s.checkAuth(r)
 	if valid {
 		s.RecordAuthSuccess(clientIP)
 		return true
 	}
 	if attempted {
 		time.Sleep(500 * time.Millisecond)
-		s.RecordAuthFailure(clientIP, attemptedVal)
+		s.RecordAuthFailure(clientIP)
 	}
 	return false
 }
@@ -228,26 +242,19 @@ func (s *DaemonServer) handleShareList(w http.ResponseWriter, r *http.Request) {
 	m := s.webSharedManifest
 	singleFile := s.webSharedFile
 	devName := s.config.DeviceName
-	pin := s.webSharePIN
-	token := s.webShareToken
 	s.mu.RUnlock()
 
+	// URLs carry no credential: the portal adds its own token/PIN when downloading
+	// (startOrResumeDownload). Names are escaped so "&", "#" or "%" cannot break the link.
 	var items []SharedItem
 	var totalBytes int64
-	authSuffix := ""
-	if token != "" {
-		authSuffix += "&token=" + token
-	}
-	if pin != "" {
-		authSuffix += "&pin=" + pin
-	}
 	if m != nil {
 		totalBytes = m.TotalBytes
 		for _, it := range m.Items {
 			items = append(items, SharedItem{
 				Name: it.RelPath,
 				Size: it.Size,
-				URL:  "/api/share/download?file=" + it.RelPath + authSuffix,
+				URL:  "/api/share/download?file=" + url.QueryEscape(it.RelPath),
 			})
 		}
 	} else if singleFile != "" {
@@ -257,7 +264,7 @@ func (s *DaemonServer) handleShareList(w http.ResponseWriter, r *http.Request) {
 			items = append(items, SharedItem{
 				Name: filepath.Base(singleFile),
 				Size: fi.Size(),
-				URL:  "/api/share/download?file=" + filepath.Base(singleFile) + authSuffix,
+				URL:  "/api/share/download?file=" + url.QueryEscape(filepath.Base(singleFile)),
 			})
 		}
 	}
@@ -553,7 +560,13 @@ func (s *DaemonServer) handleShareRequestUpload(w http.ResponseWriter, r *http.R
 
 	s.mu.Lock()
 	autoAccept := s.webShareAutoAccept
-	ticketID := fmt.Sprintf("ticket_%d_%04d", time.Now().UnixNano(), (time.Now().UnixNano()%9000)+1000)
+	ticketSuffix, err := randomHex(16)
+	if err != nil {
+		s.mu.Unlock()
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	ticketID := "ticket_" + ticketSuffix // unguessable: a ticket authorizes an upload
 	doneChan := make(chan bool, 1)
 
 	ticket := &WebUploadRequest{
@@ -958,7 +971,12 @@ func (s *DaemonServer) handleShareUploadChunk(w http.ResponseWriter, r *http.Req
 	now := time.Now()
 	elapsed := now.Sub(s.webShareTransferLastTime).Seconds()
 	if elapsed >= 0.2 || (totalSize > 0 && currentBytes >= totalSize) {
-		if elapsed > 0 && currentBytes > s.webShareTransferLastBytes {
+		// Windows' monotonic clock advances in ~15.6 ms ticks: two fast chunks can read
+		// the same instant. Floor the interval so the speed is not stuck at 0 (#15).
+		if elapsed < 0.001 {
+			elapsed = 0.001
+		}
+		if currentBytes > s.webShareTransferLastBytes {
 			delta := currentBytes - s.webShareTransferLastBytes
 			instant := (float64(delta) / (1024 * 1024)) / elapsed
 			if s.webShareTransferSpeed == 0 {
