@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"container/heap"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -18,6 +19,8 @@ type Receiver struct {
 	outputDir       string
 	workers         int
 	collisionPolicy CollisionPolicy
+	commitBytes     int64         // 0: defaultCommitBytes
+	commitInterval  time.Duration // 0: defaultCommitInterval
 	pauseMu         sync.Mutex
 	isPaused        bool
 	pauseCond       *sync.Cond
@@ -38,6 +41,13 @@ func NewReceiver(outputDir string, workers int) *Receiver {
 
 func (r *Receiver) SetCollisionPolicy(p CollisionPolicy) {
 	r.collisionPolicy = p
+}
+
+// SetCommitPolicy overrides the group-commit thresholds (STO-04): progress is made durable
+// every `bytes` written or every `interval`. Smaller values lose less work on a crash but fsync more.
+func (r *Receiver) SetCommitPolicy(bytes int64, interval time.Duration) {
+	r.commitBytes = bytes
+	r.commitInterval = interval
 }
 
 func (r *Receiver) Pause() {
@@ -65,9 +75,26 @@ type chunkTask struct {
 	length uint32
 }
 
+// taskHeap is a min-heap of chunk tasks ordered by index.
+type taskHeap []chunkTask
+
+func (h taskHeap) Len() int           { return len(h) }
+func (h taskHeap) Less(i, j int) bool { return h[i].index < h[j].index }
+func (h taskHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *taskHeap) Push(x any)        { *h = append(*h, x.(chunkTask)) }
+func (h *taskHeap) Pop() any {
+	old := *h
+	t := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return t
+}
+
+// taskDispatcher hands out the LOWEST missing index first. A heap (not a FIFO with
+// push-front) matters for the bounded window: after two retries the queue could read
+// [7, 0, ...]; checking only the head (7, outside the window) would deadlock on chunk 0.
 type taskDispatcher struct {
 	mu    sync.Mutex
-	tasks []chunkTask
+	tasks taskHeap
 }
 
 func newTaskDispatcher(totalChunks uint32, meta protocol.FileMetadata, dm *DiskManager) (*taskDispatcher, uint32) {
@@ -85,24 +112,50 @@ func newTaskDispatcher(totalChunks uint32, meta protocol.FileMetadata, dm *DiskM
 		}
 		tasks = append(tasks, chunkTask{index: i, offset: offset, length: length})
 	}
-	return &taskDispatcher{tasks: tasks}, completed
+	h := taskHeap(tasks) // built in increasing index order: already a valid heap
+	return &taskDispatcher{tasks: h}, completed
 }
 
-func (td *taskDispatcher) Pop() (chunkTask, bool) {
+// PopWithin returns the task with the smallest index if it is below limit.
+// blocked is true when tasks remain but all are outside the window.
+func (td *taskDispatcher) PopWithin(limit uint64) (task chunkTask, ok bool, blocked bool) {
 	td.mu.Lock()
 	defer td.mu.Unlock()
 	if len(td.tasks) == 0 {
-		return chunkTask{}, false
+		return chunkTask{}, false, false
 	}
-	task := td.tasks[0]
-	td.tasks = td.tasks[1:]
-	return task, true
+	if uint64(td.tasks[0].index) >= limit {
+		return chunkTask{}, false, true
+	}
+	return heap.Pop(&td.tasks).(chunkTask), true, false
 }
 
-func (td *taskDispatcher) PushFront(tasks ...chunkTask) {
+func (td *taskDispatcher) Push(tasks ...chunkTask) {
 	td.mu.Lock()
 	defer td.mu.Unlock()
-	td.tasks = append(tasks, td.tasks...)
+	for _, t := range tasks {
+		heap.Push(&td.tasks, t)
+	}
+}
+
+// Metadata bounds (D4): a peer must not make the receiver allocate millions of tasks.
+const (
+	minChunkSize   = 64 << 10
+	maxChunkSize   = 8 << 20 // chunk buffers hold 8 MiB of data
+	maxTotalChunks = 1 << 21 // 128 GiB with 64 KiB chunks
+)
+
+func validateMeta(meta protocol.FileMetadata) error {
+	if meta.FileSize < 0 {
+		return fmt.Errorf("invalid metadata: negative file size %d", meta.FileSize)
+	}
+	if meta.ChunkSize < minChunkSize || meta.ChunkSize > maxChunkSize {
+		return fmt.Errorf("invalid metadata: chunk size %d outside [%d, %d]", meta.ChunkSize, minChunkSize, maxChunkSize)
+	}
+	if n := (meta.FileSize + int64(meta.ChunkSize) - 1) / int64(meta.ChunkSize); n > maxTotalChunks {
+		return fmt.Errorf("invalid metadata: %d chunks exceeds limit %d", n, maxTotalChunks)
+	}
+	return nil
 }
 
 func sendChunkRequest(conn net.Conn, task chunkTask) error {
@@ -246,6 +299,12 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 	if meta.ChunkSize == 0 {
 		meta.ChunkSize = 4 * 1024 * 1024
 	}
+	if err := validateMeta(meta); err != nil {
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return err
+	}
 
 	// CRITICAL FILE INTEGRITY CHECK:
 	if fileID != "" && meta.FileID != "" && fileID != meta.FileID {
@@ -305,6 +364,12 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 		}
 		return fmt.Errorf("preallocation failed: %w", err)
 	}
+	if r.commitBytes > 0 {
+		dm.commitBytes = r.commitBytes
+	}
+	if r.commitInterval > 0 {
+		dm.commitInterval = r.commitInterval
+	}
 	defer dm.Cleanup()
 
 	totalChunks := uint32((meta.FileSize + int64(meta.ChunkSize) - 1) / int64(meta.ChunkSize))
@@ -313,10 +378,7 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 	}
 
 	if meta.FileSize == 0 {
-		if listener != nil {
-			listener.OnComplete(dm.finalPath, 0)
-		}
-		return dm.Finalize()
+		return r.finalize(dm, listener, 0)
 	}
 
 	dispatcher, initialCompleted := newTaskDispatcher(totalChunks, meta, dm)
@@ -333,9 +395,8 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 				ActiveStreams:    0,
 				ProgressPercent:  100.0,
 			})
-			listener.OnComplete(dm.finalPath, 0)
 		}
-		return dm.Finalize()
+		return r.finalize(dm, listener, 0)
 	}
 
 	var activeStreams int32
@@ -363,6 +424,19 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 	var lastSpeedBytes int64 = transferredBytes
 	var currentSpeed float64
 
+	// Bounded receive window (D3, STO-08): every chunk held in memory (in flight, queued or
+	// pending) has an index < windowBase + window, so at most `window` buffers are borrowed.
+	// windowBase is the lowest chunk not yet written; the writer advances it.
+	window := uint64(r.workers * 3)
+	if window < 8 {
+		window = 8
+	}
+	var windowBase uint32
+	for windowBase < totalChunks && dm.IsChunkCompleted(windowBase) {
+		windowBase++
+	}
+	windowLimit := func() uint64 { return uint64(atomic.LoadUint32(&windowBase)) + window }
+
 	writerQueue := make(chan sequencedChunk, 16)
 	writerDone := make(chan struct{})
 
@@ -372,9 +446,13 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 
 	go func() {
 		defer close(writerDone)
-		nextExpected := uint32(0)
-		for nextExpected < totalChunks && dm.IsChunkCompleted(nextExpected) {
+		nextExpected := atomic.LoadUint32(&windowBase)
+		advance := func() {
 			nextExpected++
+			for nextExpected < totalChunks && dm.IsChunkCompleted(nextExpected) {
+				nextExpected++
+			}
+			atomic.StoreUint32(&windowBase, nextExpected)
 		}
 		pending := make(map[uint32]sequencedChunk)
 
@@ -420,10 +498,7 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 					cancelWorkers()
 					break
 				}
-				nextExpected++
-				for nextExpected < totalChunks && dm.IsChunkCompleted(nextExpected) {
-					nextExpected++
-				}
+				advance()
 
 				// Flush any consecutive chunks that were waiting in pending map
 				for {
@@ -440,10 +515,7 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 						cancelWorkers()
 						break
 					}
-					nextExpected++
-					for nextExpected < totalChunks && dm.IsChunkCompleted(nextExpected) {
-						nextExpected++
-					}
+					advance()
 				}
 			} else {
 				// Out-of-order chunk: buffer until nextExpected arrives
@@ -539,6 +611,21 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 			var prefetched *chunkTask
 			taskRetry := make(map[uint32]int)
 
+			// popTask waits while the next tasks are outside the window; false when none remain.
+			popTask := func() (chunkTask, bool) {
+				for {
+					task, ok, blocked := dispatcher.PopWithin(windowLimit())
+					if ok || !blocked {
+						return task, ok
+					}
+					select {
+					case <-workerCtx.Done():
+						return chunkTask{}, false
+					case <-time.After(2 * time.Millisecond):
+					}
+				}
+			}
+
 			for {
 				select {
 				case <-workerCtx.Done():
@@ -559,7 +646,7 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 				if conn == nil {
 					if !connect() {
 						if prefetched != nil {
-							dispatcher.PushFront(*prefetched)
+							dispatcher.Push(*prefetched)
 							prefetched = nil
 						}
 						errChan <- fmt.Errorf("worker %d failed to connect", workerID)
@@ -567,7 +654,7 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 						return
 					}
 					if prefetched != nil {
-						dispatcher.PushFront(*prefetched)
+						dispatcher.Push(*prefetched)
 						prefetched = nil
 					}
 				}
@@ -578,7 +665,7 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 					prefetched = nil
 				} else {
 					var ok bool
-					task, ok = dispatcher.Pop()
+					task, ok = popTask()
 					if !ok {
 						return
 					}
@@ -589,7 +676,7 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 							cancelWorkers()
 							return
 						}
-						dispatcher.PushFront(task)
+						dispatcher.Push(task)
 						disconnect()
 						time.Sleep(100 * time.Millisecond)
 						continue
@@ -597,11 +684,11 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 				}
 
 				// PIPELINE: Prefetch the next chunk request so the wire stays 100% saturated!
-				if nextTask, ok := dispatcher.Pop(); ok {
+				if nextTask, ok, _ := dispatcher.PopWithin(windowLimit()); ok {
 					if err := sendChunkRequest(conn, nextTask); err == nil {
 						prefetched = &nextTask
 					} else {
-						dispatcher.PushFront(nextTask)
+						dispatcher.Push(nextTask)
 					}
 				}
 
@@ -616,10 +703,10 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 						return
 					}
 					if prefetched != nil {
-						dispatcher.PushFront(*prefetched)
+						dispatcher.Push(*prefetched)
 						prefetched = nil
 					}
-					dispatcher.PushFront(task)
+					dispatcher.Push(task)
 					if listener != nil {
 						listener.OnChunkFailed(task.index, taskRetry[task.index], err)
 					}
@@ -687,9 +774,8 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 						Bottleneck:         bottleneck,
 						BottleneckReason:   reason,
 					})
-					listener.OnComplete(dm.finalPath, duration)
 				}
-				return dm.Finalize()
+				return r.finalize(dm, listener, duration)
 			}
 			return fmt.Errorf("transfer terminated prematurely")
 
@@ -758,6 +844,20 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 			}
 		}
 	}
+}
+
+// finalize makes the file durable BEFORE telling the user it is complete (D2).
+func (r *Receiver) finalize(dm *DiskManager, listener TransferListener, duration time.Duration) error {
+	if err := dm.Finalize(); err != nil {
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return err
+	}
+	if listener != nil {
+		listener.OnComplete(dm.finalPath, duration)
+	}
+	return nil
 }
 
 func (r *Receiver) fetchChunk(conn net.Conn, task chunkTask, buf []byte, dm *DiskManager) error {

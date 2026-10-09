@@ -909,10 +909,11 @@ func handleSend(args []string) {
 		fmt.Println("Error: Missing file or folder path. Usage: xfer send [-i] <path> [additional_paths...]")
 		os.Exit(1)
 	}
-	chunkSize := uint32(*chunkSizeMB * 1024 * 1024)
-	if chunkSize == 0 {
-		chunkSize = 2 * 1024 * 1024
+	if *chunkSizeMB < 1 || *chunkSizeMB > 8 {
+		fmt.Println("Error: -chunk must be between 1 and 8 (MB).")
+		os.Exit(1)
 	}
+	chunkSize := uint32(*chunkSizeMB * 1024 * 1024)
 
 	rawPaths := sendCmd.Args()
 	isFolderOrMulti := len(rawPaths) > 1

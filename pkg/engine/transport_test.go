@@ -199,6 +199,9 @@ func TestEndToEndTransferResume(t *testing.T) {
 	// 1. First transfer - cancel after 2 chunks
 	sender1 := NewSender(1, chunkSize)
 	receiver1 := NewReceiver(dstDir, 1)
+	// Commit every chunk so partial progress reaches the state file before the
+	// 64 MiB file completes (default group commit is 64 MiB / 2 s).
+	receiver1.SetCommitPolicy(int64(chunkSize), 2*time.Second)
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	senderListener1 := &recordingListener{}
@@ -332,6 +335,8 @@ func TestReceiverReconnectsToRestartedSender(t *testing.T) {
 
 	// Receiver stays alive across sender restart
 	receiver := NewReceiver(dstDir, 2)
+	// Commit every chunk so partial progress is visible before the sender is stopped.
+	receiver.SetCommitPolicy(int64(chunkSize), 2*time.Second)
 	recvListener := &recordingListener{}
 	recvCtx, recvCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer recvCancel()
@@ -546,6 +551,8 @@ func TestLiveWorkerRejectsDifferentFileOnSenderRestart(t *testing.T) {
 
 	// 2. Receiver starts pulling file 1 in background with 1 worker
 	receiver := NewReceiver(dstDir, 1)
+	// Commit every chunk so partial progress is visible before the 128 MiB file completes.
+	receiver.SetCommitPolicy(512*1024, 2*time.Second)
 	recvCtx, recvCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer recvCancel()
 
