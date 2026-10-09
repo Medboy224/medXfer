@@ -572,6 +572,11 @@ func (s *DaemonServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *DaemonServer) handleHTTPStatus(w http.ResponseWriter, r *http.Request) {
+	// The status carries the Web Share PIN/token and the pairing code: never serve it to the LAN.
+	if !isLoopbackRequest(r) {
+		http.Error(w, "Forbidden: status is restricted to localhost", http.StatusForbidden)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(s.getStatus())
 }
