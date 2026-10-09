@@ -2390,7 +2390,22 @@ func TestDaemonNodePairingHandshake(t *testing.T) {
 		invalidCode = "111-111"
 	}
 
-	nodeAddr := server.GetNodeAddr()
+	// Serve binds the node listener in the background: wait for it, otherwise
+	// GetNodeAddr returns the default :18887, which may be another daemon.
+	var nodeAddr string
+	for deadline := time.Now().Add(2 * time.Second); ; {
+		server.mu.RLock()
+		ready := server.nodeLn != nil
+		server.mu.RUnlock()
+		if ready {
+			nodeAddr = server.GetNodeAddr()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("node listener not started")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if strings.HasPrefix(nodeAddr, "0.0.0.0:") {
 		nodeAddr = "127.0.0.1:" + strings.TrimPrefix(nodeAddr, "0.0.0.0:")
 	}
