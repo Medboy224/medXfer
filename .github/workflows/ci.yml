@@ -21,6 +21,11 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go build ./...
+      # Linux only: Windows runners check out with CRLF line endings, which gofmt reports.
+      - if: matrix.os == 'ubuntu-latest'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "Fichiers à formater avec gofmt :"; echo "$unformatted"; exit 1; fi
       - run: go vet ./...
       - run: go test ./pkg/...
       - if: matrix.os == 'ubuntu-latest'
