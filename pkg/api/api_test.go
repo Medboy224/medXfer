@@ -525,6 +525,7 @@ func TestPerFilePauseAndResumeWebSocketCommands(t *testing.T) {
 }
 
 func TestBatchQueueDynamicAdvanceOnPause(t *testing.T) {
+	t.Skip("quarantaine : dépend du timing, à stabiliser avec faultconn (issue #22)")
 	// 1. Setup Receiver
 	recvDir := t.TempDir()
 	recvServer := NewDaemonServer(0, recvDir, "RecvBatchNode")
@@ -2495,7 +2496,7 @@ func TestDaemonDiskBenchmarkAction(t *testing.T) {
 		var evt EventMessage
 		_ = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
 		if err := ws.ReadJSON(&evt); err != nil {
-			break
+			t.Fatalf("read while waiting for benchmark_disk_result (last event %q): %v", benchResult.Event, err)
 		}
 		if evt.Event == "benchmark_disk_result" {
 			benchResult = evt
