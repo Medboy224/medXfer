@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"testing"
 )
@@ -88,5 +90,25 @@ func TestNetworkBurst(t *testing.T) {
 	t.Logf("Network Burst Loopback: Client=%.2f MB/s, Server=%.2f MB/s", clientSpeed, res.speed)
 	if res.speed <= 0 || clientSpeed <= 0 {
 		t.Errorf("Expected positive speeds")
+	}
+}
+
+// On Windows the clock advances in ~15.6 ms ticks: a cached 4 MiB read can measure 0 s.
+// The speed must stay finite, otherwise the result cannot be sent as JSON (the daemon then
+// sent an empty WebSocket message and TestDaemonDiskBenchmarkAction failed on Windows).
+func TestBenchmarkDiskResultIsJSONEncodable(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		res, err := BenchmarkDisk(t.TempDir(), 4*1024*1024)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, v := range map[string]float64{"write": res.WriteSpeedMBps, "read": res.ReadSpeedMBps} {
+			if math.IsInf(v, 0) || math.IsNaN(v) || v <= 0 {
+				t.Fatalf("%s speed = %v; want a finite positive number", name, v)
+			}
+		}
+		if _, err := json.Marshal(res); err != nil {
+			t.Fatalf("result not encodable as JSON: %v", err)
+		}
 	}
 }

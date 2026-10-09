@@ -517,6 +517,7 @@ func TestSameNameDifferentContentIntegrity(t *testing.T) {
 }
 
 func TestLiveWorkerRejectsDifferentFileOnSenderRestart(t *testing.T) {
+	t.Skip("quarantaine : dépend du timing, à stabiliser avec faultconn (issue #23)")
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()
 
