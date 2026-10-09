@@ -614,6 +614,8 @@ const IndexHTML = `<!DOCTYPE html>
   </div>
 
   <script>
+    // Injected by the server (handleIndex) only for a loopback request with a valid Host (API-04).
+    const CONTROL_TOKEN = "__MEDXFER_CONTROL_TOKEN__";
     let ws = null;
     let isTransferPaused = false;
     let currentBatchFiles = [];
@@ -637,7 +639,7 @@ const IndexHTML = `<!DOCTYPE html>
     function connectWS() {
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       const url = proto + "//" + window.location.host + "/ws";
-      ws = new WebSocket(url);
+      ws = new WebSocket(url, ["medxfer.v1", "token." + CONTROL_TOKEN]);
 
       ws.onopen = () => {
         document.getElementById("connectionStatus").className = "badge badge-online";
@@ -1644,6 +1646,7 @@ const IndexHTML = `<!DOCTYPE html>
       };
 
       xhr.open("POST", "/api/upload");
+      xhr.setRequestHeader("Authorization", "Bearer " + CONTROL_TOKEN);
       xhr.send(formData);
     }
 
@@ -2036,7 +2039,7 @@ const IndexHTML = `<!DOCTYPE html>
 
       try {
         const url = "/api/fs/list" + (dirPath ? ("?dir=" + encodeURIComponent(dirPath)) : "");
-        const res = await fetch(url);
+        const res = await fetch(url, { headers: { "Authorization": "Bearer " + CONTROL_TOKEN } });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
 
@@ -2115,7 +2118,7 @@ const IndexHTML = `<!DOCTYPE html>
 
       try {
         const url = "/api/fs/mkdir?dir=" + encodeURIComponent(current) + "&name=" + encodeURIComponent(name.trim());
-        const res = await fetch(url);
+        const res = await fetch(url, { method: "POST", headers: { "Authorization": "Bearer " + CONTROL_TOKEN } });
         const data = await res.json();
         if (data && data.path) {
           loadFSDir(data.path);
