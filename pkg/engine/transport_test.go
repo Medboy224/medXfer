@@ -225,12 +225,13 @@ func TestEndToEndTransferResume(t *testing.T) {
 		_ = receiver1.Pull(ctx1, bindAddr1, recvListener1, fileID)
 	}()
 
-	// Wait until at least 2MB is downloaded, then cancel
+	// Cancel as soon as some progress is durable: with group commit, waiting for a
+	// larger amount races with the end of the transfer on a slow-fsync disk (CI)
 	for i := 0; i < 50; i++ {
 		time.Sleep(10 * time.Millisecond)
 		peek, err := PeekResumeOffset(dstDir, fileName, fileID, fileSize, chunkSize)
 		t.Logf("poll %d: peek=%d err=%v recvProgress=%d", i, peek, err, len(recvListener1.progresses))
-		if peek >= 2*1024*1024 {
+		if peek > 0 {
 			break
 		}
 	}
@@ -358,11 +359,11 @@ func TestReceiverReconnectsToRestartedSender(t *testing.T) {
 		recvErrChan <- receiver.Pull(recvCtx, bindAddr, recvListener, fileID)
 	}()
 
-	// Wait for partial transfer (at least 2MB), then STOP SENDER ONLY
+	// Wait for some durable progress, then STOP SENDER ONLY
 	for i := 0; i < 50; i++ {
 		time.Sleep(10 * time.Millisecond)
 		peek, _ := PeekResumeOffset(dstDir, fileName, fileID, fileSize, chunkSize)
-		if peek >= 2*1024*1024 {
+		if peek > 0 {
 			break
 		}
 	}
