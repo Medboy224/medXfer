@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -121,11 +123,16 @@ func NewDaemonServer(port int, defaultOutDir, deviceName string) *DaemonServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg := LoadConfig(defaultOutDir, deviceName)
 
-	// Generate 6-digit PIN (1,000,000 combinations) and 128-bit crypto token
-	pin := fmt.Sprintf("%06d", (time.Now().UnixNano()%900000)+100000)
-	tokenBytes := make([]byte, 16)
-	_, _ = rand.Read(tokenBytes)
-	token := hex.EncodeToString(tokenBytes)
+	// 6-digit PIN (1,000,000 combinations) and 128-bit token from crypto/rand (WEB-02, WEB-03).
+	// Since Go 1.24 crypto/rand cannot fail on supported platforms; refuse to start if it does.
+	pin, err := randomPIN(6)
+	if err != nil {
+		panic("medxfer: crypto/rand unavailable: " + err.Error())
+	}
+	token, err := randomHex(16)
+	if err != nil {
+		panic("medxfer: crypto/rand unavailable: " + err.Error())
+	}
 
 	pCode, _, _ := discovery.GeneratePairingCode("")
 
@@ -178,7 +185,7 @@ func (s *DaemonServer) CheckLockout(clientIP string) (bool, int) {
 
 // RecordAuthFailure registers a failed PIN attempt, enforces progressive lockout,
 // and triggers emergency PIN rotation on 10 consecutive failures (Panic Mode)
-func (s *DaemonServer) RecordAuthFailure(clientIP, attemptedPIN string) (locked bool, remainingSec int, pinRegenerated bool) {
+func (s *DaemonServer) RecordAuthFailure(clientIP string) (locked bool, remainingSec int, pinRegenerated bool) {
 	s.authFailMu.Lock()
 	if s.ipLockouts == nil {
 		s.ipLockouts = make(map[string]*IPAuthRecord)
@@ -208,7 +215,7 @@ func (s *DaemonServer) RecordAuthFailure(clientIP, attemptedPIN string) (locked 
 	}
 	s.authFailMu.Unlock()
 
-	log.Printf("[Security] Web Share failed PIN attempt #%d from %s (PIN: %s)", rec.FailCount, clientIP, attemptedPIN)
+	log.Printf("[Security] Web Share failed attempt #%d from %s", rec.FailCount, clientIP)
 
 	if locked {
 		log.Printf("[Security] 🚨 Brute force lockout applied to IP %s for %d seconds", clientIP, remainingSec)
@@ -220,7 +227,7 @@ func (s *DaemonServer) RecordAuthFailure(clientIP, attemptedPIN string) (locked 
 			"timestamp":       now.Format("15:04:05"),
 		}))
 	} else {
-		s.notifyAuthFailure(clientIP, attemptedPIN)
+		s.notifyAuthFailure(clientIP)
 	}
 
 	if pinRegenerated {
@@ -241,23 +248,30 @@ func (s *DaemonServer) RecordAuthSuccess(clientIP string) {
 
 // regeneratePINInternal generates a new random PIN and crypto token, then broadcasts status
 func (s *DaemonServer) regeneratePINInternal(digits int) {
-	s.mu.Lock()
-	if digits == 4 {
-		s.webSharePIN = fmt.Sprintf("%04d", (time.Now().UnixNano()%9000)+1000)
-	} else {
-		s.webSharePIN = fmt.Sprintf("%06d", (time.Now().UnixNano()%900000)+100000)
+	if digits != 4 {
+		digits = 6
 	}
-	tokenBytes := make([]byte, 16)
-	_, _ = rand.Read(tokenBytes)
-	s.webShareToken = hex.EncodeToString(tokenBytes)
+	pin, err := randomPIN(digits)
+	if err != nil {
+		log.Printf("[Security] Web Share credential rotation failed: %v", err)
+		return
+	}
+	token, err := randomHex(16)
+	if err != nil {
+		log.Printf("[Security] Web Share credential rotation failed: %v", err)
+		return
+	}
+	s.mu.Lock()
+	s.webSharePIN = pin
+	s.webShareToken = token
 	s.mu.Unlock()
 
-	log.Printf("[Security] Web Share PIN rotated: %s (Token: %s...)", s.webSharePIN, s.webShareToken[:6])
+	log.Printf("[Security] Web Share credentials rotated") // never log the PIN or token (WEB-04)
 	s.Broadcast(NewEvent("status", s.getStatus()))
 }
 
 // notifyAuthFailure logs and broadcasts an authentication failure event, rate-limited per client IP
-func (s *DaemonServer) notifyAuthFailure(clientIP, attemptedPIN string) {
+func (s *DaemonServer) notifyAuthFailure(clientIP string) {
 	s.authFailMu.Lock()
 	if s.lastAuthFail == nil {
 		s.lastAuthFail = make(map[string]time.Time)
@@ -271,12 +285,35 @@ func (s *DaemonServer) notifyAuthFailure(clientIP, attemptedPIN string) {
 	s.lastAuthFail[clientIP] = now
 	s.authFailMu.Unlock()
 
-	log.Printf("[Security] Web Share invalid PIN attempt from %s (PIN: %s)", clientIP, attemptedPIN)
+	log.Printf("[Security] Web Share invalid PIN attempt from %s", clientIP)
 	s.Broadcast(NewEvent("web_share_auth_failed", map[string]interface{}{
-		"client_ip":     clientIP,
-		"attempted_pin": attemptedPIN,
-		"timestamp":     now.Format("15:04:05"),
+		"client_ip": clientIP,
+		"timestamp": now.Format("15:04:05"),
 	}))
+}
+
+// randomHex returns n bytes from crypto/rand, hex-encoded.
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// randomPIN returns a PIN uniform in [0, 10^digits), without modulo bias (PAIR-01, WEB-03).
+func randomPIN(digits int) (string, error) {
+	max := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(digits)), nil)
+	n, err := rand.Int(rand.Reader, max)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%0*d", digits, n), nil
+}
+
+// secureEq compares secrets in constant time.
+func secureEq(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 func (s *DaemonServer) calculateCompletedBatchBytes() int64 {
@@ -468,15 +505,15 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 	mux.HandleFunc("/api/upload", s.handleUpload)
 	mux.HandleFunc("/api/fs/list", s.handleFSList)
 	mux.HandleFunc("/api/fs/mkdir", s.handleFSMkdir)
-	mux.HandleFunc("/share", s.handleSharePortal)
-	mux.HandleFunc("/api/share/list", s.handleShareList)
-	mux.HandleFunc("/api/share/download", s.handleShareDownload)
-	mux.HandleFunc("/api/share/request_upload", s.handleShareRequestUpload)
-	mux.HandleFunc("/api/share/upload", s.handleShareUpload)
-	mux.HandleFunc("/api/share/upload_chunk", s.handleShareUploadChunk)
-	mux.HandleFunc("/api/share/pause", s.handleSharePause)
-	mux.HandleFunc("/api/share/resume", s.handleShareResume)
-	mux.HandleFunc("/api/share/cancel", s.handleShareCancel)
+	mux.HandleFunc("/share", shareHeaders(s.handleSharePortal, true))
+	mux.HandleFunc("/api/share/list", shareHeaders(s.handleShareList, true))
+	mux.HandleFunc("/api/share/download", shareHeaders(s.handleShareDownload, false))
+	mux.HandleFunc("/api/share/request_upload", shareHeaders(s.handleShareRequestUpload, false))
+	mux.HandleFunc("/api/share/upload", shareHeaders(s.handleShareUpload, false))
+	mux.HandleFunc("/api/share/upload_chunk", shareHeaders(s.handleShareUploadChunk, false))
+	mux.HandleFunc("/api/share/pause", shareHeaders(s.handleSharePause, false))
+	mux.HandleFunc("/api/share/resume", shareHeaders(s.handleShareResume, false))
+	mux.HandleFunc("/api/share/cancel", shareHeaders(s.handleShareCancel, false))
 	mux.HandleFunc("/ws", s.handleWebSocket)
 
 	s.httpSrv = &http.Server{
