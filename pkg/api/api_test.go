@@ -1237,6 +1237,37 @@ func TestClearWebFilesAndStaleFilePrevention(t *testing.T) {
 	t.Logf("VERIFIED: clear_web_files correctly actualizes list to 0 and blocks stale file downloads with 404!")
 }
 
+func TestStatusRefusedFromRemote(t *testing.T) {
+	server := NewDaemonServer(0, t.TempDir(), "TestStatusHost")
+	server.SetWebShareEnabled(true)
+
+	// Remote LAN client: 403 and no secret in the body
+	reqRemote := httptest.NewRequest("GET", "/status", nil)
+	reqRemote.RemoteAddr = "10.0.0.5:1234"
+	wRemote := httptest.NewRecorder()
+	server.handleHTTPStatus(wRemote, reqRemote)
+	if wRemote.Code != http.StatusForbidden {
+		t.Fatalf("Expected 403 Forbidden for remote client on /status, got %d", wRemote.Code)
+	}
+	for _, secret := range []string{"web_share_pin", "web_share_token", "pairing_code", "portal_url"} {
+		if strings.Contains(wRemote.Body.String(), secret) {
+			t.Fatalf("Remote /status response leaks %q: %s", secret, wRemote.Body.String())
+		}
+	}
+
+	// Localhost client: still served
+	reqLocal := httptest.NewRequest("GET", "/status", nil)
+	reqLocal.RemoteAddr = "127.0.0.1:1234"
+	wLocal := httptest.NewRecorder()
+	server.handleHTTPStatus(wLocal, reqLocal)
+	if wLocal.Code != http.StatusOK {
+		t.Fatalf("Expected 200 OK for localhost client on /status, got %d", wLocal.Code)
+	}
+	if !strings.Contains(wLocal.Body.String(), "web_share_pin") {
+		t.Fatalf("Expected local /status to include web_share_pin, got %s", wLocal.Body.String())
+	}
+}
+
 func TestRemoteClientAccessRestriction(t *testing.T) {
 	tempDir := t.TempDir()
 	server := NewDaemonServer(0, tempDir, "TestSecurityHost")
