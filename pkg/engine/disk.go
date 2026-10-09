@@ -4,8 +4,8 @@ import (
 	"crypto/md5"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -55,9 +55,11 @@ func PeekResumeOffset(outputDir, fileName, fileID string, fileSize int64, chunkS
 		fileID = fmt.Sprintf("%-32s", fileID)
 	}
 
-	normPath := strings.ReplaceAll(fileName, "/", string(filepath.Separator))
-	normPath = strings.ReplaceAll(normPath, "\\", string(filepath.Separator))
-	statePath := filepath.Join(outputDir, normPath+".medxfer")
+	safeName, err := SafeRelPath(fileName)
+	if err != nil {
+		return 0, nil // unsafe peer path: treat as absent, never read outside outputDir
+	}
+	statePath := filepath.Join(outputDir, filepath.FromSlash(safeName)+".medxfer")
 
 	b, err := os.ReadFile(statePath)
 	if err != nil || len(b) < 32 {
@@ -87,45 +89,15 @@ func PeekResumeOffset(outputDir, fileName, fileID string, fileSize int64, chunkS
 	return downBytes, nil
 }
 
-func ensureDirectory(targetDir string) error {
-	if targetDir == "" || targetDir == "." {
-		return nil
-	}
-
-	cleanDir := filepath.Clean(targetDir)
-	parts := strings.Split(cleanDir, string(filepath.Separator))
-
-	current := ""
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		if current == "" {
-			current = part
-		} else {
-			current = filepath.Join(current, part)
-		}
-
-		if info, err := os.Stat(current); err == nil {
-			if !info.IsDir() {
-				// A regular file already exists where a folder needs to be created. Clean it up!
-				_ = os.Remove(current)
-				_ = os.Remove(current + ".medxfer")
-			}
-		}
-	}
-
-	return os.MkdirAll(targetDir, 0755)
-}
-
 func CreateAndPreallocate(outputDir, fileName string, fileSize int64, chunkSize uint32, fileID string) (*DiskManager, error) {
-	normPath := strings.ReplaceAll(fileName, "/", string(filepath.Separator))
-	normPath = strings.ReplaceAll(normPath, "\\", string(filepath.Separator))
+	safeName, err := SafeRelPath(fileName)
+	if err != nil {
+		return nil, err
+	}
 
-	finalPath := filepath.Join(outputDir, normPath)
-	targetDir := filepath.Dir(finalPath)
-	if err := ensureDirectory(targetDir); err != nil {
-		return nil, fmt.Errorf("failed to create directory '%s': %w", targetDir, err)
+	finalPath := filepath.Join(outputDir, filepath.FromSlash(safeName))
+	if err := ensureSubdirs(outputDir, path.Dir(safeName)); err != nil {
+		return nil, fmt.Errorf("failed to create directory for '%s': %w", safeName, err)
 	}
 	statePath := finalPath + ".medxfer"
 
@@ -141,7 +113,6 @@ func CreateAndPreallocate(outputDir, fileName string, fileSize int64, chunkSize 
 	completed := make([]bool, totalChunks)
 	var downBytes int64
 	var file, stateFile *os.File
-	var err error
 
 	if _, err = os.Stat(statePath); err == nil {
 		file, err = os.OpenFile(finalPath, os.O_RDWR, 0644)
@@ -165,7 +136,8 @@ func CreateAndPreallocate(outputDir, fileName string, fileSize int64, chunkSize 
 						}
 					} else {
 						// The partial file on disk belongs to a DIFFERENT file with the same name.
-						// Safely clean up the old mismatched state and start fresh for the new file!
+						// Safe to delete (STO-09): the name was chosen by ResolveCollision, which only
+						// returns a name with a mismatched .medxfer under the explicit Overwrite policy.
 						file.Close()
 						stateFile.Close()
 						file = nil
