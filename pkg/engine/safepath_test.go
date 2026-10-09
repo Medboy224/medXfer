@@ -27,13 +27,14 @@ func TestSafeRelPath(t *testing.T) {
 		"backup (1).tar.gz":   "backup (1).tar.gz",
 	}
 	invalid := []string{
-		"", "/abs", `\abs`, `C:\x`, "C:x", "c:/x", "a:b", "../x", `..\x`, "a/../../x", "a/./b", "a//b",
+		"", "/abs", `\abs`, "../x", `..\x`, "a/../../x", "a/./b", "a//b",
 		"a/b/..", "a/", "a\x00b", "a\x01b", "a\nb",
 		strings.Repeat("x", 256), strings.Repeat("a/", 512) + "b",
 	}
 	// Windows-only rules (decision D0-1): valid elsewhere, rejected when the receiver runs Windows.
-	// "a:b" is in invalid above: one letter + ":" is a drive prefix, rejected everywhere.
-	windowsOnly := []string{"CON", "con.txt", "NUL.tar.gz", "com1", "LPT9.log", "x.", "x ", "dir/x./f", "ab:c", "a*b", "a?b", "a<b", `a"b`, "a|b"}
+	// Drive prefixes ("C:x", `C:\x`) are harmless names on Linux/Android; on Windows ':' blocks them.
+	windowsOnly := []string{"CON", "con.txt", "NUL.tar.gz", "com1", "LPT9.log", "x.", "x ", "dir/x./f",
+		"ab:c", "a:b", "C:x", "c:/x", `C:\x`, "c:notes.txt", "a*b", "a?b", "a<b", `a"b`, "a|b"}
 	windowsOK := []string{"CONSOLE.txt", "COM0", "LPT10", "nul_file", "con-tract.pdf"}
 
 	for _, win := range []bool{false, true} {

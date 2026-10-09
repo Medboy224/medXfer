@@ -1,0 +1,5 @@
+# Go sources always use LF, on every OS: gofmt then gives the same result on Windows,
+# Linux and macOS (with CRLF, gofmt -l reports every file).
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf

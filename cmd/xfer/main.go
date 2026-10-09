@@ -113,12 +113,20 @@ func (l *cliListener) OnError(err error) {
 	}
 }
 
+// normalizeCommand tolerates how the subcommand reaches us from Termux and Windows scripts:
+// surrounding quotes, stray whitespace, invisible characters picked up by copy-paste
+// (U+00A0 no-break space, U+FEFF byte-order mark), leading dashes ("--daemon") and case.
 func normalizeCommand(arg string) string {
 	arg = strings.Trim(arg, " \t\r\n\"'\u00a0\ufeff")
 	arg = strings.TrimLeft(arg, "-")
 	return strings.ToLower(arg)
 }
 
+// getEffectiveArgs returns the arguments after the program name. On Android/Termux, depending
+// on how the binary is started (wrapper script, launch through the dynamic loader), argv[1] can
+// repeat the program path, so "xfer daemon" arrived as ["xfer", "xfer", "daemon"] and was
+// rejected as an unknown command (commit c9cdc2f). A first argument naming the program itself
+// is dropped.
 func getEffectiveArgs() []string {
 	args := os.Args[1:]
 	if len(args) > 0 {
