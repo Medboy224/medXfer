@@ -459,7 +459,9 @@ func (s *DaemonServer) Listen(port int) (net.Listener, error) {
 		addr := fmt.Sprintf("0.0.0.0:%d", p)
 		ln, err := net.Listen("tcp4", addr)
 		if err == nil {
+			s.mu.Lock()
 			s.httpPort = p
+			s.mu.Unlock()
 			return ln, nil
 		}
 	}
@@ -468,11 +470,13 @@ func (s *DaemonServer) Listen(port int) (net.Listener, error) {
 
 // Serve runs the daemon on an existing listener
 func (s *DaemonServer) Serve(httpLn net.Listener) error {
+	httpPort := 18888
 	if tcpAddr, ok := httpLn.Addr().(*net.TCPAddr); ok {
-		s.httpPort = tcpAddr.Port
-	} else {
-		s.httpPort = 18888
+		httpPort = tcpAddr.Port
 	}
+	s.mu.Lock()
+	s.httpPort = httpPort
+	s.mu.Unlock()
 
 	// 1. Start Node Pairing TCP Listener (port 18887 or fallback)
 	nodePort := 18887
@@ -481,7 +485,9 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 		ln, err = net.Listen("tcp4", "0.0.0.0:0")
 	}
 	if err == nil {
+		s.mu.Lock()
 		s.nodeLn = ln
+		s.mu.Unlock()
 		if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
 			nodePort = tcpAddr.Port
 		}
@@ -516,12 +522,15 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 	mux.HandleFunc("/api/share/cancel", shareHeaders(s.handleShareCancel, false))
 	mux.HandleFunc("/ws", s.handleWebSocket)
 
-	s.httpSrv = &http.Server{
+	httpSrv := &http.Server{
 		Handler: mux,
 	}
+	s.mu.Lock()
+	s.httpSrv = httpSrv
+	s.mu.Unlock()
 
 	log.Printf("[*] medXfer Headless Daemon started on http://%s (ws://%s/ws)", httpLn.Addr().String(), httpLn.Addr().String())
-	return s.httpSrv.Serve(httpLn)
+	return httpSrv.Serve(httpLn)
 }
 
 // Start boots the daemon, node listener, discovery server, and HTTP/WebSocket server
@@ -542,17 +551,18 @@ func (s *DaemonServer) Stop() {
 	}
 	sess := s.activeSession
 	s.activeSession = nil
+	nodeLn, httpSrv := s.nodeLn, s.httpSrv
 	s.mu.Unlock()
 
 	if sess != nil {
 		sess.Send(session.Message{Type: "disconnect"})
 		sess.Close()
 	}
-	if s.nodeLn != nil {
-		_ = s.nodeLn.Close()
+	if nodeLn != nil {
+		_ = nodeLn.Close()
 	}
-	if s.httpSrv != nil {
-		_ = s.httpSrv.Close()
+	if httpSrv != nil {
+		_ = httpSrv.Close()
 	}
 	s.hotspotMu.Lock()
 	if s.hotspotCtrl != nil {
@@ -667,8 +677,12 @@ func (s *DaemonServer) Broadcast(evt EventMessage) {
 	}
 }
 
-// SendTo sends a JSON event to a specific client connection
+// SendTo sends a JSON event to a specific client connection.
+// gorilla/websocket allows one concurrent writer per connection: every write,
+// here and in Broadcast, holds clientsMu.
 func (s *DaemonServer) sendTo(conn *websocket.Conn, evt EventMessage) {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
 	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	_ = conn.WriteJSON(evt)
 	_ = conn.SetWriteDeadline(time.Time{})
@@ -796,6 +810,13 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 		WebShareAutoAccept: s.webShareAutoAccept,
 		PairingCode:        s.pairingCode,
 	}
+}
+
+// currentHTTPPort reads the HTTP port set by Listen/Serve. Callers must not hold s.mu.
+func (s *DaemonServer) currentHTTPPort() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.httpPort
 }
 
 // GetNodeAddr returns the network address the daemon's node listener is bound to
