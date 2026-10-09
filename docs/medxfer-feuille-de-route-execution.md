@@ -241,6 +241,7 @@ J9 s'ajoute ensuite et ne figure pas dans ce total.
 **Modèle de PR.** Objectif ; exigences de la bible couvertes (identifiants) ; tests ajoutés ; mesure de performance si le chemin chaud est touché ; risques ; cases : CI verte, aucun secret journalisé, aucun nouveau `os.Remove` hors du périmètre autorisé.
 **Définition de « terminé » d'un lot.** Code fusionné ; tests de l'exigence présents et verts sur les trois systèmes ; documentation (bible ou plan) mise à jour si la décision a changé ; issue fermée avec lien vers la PR.
 **Règle de périmètre.** Pas de correction « en passant » : tout constat hors lot devient une issue.
+**Règle du `main` vert.** Un `main` rouge arrête tout : on le répare avant tout autre travail. Un test instable n'est jamais simplement relancé : il reçoit une issue (étiquette `test-instable`) et une quarantaine (`t.Skip` citant l'issue), puis il est stabilisé (souvent avec `faultconn`, WP-2.5). Un échec qui révèle un vrai bug est corrigé, pas mis en quarantaine.
 **Revue du plan.** À la fin de chaque jalon : une demi-journée pour relire ce document, recalculer les durées, écrire le plan détaillé du jalon suivant.
 
 ---

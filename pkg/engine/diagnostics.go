@@ -99,10 +99,12 @@ func BenchmarkDisk(dir string, sizeBytes int64) (*DiskBenchResult, error) {
 	}
 
 	writeDuration := time.Since(writeStart)
-	writeDurationMs := writeDuration.Milliseconds()
-	if writeDurationMs < 1 {
-		writeDurationMs = 1
+	// Floor at 1 ms: on Windows the clock advances in ~15.6 ms ticks, a cached 4 MiB
+	// write can measure 0, and the resulting +Inf speed cannot be encoded as JSON.
+	if writeDuration < time.Millisecond {
+		writeDuration = time.Millisecond
 	}
+	writeDurationMs := writeDuration.Milliseconds()
 
 	writeSpeedMBps := (float64(sizeBytes) / (1024 * 1024)) / writeDuration.Seconds()
 
@@ -132,10 +134,12 @@ func BenchmarkDisk(dir string, sizeBytes int64) (*DiskBenchResult, error) {
 	_ = rf.Close()
 
 	readDuration := time.Since(readStart)
-	readDurationMs := readDuration.Milliseconds()
-	if readDurationMs < 1 {
-		readDurationMs = 1
+	// Floor at 1 ms: on Windows the clock advances in ~15.6 ms ticks, a cached 4 MiB
+	// read can measure 0, and the resulting +Inf speed cannot be encoded as JSON.
+	if readDuration < time.Millisecond {
+		readDuration = time.Millisecond
 	}
+	readDurationMs := readDuration.Milliseconds()
 
 	readSpeedMBps := (float64(bytesRead) / (1024 * 1024)) / readDuration.Seconds()
 
