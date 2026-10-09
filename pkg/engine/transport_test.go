@@ -166,6 +166,14 @@ func (r *recordingListener) OnProgress(stats TransferStats) {
 	r.progresses = append(r.progresses, stats)
 }
 
+// progressCount reads the number of progress events under the lock: the receiver
+// appends to progresses from its own goroutine (a bare len() is a data race).
+func (r *recordingListener) progressCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.progresses)
+}
+
 func (r *recordingListener) OnChunkFailed(chunkIndex uint32, retryCount int, err error) {}
 
 func (r *recordingListener) OnComplete(savePath string, duration time.Duration) {
@@ -230,7 +238,7 @@ func TestEndToEndTransferResume(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		time.Sleep(10 * time.Millisecond)
 		peek, err := PeekResumeOffset(dstDir, fileName, fileID, fileSize, chunkSize)
-		t.Logf("poll %d: peek=%d err=%v recvProgress=%d", i, peek, err, len(recvListener1.progresses))
+		t.Logf("poll %d: peek=%d err=%v recvProgress=%d", i, peek, err, recvListener1.progressCount())
 		if peek > 0 {
 			break
 		}
