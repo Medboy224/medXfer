@@ -1399,11 +1399,14 @@ func handleDaemon(args []string) {
 	portFlag := daemonCmd.Int("port", 19999, "Port for Headless API (HTTP & WebSocket)")
 	outDirFlag := daemonCmd.String("out", "", "Default directory to save incoming files")
 	nameFlag := daemonCmd.String("name", "", "Custom device name for discovery")
+	webShareFlag := daemonCmd.Bool("web-share", false, "Open the Web Share guest portal to the LAN at startup")
 
 	_ = daemonCmd.Parse(normalizedArgs)
 
 	srv := api.NewDaemonServer(*portFlag, *outDirFlag, *nameFlag)
-	srv.SetWebShareEnabled(true)
+	// Web Share is an optional module, disabled by default (bible ch. 11, rule R3): until it is
+	// enabled (--web-share, or later from the dashboard), no LAN device can try the PIN on /share.
+	srv.SetWebShareEnabled(*webShareFlag)
 
 	ln, err := srv.Listen(*portFlag)
 	if err != nil {
@@ -1436,16 +1439,20 @@ func handleDaemon(args []string) {
 	fmt.Printf(" Local IP     : %s\n", localIP)
 	fmt.Printf(" Port         : %d\n", st.LocalPort)
 	fmt.Printf(" Pairing Code : %s\n", st.PairingCode)
-	fmt.Printf(" Web Share PIN: %s\n", st.WebSharePIN)
 	fmt.Println("--------------------------------------------------")
 	fmt.Println(" Web Dashboard (this device only):")
 	fmt.Printf("   👉 %s/\n", localURL)
 	fmt.Printf(" Control token file: %s\n", tokenPath)
-	fmt.Println(" Web Share portal (other devices):")
-	fmt.Printf("   👉 %s/share\n", remoteURL)
 	fmt.Println("--------------------------------------------------")
-	fmt.Println(" Scan QR code to connect from phone / PC:")
-	discovery.PrintTerminalQR(remoteURL)
+	if *webShareFlag {
+		fmt.Printf(" Web Share PIN: %s\n", st.WebSharePIN)
+		fmt.Println(" Web Share portal (other devices):")
+		fmt.Printf("   👉 %s/share\n", remoteURL)
+		fmt.Println(" Scan QR code to connect from phone / PC:")
+		discovery.PrintTerminalQR(remoteURL + "/share")
+	} else {
+		fmt.Println(" Web Share    : disabled (start with --web-share, or enable it from the dashboard)")
+	}
 	fmt.Println("--------------------------------------------------")
 	fmt.Println(" Daemon is running. Press Ctrl+C to stop.")
 
@@ -1560,7 +1567,7 @@ func printUsage() {
 		"               medXfer - Fast P2P Transfer        \n" +
 		"==================================================\n" +
 		"Usage:\n" +
-		"  xfer daemon [--port 19999]                     (Web UI Dashboard & WebSocket server)\n" +
+		"  xfer daemon [--port 19999] [--web-share]       (Web UI Dashboard & WebSocket server)\n" +
 		"  xfer node                                      (Persistent interactive CLI mode with pairing code)\n" +
 		"  xfer share <file_or_folder...>                 (Instant Web Share with QR code & PIN)\n" +
 		"  xfer send [-i] <file_or_folder> [more...]      (Direct transfer with pairing code; -i prompts)\n" +
