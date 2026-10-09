@@ -1016,7 +1016,7 @@ func (s *DaemonServer) handleHotspotStart(conn *websocket.Conn, req RequestMessa
 		if localIP == "" || localIP == "<nil>" {
 			localIP = "192.168.137.1"
 		}
-		port := s.httpPort
+		port := s.currentHTTPPort()
 		if port <= 0 {
 			port = 18888
 		}
@@ -1083,7 +1083,7 @@ func (s *DaemonServer) handleHotspotStart(conn *websocket.Conn, req RequestMessa
 		if localIP == "" || localIP == "<nil>" {
 			localIP = "192.168.137.1"
 		}
-		port := s.httpPort
+		port := s.currentHTTPPort()
 		if port <= 0 {
 			port = 18888
 		}
@@ -1138,7 +1138,7 @@ func (s *DaemonServer) handleHotspotStatus(conn *websocket.Conn, req RequestMess
 	if localIP == "" || localIP == "<nil>" {
 		localIP = "192.168.137.1"
 	}
-	port := s.httpPort
+	port := s.currentHTTPPort()
 	if port <= 0 {
 		port = 18888
 	}
