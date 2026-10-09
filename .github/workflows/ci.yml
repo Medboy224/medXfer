@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # Temporaire : le temps de connaître l'état de référence sur Windows et macOS.
+    # À supprimer à la fin de WP-0.4 quand les trois systèmes sont verts.
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./pkg/...
+      - if: matrix.os == 'ubuntu-latest'
+        run: go test -race ./pkg/...
