@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./pkg/...
+      - if: matrix.os == 'ubuntu-latest'
+        # Temporaire : courses préexistantes sur les WebSockets de contrôle (issue #11).
+        # À rendre bloquant quand l'issue #11 est fermée.
+        continue-on-error: true
+        run: go test -race ./pkg/...
