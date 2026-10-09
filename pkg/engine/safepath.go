@@ -25,9 +25,10 @@ const (
 // SafeRelPath validates a relative path received from a peer and returns it in
 // "/"-separated form. It rejects per COMPONENT, never per substring: "a..b.txt"
 // and "mon fichier.pdf" are valid.
-// Universal rules apply everywhere. Windows rules (reserved characters and names,
-// trailing dot or space) apply only when THIS receiver runs on Windows (decision D0-1),
-// so "rapport: final.txt" stays valid between Linux and Android devices.
+// Universal rules apply everywhere. Windows rules (reserved characters and names, trailing
+// dot or space) apply only when THIS receiver runs on Windows (decision D0-1), so
+// "rapport: final.txt" and "c:notes.txt" stay valid between Linux and Android devices. On
+// Windows, ':' is rejected in every component, which also blocks drive prefixes ("C:x").
 func SafeRelPath(p string) (string, error) {
 	return safeRelPath(p, runtime.GOOS == "windows")
 }
@@ -37,7 +38,7 @@ func safeRelPath(p string, windowsRules bool) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrBadPath, p)
 	}
 	p = strings.ReplaceAll(p, `\`, "/")
-	if strings.HasPrefix(p, "/") || hasVolumePrefix(p) {
+	if strings.HasPrefix(p, "/") {
 		return "", fmt.Errorf("%w: absolute path %q", ErrBadPath, p)
 	}
 	parts := strings.Split(p, "/")
@@ -58,13 +59,6 @@ func safeRelPath(p string, windowsRules bool) (string, error) {
 		}
 	}
 	return strings.Join(parts, "/"), nil
-}
-
-// hasVolumePrefix reports a Windows drive prefix ("C:", "C:x"). It is rejected on every
-// platform: such a path comes from a Windows absolute path, never from a relative one.
-func hasVolumePrefix(p string) bool {
-	return len(p) >= 2 && p[1] == ':' &&
-		(p[0] >= 'a' && p[0] <= 'z' || p[0] >= 'A' && p[0] <= 'Z')
 }
 
 func hasControlChar(s string) bool {
