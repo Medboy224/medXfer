@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"path"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -261,14 +259,14 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 		fileID = meta.FileID
 	}
 
-	// Normalize path across OS boundaries (Windows <-> Android/Linux)
-	normPath := strings.ReplaceAll(meta.FileName, "\\", "/")
-	normPath = path.Clean("/" + normPath)
-	normPath = strings.TrimPrefix(normPath, "/")
-	if normPath == "." || normPath == "" || strings.HasPrefix(normPath, "..") {
-		normPath = filepath.Base(meta.FileName)
+	// Validate the peer-supplied path (STO-12): a crafted offer fails instead of being silently rewritten
+	safeFileName, err := SafeRelPath(meta.FileName)
+	if err != nil {
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return err
 	}
-	safeFileName := normPath
 
 	// Resolve collision: Smart-Skip, Resume, Auto-Rename, or Overwrite
 	res, err := ResolveCollision(r.outputDir, safeFileName, fileID, meta.FileSize, meta.ChunkSize, r.collisionPolicy)

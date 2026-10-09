@@ -75,7 +75,11 @@ func ResolveCollision(outputDir, fileName, fileID string, fileSize int64, chunkS
 		chunkSize = 2 * 1024 * 1024
 	}
 
-	dir, base, ext := SplitNameAndExt(fileName)
+	safeName, err := SafeRelPath(fileName)
+	if err != nil {
+		return CollisionResult{}, err
+	}
+	dir, base, ext := SplitNameAndExt(safeName)
 
 	// Check if the original name or any incremented candidate matches
 	maxAttempts := 1000

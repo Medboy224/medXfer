@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -208,25 +209,26 @@ func ExtractTar(ctx context.Context, r io.Reader, destDir string, totalBytes int
 			return fmt.Errorf("tar read error: %w", err)
 		}
 
-		cleanRel := filepath.Clean(header.Name)
-		if strings.HasPrefix(cleanRel, "..") || filepath.IsAbs(cleanRel) {
-			return fmt.Errorf("security error: path traversal attempt detected in tar path '%s'", header.Name)
+		// Directory entries end with "/": strip it before per-component validation (STO-12)
+		safeRel, err := SafeRelPath(strings.TrimSuffix(header.Name, "/"))
+		if err != nil {
+			return fmt.Errorf("security error: rejected tar path: %w", err)
 		}
 
-		targetPath := filepath.Join(destClean, cleanRel)
+		targetPath := filepath.Join(destClean, filepath.FromSlash(safeRel))
 		if !strings.HasPrefix(targetPath, destClean+string(filepath.Separator)) && targetPath != destClean {
 			return fmt.Errorf("security error: file path escapes target directory: %s", targetPath)
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(targetPath, 0755); err != nil {
+			if err := ensureSubdirs(destClean, safeRel); err != nil {
 				return fmt.Errorf("failed to create directory '%s': %w", targetPath, err)
 			}
 
 		case tar.TypeReg, tar.TypeRegA:
 			parentDir := filepath.Dir(targetPath)
-			if err := os.MkdirAll(parentDir, 0755); err != nil {
+			if err := ensureSubdirs(destClean, path.Dir(safeRel)); err != nil {
 				return fmt.Errorf("failed to create parent dir '%s': %w", parentDir, err)
 			}
 
