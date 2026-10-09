@@ -14,11 +14,13 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,11 +34,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow localhost and local LAN connections from Flutter UI
-	},
-}
+// controlTokenPlaceholder is replaced by the real control token when the dashboard is served.
+const controlTokenPlaceholder = "__MEDXFER_CONTROL_TOKEN__"
 
 // IPAuthRecord tracks failed PIN authentication attempts for brute-force defense
 type IPAuthRecord struct {
@@ -47,6 +46,8 @@ type IPAuthRecord struct {
 
 // DaemonServer manages the headless background engine and WebSocket connections
 type DaemonServer struct {
+	controlToken    string // 256-bit secret required on every control route (API-04)
+	controlDisabled bool   // share-only mode: no dashboard, /ws, /status or /api/fs/*
 	mu                  sync.RWMutex
 	config              Config
 	clients             map[*websocket.Conn]bool
@@ -134,9 +135,18 @@ func NewDaemonServer(port int, defaultOutDir, deviceName string) *DaemonServer {
 		panic("medxfer: crypto/rand unavailable: " + err.Error())
 	}
 
+	// Control token (API-04, decision D0-2): MEDXFER_CONTROL_TOKEN if long enough, else random.
+	controlToken := os.Getenv("MEDXFER_CONTROL_TOKEN")
+	if len(controlToken) < 32 {
+		if controlToken, err = randomHex(32); err != nil {
+			panic("medxfer: crypto/rand unavailable: " + err.Error())
+		}
+	}
+
 	pCode, _, _ := discovery.GeneratePairingCode("")
 
 	srv := &DaemonServer{
+		controlToken:       controlToken,
 		config:             cfg,
 		clients:            make(map[*websocket.Conn]bool),
 		activePort:         18888,
@@ -506,11 +516,15 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/status", s.handleHTTPStatus)
-	mux.HandleFunc("/api/browse", s.handleBrowse)
-	mux.HandleFunc("/api/upload", s.handleUpload)
-	mux.HandleFunc("/api/fs/list", s.handleFSList)
-	mux.HandleFunc("/api/fs/mkdir", s.handleFSMkdir)
+	if !s.controlDisabled {
+		// Control surface (API-04): loopback + Host + Origin + control token on every route.
+		mux.HandleFunc("/status", s.control(s.handleHTTPStatus))
+		mux.HandleFunc("/api/browse", s.control(s.handleBrowse))
+		mux.HandleFunc("/api/upload", s.control(s.handleUpload))
+		mux.HandleFunc("/api/fs/list", s.control(s.handleFSList))
+		mux.HandleFunc("/api/fs/mkdir", s.control(s.handleFSMkdir))
+		mux.HandleFunc("/ws", s.control(s.handleWebSocket))
+	}
 	mux.HandleFunc("/share", shareHeaders(s.handleSharePortal, true))
 	mux.HandleFunc("/api/share/list", shareHeaders(s.handleShareList, true))
 	mux.HandleFunc("/api/share/download", shareHeaders(s.handleShareDownload, false))
@@ -520,7 +534,6 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 	mux.HandleFunc("/api/share/pause", shareHeaders(s.handleSharePause, false))
 	mux.HandleFunc("/api/share/resume", shareHeaders(s.handleShareResume, false))
 	mux.HandleFunc("/api/share/cancel", shareHeaders(s.handleShareCancel, false))
-	mux.HandleFunc("/ws", s.handleWebSocket)
 
 	httpSrv := &http.Server{
 		Handler: mux,
@@ -596,8 +609,8 @@ func (s *DaemonServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Security check: External network devices MUST NOT access the full host dashboard!
-	// Redirect any non-loopback device to the secured Web Share portal (/share).
-	if !isLoopbackRequest(r) {
+	// Redirect any non-loopback device (or everyone in share-only mode) to the Web Share portal.
+	if s.controlDisabled || !isLoopbackRequest(r) {
 		redirectURL := "/share"
 		if r.URL.RawQuery != "" {
 			redirectURL += "?" + r.URL.RawQuery
@@ -605,15 +618,28 @@ func (s *DaemonServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 		return
 	}
+	// The page receives the control token: never serve it under a foreign Host (DNS rebinding).
+	// No token is required here, it is the page that obtains it (API-04, control 7).
+	if !s.hostAllowed(r.Host) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
-	_, _ = w.Write([]byte(IndexHTML))
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	_, _ = w.Write([]byte(strings.Replace(IndexHTML, controlTokenPlaceholder, s.controlToken, 1)))
 }
 
 func (s *DaemonServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	// Liveness probe without token (decision D0-4), but loopback and Host only.
+	if !isLoopbackRequest(r) || !s.hostAllowed(r.Host) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": "1.0.0"})
 }
@@ -634,6 +660,11 @@ func (s *DaemonServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	upgrader := websocket.Upgrader{
+		// control() already rejected foreign origins; checked again as defense in depth.
+		CheckOrigin:  func(r *http.Request) bool { o := r.Header.Get("Origin"); return o == "" || s.originAllowed(o) },
+		Subprotocols: []string{"medxfer.v1"}, // never echo the "token.<hex>" protocol
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -810,6 +841,63 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 		WebShareAutoAccept: s.webShareAutoAccept,
 		PairingCode:        s.pairingCode,
 	}
+}
+
+// ControlToken returns the secret required on control routes. Never log it.
+func (s *DaemonServer) ControlToken() string { return s.controlToken }
+
+// DisableControlSurface turns the server into a Web Share portal only (xfer share):
+// no dashboard, /ws, /status or /api/* control routes. Call before Serve.
+func (s *DaemonServer) DisableControlSurface() { s.controlDisabled = true }
+
+// control guards a control route (API-04). In order: loopback peer, Host header naming this
+// listener (DNS rebinding), Origin if present (cross-site WebSocket hijacking), then the
+// control token, compared in constant time.
+func (s *DaemonServer) control(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopbackRequest(r) || !s.hostAllowed(r.Host) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if o := r.Header.Get("Origin"); o != "" && !s.originAllowed(o) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if !secureEq(extractControlToken(r), s.controlToken) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// hostAllowed accepts 127.0.0.1, localhost or [::1] with this listener's port.
+func (s *DaemonServer) hostAllowed(h string) bool {
+	host, port, err := net.SplitHostPort(h)
+	if err != nil || port != strconv.Itoa(s.currentHTTPPort()) {
+		return false
+	}
+	return host == "127.0.0.1" || host == "localhost" || host == "::1"
+}
+
+// originAllowed accepts only the dashboard's own origin.
+func (s *DaemonServer) originAllowed(o string) bool {
+	u, err := url.Parse(o)
+	return err == nil && u.Scheme == "http" && u.Path == "" && s.hostAllowed(u.Host)
+}
+
+// extractControlToken reads "Authorization: Bearer <token>" (native clients) or the WebSocket
+// subprotocol "token.<token>" (browsers cannot set headers on a WebSocket). Never the URL.
+func extractControlToken(r *http.Request) string {
+	if a := r.Header.Get("Authorization"); strings.HasPrefix(a, "Bearer ") {
+		return strings.TrimPrefix(a, "Bearer ")
+	}
+	for _, p := range websocket.Subprotocols(r) {
+		if strings.HasPrefix(p, "token.") {
+			return strings.TrimPrefix(p, "token.")
+		}
+	}
+	return ""
 }
 
 // currentHTTPPort reads the HTTP port set by Listen/Serve. Callers must not hold s.mu.
@@ -2315,6 +2403,12 @@ func (s *DaemonServer) handleFSList(w http.ResponseWriter, r *http.Request) {
 func (s *DaemonServer) handleFSMkdir(w http.ResponseWriter, r *http.Request) {
 	if !isLoopbackRequest(r) {
 		http.Error(w, "Forbidden: Directory creation is restricted to localhost", http.StatusForbidden)
+		return
+	}
+
+	if r.Method != http.MethodPost { // no side effect on GET (API-04, control 6)
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 

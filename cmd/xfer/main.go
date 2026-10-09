@@ -1411,6 +1411,13 @@ func handleDaemon(args []string) {
 		os.Exit(1)
 	}
 
+	// Scripts read the control token from this file (decision D0-2). Print its path, never its value.
+	tokenPath, err := writeControlToken(srv.ControlToken())
+	if err != nil {
+		fmt.Printf("[-] Failed to write control token: %v\n", err)
+		os.Exit(1)
+	}
+
 	st := srv.GetStatus()
 	localIP := st.LocalIP
 	if localIP == "" || localIP == "127.0.0.1" {
@@ -1431,9 +1438,11 @@ func handleDaemon(args []string) {
 	fmt.Printf(" Pairing Code : %s\n", st.PairingCode)
 	fmt.Printf(" Web Share PIN: %s\n", st.WebSharePIN)
 	fmt.Println("--------------------------------------------------")
-	fmt.Println(" Web Dashboard & Remote Access:")
-	fmt.Printf("   👉 Sur cet appareil: %s\n", localURL)
-	fmt.Printf("   👉 Depuis un PC    : %s\n", remoteURL)
+	fmt.Println(" Web Dashboard (this device only):")
+	fmt.Printf("   👉 %s/\n", localURL)
+	fmt.Printf(" Control token file: %s\n", tokenPath)
+	fmt.Println(" Web Share portal (other devices):")
+	fmt.Printf("   👉 %s/share\n", remoteURL)
 	fmt.Println("--------------------------------------------------")
 	fmt.Println(" Scan QR code to connect from phone / PC:")
 	discovery.PrintTerminalQR(remoteURL)
@@ -1455,6 +1464,21 @@ func handleDaemon(args []string) {
 	}
 }
 
+// writeControlToken stores the control token in <config dir>/control.token, readable only by
+// the user (0600 on Unix; on Windows the file lives in the user's profile).
+func writeControlToken(token string) (string, error) {
+	dir := filepath.Dir(api.GetConfigFilePath())
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	p := filepath.Join(dir, "control.token")
+	if err := os.WriteFile(p, []byte(token+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	_ = os.Chmod(p, 0o600) // WriteFile keeps the mode of an existing file
+	return p, nil
+}
+
 func handleShare(args []string) {
 	normalizedArgs := reorderArgs(args)
 	shareCmd := flag.NewFlagSet("share", flag.ExitOnError)
@@ -1468,6 +1492,7 @@ func handleShare(args []string) {
 	rawPaths := shareCmd.Args()
 
 	srv := api.NewDaemonServer(*portFlag, *outDirFlag, *nameFlag)
+	srv.DisableControlSurface() // portal only: no dashboard, /ws or /status in share mode
 	srv.SetWebShareEnabled(true)
 	if *pinFlag != "" {
 		srv.SetPIN(*pinFlag)

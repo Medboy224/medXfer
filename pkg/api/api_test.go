@@ -69,7 +69,7 @@ func TestDaemonHTTPEndpoints(t *testing.T) {
 	}
 
 	// 2. Test /status
-	statusResp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/status", port))
+	statusResp, err := controlGet(fmt.Sprintf("http://127.0.0.1:%d/status", port))
 	if err != nil {
 		t.Fatalf("Failed to GET /status: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestDaemonWebSocketCommands(t *testing.T) {
 	defer server.Stop()
 
 	u := url.URL{Scheme: "ws", Host: fmt.Sprintf("127.0.0.1:%d", port), Path: "/ws"}
-	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	ws, _, err := websocket.DefaultDialer.Dial(u.String(), testAuth())
 	if err != nil {
 		t.Fatalf("WebSocket Dial failed: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestFSEndpoints(t *testing.T) {
 	defer server.Stop()
 
 	// 1. Test /api/fs/list
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/fs/list?dir=%s", port, url.QueryEscape(tempDir)))
+	resp, err := controlGet(fmt.Sprintf("http://127.0.0.1:%d/api/fs/list?dir=%s", port, url.QueryEscape(tempDir)))
 	if err != nil {
 		t.Fatalf("Failed to GET /api/fs/list: %v", err)
 	}
@@ -243,9 +243,9 @@ func TestFSEndpoints(t *testing.T) {
 	}
 
 	// 2. Test /api/fs/mkdir
-	mkdirResp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/fs/mkdir?dir=%s&name=NewTestDir", port, url.QueryEscape(tempDir)))
+	mkdirResp, err := controlPost(fmt.Sprintf("http://127.0.0.1:%d/api/fs/mkdir?dir=%s&name=NewTestDir", port, url.QueryEscape(tempDir)))
 	if err != nil {
-		t.Fatalf("Failed to GET /api/fs/mkdir: %v", err)
+		t.Fatalf("Failed to POST /api/fs/mkdir: %v", err)
 	}
 	defer mkdirResp.Body.Close()
 	if mkdirResp.StatusCode != http.StatusOK {
@@ -270,7 +270,7 @@ func TestPauseResumeAndSkipWebSocketCommands(t *testing.T) {
 	defer server.Stop()
 
 	u := url.URL{Scheme: "ws", Host: fmt.Sprintf("127.0.0.1:%d", port), Path: "/ws"}
-	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	ws, _, err := websocket.DefaultDialer.Dial(u.String(), testAuth())
 	if err != nil {
 		t.Fatalf("WebSocket Dial failed: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestInstantOfferAndSessionDispatch(t *testing.T) {
 
 	// Connect WebSocket to Receiver
 	recvWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", recvHTTPPort)
-	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, nil)
+	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to dial receiver ws: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestInstantOfferAndSessionDispatch(t *testing.T) {
 
 	// Connect WebSocket to Sender
 	sendWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", sendHTTPPort)
-	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, nil)
+	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to dial sender ws: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestPerFilePauseAndResumeWebSocketCommands(t *testing.T) {
 	defer server.Stop()
 
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, testAuth())
 	if err != nil {
 		t.Fatalf("WebSocket Dial failed: %v", err)
 	}
@@ -568,14 +568,14 @@ func TestBatchQueueDynamicAdvanceOnPause(t *testing.T) {
 
 	// 3. Connect WebSockets
 	recvWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", recvHTTPPort)
-	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, nil)
+	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, testAuth())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer recvWS.Close()
 
 	sendWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", sendHTTPPort)
-	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, nil)
+	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, testAuth())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -755,7 +755,7 @@ func TestFolderTarStreamingBatch(t *testing.T) {
 
 	// Connect WebSocket to Receiver
 	recvWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", recvHTTPPort)
-	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, nil)
+	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to dial receiver ws: %v", err)
 	}
@@ -766,7 +766,7 @@ func TestFolderTarStreamingBatch(t *testing.T) {
 
 	// Connect WebSocket to Sender
 	sendWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", sendHTTPPort)
-	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, nil)
+	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to dial sender ws: %v", err)
 	}
@@ -883,7 +883,7 @@ func TestFolderGranularBatchTransfer(t *testing.T) {
 
 	// Connect WebSocket to Receiver
 	recvWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", recvHTTPPort)
-	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, nil)
+	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to dial receiver ws: %v", err)
 	}
@@ -894,7 +894,7 @@ func TestFolderGranularBatchTransfer(t *testing.T) {
 
 	// Connect WebSocket to Sender and continuously drain events so buffer never blocks
 	sendWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", sendHTTPPort)
-	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, nil)
+	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to dial sender ws: %v", err)
 	}
@@ -1135,7 +1135,7 @@ func TestClearWebFilesAndStaleFilePrevention(t *testing.T) {
 	defer server.Stop()
 
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, testAuth())
 	if err != nil {
 		t.Fatalf("WS Dial failed: %v", err)
 	}
@@ -1290,6 +1290,7 @@ func TestRemoteClientAccessRestriction(t *testing.T) {
 	// 2. Local access to GET / must succeed with 200 OK
 	reqLocalRoot := httptest.NewRequest("GET", "/", nil)
 	reqLocalRoot.RemoteAddr = localIP
+	reqLocalRoot.Host = fmt.Sprintf("127.0.0.1:%d", server.currentHTTPPort()) // API-04: Host is checked
 	wLocalRoot := httptest.NewRecorder()
 	server.handleIndex(wLocalRoot, reqLocalRoot)
 	if wLocalRoot.Code != http.StatusOK {
@@ -1355,7 +1356,7 @@ func TestWebShareInvalidPINNotification(t *testing.T) {
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
 
 	// Connect WS client to receive real-time events
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to connect WS: %v", err)
 	}
@@ -1456,7 +1457,7 @@ func TestWebShareAntiBruteForceLockout(t *testing.T) {
 	}()
 
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to connect WS: %v", err)
 	}
@@ -1601,7 +1602,7 @@ func TestWebShareToggleAndDisabledState(t *testing.T) {
 
 	// 2. Connect WebSocket and toggle Web Share ON
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, testAuth())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1994,7 +1995,7 @@ func TestWebSharePauseResumeControls(t *testing.T) {
 
 	// 5. Connect WebSocket from host to test host controls
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, testAuth())
 	if err != nil {
 		t.Fatalf("WS connect failed: %v", err)
 	}
@@ -2078,7 +2079,7 @@ func TestWebShareCancelReflectedToHostAndSpeed(t *testing.T) {
 
 	// Connect Host WebSocket
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, testAuth())
 	if err != nil {
 		t.Fatalf("WS dial failed: %v", err)
 	}
@@ -2463,7 +2464,7 @@ func TestDaemonDiskBenchmarkAction(t *testing.T) {
 	}()
 
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to connect WS: %v", err)
 	}
@@ -2576,7 +2577,7 @@ func TestBatchMultiFileResilienceAndErrorRecovery(t *testing.T) {
 
 	// Connect WebSocket to Receiver
 	recvWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", recvHTTPPort)
-	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, nil)
+	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to dial receiver ws: %v", err)
 	}
@@ -2587,7 +2588,7 @@ func TestBatchMultiFileResilienceAndErrorRecovery(t *testing.T) {
 
 	// Connect WebSocket to Sender and drain events in background
 	sendWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", sendHTTPPort)
-	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, nil)
+	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to dial sender ws: %v", err)
 	}
@@ -2705,7 +2706,7 @@ func TestBatchItemFailedAdvance(t *testing.T) {
 
 	// Connect WebSocket to Receiver
 	recvWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", recvHTTPPort)
-	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, nil)
+	recvWS, _, err := websocket.DefaultDialer.Dial(recvWSURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to dial receiver ws: %v", err)
 	}
@@ -2716,7 +2717,7 @@ func TestBatchItemFailedAdvance(t *testing.T) {
 
 	// Connect WebSocket to Sender and track events
 	sendWSURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", sendHTTPPort)
-	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, nil)
+	sendWS, _, err := websocket.DefaultDialer.Dial(sendWSURL, testAuth())
 	if err != nil {
 		t.Fatalf("Failed to dial sender ws: %v", err)
 	}

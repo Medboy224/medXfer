@@ -29,7 +29,7 @@ func TestHotspotWebSocketCommands(t *testing.T) {
 	defer server.Stop()
 
 	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, testAuth())
 	if err != nil {
 		t.Fatalf("WS Dial failed: %v", err)
 	}
