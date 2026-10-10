@@ -7,7 +7,6 @@ package diag
 import (
 	"fmt"
 	"math"
-	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +33,7 @@ type TransferSessionTracker struct {
 	diskSampleCount  int
 	netSampleCount   int
 	bottleneckCounts map[string]int
+	retries          int
 
 	// 4 Quartile buckets (0: 0-25%, 1: 25-50%, 2: 50-75%, 3: 75-100%)
 	phaseSpeedSum       [4]float64
@@ -122,8 +122,16 @@ func (t *TransferSessionTracker) RecordSample(stats engine.TransferStats, progre
 	}
 }
 
-// GenerateReport compiles the full transfer diagnostic summary
-func (t *TransferSessionTracker) GenerateReport() *TransferSummaryReport {
+// RecordRetry counts a chunk that had to be requested again.
+func (t *TransferSessionTracker) RecordRetry() {
+	t.mu.Lock()
+	t.retries++
+	t.mu.Unlock()
+}
+
+// GenerateReport compiles the full transfer diagnostic summary. With the zero ReportOptions
+// it carries no file name (DEV-05).
+func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -171,7 +179,7 @@ func (t *TransferSessionTracker) GenerateReport() *TransferSummaryReport {
 
 	// Phase samples
 	phaseNames := []string{"0-25%", "25-50%", "50-75%", "75-100%"}
-	var phaseSamples []TransferPhaseSample
+	var phaseSamples []PhaseSample
 
 	for i := 0; i < 4; i++ {
 		pSpeed := 0.0
@@ -204,7 +212,7 @@ func (t *TransferSessionTracker) GenerateReport() *TransferSummaryReport {
 			}
 		}
 
-		phaseSamples = append(phaseSamples, TransferPhaseSample{
+		phaseSamples = append(phaseSamples, PhaseSample{
 			Phase:          phaseNames[i],
 			AvgSpeedMBps:   math.Round(pSpeed*10) / 10,
 			DiskLatencyMs:  math.Round(pDisk*10) / 10,
@@ -224,42 +232,24 @@ func (t *TransferSessionTracker) GenerateReport() *TransferSummaryReport {
 		diagnosisText = fmt.Sprintf("✓ Transfert optimal et équilibré : Écriture séquentielle continue (latence disque %.1f ms, latence réseau %.1f ms).", avgDiskLatency, avgNetLatency)
 	}
 
-	// Formatted Report (Clipboard-ready)
-	durMinutes := int(duration.Minutes())
-	durRemainderSec := int(duration.Seconds()) % 60
-	durStr := fmt.Sprintf("%02dm %02ds", durMinutes, durRemainderSec)
-
-	var sb strings.Builder
-	sb.WriteString("================ medXfer Diagnostic Summary ================\n")
-	sb.WriteString(fmt.Sprintf("Transfer: %s (%d files, %s)\n", t.TransferName, t.TotalFiles, FormatBytes(t.TotalBytes)))
-	sb.WriteString(fmt.Sprintf("Duration: %s | Avg Speed: %.1f MB/s | Peak: %.1f MB/s | Min: %.1f MB/s\n",
-		durStr, avgSpeed, t.peakSpeed, minSpeed))
-	sb.WriteString(fmt.Sprintf("Bottleneck: %s (Disk Latency: %.1f ms | Net Latency: %.1f ms)\n",
-		primaryBottleneck, avgDiskLatency, avgNetLatency))
-	sb.WriteString("Quartile Breakdown:\n")
-	for _, ps := range phaseSamples {
-		sb.WriteString(fmt.Sprintf("  - %s: %5.1f MB/s | Disk: %5.1f ms | Net: %5.1f ms [%s]\n",
-			ps.Phase, ps.AvgSpeedMBps, ps.DiskLatencyMs, ps.NetLatencyMs, ps.DominantFactor))
+	r := newReportHeader()
+	if opts.IncludeNames {
+		r.TransferName = t.TransferName
 	}
-	sb.WriteString(fmt.Sprintf("Analysis: %s\n", diagnosisText))
-	sb.WriteString("Pipeline: Ordered Sequential Writer Active (Zero-seek guarantee)\n")
-	sb.WriteString("============================================================")
-
-	return &TransferSummaryReport{
-		TransferName:      t.TransferName,
-		TotalBytes:        t.TotalBytes,
-		TotalFiles:        t.TotalFiles,
-		DurationSec:       math.Round(durSec*10) / 10,
-		AvgSpeedMBps:      math.Round(avgSpeed*10) / 10,
-		PeakSpeedMBps:     math.Round(t.peakSpeed*10) / 10,
-		MinSpeedMBps:      math.Round(minSpeed*10) / 10,
-		PrimaryBottleneck: primaryBottleneck,
-		AvgDiskLatencyMs:  math.Round(avgDiskLatency*10) / 10,
-		AvgNetLatencyMs:   math.Round(avgNetLatency*10) / 10,
-		PhaseSamples:      phaseSamples,
-		DiagnosisText:     diagnosisText,
-		FormattedReport:   sb.String(),
-	}
+	r.TotalBytes = t.TotalBytes
+	r.TotalFiles = t.TotalFiles
+	r.DurationSec = math.Round(durSec*10) / 10
+	r.AvgSpeedMBps = math.Round(avgSpeed*10) / 10
+	r.PeakSpeedMBps = math.Round(t.peakSpeed*10) / 10
+	r.MinSpeedMBps = math.Round(minSpeed*10) / 10
+	r.Retries = t.retries
+	r.PrimaryBottleneck = primaryBottleneck
+	r.AvgDiskLatencyMs = math.Round(avgDiskLatency*10) / 10
+	r.AvgNetLatencyMs = math.Round(avgNetLatency*10) / 10
+	r.PhaseSamples = phaseSamples
+	r.DiagnosisText = diagnosisText
+	r.FormattedReport = FormatText(&r)
+	return &r
 }
 
 // FormatBytes formats an integer byte count into human-readable string (KB, MB, GB)

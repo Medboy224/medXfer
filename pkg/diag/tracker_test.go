@@ -57,7 +57,7 @@ func TestTransferSessionTracker(t *testing.T) {
 	tracker.StartTime = time.Now().Add(-14 * time.Minute)
 	tracker.EndTime = time.Now()
 
-	report := tracker.GenerateReport()
+	report := tracker.GenerateReport(ReportOptions{IncludeNames: true})
 	if report == nil {
 		t.Fatal("Expected report, got nil")
 	}
@@ -86,8 +86,8 @@ func TestTransferSessionTracker(t *testing.T) {
 	if !strings.Contains(report.FormattedReport, "medXfer Diagnostic Summary") {
 		t.Errorf("Formatted report missing header")
 	}
-	if !strings.Contains(report.FormattedReport, "Ordered Sequential Writer Active") {
-		t.Errorf("Formatted report missing pipeline confirmation")
+	if !strings.Contains(report.FormattedReport, "Naruto Season 1") {
+		t.Errorf("Formatted report missing the transfer name requested by IncludeNames")
 	}
 
 	t.Logf("Generated Diagnostic Report:\n%s", report.FormattedReport)

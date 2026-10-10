@@ -24,9 +24,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// testConfigDir keeps the tests away from the user's real config.json and reports.
+// TestMain removes it.
+var testConfigDir string
+
 func init() {
 	temp, err := os.MkdirTemp("", "medxfer_test_cfg_*")
 	if err == nil {
+		testConfigDir = temp
 		SetCustomConfigDir(temp)
 	}
 }

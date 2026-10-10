@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/api"
+	"github.com/Medboy224/medXfer/pkg/diag"
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/hotspot"
@@ -140,6 +141,7 @@ func getEffectiveArgs() []string {
 }
 
 func main() {
+	diag.AppVersion = discovery.AppVersion
 	args := getEffectiveArgs()
 	if len(args) < 1 {
 		printUsage()
@@ -157,6 +159,8 @@ func main() {
 		handleRecv(args[1:])
 	case "node", "n", "cli":
 		handleNode()
+	case "report":
+		handleReport(args[1:])
 	case "help", "h", "?":
 		printUsage()
 		os.Exit(0)
@@ -1581,6 +1585,7 @@ func printUsage() {
 		"  xfer send [-i] <file_or_folder> [more...]      (Direct transfer with pairing code; -i prompts)\n" +
 		"  xfer recv [pairing_code]                       (Receive via 6-digit code or auto-discover)\n" +
 		"  xfer recv --ip <addr>                          (Direct connect by IP)\n" +
+		"  xfer report show|compare|list [--json]         (Transfer diagnostic reports)\n" +
 		"\n" +
 		"Examples on Android / Termux:\n" +
 		"  ./xfer-android-arm64 daemon                    -> Starts Web UI on http://localhost:19999\n" +
