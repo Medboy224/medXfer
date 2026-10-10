@@ -151,6 +151,13 @@ func main() {
 	switch cmd {
 	case "daemon", "d", "server", "srv":
 		handleDaemon(args[1:])
+	case "dev-ui", "devui":
+		if !api.DashboardAvailable {
+			fmt.Fprintln(os.Stderr, "[-] xfer dev-ui: the web dashboard is a development tool, not part of this build.\n"+
+				"    Build with: go build -tags devui -o xfer ./cmd/xfer   (build.bat does)")
+			os.Exit(1)
+		}
+		handleDaemon(args[1:])
 	case "share", "web":
 		handleShare(args[1:])
 	case "send", "s":
@@ -1459,8 +1466,12 @@ func handleDaemon(args []string) {
 	fmt.Printf(" Port         : %d\n", st.LocalPort)
 	fmt.Printf(" Pairing Code : %s\n", st.PairingCode)
 	fmt.Println("--------------------------------------------------")
-	fmt.Println(" Web Dashboard (this device only):")
-	fmt.Printf("   👉 %s/\n", localURL)
+	if api.DashboardAvailable {
+		fmt.Println(" Web Dashboard (development build, this device only):")
+		fmt.Printf("   👉 %s/\n", localURL)
+	} else {
+		fmt.Println(" Web Dashboard: not in this build (development tool, build with -tags devui)")
+	}
 	fmt.Printf(" Control token file: %s\n", tokenPath)
 	fmt.Println("--------------------------------------------------")
 	if *webShareFlag {
@@ -1587,7 +1598,8 @@ func printUsage() {
 		"               medXfer - Fast P2P Transfer        \n" +
 		"==================================================\n" +
 		"Usage:\n" +
-		"  xfer daemon [--port 19999] [--web-share]       (Web UI Dashboard & WebSocket server)\n" +
+		"  xfer daemon [--port 19999] [--web-share]       (Headless daemon & control WebSocket)\n" +
+		"  xfer dev-ui [--port 19999] [--web-share]       (Daemon with the web dashboard; devui builds)\n" +
 		"  xfer node                                      (Persistent interactive CLI mode with pairing code)\n" +
 		"  xfer share <file_or_folder...>                 (Instant Web Share with QR code & PIN)\n" +
 		"  xfer send [-i] <file_or_folder> [more...]      (Direct transfer with pairing code; -i prompts)\n" +
