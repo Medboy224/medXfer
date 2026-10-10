@@ -247,6 +247,48 @@ func TestFinalizeSyncFailureKeepsState(t *testing.T) {
 	}
 }
 
+type closeTrackingFile struct {
+	*memFile
+	closed bool
+}
+
+func (f *closeTrackingFile) Close() error { f.closed = true; return nil }
+
+// #32: the data file is closed when Finalize returns, so the received file can be moved or
+// deleted at once (Windows refuses both on an open file).
+func TestFinalizeClosesDataFileBeforeReturning(t *testing.T) {
+	dir := t.TempDir()
+	data := &closeTrackingFile{memFile: &memFile{}}
+	state := &memFile{vol: []byte(strings.Repeat("i", 32) + "\x00")}
+	dm := newDiskManager(data, state, filepath.Join(dir, "f.bin"), filepath.Join(dir, "f.bin.medxfer"),
+		10, make([]bool, 1), 0)
+	if err := dm.Finalize(); err != nil {
+		t.Fatal(err)
+	}
+	if !data.closed {
+		t.Fatal("data file still open after Finalize returned")
+	}
+
+	// Same check on a real file: rename and delete right after Finalize.
+	real, err := CreateAndPreallocate(dir, "real.bin", 64*1024, 64*1024, strings.Repeat("r", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := real.WriteChunkAt(chunkContent(0, 64*1024), 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := real.Finalize(); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(dir, "moved.bin")
+	if err := os.Rename(filepath.Join(dir, "real.bin"), moved); err != nil {
+		t.Fatalf("cannot move the received file right after Finalize: %v", err)
+	}
+	if err := os.Remove(moved); err != nil {
+		t.Fatalf("cannot delete the received file right after Finalize: %v", err)
+	}
+}
+
 func TestDispatcherNoDeadlockAfterRetries(t *testing.T) {
 	td := &taskDispatcher{}
 	td.Push(chunkTask{index: 7}) // two workers failed: 7 then 0 pushed back

@@ -359,14 +359,13 @@ func (dm *DiskManager) Finalize() error {
 		_ = os.Remove(sp)
 	}
 
-	// Close payload file asynchronously so network batch pipeline doesn't block on OS buffer flush.
-	// Redundant Truncate is intentionally avoided to prevent Windows NTFS zeroing and lock contention.
-	go func(fileToClose fileHandle) {
-		if fileToClose != nil {
-			_ = fileToClose.Close()
-		}
-	}(f)
-
+	// Close synchronously: the data is already synced, so Close is cheap, and the file must be
+	// released before the transfer is reported complete. On Windows an open file cannot be
+	// moved or deleted (#32). Redundant Truncate is intentionally avoided to prevent Windows
+	// NTFS zeroing and lock contention.
+	if f != nil {
+		_ = f.Close()
+	}
 	return nil
 }
 
