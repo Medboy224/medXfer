@@ -79,7 +79,11 @@ func runBench(args []string, stdout io.Writer) error {
 			if *code == "" {
 				return fmt.Errorf("--peer needs the --code printed by the listening side")
 			}
-			return benchNetPeer(stdout, *peer, *code, size, *asJSON)
+			addr, err := peerAddress(*peer)
+			if err != nil {
+				return err
+			}
+			return benchNetPeer(stdout, addr, *code, size, *asJSON)
 		}
 		return fmt.Errorf("net needs --listen or --peer\n%s", benchUsage)
 	}
@@ -125,6 +129,13 @@ func benchNetListen(stdout io.Writer, addr string, once bool) error {
 		fmt.Fprintln(stdout, "On the other device, use the address of the network it shares with this one:")
 		for _, a := range addrs {
 			fmt.Fprintf(stdout, "  %-24s xfer bench net --peer %s --code %s\n", a.iface+":", net.JoinHostPort(a.ip, port), code)
+		}
+		if len(addrs) == 1 && addrs[0].iface == "default route" {
+			// Android hides its interfaces: the default route may be mobile data, unreachable
+			// from a device on this phone's hotspot.
+			fmt.Fprintf(stdout, "If the other device is on this phone's hotspot, use this phone's address on the hotspot\n"+
+				"instead: the default gateway shown on the other device (Windows: ipconfig; Linux: ip route).\n"+
+				"  xfer bench net --peer <gateway>:%s --code %s\n", port, code)
 		}
 	} else {
 		fmt.Fprintf(stdout, "No active network interface found. On the other device: xfer bench net --peer <this-ip>:%s --code %s\n", port, code)
@@ -176,6 +187,31 @@ func parseSize(s string) (int64, error) {
 		return 0, fmt.Errorf("invalid size %q (examples: 4M, 512K, 1G)", s)
 	}
 	return v * mult, nil
+}
+
+const benchNetDefaultPort = "19990"
+
+// peerAddress accepts HOST:PORT, or HOST alone (default port). "10.0.0.5.19990", a common
+// typo, gets an explicit correction instead of Go's "missing port in address".
+func peerAddress(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if _, _, err := net.SplitHostPort(s); err == nil {
+		return s, nil
+	}
+	if ip := net.ParseIP(s); ip != nil {
+		return net.JoinHostPort(s, benchNetDefaultPort), nil
+	}
+	if i := strings.LastIndex(s, "."); i > 0 {
+		if ip := net.ParseIP(s[:i]); ip != nil && ip.To4() != nil {
+			if _, err := strconv.Atoi(s[i+1:]); err == nil {
+				return "", fmt.Errorf("invalid address %q: separate the port with a colon: %s:%s", s, s[:i], s[i+1:])
+			}
+		}
+	}
+	if !strings.Contains(s, ":") && s != "" {
+		return net.JoinHostPort(s, benchNetDefaultPort), nil // host name without port
+	}
+	return "", fmt.Errorf("invalid address %q (expected HOST:PORT, for example 192.168.1.20:%s)", s, benchNetDefaultPort)
 }
 
 type lanAddress struct{ iface, ip string }

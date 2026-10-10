@@ -70,3 +70,26 @@ func TestLANAddresses(t *testing.T) {
 		}
 	}
 }
+
+func TestPeerAddress(t *testing.T) {
+	ok := map[string]string{
+		"10.0.0.5:19990":    "10.0.0.5:19990",
+		"10.0.0.5":          "10.0.0.5:19990",
+		" 192.168.1.2:4000": "192.168.1.2:4000",
+		"[::1]:5000":        "[::1]:5000",
+		"::1":               "[::1]:19990",
+		"phone.local":       "phone.local:19990",
+	}
+	for in, want := range ok {
+		if got, err := peerAddress(in); err != nil || got != want {
+			t.Errorf("peerAddress(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	// The typo of the field report: a dot instead of the colon.
+	if _, err := peerAddress("10.31.11.102.19990"); err == nil || !strings.Contains(err.Error(), "10.31.11.102:19990") {
+		t.Errorf("typo not explained: %v", err)
+	}
+	if _, err := peerAddress(""); err == nil {
+		t.Error("empty address accepted")
+	}
+}
