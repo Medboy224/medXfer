@@ -181,8 +181,34 @@ func parseSize(s string) (int64, error) {
 type lanAddress struct{ iface, ip string }
 
 // lanAddresses lists the IPv4 addresses of the interfaces that are up, skipping loopback and
-// link-local (169.254.x.x) addresses, which another device cannot reach.
+// link-local (169.254.x.x) addresses, which another device cannot reach. Android 11 and later
+// forbid listing interfaces (net.Interfaces fails or returns nothing under Termux): the address
+// of the default route is then returned instead.
 func lanAddresses() []lanAddress {
+	out := interfaceAddresses()
+	if len(out) == 0 {
+		if ip := defaultRouteIP(); ip != "" {
+			out = append(out, lanAddress{iface: "default route", ip: ip})
+		}
+	}
+	return out
+}
+
+// defaultRouteIP returns the local address the system would use to reach the Internet. A UDP
+// "connection" only selects a route: no packet is sent.
+func defaultRouteIP() string {
+	conn, err := net.Dial("udp4", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	if a, ok := conn.LocalAddr().(*net.UDPAddr); ok && a.IP.To4() != nil && !a.IP.IsLoopback() {
+		return a.IP.To4().String()
+	}
+	return ""
+}
+
+func interfaceAddresses() []lanAddress {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil
