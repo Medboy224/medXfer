@@ -333,7 +333,7 @@ func TestFolderTarStreamingBatch(t *testing.T) {
 
 	pair.Send([]string{folderToShare}, testkit.SendOptions{UseTarStream: true})
 	pair.AcceptOffer(0)
-	pair.Receiver.WaitEvent("transfer_complete", 0)
+	pair.WaitTransferDone(0)
 
 	testkit.AssertTreesEqual(t, sendDir, recvDir)
 }
@@ -354,7 +354,7 @@ func TestFolderGranularBatchTransfer(t *testing.T) {
 	// Without use_tar_stream a folder is sent as a granular batch.
 	pair.Send([]string{folderToShare}, testkit.SendOptions{})
 	pair.AcceptOffer(0)
-	pair.Receiver.WaitEvent("transfer_complete", 0)
+	pair.WaitTransferDone(0)
 
 	testkit.AssertTreesEqual(t, sendDir, recvDir)
 }
@@ -1635,7 +1635,7 @@ func TestBatchMultiFileResilienceAndErrorRecovery(t *testing.T) {
 	pair.AcceptOffer(0)
 
 	// A freeze or deadlock shows up as a missing transfer_complete.
-	pair.Receiver.WaitEvent("transfer_complete", 15*time.Second)
+	pair.WaitTransferDone(15 * time.Second)
 	testkit.AssertTreesEqual(t, sendDir, recvDir)
 }
 
@@ -1658,7 +1658,7 @@ func TestBatchItemFailedAdvance(t *testing.T) {
 
 	pair.Send([]string{folderToShare}, testkit.SendOptions{})
 	pair.AcceptOffer(0)
-	pair.Receiver.WaitEvent("transfer_complete", 0)
+	pair.WaitTransferDone(0)
 
 	for _, name := range []string{"file_0.txt", "file_2.txt"} {
 		if _, err := os.Stat(filepath.Join(recvDir, "batch_with_skip", name)); err != nil {
