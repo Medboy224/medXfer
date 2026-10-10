@@ -59,13 +59,11 @@ func BenchmarkDisk(dir string, sizeBytes int64) (*DiskBenchResult, error) {
 		_ = os.Remove(testFilePath)
 	}()
 
-	// Prepare 1MB pseudo-pattern buffer to prevent aggressive filesystem zero-compression
+	// 1 MiB of random data (DEV-09): zeros or a short repeated pattern would let a compressing
+	// or deduplicating file system skip most of the writes.
 	blockSize := 1024 * 1024
 	pattern := make([]byte, blockSize)
-	_, _ = rand.Read(pattern[:4096])
-	for i := 4096; i < blockSize; i += 4096 {
-		copy(pattern[i:], pattern[:4096])
-	}
+	_, _ = rand.Read(pattern)
 
 	// 1. Write Benchmark
 	f, err := os.OpenFile(testFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)

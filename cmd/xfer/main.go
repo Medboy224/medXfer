@@ -163,6 +163,8 @@ func main() {
 		handleReport(args[1:])
 	case "ctl":
 		handleCtl(args[1:])
+	case "bench":
+		handleBench(args[1:])
 	case "help", "h", "?":
 		printUsage()
 		os.Exit(0)
@@ -1589,6 +1591,7 @@ func printUsage() {
 		"  xfer recv --ip <addr>                          (Direct connect by IP)\n" +
 		"  xfer report show|compare|list [--json]         (Transfer diagnostic reports)\n" +
 		"  xfer ctl [--script scenario.jsonl]             (Drive an embedded daemon with JSON lines)\n" +
+		"  xfer bench disk|net [...]                      (Disk and network benchmarks)\n" +
 		"\n" +
 		"Examples on Android / Termux:\n" +
 		"  ./xfer-android-arm64 daemon                    -> Starts Web UI on http://localhost:19999\n" +

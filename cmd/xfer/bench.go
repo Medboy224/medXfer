@@ -1,0 +1,180 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/Medboy224/medXfer/pkg/diag"
+	"github.com/Medboy224/medXfer/pkg/engine"
+)
+
+const benchUsage = `Usage:
+  xfer bench disk [--dir DIR] [--size 32M] [--json]
+      Write SIZE of random data with fsync, read it back, delete it. DIR defaults to the
+      current folder: point it at the folder you receive into.
+  xfer bench net --listen [ADDR]                    (default ADDR :19990; prints a code)
+  xfer bench net --peer HOST:PORT --code CODE [--size 32M] [--json]
+      Latency (ping-pong) and throughput in both directions, in memory, no disk.
+
+The network benchmark is raw, unencrypted TCP (step R1): the encrypted measurement comes
+with the secure channel (J3).
+`
+
+// handleBench implements `xfer bench` (DEV-07, base version). It exits with status 1 on error.
+func handleBench(args []string) {
+	if err := runBench(args, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] xfer bench: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runBench(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing subcommand\n%s", benchUsage)
+	}
+	fs := flag.NewFlagSet("bench", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	asJSON := fs.Bool("json", false, "print JSON")
+	sizeStr := fs.String("size", "32M", "bytes to write or send (K, M, G suffixes)")
+	dir := fs.String("dir", ".", "folder to test (disk)")
+	listen := fs.String("listen", "", "serve network benchmarks on this address (net)")
+	peer := fs.String("peer", "", "address of a `xfer bench net --listen` (net)")
+	code := fs.String("code", "", "code printed by the listening side (net)")
+	once := fs.Bool("once", false, "with --listen, stop after one session")
+	// Accept "--listen" without a value: it then uses the default address.
+	sub := normalizeCommand(args[0])
+	rest := args[1:]
+	for i, a := range rest {
+		if (a == "--listen" || a == "-listen") && (i+1 == len(rest) || strings.HasPrefix(rest[i+1], "-")) {
+			rest = append(append(append([]string{}, rest[:i]...), a+"=:19990"), rest[i+1:]...)
+			break
+		}
+	}
+	if err := fs.Parse(rest); err != nil {
+		return fmt.Errorf("%v\n%s", err, benchUsage)
+	}
+	size, err := parseSize(*sizeStr)
+	if err != nil {
+		return err
+	}
+
+	switch sub {
+	case "disk":
+		return benchDisk(stdout, *dir, size, *asJSON)
+	case "net":
+		switch {
+		case *listen != "":
+			return benchNetListen(stdout, *listen, *once)
+		case *peer != "":
+			if *code == "" {
+				return fmt.Errorf("--peer needs the --code printed by the listening side")
+			}
+			return benchNetPeer(stdout, *peer, *code, size, *asJSON)
+		}
+		return fmt.Errorf("net needs --listen or --peer\n%s", benchUsage)
+	}
+	return fmt.Errorf("unknown bench subcommand %q\n%s", args[0], benchUsage)
+}
+
+func benchDisk(stdout io.Writer, dir string, size int64, asJSON bool) error {
+	if size < 4<<20 || size > 512<<20 {
+		return fmt.Errorf("disk size must be between 4M and 512M")
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	res, err := engine.BenchmarkDisk(abs, size)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return writeJSON(stdout, res)
+	}
+	fmt.Fprintf(stdout, "Disk benchmark: %s (%s, random data, fsync)\n", abs, diag.FormatBytes(size))
+	fmt.Fprintf(stdout, "  write: %8.1f MB/s  (%d ms)\n", res.WriteSpeedMBps, res.WriteDurationMs)
+	fmt.Fprintf(stdout, "  read:  %8.1f MB/s  (%d ms, may come from the OS cache)\n", res.ReadSpeedMBps, res.ReadDurationMs)
+	fmt.Fprintf(stdout, "  rating: %s\n", res.Rating)
+	if res.Warning != "" {
+		fmt.Fprintf(stdout, "  warning: %s\n", res.Warning)
+	}
+	return nil
+}
+
+func benchNetListen(stdout io.Writer, addr string, once bool) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	code := diag.NewNetBenchCode()
+	fmt.Fprintf(stdout, "Network benchmark server on %s, code %s\n", ln.Addr(), code)
+	fmt.Fprintf(stdout, "On the other device: xfer bench net --peer <this-ip>:%s --code %s\n", portOf(ln.Addr()), code)
+	fmt.Fprintln(stdout, "Raw unencrypted TCP. Ctrl+C to stop.")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return diag.ServeNetBench(ctx, ln, code, once, func(err error) {
+		fmt.Fprintf(os.Stderr, "[-] session: %v\n", err)
+	})
+}
+
+func benchNetPeer(stdout io.Writer, addr, code string, size int64, asJSON bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	res, err := diag.RunNetBench(ctx, addr, code, size)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return writeJSON(stdout, res)
+	}
+	fmt.Fprintf(stdout, "Network benchmark: %s each way, raw unencrypted TCP\n", diag.FormatBytes(size))
+	fmt.Fprintf(stdout, "  latency:  min %.3f ms | avg %.3f ms | p95 %.3f ms\n", res.RTTMinMs, res.RTTAvgMs, res.RTTP95Ms)
+	fmt.Fprintf(stdout, "  upload:   %8.1f MB/s (this device -> peer)\n", res.UploadMBps)
+	fmt.Fprintf(stdout, "  download: %8.1f MB/s (peer -> this device)\n", res.DownloadMBps)
+	fmt.Fprintf(stdout, "  link: %s, %s\n", res.LinkType, res.Rating)
+	return nil
+}
+
+// parseSize reads a byte count with an optional K, M or G suffix (powers of 1024).
+func parseSize(s string) (int64, error) {
+	s = strings.TrimSpace(strings.ToUpper(s))
+	s = strings.TrimSuffix(strings.TrimSuffix(s, "IB"), "B")
+	mult := int64(1)
+	if n := len(s); n > 0 {
+		switch s[n-1] {
+		case 'K':
+			mult, s = 1<<10, s[:n-1]
+		case 'M':
+			mult, s = 1<<20, s[:n-1]
+		case 'G':
+			mult, s = 1<<30, s[:n-1]
+		}
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || v <= 0 || v > (1<<40)/mult {
+		return 0, fmt.Errorf("invalid size %q (examples: 4M, 512K, 1G)", s)
+	}
+	return v * mult, nil
+}
+
+func portOf(a net.Addr) string {
+	_, port, _ := net.SplitHostPort(a.String())
+	return port
+}
+
+func writeJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
