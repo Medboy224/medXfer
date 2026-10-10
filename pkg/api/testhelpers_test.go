@@ -12,7 +12,11 @@ const testControlToken = "7e57c0de7e57c0de7e57c0de7e57c0de7e57c0de7e57c0de7e57c0
 
 func TestMain(m *testing.M) {
 	_ = os.Setenv("MEDXFER_CONTROL_TOKEN", testControlToken)
-	os.Exit(m.Run())
+	code := m.Run()
+	if testConfigDir != "" {
+		_ = os.RemoveAll(testConfigDir)
+	}
+	os.Exit(code)
 }
 
 // testAuth is the header a native client sends on control routes and /ws.

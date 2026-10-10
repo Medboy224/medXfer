@@ -6,8 +6,8 @@ import "github.com/Medboy224/medXfer/pkg/diag"
 // and the dashboard payloads unchanged.
 type (
 	TransferSessionTracker = diag.TransferSessionTracker
-	TransferSummaryReport  = diag.TransferSummaryReport
-	TransferPhaseSample    = diag.TransferPhaseSample
+	TransferSummaryReport  = diag.Report
+	TransferPhaseSample    = diag.PhaseSample
 )
 
 // NewTransferSessionTracker creates a tracker for a single file or folder batch.

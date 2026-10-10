@@ -970,7 +970,9 @@ func (l *daemonListener) OnProgress(stats engine.TransferStats) {
 	}))
 }
 
-func (l *daemonListener) OnChunkFailed(chunkIndex uint32, retryCount int, err error) {}
+func (l *daemonListener) OnChunkFailed(chunkIndex uint32, retryCount int, err error) {
+	l.server.RecordTransferRetry()
+}
 
 func (l *daemonListener) OnComplete(savePath string, duration time.Duration) {
 	l.server.Broadcast(NewEvent("file_complete", map[string]interface{}{

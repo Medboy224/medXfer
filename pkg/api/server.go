@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/diag"
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/hotspot"
@@ -2454,16 +2455,40 @@ func (s *DaemonServer) RecordTransferSample(stats engine.TransferStats, progress
 	tracker.RecordSample(stats, progressPercent)
 }
 
-// FinishTransferTracker compiles the final diagnostic summary report
+// RecordTransferRetry counts a chunk retry in the active telemetry tracker, if any.
+func (s *DaemonServer) RecordTransferRetry() {
+	s.trackerMu.Lock()
+	tracker := s.activeTracker
+	s.trackerMu.Unlock()
+	if tracker != nil {
+		tracker.RecordRetry()
+	}
+}
+
+// maxSavedReports is how many transfer reports ReportsDir keeps (oldest removed first).
+const maxSavedReports = 20
+
+// ReportsDir is where the daemon saves transfer reports, next to config.json.
+func ReportsDir() string {
+	return filepath.Join(filepath.Dir(GetConfigFilePath()), "reports")
+}
+
+// FinishTransferTracker compiles the final diagnostic summary report and saves it in
+// ReportsDir. The report carries no file name, IP or host name (DEV-05).
 func (s *DaemonServer) FinishTransferTracker() *TransferSummaryReport {
 	s.trackerMu.Lock()
-	defer s.trackerMu.Unlock()
 	if s.activeTracker == nil {
+		defer s.trackerMu.Unlock()
 		return s.lastSummaryReport
 	}
-	report := s.activeTracker.GenerateReport()
+	report := s.activeTracker.GenerateReport(diag.ReportOptions{})
 	s.lastSummaryReport = report
 	s.activeTracker = nil
+	s.trackerMu.Unlock()
+
+	if _, err := diag.SaveReport(ReportsDir(), report, maxSavedReports); err != nil {
+		log.Printf("[diag] could not save the transfer report: %v", err)
+	}
 	return report
 }
 
