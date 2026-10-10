@@ -918,6 +918,20 @@ func (s *DaemonServer) GetNodeAddr() string {
 	return "127.0.0.1:18887"
 }
 
+// NodeListenAddr returns the address of the peer (pairing) listener, or "" until Serve has
+// opened it. Unlike GetNodeAddr it never falls back to the default port.
+func (s *DaemonServer) NodeListenAddr() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.nodeLn != nil {
+		return s.nodeLn.Addr().String()
+	}
+	return ""
+}
+
+// PairingCode returns the code a peer must present to pair with this daemon.
+func (s *DaemonServer) PairingCode() string { return s.GetStatus().PairingCode }
+
 func (s *DaemonServer) listenForIncomingPairings(ln net.Listener) {
 	srvTLSConfig, _ := session.ServerTLSConfig()
 	for {
