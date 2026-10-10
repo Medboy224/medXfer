@@ -230,6 +230,25 @@ func (p *Pair) AcceptOffer(timeout time.Duration) Event {
 	return offer
 }
 
+// WaitTransferDone waits for the receiver's transfer_complete and for the end of the
+// pre-flight disk probe (transfer_preflight), in either order, and returns the completion
+// event. The daemon runs that probe in the receive folder when an offer is accepted; until it
+// ends, its temporary file is in that folder (issue #36).
+func (p *Pair) WaitTransferDone(timeout time.Duration) Event {
+	p.Receiver.t.Helper()
+	var complete Event
+	var done, probed bool
+	for !done || !probed {
+		e := p.Receiver.WaitEventAny(timeout, "transfer_complete", "transfer_preflight")
+		if e.Event == "transfer_complete" {
+			complete, done = e, true
+		} else {
+			probed = true
+		}
+	}
+	return complete
+}
+
 // AssertTreesEqual fails the test unless directories want and got hold the same files with
 // the same contents. Empty directories and *.medxfer state files are ignored.
 func AssertTreesEqual(t testing.TB, want, got string) {
