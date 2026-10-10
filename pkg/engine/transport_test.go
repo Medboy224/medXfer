@@ -223,13 +223,18 @@ func TestEndToEndTransferResume(t *testing.T) {
 	l1.Close()
 
 	bindAddr1 := fmt.Sprintf("127.0.0.1:%d", port1)
+	// Every goroutine is awaited before the test ends: on Windows a file still open by a
+	// stopping sender or receiver makes the TempDir cleanup fail (issue #41).
+	send1Done, recv1Done := make(chan struct{}), make(chan struct{})
 	go func() {
+		defer close(send1Done)
 		_ = sender1.ServeAndSend(ctx1, bindAddr1, srcPath, senderListener1, 0)
 	}()
 
 	time.Sleep(50 * time.Millisecond)
 
 	go func() {
+		defer close(recv1Done)
 		_ = receiver1.Pull(ctx1, bindAddr1, recvListener1, fileID)
 	}()
 
@@ -244,7 +249,15 @@ func TestEndToEndTransferResume(t *testing.T) {
 		}
 	}
 	cancel1()
-	time.Sleep(200 * time.Millisecond)
+	stopStart := time.Now()
+	for name, done := range map[string]chan struct{}{"receiver 1": recv1Done, "sender 1": send1Done} {
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Fatalf("%s still running 15 s after its context was cancelled", name)
+		}
+	}
+	t.Logf("first transfer stopped %v after cancel", time.Since(stopStart))
 
 	statePathDebug := filepath.Join(dstDir, fileName+".medxfer")
 	rawB, readErr := os.ReadFile(statePathDebug)
@@ -283,8 +296,14 @@ func TestEndToEndTransferResume(t *testing.T) {
 	recvListener2 := &recordingListener{}
 
 	// Notice: pass peekOffset as in node mode!
+	send2Done := make(chan struct{})
 	go func() {
+		defer close(send2Done)
 		_ = sender2.ServeAndSend(ctx2, bindAddr2, srcPath, senderListener2, peekOffset)
+	}()
+	defer func() { // runs before TempDir cleanup: the sender must have released srcPath
+		cancel2()
+		<-send2Done
 	}()
 
 	time.Sleep(50 * time.Millisecond)
