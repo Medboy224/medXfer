@@ -165,6 +165,8 @@ func main() {
 		handleCtl(args[1:])
 	case "bench":
 		handleBench(args[1:])
+	case "bundle":
+		handleBundle(args[1:])
 	case "help", "h", "?":
 		printUsage()
 		os.Exit(0)
@@ -1418,6 +1420,7 @@ func handleDaemon(args []string) {
 	webShareFlag := daemonCmd.Bool("web-share", false, "Open the Web Share guest portal to the LAN at startup")
 
 	_ = daemonCmd.Parse(normalizedArgs)
+	defer startJournal()()
 
 	srv := api.NewDaemonServer(*portFlag, *outDirFlag, *nameFlag)
 	// Web Share is an optional module, disabled by default (bible ch. 11, rule R3): until it is
@@ -1512,6 +1515,7 @@ func handleShare(args []string) {
 	nameFlag := shareCmd.String("name", "", "Custom device name")
 
 	_ = shareCmd.Parse(normalizedArgs)
+	defer startJournal()()
 	rawPaths := shareCmd.Args()
 
 	srv := api.NewDaemonServer(*portFlag, *outDirFlag, *nameFlag)
@@ -1592,6 +1596,7 @@ func printUsage() {
 		"  xfer report show|compare|list [--json]         (Transfer diagnostic reports)\n" +
 		"  xfer ctl [--script scenario.jsonl]             (Drive an embedded daemon with JSON lines)\n" +
 		"  xfer bench disk|net [...]                      (Disk and network benchmarks)\n" +
+		"  xfer bundle [-o FILE.zip]                      (Diagnostic bundle for a bug report)\n" +
 		"\n" +
 		"Examples on Android / Termux:\n" +
 		"  ./xfer-android-arm64 daemon                    -> Starts Web UI on http://localhost:19999\n" +
