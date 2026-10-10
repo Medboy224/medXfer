@@ -51,14 +51,11 @@ func guardDo(t *testing.T, method, url string, hdr map[string]string) (int, stri
 	return resp.StatusCode, string(body)
 }
 
-var controlRoutes = []struct{ method, path string }{
-	{"GET", "/status"},
-	{"GET", "/api/browse"},
-	{"POST", "/api/upload"},
-	{"GET", "/api/fs/list"},
-	{"POST", "/api/fs/mkdir?dir=x&name=y"},
-	{"GET", "/ws"},
-}
+type route struct{ method, path string }
+
+// controlRoutes are the routes behind the control guard; devUIRoutes is empty in builds
+// without the dashboard (DEV-19).
+var controlRoutes = append([]route{{"GET", "/status"}, {"GET", "/ws"}}, devUIRoutes...)
 
 func TestControlRoutesRequireToken(t *testing.T) {
 	s, addr := startGuardServer(t, false)
@@ -82,9 +79,6 @@ func TestControlRoutesRequireToken(t *testing.T) {
 	good := map[string]string{"Authorization": "Bearer " + s.ControlToken()}
 	if code, body := guardDo(t, "GET", "http://"+addr+"/status", good); code != http.StatusOK || !strings.Contains(body, "web_share_pin") {
 		t.Fatalf("/status with token = %d %s; want 200 with the status", code, body)
-	}
-	if code, _ := guardDo(t, "GET", "http://"+addr+"/api/fs/list", good); code != http.StatusOK {
-		t.Fatalf("/api/fs/list with token = %d; want 200", code)
 	}
 }
 
@@ -161,37 +155,13 @@ func TestWebSocketTokenForms(t *testing.T) {
 	}
 }
 
-func TestDashboardTokenInjection(t *testing.T) {
-	if strings.Count(IndexHTML, controlTokenPlaceholder) != 1 {
-		t.Fatal("IndexHTML must contain the token placeholder exactly once")
-	}
-	s, addr := startGuardServer(t, false)
-	if strings.Contains(IndexHTML, s.ControlToken()) {
-		t.Fatal("IndexHTML constant contains a real token")
-	}
-
-	code, body := guardDo(t, "GET", "http://"+addr+"/", nil)
-	if code != http.StatusOK || !strings.Contains(body, s.ControlToken()) || strings.Contains(body, controlTokenPlaceholder) {
-		t.Fatalf("dashboard = %d; want 200 with the real token injected", code)
-	}
-	// Under a foreign Host (DNS rebinding), the page and its token are not served.
-	code, body = guardDo(t, "GET", "http://"+addr+"/", map[string]string{"Host": "evil.example"})
-	if code != http.StatusForbidden || strings.Contains(body, s.ControlToken()) {
-		t.Fatalf("dashboard under foreign Host = %d; want 403 without token", code)
-	}
-}
-
-func TestHealthAndMkdirMethod(t *testing.T) {
-	s, addr := startGuardServer(t, false)
+func TestHealthWithoutToken(t *testing.T) {
+	_, addr := startGuardServer(t, false)
 	if code, _ := guardDo(t, "GET", "http://"+addr+"/health", nil); code != http.StatusOK {
 		t.Errorf("/health = %d; want 200 without token (D0-4)", code)
 	}
 	if code, _ := guardDo(t, "GET", "http://"+addr+"/health", map[string]string{"Host": "evil.example"}); code != http.StatusForbidden {
 		t.Errorf("/health under foreign Host = %d; want 403", code)
-	}
-	good := map[string]string{"Authorization": "Bearer " + s.ControlToken()}
-	if code, _ := guardDo(t, "GET", "http://"+addr+"/api/fs/mkdir?dir=x&name=y", good); code != http.StatusMethodNotAllowed {
-		t.Errorf("GET /api/fs/mkdir = %d; want 405 (no side effect on GET)", code)
 	}
 }
 

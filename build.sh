@@ -11,7 +11,14 @@ fi
 mkdir -p bin
 
 export CGO_ENABLED=0
-go build -ldflags="-s -w" -o bin/xfer ./cmd/xfer
+# Development builds keep the web dashboard (build tag devui, DEV-19);
+# "./build.sh release" builds the published binary, without it.
+TAGS="-tags=devui"
+if [ "${1:-}" = "release" ]; then
+    TAGS=""
+    echo "[*] Release build: without the web dashboard"
+fi
+go build $TAGS -ldflags="-s -w" -o bin/xfer ./cmd/xfer
 
 echo "[+] Build successful: ./bin/xfer"
 

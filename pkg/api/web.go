@@ -1,3 +1,5 @@
+//go:build devui
+
 package api
 
 const IndexHTML = `<!DOCTYPE html>
