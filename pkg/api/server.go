@@ -145,6 +145,7 @@ func NewDaemonServer(port int, defaultOutDir, deviceName string) *DaemonServer {
 	}
 
 	pCode, _, _ := discovery.GeneratePairingCode("")
+	registerSecrets(pin, token, controlToken, pCode)
 
 	srv := &DaemonServer{
 		controlToken:       controlToken,
@@ -272,6 +273,7 @@ func (s *DaemonServer) regeneratePINInternal(digits int) {
 		log.Printf("[Security] Web Share credential rotation failed: %v", err)
 		return
 	}
+	registerSecrets(pin, token, "", "")
 	s.mu.Lock()
 	s.webSharePIN = pin
 	s.webShareToken = token
@@ -696,6 +698,7 @@ func (s *DaemonServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // Broadcast sends a JSON event to all active Flutter clients
 func (s *DaemonServer) Broadcast(evt EventMessage) {
+	journalEvent(evt)
 	s.clientsMu.Lock()
 	defer s.clientsMu.Unlock()
 	for client := range s.clients {
@@ -749,6 +752,7 @@ func (s *DaemonServer) SharePaths(paths []string) error {
 
 // SetPIN configures the 4-digit security PIN for Web Share
 func (s *DaemonServer) SetPIN(pin string) {
+	registerSecrets(pin, "", "", "")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.webSharePIN = pin
