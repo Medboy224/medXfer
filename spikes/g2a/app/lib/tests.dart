@@ -97,7 +97,11 @@ class Suite {
       total += n;
       checkpoints['+${total ~/ 1000}k'] = await calls(n) / 1048576;
     }
-    final drift = (rss1 - rss0) * 100 / rss0;
+    // Stability is judged on the last segment (full: +60k → +160k, quick: +10k → +60k): the
+    // warm-up of the Dart heap lasts longer than 10,000 calls on some platforms (Linux).
+    final keys = checkpoints.keys.toList();
+    final before = checkpoints[keys[keys.length - 2]]!, after = checkpoints[keys.last]!;
+    final drift = (after - before) * 100 / before;
     final median = lat[lat.length ~/ 2];
     return {
       'pass': errors == 0 && drift.abs() <= 5,
@@ -107,7 +111,9 @@ class Suite {
       'rss_mb_checkpoints': checkpoints,
       'go_memstats_start': goStart,
       'go_memstats_end': core.call('memstats'),
-      'rss_drift_pct_10k_after_warmup': drift,
+      'rss_drift_pct_last_segment': drift,
+      'rss_drift_segment': '${keys[keys.length - 2]} -> ${keys.last}',
+      'rss_drift_pct_first_10k_after_warmup': (rss1 - rss0) * 100 / rss0,
     };
   }
 

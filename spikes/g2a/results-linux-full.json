@@ -1,0 +1,138 @@
+{
+  "platform": "linux",
+  "os_version": "Linux 6.2.0-39-generic #40~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Nov 16 10:53:04 UTC 2",
+  "dart": "3.13.5",
+  "mode": "full",
+  "cold_start_ms_main_to_first_ping": 6.957,
+  "G2A-05_lifecycle": {
+    "pass": true,
+    "second_start_already_started": true,
+    "started_after_stop": false,
+    "started_after_restart": true
+  },
+  "G2A-02_ping": {
+    "pass": false,
+    "errors": 0,
+    "latency_us": {
+      "median": 6,
+      "p95": 21,
+      "max": 155
+    },
+    "latency_alert_5ms": false,
+    "rss_mb_checkpoints": {
+      "start": 179.17578125,
+      "after_warmup_10k": 185.73828125,
+      "+10k": 198.2421875,
+      "+60k": 201.1875,
+      "+160k": 200.88671875
+    },
+    "go_memstats_start": {
+      "goroutines": 1,
+      "heap_inuse_mb": 2.625,
+      "id": "r4",
+      "num_gc": 0,
+      "ok": true,
+      "stack_inuse_mb": 0.40625,
+      "sys_mb": 6.8349761962890625
+    },
+    "go_memstats_end": {
+      "goroutines": 1,
+      "heap_inuse_mb": 2.109375,
+      "id": "r5",
+      "num_gc": 72,
+      "ok": true,
+      "stack_inuse_mb": 0.46875,
+      "sys_mb": 11.209976196289062
+    },
+    "rss_drift_pct_10k_after_warmup": 6.732002776083619
+  },
+  "G2A-04_panic": {
+    "pass": true,
+    "panic_call_error": "panic: test panic in medxfer_call (G2A-04)",
+    "core_error_received": true,
+    "core_error_where": "panic_goroutine",
+    "alive_after": true
+  },
+  "G2A-03_baseline_no_events": {
+    "pass": true,
+    "informative": true,
+    "seconds": 60,
+    "max_ui_lag_ms": 0.3100000000000005,
+    "p99_ui_lag_ms": 0.1750000000000007,
+    "lag_over_50ms": 0,
+    "lag_over_100ms": 0
+  },
+  "G2A-03_callback_steady": {
+    "pass": true,
+    "model": "callback",
+    "count": 10000,
+    "per_sec": 100,
+    "received": 10000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 100.516,
+    "max_ui_lag_ms": 6.183,
+    "p99_ui_lag_ms": 0.6880000000000006,
+    "lag_over_50ms": 0,
+    "lag_over_100ms": 0
+  },
+  "G2A-03_callback_burst": {
+    "pass": true,
+    "model": "callback",
+    "count": 60000,
+    "per_sec": 1000,
+    "received": 60000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 60.522,
+    "max_ui_lag_ms": 7.587,
+    "p99_ui_lag_ms": 2.2200000000000006,
+    "lag_over_50ms": 0,
+    "lag_over_100ms": 0
+  },
+  "G2A-03_poll_steady": {
+    "pass": true,
+    "model": "poll",
+    "count": 10000,
+    "per_sec": 100,
+    "received": 10000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 100.314,
+    "max_ui_lag_ms": 2.4540000000000006,
+    "p99_ui_lag_ms": 0.6329999999999991,
+    "lag_over_50ms": 0,
+    "lag_over_100ms": 0
+  },
+  "G2A-03_poll_burst": {
+    "pass": true,
+    "model": "poll",
+    "count": 60000,
+    "per_sec": 1000,
+    "received": 60000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 60.321,
+    "max_ui_lag_ms": 7.774999999999999,
+    "p99_ui_lag_ms": 2.5869999999999997,
+    "lag_over_50ms": 0,
+    "lag_over_100ms": 0
+  },
+  "pass": false
+}
