@@ -200,6 +200,8 @@ func (s *Sender) ServeAndSendWithRelPathReady(ctx context.Context, bindAddr, fil
 				return err
 			}
 		}
+		TuneConn(conn) // on the raw TCP connection, before any fault wrapper
+		conn = wrapConn(ConnAccepted, conn)
 
 		if s.authorizer != nil {
 			authOnce.Do(func() {
@@ -215,7 +217,6 @@ func (s *Sender) ServeAndSendWithRelPathReady(ctx context.Context, bindAddr, fil
 			}
 		}
 
-		TuneConn(conn)
 		wg.Add(1)
 		atomic.AddInt32(&activeStreams, 1)
 

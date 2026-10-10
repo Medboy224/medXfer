@@ -233,7 +233,7 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 		var dialer net.Dialer
 		c, err := dialer.DialContext(ctx, "tcp4", senderAddr)
 		if err == nil {
-			handshakeConn = c
+			handshakeConn = wrapConn(ConnDialed, c)
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -566,8 +566,8 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 					var dialer net.Dialer
 					c, err := dialer.DialContext(workerCtx, "tcp4", senderAddr)
 					if err == nil {
-						conn = c
-						TuneConn(conn)
+						TuneConn(c)
+						conn = wrapConn(ConnDialed, c)
 						connsMu.Lock()
 						activeConns[conn] = struct{}{}
 						connsMu.Unlock()
