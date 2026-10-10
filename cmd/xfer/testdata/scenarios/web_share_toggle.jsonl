@@ -1,0 +1,6 @@
+{"comment": "Golden scenario (DEV-17): Web Share is off by default, can be enabled and disabled again."}
+{"expect": {"event": "status", "data": {"web_share_enabled": false}}}
+{"id": "on", "action": "toggle_web_share", "payload": {"enabled": true}}
+{"expect": {"id": "on", "event": "status", "data": {"web_share_enabled": true}}}
+{"id": "off", "action": "toggle_web_share", "payload": {"enabled": false}}
+{"expect": {"id": "off", "event": "status", "data": {"web_share_enabled": false}}}

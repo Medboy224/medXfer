@@ -1,0 +1,8 @@
+{"comment": "Golden scenario (DEV-17): status on connect, configuration change, disk benchmark."}
+{"expect": {"event": "status", "data": {"status": "idle", "web_share_enabled": false}}}
+{"id": "cfg", "action": "set_config", "payload": {"device_name": "ctl-golden", "collision_policy": "skip"}}
+{"expect": {"id": "cfg", "event": "status", "data": {"device_name": "ctl-golden", "collision_policy": "skip"}}}
+{"id": "st", "action": "get_status"}
+{"expect": {"id": "st", "data": {"device_name": "ctl-golden", "pairing_code": "*"}}}
+{"id": "disk", "action": "test_disk", "payload": {"dir": "${outdir}", "size_bytes": 4194304}}
+{"expect": {"event": "benchmark_disk_result", "data": {"size_bytes": 4194304, "write_speed_mbps": "*", "rating": "*"}}, "timeout_ms": 30000}

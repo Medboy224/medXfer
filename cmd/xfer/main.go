@@ -161,6 +161,8 @@ func main() {
 		handleNode()
 	case "report":
 		handleReport(args[1:])
+	case "ctl":
+		handleCtl(args[1:])
 	case "help", "h", "?":
 		printUsage()
 		os.Exit(0)
@@ -1586,6 +1588,7 @@ func printUsage() {
 		"  xfer recv [pairing_code]                       (Receive via 6-digit code or auto-discover)\n" +
 		"  xfer recv --ip <addr>                          (Direct connect by IP)\n" +
 		"  xfer report show|compare|list [--json]         (Transfer diagnostic reports)\n" +
+		"  xfer ctl [--script scenario.jsonl]             (Drive an embedded daemon with JSON lines)\n" +
 		"\n" +
 		"Examples on Android / Termux:\n" +
 		"  ./xfer-android-arm64 daemon                    -> Starts Web UI on http://localhost:19999\n" +

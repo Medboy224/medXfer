@@ -55,6 +55,7 @@ type Client struct {
 	cursor  int           // events before cursor were consumed by Next / WaitFor
 	changed chan struct{} // closed and replaced whenever events or err change
 	err     error         // read error that ended the connection
+	watch   func(Event)   // called for every event, in order, from the reading goroutine
 }
 
 // Dial connects to the daemon whose HTTP server listens on httpAddr (host:port).
@@ -85,9 +86,13 @@ func (c *Client) readLoop() {
 		}
 		close(c.changed)
 		c.changed = make(chan struct{})
+		watch := c.watch
 		c.mu.Unlock()
 		if err != nil {
 			return
+		}
+		if watch != nil {
+			watch(e)
 		}
 	}
 }
@@ -145,6 +150,20 @@ func (c *Client) WaitFor(ctx context.Context, match func(Event) bool) (Event, er
 
 // Next returns the next unconsumed event, whatever it is.
 func (c *Client) Next(ctx context.Context) (Event, error) { return c.WaitFor(ctx, nil) }
+
+// Watch calls fn for every event, in order: first for the events already received, then for
+// each new one, from the goroutine that reads the connection. fn must not block for long.
+// Watch does not consume events: WaitFor and Next still see them.
+func (c *Client) Watch(fn func(Event)) {
+	c.mu.Lock()
+	past := append([]Event(nil), c.events...)
+	c.watch = fn
+	// Hold the lock while replaying so a new event cannot be delivered before the past ones.
+	for _, e := range past {
+		fn(e)
+	}
+	c.mu.Unlock()
+}
 
 // Events returns a copy of every event received so far, consumed or not.
 func (c *Client) Events() []Event {
