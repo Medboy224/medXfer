@@ -23,7 +23,7 @@ if command -v go &>/dev/null; then
     echo "[*] Go compiler found: $(go version)"
     echo "[*] Compiling medXfer natively..."
     go mod tidy 2>/dev/null || true
-    if go build -buildvcs=false -ldflags="-s -w" -o "$INSTALL_DIR/xfer" ./cmd/xfer/main.go; then
+    if go build -buildvcs=false -ldflags="-s -w" -o "$INSTALL_DIR/xfer" ./cmd/xfer; then
         chmod +x "$INSTALL_DIR/xfer"
         BUILD_SUCCESS=1
         echo "[+] Native build successful: $INSTALL_DIR/xfer"
