@@ -1,0 +1,117 @@
+{
+  "platform": "windows",
+  "os_version": "\"Windows 10 Pro\" 10.0 (Build 26200)",
+  "dart": "3.13.5",
+  "mode": "full",
+  "cold_start_ms_main_to_first_ping": 5.026,
+  "G2A-05_lifecycle": {
+    "pass": true,
+    "second_start_already_started": true,
+    "started_after_stop": false,
+    "started_after_restart": true
+  },
+  "G2A-02_ping": {
+    "pass": true,
+    "errors": 0,
+    "latency_us": {
+      "median": 12,
+      "p95": 24,
+      "max": 164
+    },
+    "latency_alert_5ms": false,
+    "rss_mb_checkpoints": {
+      "start": 65.98828125,
+      "after_warmup_10k": 187.35546875,
+      "+10k": 191.19140625,
+      "+60k": 192.3828125,
+      "+160k": 192.5234375
+    },
+    "go_memstats_start": {
+      "goroutines": 1,
+      "heap_inuse_mb": 2.4921875,
+      "id": "r4",
+      "num_gc": 0,
+      "ok": true,
+      "stack_inuse_mb": 0.09375,
+      "sys_mb": 10.51953125
+    },
+    "go_memstats_end": {
+      "goroutines": 1,
+      "heap_inuse_mb": 2.078125,
+      "id": "r5",
+      "num_gc": 48,
+      "ok": true,
+      "stack_inuse_mb": 0.15625,
+      "sys_mb": 15.69921875
+    },
+    "rss_drift_pct_10k_after_warmup": 2.04741154640035
+  },
+  "G2A-04_panic": {
+    "pass": true,
+    "panic_call_error": "panic: test panic in medxfer_call (G2A-04)",
+    "core_error_received": true,
+    "core_error_where": "panic_goroutine",
+    "alive_after": true
+  },
+  "G2A-03_callback_steady": {
+    "pass": false,
+    "model": "callback",
+    "count": 10000,
+    "per_sec": 100,
+    "received": 10000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 100.492,
+    "max_ui_lag_ms": 121.41999999999999
+  },
+  "G2A-03_callback_burst": {
+    "pass": true,
+    "model": "callback",
+    "count": 60000,
+    "per_sec": 1000,
+    "received": 60000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 60.516,
+    "max_ui_lag_ms": 19.286
+  },
+  "G2A-03_poll_steady": {
+    "pass": true,
+    "model": "poll",
+    "count": 10000,
+    "per_sec": 100,
+    "received": 10000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 100.292,
+    "max_ui_lag_ms": 40.888
+  },
+  "G2A-03_poll_burst": {
+    "pass": true,
+    "model": "poll",
+    "count": 60000,
+    "per_sec": 1000,
+    "received": 60000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 60.302,
+    "max_ui_lag_ms": 14.609000000000002
+  },
+  "pass": false
+}
