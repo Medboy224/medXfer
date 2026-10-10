@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Checks that the production binary carries no diagnostic or development code
-# (DEV-10, DEV-12, DEV-19): faultconn, faultfs, the engine fault hooks, pprof, devui.
+# (DEV-10, DEV-12, DEV-19): faultconn, faultfs, the engine fault hooks, testkit and the
+# testing package, pprof, devui.
 # Usage: scripts/check-prod-binary.sh [extra go build flags]
 # Self-test: scripts/check-prod-binary.sh -tags diag   must fail.
 set -euo pipefail
 
-forbidden='pkg/diag/faultconn|pkg/diag/faultfs|net/http/pprof|devui'
+forbidden='pkg/diag/faultconn|pkg/diag/faultfs|pkg/testkit|net/http/pprof|devui|^testing$'
 forbidden_symbols="$forbidden|engine\.SetConnWrapper|engine\.SetStorageWrapper|engine\.buffersPeak"
 
 status=0
