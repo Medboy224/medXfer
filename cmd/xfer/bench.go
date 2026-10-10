@@ -117,8 +117,18 @@ func benchNetListen(stdout io.Writer, addr string, once bool) error {
 		return err
 	}
 	code := diag.NewNetBenchCode()
+	port := portOf(ln.Addr())
 	fmt.Fprintf(stdout, "Network benchmark server on %s, code %s\n", ln.Addr(), code)
-	fmt.Fprintf(stdout, "On the other device: xfer bench net --peer <this-ip>:%s --code %s\n", portOf(ln.Addr()), code)
+	if host, _, _ := net.SplitHostPort(ln.Addr().String()); host != "" && !net.ParseIP(host).IsUnspecified() {
+		fmt.Fprintf(stdout, "On the other device: xfer bench net --peer %s --code %s\n", ln.Addr(), code)
+	} else if addrs := lanAddresses(); len(addrs) > 0 {
+		fmt.Fprintln(stdout, "On the other device, use the address of the network it shares with this one:")
+		for _, a := range addrs {
+			fmt.Fprintf(stdout, "  %-24s xfer bench net --peer %s --code %s\n", a.iface+":", net.JoinHostPort(a.ip, port), code)
+		}
+	} else {
+		fmt.Fprintf(stdout, "No active network interface found. On the other device: xfer bench net --peer <this-ip>:%s --code %s\n", port, code)
+	}
 	fmt.Fprintln(stdout, "Raw unencrypted TCP. Ctrl+C to stop.")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -166,6 +176,36 @@ func parseSize(s string) (int64, error) {
 		return 0, fmt.Errorf("invalid size %q (examples: 4M, 512K, 1G)", s)
 	}
 	return v * mult, nil
+}
+
+type lanAddress struct{ iface, ip string }
+
+// lanAddresses lists the IPv4 addresses of the interfaces that are up, skipping loopback and
+// link-local (169.254.x.x) addresses, which another device cannot reach.
+func lanAddresses() []lanAddress {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []lanAddress
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 || ifc.Flags&net.FlagRunning == 0 {
+			continue
+		}
+		addrs, _ := ifc.Addrs()
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipn.IP.To4()
+			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+			out = append(out, lanAddress{iface: ifc.Name, ip: ip.String()})
+		}
+	}
+	return out
 }
 
 func portOf(a net.Addr) string {

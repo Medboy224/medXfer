@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -56,6 +57,16 @@ func TestParseSize(t *testing.T) {
 	for _, bad := range []string{"", "0", "-1M", "M", "1T", "abc"} {
 		if _, err := parseSize(bad); err == nil {
 			t.Errorf("parseSize(%q) accepted", bad)
+		}
+	}
+}
+
+// The addresses shown to the other device are reachable ones: IPv4, no loopback, no 169.254.
+func TestLANAddresses(t *testing.T) {
+	for _, a := range lanAddresses() {
+		ip := net.ParseIP(a.ip)
+		if ip == nil || ip.To4() == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || a.iface == "" {
+			t.Errorf("unsuitable address %+v", a)
 		}
 	}
 }
