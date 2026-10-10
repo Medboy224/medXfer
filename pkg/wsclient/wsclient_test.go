@@ -97,3 +97,39 @@ func TestClient(t *testing.T) {
 		t.Fatalf("Events() holds %d events; want 10", n)
 	}
 }
+
+// Watch replays the events already received, then delivers new ones, in order, once each.
+func TestWatch(t *testing.T) {
+	addr := fakeDaemon(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := Dial(ctx, addr, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Next(ctx); err != nil { // "status" is now in the past
+		t.Fatal(err)
+	}
+
+	seen := make(chan string, 16)
+	c.Watch(func(e Event) { seen <- e.Event })
+	if _, err := c.Send("", "test", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.WaitFor(ctx, func(e Event) bool { return e.Event == "ack" }); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for len(got) < 4 {
+		select {
+		case name := <-seen:
+			got = append(got, name)
+		case <-ctx.Done():
+			t.Fatalf("Watch delivered only %v", got)
+		}
+	}
+	if strings.Join(got, ",") != "status,noise,noise,ack" {
+		t.Fatalf("Watch delivered %v; want status, noise, noise, ack", got)
+	}
+}
