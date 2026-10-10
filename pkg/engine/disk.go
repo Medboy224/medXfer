@@ -214,7 +214,8 @@ func CreateAndPreallocate(outputDir, fileName string, fileSize int64, chunkSize 
 		}
 	}
 
-	return newDiskManager(file, stateFile, finalPath, statePath, fileSize, completed, downBytes), nil
+	return newDiskManager(wrapStorage(file, finalPath), wrapStorage(stateFile, statePath),
+		finalPath, statePath, fileSize, completed, downBytes), nil
 }
 
 func (dm *DiskManager) IsChunkCompleted(index uint32) bool {
