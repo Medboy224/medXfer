@@ -76,7 +76,10 @@ class _TestScreenState extends State<TestScreen> {
     if (widget.autorun == 'quick' || widget.autorun == 'full') {
       WidgetsBinding.instance.addPostFrameCallback((_) => _run(full: widget.autorun == 'full', exitAfter: true));
     } else if (widget.autorun == 'loopback' || widget.autorun == 'g2a07') {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _runTransfers(widget.autorun, exitAfter: true));
+      // MEDXFER_G2A_DELAY_MS: start after the app's own start-up work (G2A-06 investigation).
+      final delay = Duration(milliseconds: int.parse(Platform.environment['MEDXFER_G2A_DELAY_MS'] ?? '0'));
+      WidgetsBinding.instance.addPostFrameCallback(
+          (_) => Future<void>.delayed(delay, () => _runTransfers(widget.autorun, exitAfter: true)));
     }
   }
 
