@@ -293,6 +293,8 @@ func handleNode() {
 
 	inputChan := make(chan string)
 	msgChan := make(chan session.Message)
+	trustReqChan := make(chan *trustRequest) // incoming unknown keys, decided in the command loop
+	var pendingTrust *trustRequest
 	disconnectChan := make(chan bool)
 
 	go func() {
@@ -346,6 +348,41 @@ func handleNode() {
 				continue
 			}
 
+			// ID-05: a trusted device's address presenting another key is refused.
+			peerFP, peerIP := ch.PeerFingerprint(), ch.RemoteIP()
+			if known, changed := keyChanged(nodeTrust, peerIP, peerFP); changed {
+				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "device key changed"})
+				ch.Close()
+				fmt.Printf("\n%s\n", keyChangedAlert(known, peerIP, peerFP))
+				printPrompt()
+				continue
+			}
+			// WP-3.3: an unknown key is trusted only if the user says so, never silently.
+			answer := trustOnce
+			if conn.State() == securechan.Unauth {
+				req := &trustRequest{name: msg.DeviceName, ip: peerIP, fp: peerFP,
+					expires: time.Now().Add(trustPromptTimeout), reply: make(chan trustAnswer, 1)}
+				answer = trustRefused
+				select {
+				case trustReqChan <- req:
+					select {
+					case answer = <-req.reply:
+					case <-time.After(trustPromptTimeout):
+					}
+				case <-time.After(trustPromptTimeout):
+				}
+				if answer == trustRefused {
+					_ = ch.Send(session.Message{Type: "pair_reject", FileName: "device not trusted"})
+					ch.Close()
+					fmt.Printf("\n[-] Pairing with %s refused: device not trusted.\n", peerIP)
+					printPrompt()
+					continue
+				}
+			}
+			if err := rememberPeer(nodeTrust, peerFP, msg.DeviceName, peerIP, answer); err != nil {
+				fmt.Printf("\n[-] Could not save the trusted device: %v\n", err)
+			}
+
 			// Valid pairing code!
 			ch.Authenticate()
 			_ = ch.Send(session.Message{
@@ -373,6 +410,10 @@ func handleNode() {
 	}()
 
 	printPrompt = func() {
+		if pendingTrust != nil {
+			fmt.Print("\n[?] Trust this device? [y]es for this session / [a]lways / [N]o: ")
+			return
+		}
 		if pendingOffer != nil {
 			if pendingOffer.Type == "batch_offer" && pendingOffer.Batch != nil {
 				fmt.Printf("\n[?] Accept folder %s? [Y/n]: ", pendingOffer.Batch.SummaryString())
@@ -389,8 +430,27 @@ func handleNode() {
 
 	for {
 		select {
+		case req := <-trustReqChan:
+			pendingTrust = req
+			fmt.Printf("\n\n%s", trustQuestion(req.name, req.fp, nodeID.Fingerprint))
+			continue
 		case text := <-inputChan:
 			text = strings.TrimSpace(text)
+			if pendingTrust != nil {
+				req := pendingTrust
+				pendingTrust = nil
+				if time.Now().After(req.expires) {
+					fmt.Println("[-] Too late: the pairing request has expired.")
+				} else {
+					answer := parseTrustAnswer(text)
+					req.reply <- answer
+					if answer == trustRefused {
+						fmt.Println("[-] Device not trusted.")
+					}
+				}
+				printPrompt()
+				continue
+			}
 			if pendingOffer != nil {
 				if strings.ToLower(text) == "n" {
 					activeSession.Send(session.Message{Type: "reject"})
@@ -540,6 +600,13 @@ func handleNode() {
 					break
 				}
 
+				peerFP := conn.PeerFingerprint()
+				if known, changed := keyChanged(nodeTrust, targetIP, peerFP); changed {
+					fmt.Println(keyChangedAlert(known, targetIP, peerFP))
+					conn.Close()
+					break
+				}
+
 				ch := session.NewChannel(conn)
 
 				// Authenticate by sending the secret pairing code
@@ -549,8 +616,8 @@ func handleNode() {
 					PairingCode: pairingCode,
 				})
 
-				// Wait for target node response (5s deadline)
-				_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+				// Wait for the answer: the other user may be asked to trust this device.
+				_ = conn.SetReadDeadline(time.Now().Add(trustPromptTimeout + 10*time.Second))
 				resp, err := ch.Read()
 				_ = conn.SetReadDeadline(time.Time{})
 
@@ -564,12 +631,32 @@ func handleNode() {
 					break
 				}
 
-				ch.Authenticate()
-				activeSession = ch
 				remoteName := resp.DeviceName
 				if remoteName == "" {
 					remoteName = targetDeviceName
 				}
+				// WP-3.3: an unknown key is trusted only if our user says so.
+				answer := trustOnce
+				if conn.State() == securechan.Unauth {
+					fmt.Print(trustQuestion(remoteName, peerFP, nodeID.Fingerprint))
+					answer = trustRefused
+					select {
+					case reply := <-inputChan:
+						answer = parseTrustAnswer(reply)
+					case <-time.After(trustPromptTimeout):
+						fmt.Println()
+					}
+					if answer == trustRefused {
+						fmt.Println("[-] Pairing cancelled: device not trusted.")
+						ch.Close()
+						break
+					}
+				}
+				if err := rememberPeer(nodeTrust, peerFP, remoteName, targetIP, answer); err != nil {
+					fmt.Printf("[-] Could not save the trusted device: %v\n", err)
+				}
+				ch.Authenticate()
+				activeSession = ch
 				if remoteName == "" {
 					remoteName = targetIP
 				}
