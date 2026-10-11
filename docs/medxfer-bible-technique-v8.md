@@ -488,7 +488,7 @@ func SafeRelPath(p string) (string, error) {
 | `STO-06` | À la reprise, vérification des 8 derniers chunks ; mode complet disponible. | ✅ |
 | `STO-07` | Disque plein = pause propre, pas d'échec ni de suppression. | ✅ |
 | `STO-08` | Mémoire du récepteur bornée : `N × 2 × chunk_size` (supprime la table `pending` non bornée du code actuel). | ✅ |
-| `STO-09` | Android : à partir de l'API 30, les fichiers reçus vont directement dans `Download/medXfer/` par chemin ; `.part`, `fsync` et renommage y fonctionnent sans permission (Android 16, G2A-10). Repli MediaStore pour Android 10 et avant, et pour un dossier choisi par l'utilisateur (SAF), avec copie après réception (1 Gio en 2,9 à 3,7 s sur le téléphone de test). | 📏 décision en J6b, Android 10 et SAF non testés |
+| `STO-15` | Android : à partir de l'API 30, les fichiers reçus vont directement dans `Download/medXfer/` par chemin ; `.part`, `fsync` et renommage y fonctionnent sans permission (Android 16, G2A-10). Repli MediaStore pour Android 10 et avant, et pour un dossier choisi par l'utilisateur (SAF), avec copie après réception (1 Gio en 2,9 à 3,7 s sur le téléphone de test). | 📏 décision en J6b, Android 10 et SAF non testés |
 
 ---
 
