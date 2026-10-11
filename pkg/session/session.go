@@ -55,6 +55,7 @@ type Message struct {
 	Type        string             `json:"type"`
 	DeviceName  string             `json:"device_name,omitempty"`
 	PairingCode string             `json:"pairing_code,omitempty"`
+	Secret      string             `json:"secret,omitempty"` // QR pairing secret, base64url (pkg/pairing)
 	FileName    string             `json:"file_name,omitempty"`
 	FileSize    int64              `json:"file_size,omitempty"`
 	FileID      string             `json:"file_id,omitempty"` // Unique Cryptographic Hash

@@ -184,6 +184,8 @@ func main() {
 		handleID(args[1:])
 	case "trust":
 		handleTrust(args[1:])
+	case "pair":
+		handlePair(args[1:])
 	case "help", "h", "?":
 		printUsage()
 		os.Exit(0)
@@ -1778,6 +1780,7 @@ func printUsage() {
 		"  xfer bundle [-o FILE.zip]                      (Diagnostic bundle for a bug report)\n" +
 		"  xfer id                                        (This device's fingerprint)\n" +
 		"  xfer trust list|forget <fingerprint>           (Trusted devices)\n" +
+		"  xfer pair --show | xfer pair <medxfer://...>   (Pair two devices by QR code)\n" +
 		"\n" +
 		"Examples on Android / Termux:\n" +
 		"  ./xfer-android-arm64 daemon                    -> Starts Web UI on http://localhost:19999\n" +
