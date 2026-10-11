@@ -242,7 +242,7 @@ func handleNode() {
 		return
 	}
 	// Control connections: unknown keys start UNAUTH; the pairing code decides (until WP-3.6).
-	pairCfg := securechan.Config{Identity: nodeID, Trust: nodeTrust, AllowUnknown: true}
+	pairCfg := securechan.Config{Identity: nodeID, Trust: nodeTrust, AllowUnknown: true, Gate: securechan.NewGate()}
 
 	fmt.Println("==================================================")
 	fmt.Println("             medXfer Persistent Node              ")

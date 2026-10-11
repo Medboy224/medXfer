@@ -76,3 +76,24 @@ func TestDaemonPairingIsSecure(t *testing.T) {
 		t.Fatal("handshake incomplete or wrong ALPN")
 	}
 }
+
+// LIM-01: the control listener accepts at most 5 new connections per minute from one IP.
+func TestDaemonLimitsNewConnectionsPerIP(t *testing.T) {
+	_, addr := startNodeListener(t)
+	peer := testPeerChan(t)
+	for i := 1; i <= 5; i++ {
+		conn, err := dialSecure(t.Context(), addr, peer)
+		if err != nil {
+			t.Fatalf("connection %d refused: %v", i, err)
+		}
+		conn.Close()
+	}
+	if conn, err := dialSecure(t.Context(), addr, peer); err == nil {
+		// TLS 1.3: the client may finish its side first; the server has closed: reading fails.
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, rerr := conn.Read(make([]byte, 1)); rerr == nil {
+			t.Fatal("6th connection in the minute was served")
+		}
+		conn.Close()
+	}
+}

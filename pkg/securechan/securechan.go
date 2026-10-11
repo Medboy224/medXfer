@@ -63,6 +63,8 @@ type Config struct {
 	AllowUnknown bool
 	// HandshakeTimeout defaults to DefaultHandshakeTimeout.
 	HandshakeTimeout time.Duration
+	// Gate, on the server side, limits connections that are not authenticated yet (LIM-01).
+	Gate *Gate
 }
 
 // Conn is an established secure channel.
@@ -73,6 +75,7 @@ type Conn struct {
 	mu         sync.Mutex
 	state      State
 	unauthRead int
+	release    func() // gives the Gate place back (LIM-01)
 }
 
 // PeerFingerprint is the fingerprint of the peer's key, verified during the handshake.
@@ -95,6 +98,19 @@ func (c *Conn) Authenticate() {
 	if wasUnauth {
 		_ = c.Conn.SetDeadline(time.Time{})
 	}
+	c.releaseGate()
+}
+
+// Close closes the connection and gives its Gate place back.
+func (c *Conn) Close() error {
+	c.releaseGate()
+	return c.Conn.Close()
+}
+
+func (c *Conn) releaseGate() {
+	if c.release != nil {
+		c.release()
+	}
 }
 
 // Read enforces the Unauth read limit (LIM-03): past it, the connection is closed.
@@ -104,7 +120,7 @@ func (c *Conn) Read(p []byte) (int, error) {
 		left := UnauthReadLimit - c.unauthRead
 		if left <= 0 {
 			c.mu.Unlock()
-			_ = c.Conn.Close()
+			_ = c.Close()
 			return 0, ErrUnauthLimit
 		}
 		if len(p) > left {
@@ -154,6 +170,15 @@ func handshake(ctx context.Context, raw net.Conn, cfg Config, server bool) (*Con
 		raw.Close()
 		return nil, errors.New("securechan: no identity")
 	}
+	release := func() {}
+	if server && cfg.Gate != nil {
+		r, err := cfg.Gate.Admit(raw.RemoteAddr())
+		if err != nil {
+			raw.Close()
+			return nil, err
+		}
+		release = r
+	}
 	var (
 		peer  identity.Fingerprint
 		state State
@@ -202,11 +227,14 @@ func handshake(ctx context.Context, raw net.Conn, cfg Config, server bool) (*Con
 	defer cancel()
 	if err := tconn.HandshakeContext(hctx); err != nil {
 		raw.Close()
+		release()
 		return nil, fmt.Errorf("securechan: handshake with %s: %w", raw.RemoteAddr(), err)
 	}
-	c := &Conn{Conn: tconn, peer: peer, state: state}
+	c := &Conn{Conn: tconn, peer: peer, state: state, release: release}
 	if state == Unauth {
 		_ = tconn.SetDeadline(time.Now().Add(UnauthTimeout))
+	} else {
+		c.releaseGate() // a trusted peer does not count against the unauthenticated limit
 	}
 	return c, nil
 }
