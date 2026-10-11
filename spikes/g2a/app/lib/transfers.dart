@@ -67,7 +67,7 @@ class Transfers {
     final runs = <Map<String, dynamic>>[];
     for (var i = 1; i <= trials; i++) {
       ok('remove', {'path': out});
-      final port = 19990 + i;
+      final port = 21000 + i; // clear of 19997-19999 (discovery), whatever the number of trials
       final s = ok('send_file', {'path': src, 'port': port});
       final r = ok('receive_file', {'addr': '127.0.0.1:$port', 'out_dir': out});
       final sw = Stopwatch()..start();
@@ -92,7 +92,8 @@ class Transfers {
     ok('remove', {'path': base});
     await Future<void>.delayed(const Duration(seconds: 2)); // let the transfer goroutines exit
     final memAfter = ok('memstats', {});
-    log('memstats after $memAfter');
+    final memAfterGc = ok('memstats', {'gc': true}); // garbage vs retained memory
+    log('memstats after $memAfter, after GC $memAfterGc');
     final speeds = [for (final r in runs) r['mib_per_s'] as double]..sort();
     return {
       'pass': runs.every((r) => r['hash_ok'] == true),
@@ -104,6 +105,7 @@ class Transfers {
       // Leak check (S5): goroutines and Go memory before and after the trials.
       'memstats_before': memBefore,
       'memstats_after': memAfter,
+      'memstats_after_gc': memAfterGc,
     };
   }
 

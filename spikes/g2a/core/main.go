@@ -287,7 +287,16 @@ func init() {
 		return nil, nil
 	}
 	// memstats reports the Go runtime's own memory, to split the process RSS between Go and Dart.
-	handlers["memstats"] = func(*coreState, json.RawMessage) (map[string]any, error) {
+	// {"gc": true} first collects and returns freed memory to the OS (leak check, S5).
+	handlers["memstats"] = func(_ *coreState, p json.RawMessage) (map[string]any, error) {
+		var args struct {
+			GC bool `json:"gc"`
+		}
+		_ = json.Unmarshal(p, &args)
+		if args.GC {
+			runtime.GC()
+			debug.FreeOSMemory()
+		}
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)
 		return map[string]any{

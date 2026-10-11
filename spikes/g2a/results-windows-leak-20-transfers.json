@@ -1,0 +1,247 @@
+{
+  "platform": "windows",
+  "os_version": "\"Windows 10 Pro\" 10.0 (Build 26200)",
+  "loopback": {
+    "pass": true,
+    "note": "throughput criterion (>= 95 % of the CLI) is checked against xfer send/recv on the same device",
+    "size_mib": 64,
+    "sha256": "553613edc3440b5502861c0a9af6da1d8c2e47c0f5ed3b858c20a3c1db936e31",
+    "median_mib_per_s": 463.76811594202894,
+    "runs": [
+      {
+        "trial": 1,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.163,
+        "engine_ms": 91,
+        "wall_ms": 162,
+        "mib_per_s": 392.63803680981596,
+        "hash_ok": true
+      },
+      {
+        "trial": 2,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.133,
+        "engine_ms": 69,
+        "wall_ms": 133,
+        "mib_per_s": 481.203007518797,
+        "hash_ok": true
+      },
+      {
+        "trial": 3,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.143,
+        "engine_ms": 67,
+        "wall_ms": 143,
+        "mib_per_s": 447.5524475524476,
+        "hash_ok": true
+      },
+      {
+        "trial": 4,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.139,
+        "engine_ms": 65,
+        "wall_ms": 139,
+        "mib_per_s": 460.431654676259,
+        "hash_ok": true
+      },
+      {
+        "trial": 5,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.141,
+        "engine_ms": 65,
+        "wall_ms": 140,
+        "mib_per_s": 453.9007092198582,
+        "hash_ok": true
+      },
+      {
+        "trial": 6,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.138,
+        "engine_ms": 65,
+        "wall_ms": 138,
+        "mib_per_s": 463.76811594202894,
+        "hash_ok": true
+      },
+      {
+        "trial": 7,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.137,
+        "engine_ms": 66,
+        "wall_ms": 137,
+        "mib_per_s": 467.1532846715328,
+        "hash_ok": true
+      },
+      {
+        "trial": 8,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.129,
+        "engine_ms": 66,
+        "wall_ms": 129,
+        "mib_per_s": 496.1240310077519,
+        "hash_ok": true
+      },
+      {
+        "trial": 9,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.136,
+        "engine_ms": 66,
+        "wall_ms": 137,
+        "mib_per_s": 470.5882352941176,
+        "hash_ok": true
+      },
+      {
+        "trial": 10,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.14,
+        "engine_ms": 65,
+        "wall_ms": 140,
+        "mib_per_s": 457.1428571428571,
+        "hash_ok": true
+      },
+      {
+        "trial": 11,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.136,
+        "engine_ms": 67,
+        "wall_ms": 136,
+        "mib_per_s": 470.5882352941176,
+        "hash_ok": true
+      },
+      {
+        "trial": 12,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.145,
+        "engine_ms": 67,
+        "wall_ms": 145,
+        "mib_per_s": 441.3793103448276,
+        "hash_ok": true
+      },
+      {
+        "trial": 13,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.135,
+        "engine_ms": 66,
+        "wall_ms": 134,
+        "mib_per_s": 474.074074074074,
+        "hash_ok": true
+      },
+      {
+        "trial": 14,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.137,
+        "engine_ms": 66,
+        "wall_ms": 137,
+        "mib_per_s": 467.1532846715328,
+        "hash_ok": true
+      },
+      {
+        "trial": 15,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.14,
+        "engine_ms": 68,
+        "wall_ms": 140,
+        "mib_per_s": 457.1428571428571,
+        "hash_ok": true
+      },
+      {
+        "trial": 16,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.143,
+        "engine_ms": 67,
+        "wall_ms": 142,
+        "mib_per_s": 447.5524475524476,
+        "hash_ok": true
+      },
+      {
+        "trial": 17,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.137,
+        "engine_ms": 66,
+        "wall_ms": 137,
+        "mib_per_s": 467.1532846715328,
+        "hash_ok": true
+      },
+      {
+        "trial": 18,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.141,
+        "engine_ms": 67,
+        "wall_ms": 140,
+        "mib_per_s": 453.9007092198582,
+        "hash_ok": true
+      },
+      {
+        "trial": 19,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.128,
+        "engine_ms": 74,
+        "wall_ms": 128,
+        "mib_per_s": 500.0,
+        "hash_ok": true
+      },
+      {
+        "trial": 20,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 0.147,
+        "engine_ms": 69,
+        "wall_ms": 146,
+        "mib_per_s": 435.374149659864,
+        "hash_ok": true
+      }
+    ],
+    "memstats_before": {
+      "gomaxprocs": 8,
+      "goroutines": 1,
+      "heap_inuse_mb": 5.8671875,
+      "id": "r5",
+      "num_cpu": 8,
+      "num_gc": 1,
+      "ok": true,
+      "stack_inuse_mb": 0.15625,
+      "sys_mb": 10.83203125
+    },
+    "memstats_after": {
+      "gomaxprocs": 8,
+      "goroutines": 1,
+      "heap_inuse_mb": 207.234375,
+      "id": "r87",
+      "num_cpu": 8,
+      "num_gc": 5,
+      "ok": true,
+      "stack_inuse_mb": 0.96875,
+      "sys_mb": 216.39453125
+    },
+    "memstats_after_gc": {
+      "gomaxprocs": 8,
+      "goroutines": 1,
+      "heap_inuse_mb": 2.0234375,
+      "id": "r88",
+      "num_cpu": 8,
+      "num_gc": 7,
+      "ok": true,
+      "stack_inuse_mb": 0.96875,
+      "sys_mb": 216.39453125
+    }
+  },
+  "pass": true
+}
