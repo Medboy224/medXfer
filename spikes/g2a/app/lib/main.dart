@@ -65,6 +65,8 @@ class _TestScreenState extends State<TestScreen> {
   void _log(String s) {
     // ignore: avoid_print
     print('G2A $s');
+    // MEDXFER_G2A_QUIET=1: log without redrawing the screen (G2A-06 investigation).
+    if (Platform.environment['MEDXFER_G2A_QUIET'] == '1') return;
     if (mounted) setState(() => _lines.add(s));
   }
 
