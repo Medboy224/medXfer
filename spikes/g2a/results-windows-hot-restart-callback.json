@@ -1,0 +1,31 @@
+{
+  "device": "windows",
+  "model": "callback",
+  "restarts_requested": 20,
+  "restarts_done": 0,
+  "ended": "app.stop",
+  "restart_ms": [
+    516
+  ],
+  "first_start_already_started": false,
+  "later_all_already_started": null,
+  "start_calls_sequence": [
+    1
+  ],
+  "events_per_generation": [
+    801
+  ],
+  "goroutines": [
+    2
+  ],
+  "go_sys_mb": [
+    6.8
+  ],
+  "rss_mb": [
+    311
+  ],
+  "tool_messages": [
+    "TOOL Lost connection to device."
+  ],
+  "pass": false
+}

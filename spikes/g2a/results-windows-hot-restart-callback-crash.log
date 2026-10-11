@@ -1,0 +1,24 @@
+﻿<< {"event": "daemon.connected", "params": {"version": "0.6.1", "pid": 10964}}
+<< {"event": "app.start", "params": {"appId": "b7803b25-1b10-4f59-b93c-7b327d3124fe", "deviceId": "windows", "directory": "C:\\Users\\skull\\Documents\\Project\\medXfer\\spikes\\g2a\\app", "supportsRestart": true, "launchMode": "run", "mode": "debug"}}
+<< {"raw": "Launching lib\\main.dart on Windows in debug mode..."}
+<< {"raw": "\u221a Built build\\windows\\x64\\runner\\Debug\\medxfer_g2a.exe"}
+<< {"raw": "[IMPORTANT:flutter/shell/platform/embedder/embedder_surface_gl_impeller.cc(126)] Using the Impeller rendering backend (OpenGLESSDF)."}
+<< {"event": "app.debugPort", "params": {"appId": "b7803b25-1b10-4f59-b93c-7b327d3124fe", "port": 60984, "wsUri": "ws://127.0.0.1:60984/ORrmZHLpTso=/ws", "baseUri": "file:///C:/Users/skull/AppData/Local/Temp/appc98f1689/app/"}}
+<< {"event": "app.devTools", "params": {"appId": "b7803b25-1b10-4f59-b93c-7b327d3124fe", "uri": "http://127.0.0.1:60984/ORrmZHLpTso=/devtools/?uri=ws://127.0.0.1:60984/ORrmZHLpTso=/ws"}}
+<< {"event": "app.dtd", "params": {"appId": "b7803b25-1b10-4f59-b93c-7b327d3124fe", "uri": "ws://127.0.0.1:60983/SXYF4zu6GtI="}}
+<< {"event": "app.started", "params": {"appId": "b7803b25-1b10-4f59-b93c-7b327d3124fe"}}
+<< {"raw": "G2A core loaded (medxfer.dll), first ping ok after 88.519 ms since main()"}
+<< {"raw": "G2A G2A_RESTART start={already_started: false, ok: true, start_calls: 1} model=callback"}
+app started in 14 s, appId=b7803b25-1b10-4f59-b93c-7b327d3124fe
+<< {"raw": "../../../flutter/third_party/dart/runtime/vm/runtime_entry.cc: 5380: error: Callback invoked after it has been deleted."}
+<< {"raw": "version=3.13.5 (stable) (Tue Sep 29 01:00:52 2026 -0700) on \"windows_x64\""}
+<< {"raw": "pid=13696, thread=28696, isolate_group=(nil)(0000000000000000), isolate=(nil)(0000000000000000)"}
+<< {"raw": "os=windows, arch=x64, comp=no, sim=no"}
+<< {"raw": "isolate_instructions=0, vm_instructions=0"}
+<< {"raw": "fp=82bd8ffb10, sp=82bd8ffad0, pc=7ff9d1586898"}
+<< {"raw": "pc 0x00007ff9d1586898 fp 0x00000082bd8ffb10 InternalFlutterGpu_Texture_InitializeFromImage+0x164dec"}
+<< {"raw": "-- End of DumpStackTrace"}
+<< {"raw": "Lost connection to device."}
+<< {"event": "app.stop", "params": {"appId": "b7803b25-1b10-4f59-b93c-7b327d3124fe"}}
+restart  1: FAILED 455 ms, already_started=False start_calls=1 alive={'events': 801, 'goroutines': 2, 'sys_mb': 6.5, 'rss_mb': 313}
+{"device": "windows", "model": "callback", "restarts_requested": 2, "restarts_done": 0, "ended": "app.stop", "restart_ms": [455], "first_start_already_started": false, "later_all_already_started": null, "start_calls_sequence": [1], "events_per_generation": [801], "goroutines": [2], "go_sys_mb": [6.5], "rss_mb": [313], "pass": false}
