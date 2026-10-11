@@ -47,9 +47,10 @@ func (l *transferListener) OnStart(fileName string, fileSize int64, totalChunks 
 }
 
 func (l *transferListener) OnProgress(s engine.TransferStats) {
-	// The engine's sender never reports completion; like `xfer send` (cliListener), it is done
-	// when every byte has been served.
-	if l.role == "send" && s.TotalBytes > 0 && s.BytesTransferred >= s.TotalBytes {
+	// The engine's sender never reports completion. Like `xfer send` (cliListener, fixed in #44),
+	// it is done when every byte has been written AND the receiver has closed its connections:
+	// at 100 % written, the end of the file may still sit in the socket buffers.
+	if l.role == "send" && s.TotalBytes > 0 && s.BytesTransferred >= s.TotalBytes && s.ActiveStreams == 0 {
 		l.OnComplete("", time.Since(l.start))
 		if l.cancel != nil {
 			l.cancel()

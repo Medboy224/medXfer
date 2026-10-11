@@ -114,7 +114,17 @@ class Transfers {
     Map<String, dynamic>? recv;
     final sw2 = Stopwatch();
     final deadline = DateTime.now().add(const Duration(minutes: 10));
+    final host = peer.substring(0, peer.lastIndexOf(':'));
+    final port = int.parse(peer.substring(peer.lastIndexOf(':') + 1));
     while (DateTime.now().isBefore(deadline)) {
+      // Receiver.Pull dials without a timeout: towards a firewall that drops packets to a closed
+      // port, each attempt hangs for minutes. Wait until the sender's port answers.
+      try {
+        (await Socket.connect(host, port, timeout: const Duration(seconds: 2))).destroy();
+      } catch (_) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        continue;
+      }
       final r = ok('receive_file', {'addr': peer, 'out_dir': out});
       sw2
         ..reset()

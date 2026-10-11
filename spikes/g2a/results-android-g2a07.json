@@ -1,0 +1,42 @@
+{
+    "platform":  "android",
+    "os_version":  "BP4A.251205.006.A576BXXS6AZI2",
+    "g2a07":  {
+                  "pass":  true,
+                  "note":  "hashes are compared with the PC side (sha256 of the file received / sent by xfer)",
+                  "network":  {
+                                  "default_route_ip":  "192.168.21.123",
+                                  "id":  "r2",
+                                  "interfaces":  null,
+                                  "ok":  true,
+                                  "primary":  "192.168.21.123"
+                              },
+                  "size_mib":  1024,
+                  "app_to_cli":  {
+                                     "event":  "transfer_done",
+                                     "sha256":  "a460202fce137cf88153e8a9174e22e1fb037f9eb54242bf12dd48fbb776cff4",
+                                     "seconds":  343.601,
+                                     "mib_per_s":  2.9802008725236537
+                                 },
+                  "cli_to_app":  {
+                                     "event":  "transfer_done",
+                                     "error":  null,
+                                     "sha256":  "9605a678933951df469a08dbbfbebe07755a0acf2ac2f6b1224b1658c2525ddc",
+                                     "seconds":  428.393,
+                                     "mib_per_s":  2.390328506768318
+                                 },
+                  "pc_side":  {
+                                  "pc_to_app":  {
+                                                    "hash_ok":  true,
+                                                    "pc_sha256":  "9605a678933951df469a08dbbfbebe07755a0acf2ac2f6b1224b1658c2525ddc"
+                                                },
+                                  "app_to_pc":  {
+                                                    "xfer_recv_engine":  "5m41.61s",
+                                                    "xfer_recv_process_s":  342.6198513,
+                                                    "pc_sha256":  "a460202fce137cf88153e8a9174e22e1fb037f9eb54242bf12dd48fbb776cff4",
+                                                    "hash_ok":  true
+                                                }
+                              }
+              },
+    "pass":  true
+}
