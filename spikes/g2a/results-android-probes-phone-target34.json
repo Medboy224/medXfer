@@ -1,0 +1,207 @@
+{
+    "platform":  "android",
+    "os_version":  "BP4A.251205.006.A576BXXS6AZI2",
+    "probes":  {
+                   "platform_paths":  {
+                                          "sdk":  36,
+                                          "model":  "SM-A576B",
+                                          "files":  "/data/user/0/dev.medxfer.medxfer_g2a/files",
+                                          "cache":  "/data/user/0/dev.medxfer.medxfer_g2a/cache",
+                                          "external_files":  "/storage/emulated/0/Android/data/dev.medxfer.medxfer_g2a/files",
+                                          "downloads_public":  "/storage/emulated/0/Download"
+                                      },
+                   "net_probe_lock_false":  {
+                                                "broadcast_send":  {
+                                                                       "error":  null,
+                                                                       "ok":  true
+                                                                   },
+                                                "discovery_primary_ip":  "192.168.21.123",
+                                                "discovery_targets":  null,
+                                                "id":  "r2",
+                                                "interface_addrs":  {
+                                                                        "error":  "route ip+net: netlinkrib: permission denied",
+                                                                        "list":  null
+                                                                    },
+                                                "interfaces":  {
+                                                                   "count":  0,
+                                                                   "error":  "route ip+net: netlinkrib: permission denied",
+                                                                   "list":  null
+                                                               },
+                                                "multicast_join":  {
+                                                                       "error":  null,
+                                                                       "group":  "239.255.255.250:19997",
+                                                                       "ok":  true
+                                                                   },
+                                                "multicast_self_receive":  {
+                                                                               "from":  "192.168.21.123:52656",
+                                                                               "ok":  true,
+                                                                               "read_error":  null,
+                                                                               "write_error":  null
+                                                                           },
+                                                "ok":  true,
+                                                "received_from_others":  {
+                                                                             "discovery_port_from":  [
+                                                                                                         "192.168.21.174"
+                                                                                                     ],
+                                                                             "discovery_port_packets":  140,
+                                                                             "multicast_from":  [
+                                                                                                    "192.168.21.174"
+                                                                                                ],
+                                                                             "multicast_packets":  70,
+                                                                             "seconds":  8
+                                                                         },
+                                                "tcp_listen_any":  {
+                                                                       "addr":  "0.0.0.0:45925",
+                                                                       "ok":  true
+                                                                   },
+                                                "udp_listen_discovery_port":  {
+                                                                                  "error":  null,
+                                                                                  "ok":  true
+                                                                              }
+                                            },
+                   "net_probe_lock_true":  {
+                                               "broadcast_send":  {
+                                                                      "error":  null,
+                                                                      "ok":  true
+                                                                  },
+                                               "discovery_primary_ip":  "192.168.21.123",
+                                               "discovery_targets":  null,
+                                               "id":  "r3",
+                                               "interface_addrs":  {
+                                                                       "error":  "route ip+net: netlinkrib: permission denied",
+                                                                       "list":  null
+                                                                   },
+                                               "interfaces":  {
+                                                                  "count":  0,
+                                                                  "error":  "route ip+net: netlinkrib: permission denied",
+                                                                  "list":  null
+                                                              },
+                                               "multicast_join":  {
+                                                                      "error":  null,
+                                                                      "group":  "239.255.255.250:19997",
+                                                                      "ok":  true
+                                                                  },
+                                               "multicast_self_receive":  {
+                                                                              "from":  "192.168.21.123:59035",
+                                                                              "ok":  true,
+                                                                              "read_error":  null,
+                                                                              "write_error":  null
+                                                                          },
+                                               "ok":  true,
+                                               "received_from_others":  {
+                                                                            "discovery_port_from":  [
+                                                                                                        "192.168.21.174"
+                                                                                                    ],
+                                                                            "discovery_port_packets":  138,
+                                                                            "multicast_from":  [
+                                                                                                   "192.168.21.174"
+                                                                                               ],
+                                                                            "multicast_packets":  69,
+                                                                            "seconds":  8
+                                                                        },
+                                               "tcp_listen_any":  {
+                                                                      "addr":  "0.0.0.0:34991",
+                                                                      "ok":  true
+                                                                  },
+                                               "udp_listen_discovery_port":  {
+                                                                                 "error":  null,
+                                                                                 "ok":  true
+                                                                             }
+                                           },
+                   "storage_probe":  {
+                                         "cache":  {
+                                                       "close":  "ok",
+                                                       "create":  "ok",
+                                                       "fsync":  "ok",
+                                                       "mkdir":  "ok",
+                                                       "path":  "/data/user/0/dev.medxfer.medxfer_g2a/cache",
+                                                       "read":  "ok",
+                                                       "read_size_ok":  true,
+                                                       "remove":  "ok",
+                                                       "rename":  "ok",
+                                                       "write":  "ok",
+                                                       "write_ms":  19
+                                                   },
+                                         "dart_system_temp":  {
+                                                                  "close":  "ok",
+                                                                  "create":  "ok",
+                                                                  "fsync":  "ok",
+                                                                  "mkdir":  "ok",
+                                                                  "path":  "/data/user/0/dev.medxfer.medxfer_g2a/code_cache",
+                                                                  "read":  "ok",
+                                                                  "read_size_ok":  true,
+                                                                  "remove":  "ok",
+                                                                  "rename":  "ok",
+                                                                  "write":  "ok",
+                                                                  "write_ms":  34
+                                                              },
+                                         "downloads_direct":  {
+                                                                  "close":  "ok",
+                                                                  "create":  "ok",
+                                                                  "fsync":  "ok",
+                                                                  "mkdir":  "ok",
+                                                                  "path":  "/storage/emulated/0/Download",
+                                                                  "read":  "ok",
+                                                                  "read_size_ok":  true,
+                                                                  "remove":  "ok",
+                                                                  "rename":  "ok",
+                                                                  "write":  "ok",
+                                                                  "write_ms":  53
+                                                              },
+                                         "external_files":  {
+                                                                "close":  "ok",
+                                                                "create":  "ok",
+                                                                "fsync":  "ok",
+                                                                "mkdir":  "ok",
+                                                                "path":  "/storage/emulated/0/Android/data/dev.medxfer.medxfer_g2a/files",
+                                                                "read":  "ok",
+                                                                "read_size_ok":  true,
+                                                                "remove":  "ok",
+                                                                "rename":  "ok",
+                                                                "write":  "ok",
+                                                                "write_ms":  26
+                                                            },
+                                         "files":  {
+                                                       "close":  "ok",
+                                                       "create":  "ok",
+                                                       "fsync":  "ok",
+                                                       "mkdir":  "ok",
+                                                       "path":  "/data/user/0/dev.medxfer.medxfer_g2a/files",
+                                                       "read":  "ok",
+                                                       "read_size_ok":  true,
+                                                       "remove":  "ok",
+                                                       "rename":  "ok",
+                                                       "write":  "ok",
+                                                       "write_ms":  18
+                                                   },
+                                         "id":  "r4",
+                                         "ok":  true,
+                                         "sdcard_download":  {
+                                                                 "close":  "ok",
+                                                                 "create":  "ok",
+                                                                 "fsync":  "ok",
+                                                                 "mkdir":  "ok",
+                                                                 "path":  "/sdcard/Download",
+                                                                 "read":  "ok",
+                                                                 "read_size_ok":  true,
+                                                                 "remove":  "ok",
+                                                                 "rename":  "ok",
+                                                                 "write":  "ok",
+                                                                 "write_ms":  37
+                                                             }
+                                     },
+                   "receive_then_publish_cost":  {
+                                                     "size_mib":  1024,
+                                                     "private_write_ms":  1506,
+                                                     "mediastore_copy_ms":  2817,
+                                                     "mediastore_uri":  "content://media/external/downloads/149885",
+                                                     "direct_copy_ms":  5007,
+                                                     "direct_copy_error":  null,
+                                                     "private_write_mib_per_s":  679.9468791500664,
+                                                     "mediastore_copy_mib_per_s":  363.5072772452964,
+                                                     "direct_copy_mib_per_s":  204.51368084681445
+                                                 },
+                   "pass":  true
+               },
+    "pass":  true
+}

@@ -2,6 +2,8 @@
     <!-- G2a: the Flutter template grants INTERNET to debug and profile builds only; without it a
          release build cannot open a socket ("socket: operation not permitted"). -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- G2a S5 (G2A-09): Wi-Fi multicast lock, a normal permission granted at install. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
     <application
         android:label="medxfer_g2a"
         android:name="${applicationName}"

@@ -88,6 +88,7 @@ type coreState struct {
 	cfg     config
 	stopCh  chan struct{}
 	startAt time.Time
+	calls   int // medxfer_start calls since the library was loaded (hot restart: G2A-05)
 
 	cbMu sync.RWMutex
 	cb   C.medxfer_event_cb
@@ -107,11 +108,12 @@ func (c *coreState) start(cfgJSON string) string {
 			return jsonString(map[string]any{"ok": false, "error": "invalid config: " + err.Error()})
 		}
 	}
+	c.calls++
 	if c.started { // B4: Flutter hot restart re-runs Dart, not the process
-		return jsonString(map[string]any{"ok": true, "already_started": true})
+		return jsonString(map[string]any{"ok": true, "already_started": true, "start_calls": c.calls})
 	}
 	c.started, c.cfg, c.stopCh, c.startAt = true, cfg, make(chan struct{}), time.Now()
-	return jsonString(map[string]any{"ok": true, "already_started": false})
+	return jsonString(map[string]any{"ok": true, "already_started": false, "start_calls": c.calls})
 }
 
 func (c *coreState) stop() {

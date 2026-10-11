@@ -62,7 +62,8 @@ class Transfers {
       log('test file $sizeMB MiB written in ${made['ms']} ms');
     }
     final want = sha(src);
-    log('memstats ${ok('memstats', {})}');
+    final memBefore = ok('memstats', {});
+    log('memstats $memBefore');
     final runs = <Map<String, dynamic>>[];
     for (var i = 1; i <= trials; i++) {
       ok('remove', {'path': out});
@@ -89,6 +90,9 @@ class Transfers {
       runs.add(run);
     }
     ok('remove', {'path': base});
+    await Future<void>.delayed(const Duration(seconds: 2)); // let the transfer goroutines exit
+    final memAfter = ok('memstats', {});
+    log('memstats after $memAfter');
     final speeds = [for (final r in runs) r['mib_per_s'] as double]..sort();
     return {
       'pass': runs.every((r) => r['hash_ok'] == true),
@@ -97,6 +101,9 @@ class Transfers {
       'sha256': want,
       'median_mib_per_s': speeds[speeds.length ~/ 2],
       'runs': runs,
+      // Leak check (S5): goroutines and Go memory before and after the trials.
+      'memstats_before': memBefore,
+      'memstats_after': memAfter,
     };
   }
 

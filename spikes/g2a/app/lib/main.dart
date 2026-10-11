@@ -3,6 +3,7 @@
 // Automatic mode, for unattended measurements:
 //   desktop: MEDXFER_G2A_AUTORUN=quick|full  (results: MEDXFER_G2A_RESULT or <temp>/medxfer_g2a_results.json)
 //   android: flutter build apk --dart-define=AUTORUN=quick|full  (results in logcat and the app's temp dir)
+// Other modes: loopback, g2a07 (S4); probes, listen (Android) and restart (S5).
 // The app runs the suite, writes the JSON results, prints "G2A_RESULT <json>" and exits
 // with status 0 when every criterion passed.
 import 'dart:convert';
@@ -11,6 +12,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'core.dart';
+import 's5.dart';
 import 'tests.dart';
 import 'transfers.dart';
 
@@ -18,6 +20,7 @@ const _autorunDefine = String.fromEnvironment('AUTORUN');
 const _sizeDefine = String.fromEnvironment('SIZE_MB', defaultValue: '1024');
 const _peerDefine = String.fromEnvironment('PEER');
 const _trialsDefine = String.fromEnvironment('TRIALS', defaultValue: '3');
+const _eventsDefine = String.fromEnvironment('EVENTS', defaultValue: 'callback');
 
 /// Desktop: environment variable `MEDXFER_G2A_<name>`; Android: --dart-define value.
 String _setting(String name, String define) => Platform.environment['MEDXFER_G2A_$name'] ?? define;
@@ -26,41 +29,67 @@ void main() {
   final sinceMain = Stopwatch()..start();
   WidgetsFlutterBinding.ensureInitialized();
   final core = Core.open();
-  core.start({'data_dir': Directory.systemTemp.path, 'download_dir': Directory.systemTemp.path});
+  final startResult = core.start({'data_dir': Directory.systemTemp.path, 'download_dir': Directory.systemTemp.path});
   final firstPing = core.call('ping');
   final coldStart = sinceMain.elapsed;
   final autorun = Platform.environment['MEDXFER_G2A_AUTORUN'] ?? _autorunDefine;
-  runApp(G2aApp(core: core, coldStart: coldStart, firstPingOk: firstPing['ok'] == true, autorun: autorun));
+  runApp(G2aApp(
+      core: core, coldStart: coldStart, firstPingOk: firstPing['ok'] == true, autorun: autorun, startResult: startResult));
 }
 
 class G2aApp extends StatelessWidget {
-  const G2aApp({super.key, required this.core, required this.coldStart, required this.firstPingOk, required this.autorun});
+  const G2aApp(
+      {super.key,
+      required this.core,
+      required this.coldStart,
+      required this.firstPingOk,
+      required this.autorun,
+      required this.startResult});
   final Core core;
   final Duration coldStart;
   final bool firstPingOk;
   final String autorun;
+  final Map<String, dynamic> startResult;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'medXfer G2a',
-        home: TestScreen(core: core, coldStart: coldStart, firstPingOk: firstPingOk, autorun: autorun),
+        home: TestScreen(
+            core: core, coldStart: coldStart, firstPingOk: firstPingOk, autorun: autorun, startResult: startResult),
       );
 }
 
 class TestScreen extends StatefulWidget {
-  const TestScreen({super.key, required this.core, required this.coldStart, required this.firstPingOk, required this.autorun});
+  const TestScreen(
+      {super.key,
+      required this.core,
+      required this.coldStart,
+      required this.firstPingOk,
+      required this.autorun,
+      required this.startResult});
   final Core core;
   final Duration coldStart;
   final bool firstPingOk;
   final String autorun;
+  final Map<String, dynamic> startResult;
 
   @override
   State<TestScreen> createState() => _TestScreenState();
 }
 
-class _TestScreenState extends State<TestScreen> {
+class _TestScreenState extends State<TestScreen> with WidgetsBindingObserver {
   final _lines = <String>[];
   bool _running = false;
+
+  // G2A-05: background / foreground transitions, to read alongside the core's state.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) => _log('G2A_LIFECYCLE $state');
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   void _log(String s) {
     // ignore: avoid_print
@@ -73,6 +102,7 @@ class _TestScreenState extends State<TestScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _log('core loaded (${libraryName()}), first ping ${widget.firstPingOk ? 'ok' : 'FAILED'} '
         'after ${widget.coldStart.inMicroseconds / 1000} ms since main()');
     if (widget.autorun == 'quick' || widget.autorun == 'full') {
@@ -82,7 +112,29 @@ class _TestScreenState extends State<TestScreen> {
       final delay = Duration(milliseconds: int.parse(Platform.environment['MEDXFER_G2A_DELAY_MS'] ?? '0'));
       WidgetsBinding.instance.addPostFrameCallback(
           (_) => Future<void>.delayed(delay, () => _runTransfers(widget.autorun, exitAfter: true)));
+    } else if (widget.autorun == 'probes' || widget.autorun == 'listen') {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _runS5(widget.autorun, exitAfter: true));
+    } else if (widget.autorun == 'restart') {
+      // No exit: the driver (flutter run --machine) restarts the app, then stops it.
+      WidgetsBinding.instance.addPostFrameCallback(
+          (_) => S5(widget.core, _log).restartGeneration(widget.startResult, _setting('EVENTS', _eventsDefine)));
     }
+  }
+
+  // S5 on Android: probes (G2A-09, G2A-10) or listen (G2A-05 background and kill).
+  Future<void> _runS5(String mode, {bool exitAfter = false}) async {
+    setState(() => _running = true);
+    final sizeMB = int.parse(_setting('SIZE_MB', _sizeDefine));
+    final s5 = S5(widget.core, _log);
+    Map<String, dynamic> r;
+    try {
+      r = mode == 'probes' ? await s5.androidProbes(sizeMB: sizeMB) : await s5.listen(sizeMB: sizeMB);
+    } catch (e, st) {
+      r = {'pass': false, 'exception': '$e', 'stack': '$st'};
+    }
+    _log('$mode: ${r['pass'] == true ? 'PASS' : 'FAIL'}');
+    _finish({'platform': Platform.operatingSystem, 'os_version': Platform.operatingSystemVersion, mode: r,
+      'pass': r['pass'] == true}, exitAfter);
   }
 
   Future<void> _run({required bool full, bool exitAfter = false}) async {
