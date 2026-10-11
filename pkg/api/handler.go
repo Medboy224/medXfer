@@ -225,8 +225,8 @@ func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
 		PairingCode: payload.Code,
 	})
 
-	// Wait for peer response (5s deadline)
-	_ = connPeer.SetReadDeadline(time.Now().Add(5 * time.Second))
+	// Wait for the answer: on xfer node, the user may be asked to trust this device (60 s).
+	_ = connPeer.SetReadDeadline(time.Now().Add(70 * time.Second))
 	resp, err := ch.Read()
 	_ = connPeer.SetReadDeadline(time.Time{})
 
@@ -368,7 +368,7 @@ func (s *DaemonServer) connectAndSend(targetIP, code string, paths []string, id 
 		PairingCode: code,
 	})
 
-	_ = connPeer.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = connPeer.SetReadDeadline(time.Now().Add(70 * time.Second)) // xfer node may ask its user
 	resp, err := ch.Read()
 	_ = connPeer.SetReadDeadline(time.Time{})
 
