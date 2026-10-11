@@ -33,6 +33,10 @@ int main(int argc, char **argv) {
     free_fn mfree = (free_fn)dlsym(lib, "medxfer_free");
 
     mfree(start("{}"));
+    char *ms = call("{\"id\":\"m\",\"action\":\"memstats\"}");
+    fprintf(stderr, "memstats %s
+", ms);
+    mfree(ms);
     char req[4096];
     snprintf(req, sizeof req, "{\"id\":\"s\",\"action\":\"send_file\",\"payload\":{\"path\":\"%s\",\"port\":19988}}", argv[2]);
     char *r = call(req);

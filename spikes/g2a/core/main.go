@@ -291,7 +291,7 @@ func init() {
 		return map[string]any{
 			"sys_mb": float64(m.Sys) / 1048576, "heap_inuse_mb": float64(m.HeapInuse) / 1048576,
 			"stack_inuse_mb": float64(m.StackInuse) / 1048576, "num_gc": m.NumGC,
-			"goroutines": runtime.NumGoroutine(),
+			"goroutines": runtime.NumGoroutine(), "gomaxprocs": runtime.GOMAXPROCS(0), "num_cpu": runtime.NumCPU(),
 		}, nil
 	}
 	handlers["panic_call"] = func(*coreState, json.RawMessage) (map[string]any, error) {

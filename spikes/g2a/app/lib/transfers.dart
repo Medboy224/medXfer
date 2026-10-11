@@ -60,6 +60,7 @@ class Transfers {
       log('test file $sizeMB MiB written in ${made['ms']} ms');
     }
     final want = sha(src);
+    log('memstats ${ok('memstats', {})}');
     final runs = <Map<String, dynamic>>[];
     for (var i = 1; i <= trials; i++) {
       ok('remove', {'path': out});
