@@ -75,7 +75,11 @@ func (l *cliListener) OnProgress(stats engine.TransferStats) {
 	if l.bar != nil {
 		l.bar.Render(stats.BytesTransferred, stats.TotalBytes, stats.SpeedMBps)
 	}
-	if l.isSender && !l.finished && stats.TotalBytes > 0 && stats.BytesTransferred >= stats.TotalBytes {
+	// The sender counts bytes written to its sockets, not bytes received: at 100 % the end of
+	// the file may still sit in the send buffers. It is done once the receiver, which closes
+	// its connections after finalizing the file, has gone (#44).
+	if l.isSender && !l.finished && stats.TotalBytes > 0 && stats.BytesTransferred >= stats.TotalBytes &&
+		stats.ActiveStreams == 0 {
 		l.finished = true
 		if l.cancel != nil {
 			go func() {
