@@ -468,6 +468,12 @@ func calculateSweepRange(ip net.IP, mask net.IPMask) []string {
 
 // GetPrimaryLocalIP returns the primary routable IPv4 address
 func GetPrimaryLocalIP() string {
+	// The interface that carries the default route is the one other devices can reach. An
+	// interface without link keeps its address (Windows: Ethernet unplugged, connection sharing
+	// 192.168.137.1) and used to be chosen here (issue #19).
+	if ip := DefaultRouteIP(); ip != "" {
+		return ip
+	}
 	targets := GetActiveNetworkTargets()
 	if len(targets) > 0 {
 		return targets[0].LocalIP.String()
@@ -544,4 +550,18 @@ func IsSubnetReachable(ipStr string) bool {
 	}
 
 	return false
+}
+
+// DefaultRouteIP returns the local IPv4 address the system uses to reach the Internet, or ""
+// without a default route. A UDP "connection" only selects a route: no packet is sent.
+func DefaultRouteIP() string {
+	conn, err := net.Dial("udp4", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	if a, ok := conn.LocalAddr().(*net.UDPAddr); ok && a.IP.To4() != nil && !a.IP.IsLoopback() && !a.IP.IsUnspecified() {
+		return a.IP.To4().String()
+	}
+	return ""
 }
