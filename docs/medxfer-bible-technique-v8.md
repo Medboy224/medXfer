@@ -364,7 +364,7 @@ Messages `CONTROL` (champ `type`) : `hello`, `pair_secret`, `pair_pake`, `pair_c
 |---|---|---|
 | `XFER-01` | Toute lecture réseau est bornée par la longueur annoncée dans l'en-tête et par les limites du chapitre 12. | ✅ |
 | `XFER-02` | La taille de chunk est fixée dans `accept` et ne change plus pendant le transfert. Défaut 4 Mio ; bornes 256 Kio à 16 Mio. | 📏 |
-| `XFER-03` | Le hash de chunk est SHA-256. | ✅ / gate G6 |
+| `XFER-03` | Le hash de chunk est SHA-256. | ✅ (gate G6 fermée) |
 | `XFER-04` | Le receveur NE DOIT PAS écrire un chunk dont le hash ne correspond pas ; il le redemande (3 essais maximum, sur une autre connexion si possible). | ✅ |
 | `XFER-05` | Une connexion de données coupée est rétablie avec un délai croissant (50 ms jusqu'à 1 s, 8 tentatives). | ✅ (déjà dans le code) |
 | `XFER-06` | Négociation de version : ALPN `medxfer/N`. Un changement incompatible utilise un nouvel ALPN, l'ancien restant servi en parallèle pendant la transition. | ✅ |
@@ -695,7 +695,7 @@ Chaque phase est livrable seule (règle R5). Le projet n'étant pas encore publi
 | **G3** | TCP+TLS atteint-il 80 % d'iperf3 ? | Oui / non. | Benchmark §14.3. | Décision QUIC (phase 6) |
 | **G4** | Revue cryptographique externe | Qui, quand. | Avant la version 1.0, couvrant chapitres 6 et 7. | Version 1.0 |
 | **G5** | HTTPS auto-signé du Web Share | Acceptable pour l'utilisateur ? | Test utilisateur sur iOS Safari et Chrome Android. | Phase 5 |
-| **G6** | SHA-256 suffisant ? | SHA-256 / BLAKE3. | Benchmark de hachage sur téléphones cibles ≥ 1,5× le débit du lien. | Phase 3 |
+| **G6** ✅ fermée (11/10/2026) | SHA-256 suffisant ? | **Retenu : SHA-256** (`crypto/sha256`). Sur le téléphone de référence (Exynos 1580), 536 Mo/s sur un cœur contre 60 Mo/s pour BLAKE3 en Go, qui n'est pas accéléré sur arm64 ; mesures dans `medxfer-plan-j4a.md` (WP-4.0). | Benchmark de hachage sur téléphones cibles ≥ 1,5× le débit du lien. | — |
 | **G7** | Quand supprimer le tableau de bord web ? | Garder / supprimer. | Tous les critères de retrait de `DEV-19` sont remplis par le panneau développeur Flutter et `xfer ctl`. | Fin de la phase 6 au plus tard |
 
 ---

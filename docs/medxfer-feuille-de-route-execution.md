@@ -170,7 +170,7 @@ Détail complet dans [medxfer-plan-prototype-g2a.md](medxfer-plan-prototype-g2a.
 ---
 
 ### J4a — Protocole de transfert v1 · ≈ 6 à 9 jours
-Bible chapitre 8. **Décision G6 (SHA-256 ou BLAKE3) prise en tête de jalon**, par un petit benchmark de hachage sur le téléphone.
+Bible chapitre 8. **Décision G6 (SHA-256 ou BLAKE3) prise en tête de jalon**, par un petit benchmark de hachage sur le téléphone : **SHA-256 retenu** (11/10/2026). Plan détaillé : [medxfer-plan-j4a.md](medxfer-plan-j4a.md).
 
 | Lot | Contenu |
 |---|---|
