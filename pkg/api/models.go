@@ -213,14 +213,14 @@ type WebUploadFile struct {
 type PairPayload struct {
 	IP   string `json:"ip,omitempty"`
 	Port int    `json:"port,omitempty"`
-	Code string `json:"code,omitempty"`
+	Code string `json:"code,omitempty"` // finds the device on the network; gives no trust (WP-3.6b)
 }
 
 // SendPayload parameters for "send" action
 type SendPayload struct {
 	Paths        []string `json:"paths"`
 	TargetIP     string   `json:"target_ip,omitempty"`      // For one-shot send without pairing
-	Code         string   `json:"code,omitempty"`           // Pairing code for one-shot direct send
+	Code         string   `json:"code,omitempty"`           // ignored since WP-3.6b: trust comes from the key
 	UseTarStream bool     `json:"use_tar_stream,omitempty"` // Explicit opt-in for tar streaming
 }
 

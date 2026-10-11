@@ -34,6 +34,15 @@ func (s *DaemonServer) dispatch(conn *websocket.Conn, req RequestMessage) {
 	case "pair":
 		s.handlePair(conn, req)
 
+	case "pair_show":
+		s.handlePairShow(conn, req)
+
+	case "pair_uri":
+		s.handlePairURI(conn, req)
+
+	case "trust_respond":
+		s.handleTrustRespond(conn, req)
+
 	case "disconnect":
 		s.handleDisconnect(conn, req)
 
@@ -185,6 +194,7 @@ func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
 		return
 	}
 
+	// The code only finds the device on the network (WP-3.6b): trust comes from its key.
 	if payload.Code != "" && payload.IP == "" {
 		peer, err := discovery.ResolvePairingCode(s.ctx, payload.Code, 3*time.Second)
 		if err != nil {
@@ -197,79 +207,16 @@ func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
 		}
 	}
 
-	if payload.Code == "" {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "pairing code is required to pair with device"}, req.ID))
-		return
-	}
-
 	port := payload.Port
 	if port <= 0 {
 		port = 18887
 	}
-
 	target := net.JoinHostPort(payload.IP, strconv.Itoa(int(port)))
-	connPeer, err := dialSecure(s.ctx, target, s.pairingChanConfig())
-	if err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", target, err)}, req.ID))
-		return
-	}
-
-	ch := session.NewChannel(connPeer)
-	s.mu.RLock()
-	devName := s.config.DeviceName
-	s.mu.RUnlock()
-
-	_ = ch.Send(session.Message{
-		Type:        "pair_request",
-		DeviceName:  devName,
-		PairingCode: payload.Code,
-	})
-
-	// Wait for the answer: on xfer node, the user may be asked to trust this device (60 s).
-	_ = connPeer.SetReadDeadline(time.Now().Add(70 * time.Second))
-	resp, err := ch.Read()
-	_ = connPeer.SetReadDeadline(time.Time{})
-
-	if err != nil || resp.Type != "pair_accept" {
-		reason := "pairing rejected by peer"
-		if resp.Type == "pair_reject" {
-			reason = "invalid pairing code"
-			if resp.FileName != "" {
-				reason = resp.FileName
-			}
-		} else if err != nil {
-			reason = err.Error()
+	go func() {
+		if _, err := s.pairWith(target, nil, false, req.ID); err != nil {
+			s.sendTo(conn, NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", target, err)}, req.ID))
 		}
-		ch.Close()
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %s", target, reason)}, req.ID))
-		return
-	}
-
-	ch.Authenticate() // pair_accept: the peer knew the pairing code
-	peerDevName := resp.DeviceName
-	if peerDevName == "" {
-		peerDevName = payload.IP
-	}
-
-	s.mu.Lock()
-	if s.sessionGraceTimer != nil {
-		s.sessionGraceTimer.Stop()
-		s.sessionGraceTimer = nil
-	}
-	s.isReconnecting = false
-	if s.activeSession != nil {
-		s.activeSession.Close()
-	}
-	s.activeSession = ch
-	s.pairedDeviceName = peerDevName
-	s.mu.Unlock()
-
-	s.Broadcast(NewEvent("paired", map[string]string{
-		"ip":          payload.IP,
-		"device_name": peerDevName,
-	}, req.ID))
-
-	go s.listenToSession(ch)
+	}()
 }
 
 func (s *DaemonServer) handleDisconnect(conn *websocket.Conn, req RequestMessage) {
@@ -312,11 +259,7 @@ func (s *DaemonServer) handleSend(conn *websocket.Conn, req RequestMessage) {
 
 	// If a specific target IP was provided and we have no session or session is with someone else:
 	if payload.TargetIP != "" && (sess == nil || sess.RemoteIP() != cleanTarget) {
-		if payload.Code == "" {
-			s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "pairing code is required for direct send"}, req.ID))
-			return
-		}
-		go s.connectAndSend(payload.TargetIP, payload.Code, payload.Paths, req.ID, payload.UseTarStream)
+		go s.connectAndSend(payload.TargetIP, payload.Paths, req.ID, payload.UseTarStream)
 		return
 	}
 
@@ -326,7 +269,7 @@ func (s *DaemonServer) handleSend(conn *websocket.Conn, req RequestMessage) {
 			err := s.sendOverSession(payload.Paths, req.ID, payload.UseTarStream)
 			if err != nil && payload.TargetIP != "" {
 				// Old session failed (stale/broken connection), immediately reconnect and retry!
-				s.connectAndSend(payload.TargetIP, payload.Code, payload.Paths, req.ID, payload.UseTarStream)
+				s.connectAndSend(payload.TargetIP, payload.Paths, req.ID, payload.UseTarStream)
 			} else if err != nil {
 				s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 			}
@@ -334,79 +277,14 @@ func (s *DaemonServer) handleSend(conn *websocket.Conn, req RequestMessage) {
 		return
 	}
 
-	if payload.TargetIP != "" {
-		if payload.Code == "" {
-			s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "pairing code is required for direct send"}, req.ID))
-			return
-		}
-		go s.connectAndSend(payload.TargetIP, payload.Code, payload.Paths, req.ID, payload.UseTarStream)
-		return
-	}
-
 	s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "not paired with any device and no target_ip specified"}, req.ID))
 }
 
-func (s *DaemonServer) connectAndSend(targetIP, code string, paths []string, id string, useTarStream ...bool) {
-	target := targetIP
-	if !strings.Contains(target, ":") {
-		target = fmt.Sprintf("%s:18887", targetIP)
-	}
-	connPeer, err := dialSecure(s.ctx, target, s.pairingChanConfig())
-	if err != nil {
-		s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to connect to %s: %v", target, err)}, id))
+func (s *DaemonServer) connectAndSend(targetIP string, paths []string, id string, useTarStream ...bool) {
+	if _, err := s.pairWith(targetIP, nil, false, id); err != nil {
+		s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", targetIP, err)}, id))
 		return
 	}
-
-	ch := session.NewChannel(connPeer)
-	s.mu.RLock()
-	devName := s.config.DeviceName
-	s.mu.RUnlock()
-
-	_ = ch.Send(session.Message{
-		Type:        "pair_request",
-		DeviceName:  devName,
-		PairingCode: code,
-	})
-
-	_ = connPeer.SetReadDeadline(time.Now().Add(70 * time.Second)) // xfer node may ask its user
-	resp, err := ch.Read()
-	_ = connPeer.SetReadDeadline(time.Time{})
-
-	if err != nil || resp.Type != "pair_accept" {
-		reason := "pairing rejected by peer"
-		if resp.Type == "pair_reject" {
-			reason = "invalid pairing code"
-			if resp.FileName != "" {
-				reason = resp.FileName
-			}
-		}
-		ch.Close()
-		s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %s", target, reason)}, id))
-		return
-	}
-
-	cleanIP := strings.Split(targetIP, ":")[0]
-	ch.Authenticate() // pair_accept: the peer knew the pairing code
-	peerDevName := resp.DeviceName
-	if peerDevName == "" {
-		peerDevName = cleanIP
-	}
-
-	s.mu.Lock()
-	if s.activeSession != nil {
-		s.activeSession.Close()
-	}
-	s.activeSession = ch
-	s.pairedDeviceName = peerDevName
-	s.mu.Unlock()
-
-	s.Broadcast(NewEvent("paired", map[string]string{
-		"ip":          cleanIP,
-		"device_name": peerDevName,
-	}))
-	go s.listenToSession(ch)
-
-	// Dispatch offer immediately
 	tarOpt := len(useTarStream) > 0 && useTarStream[0]
 	_ = s.sendOverSession(paths, id, tarOpt)
 }

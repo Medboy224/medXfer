@@ -7,10 +7,12 @@ package main
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/session"
 )
 
@@ -118,4 +120,38 @@ func sessionPeer(s *session.Channel) identity.Fingerprint {
 		return identity.Fingerprint{}
 	}
 	return s.PeerFingerprint()
+}
+
+// nodeInvitation is the QR code shown by `pair --show` in xfer node (WP-3.6b): its secret
+// admits one device, which becomes trusted (this session only with --once).
+type nodeInvitation struct {
+	mu   sync.Mutex
+	inv  *pairing.Invitation
+	once bool
+}
+
+// renew replaces the QR code with a new one, valid pairing.TTL.
+func (n *nodeInvitation) renew(fp identity.Fingerprint, host string, port int, once bool) (pairing.URI, error) {
+	inv, err := pairing.NewInvitation(pairing.TTL)
+	if err != nil {
+		return pairing.URI{}, err
+	}
+	n.mu.Lock()
+	n.inv, n.once = inv, once
+	n.mu.Unlock()
+	return inv.URI(fp, host, port), nil
+}
+
+// redeem checks a scanner's secret: single use, before expiry, in constant time.
+func (n *nodeInvitation) redeem(secret string) (trustAnswer, bool) {
+	n.mu.Lock()
+	inv, once := n.inv, n.once
+	n.mu.Unlock()
+	if inv == nil || inv.Redeem(pairing.DecodeSecret(secret), time.Now()) != nil {
+		return trustRefused, false
+	}
+	if once {
+		return trustOnce, true
+	}
+	return trustAlways, true
 }

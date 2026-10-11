@@ -35,7 +35,8 @@ type Server interface {
 	Stop()
 	ControlToken() string
 	NodeListenAddr() string // "" until Serve has opened the peer listener
-	PairingCode() string
+	Fingerprint() string    // this daemon's key, once Serve has loaded it
+	TrustDevice(fingerprint, alias string) error
 }
 
 // Event is an event of the control WebSocket.
@@ -196,10 +197,20 @@ type Pair struct {
 	Sender, Receiver *Node
 }
 
-// StartPair starts both daemons with StartNode.
+// StartPair starts both daemons with StartNode and makes each one trust the other, as a
+// pairing by QR code would: their control connections are then admitted at once.
 func StartPair(t testing.TB, sender, receiver Server) *Pair {
 	t.Helper()
-	return &Pair{Sender: StartNode(t, sender), Receiver: StartNode(t, receiver)}
+	p := &Pair{Sender: StartNode(t, sender), Receiver: StartNode(t, receiver)}
+	for _, n := range []struct {
+		self, other Server
+		alias       string
+	}{{sender, receiver, "receiver"}, {receiver, sender, "sender"}} {
+		if err := n.self.TrustDevice(n.other.Fingerprint(), n.alias); err != nil {
+			t.Fatalf("testkit: trust: %v", err)
+		}
+	}
+	return p
 }
 
 // SendOptions are the optional fields of a "send" request.
@@ -207,14 +218,13 @@ type SendOptions struct {
 	UseTarStream bool
 }
 
-// Send asks the sender to send paths to the receiver, pairing with the receiver's code, and
-// returns the request id.
+// Send asks the sender to send paths to the receiver, which it trusts, and returns the
+// request id.
 func (p *Pair) Send(paths []string, opts SendOptions) string {
 	p.Sender.t.Helper()
 	payload := map[string]any{
 		"paths":     paths,
 		"target_ip": p.Receiver.PeerAddr(),
-		"code":      p.Receiver.Server.PairingCode(),
 	}
 	if opts.UseTarStream {
 		payload["use_tar_stream"] = true

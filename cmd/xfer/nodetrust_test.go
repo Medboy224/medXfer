@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/pairing"
 )
 
 func TestParseTrustAnswer(t *testing.T) {
@@ -90,4 +91,35 @@ func newTestIdentity(t *testing.T) *identity.Identity {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// xfer node's QR code: its secret admits one device, saved unless --once (WP-3.6b).
+func TestNodeInvitation(t *testing.T) {
+	id, _ := testDevice(t)
+	var n nodeInvitation
+	if _, ok := n.redeem("anything"); ok {
+		t.Fatal("a secret was accepted with no QR code shown")
+	}
+	u, err := n.renew(id.Fingerprint, "10.0.0.2", 18887, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Fingerprint != id.Fingerprint || u.Port != 18887 {
+		t.Fatalf("URI: %+v", u)
+	}
+	bad := u.Secret
+	bad[0] ^= 0xff
+	if _, ok := n.redeem(pairing.EncodeSecret(bad)); ok {
+		t.Fatal("a wrong secret was accepted")
+	}
+	if a, ok := n.redeem(pairing.EncodeSecret(u.Secret)); !ok || a != trustAlways {
+		t.Fatalf("right secret: %v, %v", a, ok)
+	}
+	if _, ok := n.redeem(pairing.EncodeSecret(u.Secret)); ok {
+		t.Fatal("the secret was accepted twice")
+	}
+	u, _ = n.renew(id.Fingerprint, "10.0.0.2", 18887, true)
+	if a, ok := n.redeem(pairing.EncodeSecret(u.Secret)); !ok || a != trustOnce {
+		t.Fatalf("--once: %v, %v", a, ok)
+	}
 }

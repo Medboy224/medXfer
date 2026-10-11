@@ -156,7 +156,7 @@ const IndexHTML = `<!DOCTYPE html>
               <input type="text" id="pairCodeInput" placeholder="Code (XXX-YYY)" style="flex: 1; max-width: 140px; font-family: monospace; text-align: center; font-weight: 700; letter-spacing: 1px;">
               <button id="pairBtn" class="btn btn-primary" style="width: auto; padding: 0 16px;" onclick="pairNode()">Pair</button>
             </div>
-            <div style="font-size: 11px; color: var(--muted);">Enter the target device's IP and 6-digit pairing code (shown on its screen).</div>
+            <div style="font-size: 11px; color: var(--muted);">Enter the target device's IP or its 6-digit code (it only finds the device: both screens then compare fingerprints).</div>
           </div>
         </div>
 
@@ -677,6 +677,16 @@ const IndexHTML = `<!DOCTYPE html>
       log("SEND", msg);
     }
 
+    // An unknown device (WP-3.6b): the user compares both fingerprints with the other screen.
+    // OK trusts it for this session; the answer defaults to no.
+    function onTrustRequest(d) {
+      const who = (d.device_name || "Unknown device") + (d.ip ? " (" + d.ip + ")" : "");
+      const ok = confirm("New device: " + who + "\n\nIts fingerprint:  " + d.short +
+        "\nOurs:             " + d.self +
+        "\n\nCheck that the other screen shows the same two fingerprints.\nTrust it for this session?");
+      sendCmd("trust_respond", { fingerprint: d.fingerprint, answer: ok ? "once" : "no" });
+    }
+
     function handleEvent(msg) {
       if (msg.event === "log" && msg.data && msg.data.level && msg.data.message) {
         log(msg.data.level, msg.data.message);
@@ -685,6 +695,9 @@ const IndexHTML = `<!DOCTYPE html>
       log("RECV:" + msg.event, msg.data);
 
       switch (msg.event) {
+        case "trust_request":
+          onTrustRequest(msg.data);
+          break;
         case "benchmark_disk_result":
           onBenchmarkDiskResult(msg.data);
           break;
@@ -1790,12 +1803,6 @@ const IndexHTML = `<!DOCTYPE html>
         return;
       }
 
-      if (raw && !code) {
-        code = prompt("Enter the 6-digit pairing code shown on " + raw + ":");
-        if (!code) return;
-        code = code.trim();
-      }
-
       const btn = document.getElementById("pairBtn");
       if (btn) {
         btn.innerText = "⏳ Pairing...";
@@ -1805,15 +1812,11 @@ const IndexHTML = `<!DOCTYPE html>
     }
 
     function directPair(ip, btnEl, devName) {
-      const label = devName ? (devName + " (" + ip + ")") : ip;
-      let code = prompt("Enter the 6-digit pairing code shown on " + label + ":");
-      if (!code) return;
-      code = code.trim();
       if (btnEl) {
         btnEl.innerText = "⏳ Pairing...";
         btnEl.disabled = true;
       }
-      sendCmd("pair", { ip: ip, code: code });
+      sendCmd("pair", { ip: ip });
     }
 
     async function directSend(ip) {
@@ -1822,14 +1825,8 @@ const IndexHTML = `<!DOCTYPE html>
         alert("Please select files/folders or enter path(s) first!");
         return;
       }
-      let code = "";
-      if (document.getElementById("unpairedBox").style.display !== "none") {
-        code = prompt("Enter the 6-digit pairing code for " + ip + ":");
-        if (!code) return;
-        code = code.trim();
-      }
       const useTar = document.getElementById("useTarStreamCheck") ? document.getElementById("useTarStreamCheck").checked : false;
-      sendCmd("send", { paths: paths, target_ip: ip, code: code, use_tar_stream: useTar });
+      sendCmd("send", { paths: paths, target_ip: ip, use_tar_stream: useTar });
     }
 
     function disconnectNode() {
