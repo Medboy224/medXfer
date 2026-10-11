@@ -165,6 +165,7 @@ Détail complet dans [medxfer-plan-prototype-g2a.md](medxfer-plan-prototype-g2a.
 
 **Veille G1 pendant J3 (2 à 3 jours cumulés, sans code de production) :** comparer SPAKE2 (RFC 9382), CPace et `schollz/pake` d'après les critères de la gate ; écrire la décision recommandée.
 **Critère de sortie :** une capture réseau d'un transfert complet ne montre aucun contenu lisible ; les tests MITM et de repli passent ; deux appareils s'appairent par QR puis transfèrent.
+**Résultat (11/10/2026) :** jalon terminé, les cinq critères du plan sont remplis (PR #51 à #64) : plus rien en clair, y compris dans la découverte (#64) ; trois façons d'être admis (appareil de confiance, QR, comparaison des empreintes) ; le code `XXX-YYY` ne fait plus que localiser. Réserves et suites dans [j3-report.md](j3-report.md).
 
 ---
 
