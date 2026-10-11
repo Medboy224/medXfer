@@ -56,7 +56,7 @@ La vitesse vient en dernier parce qu'un transfert rapide mais corrompu ou interc
 Relais Internet, comptes utilisateurs, synchronisation de dossiers, anonymat réseau, protection contre un système d'exploitation déjà compromis, transfert hors LAN.
 
 ### 1.3 Plateformes visées et ordre de validation
-Cinq plateformes : **Windows, Linux, Android, macOS, iOS**. Le poste de développement est Windows ; il n'y a, à ce jour, ni Mac ni iPhone. Ordre de validation : (1) Windows, Linux (via WSL2), Android, validés par le prototype G2a (`medxfer-plan-prototype-g2a.md`) ; (2) macOS et iOS dès qu'un environnement macOS est disponible (gates G2b et G8). Le cœur Go est testé sur macOS dès la phase 0b par l'intégration continue (`DEV-20`).
+Cinq plateformes : **Windows, Linux, Android, macOS, iOS**. Le poste de développement est Windows ; il n'y a, à ce jour, ni Mac ni iPhone. Ordre de validation : (1) Windows, Linux, Android, validés par le prototype G2a (`medxfer-plan-prototype-g2a.md`, résultats dans `g2a-report.md`, octobre 2026 ; Linux sur un PC Zorin OS 17, sans WSL2) ; (2) macOS et iOS dès qu'un environnement macOS est disponible (gates G2b et G8). Le cœur Go est testé sur macOS dès la phase 0b par l'intégration continue (`DEV-20`).
 
 ---
 
@@ -164,7 +164,7 @@ type ChunkSink interface {
 | Taille de bloc 4→1 Mo en cas de chaleur | ❌ Supprimée. Taille fixe par transfert. | Changer la taille en cours de route casse `index × taille` et donc la reprise. | — |
 | mDNS | ✅ Conservé, avec précisions iOS/Android (§5). | Standard géré par l'OS ; seule voie sans entitlement spécial sur iOS. | — |
 | Code `XXX-YYY` avec octet d'IP | ❌ Supprimé. | Réduisait le PIN à 900 valeurs (~10 bits). | — |
-| Daemon + WebSocket | ❌ Remplacé par un cœur Go en-processus (§10). | iOS interdit de lancer un autre programme et Android a fortement restreint l'exécution de binaires embarqués : un daemon séparé est impossible sur mobile. Un port d'écoute est en plus une surface d'attaque inutile. | Le prototype G2a échoue sur une plateforme de bureau (un processus séparé reste alors un plan B). |
+| Daemon + WebSocket | ❌ Remplacé par un cœur Go en-processus (§10). Confirmé par le prototype G2a sur Windows, Linux et Android (`g2a-report.md`). | iOS interdit de lancer un autre programme et Android a fortement restreint l'exécution de binaires embarqués : un daemon séparé est impossible sur mobile. Un port d'écoute est en plus une surface d'attaque inutile. | Le prototype G2a échoue sur une plateforme de bureau (un processus séparé reste alors un plan B). |
 | Tableau de bord web hôte (`IndexHTML`) | ⏸ Outil de développement seulement (`DEV-19`), absent des versions publiées, gelé, à supprimer. | Duplique l'interface Flutter, 2 400 lignes sans tests réels, surface d'attaque (sélecteur natif, dépôt temporaire). | Jamais en production. |
 | Chiffrement WebCrypto du Web Share | ❌ Supprimé (§11.4). | `crypto.subtle` n'existe qu'en contexte sécurisé ; le JavaScript est servi par le même canal. | — |
 | Chroot virtuel HTTP | ✅ Conservé via `os.Root` (Go ≥ 1.24). | Confinement sans fenêtre TOCTOU. | — |
@@ -210,6 +210,7 @@ Aujourd'hui (`session/tls.go`) le certificat est régénéré à chaque démarra
 | `DISC-07` | Le sélecteur côté receveur reconnaît un appareil grâce au suffixe du nom générique (`…-4F2A`) affiché aussi sur l'écran de l'émetteur, à côté du PIN. | ✅ |
 | `DISC-08` | Repli manuel : saisie `IP:port` ou QR (contient l'adresse). | ✅ |
 | `DISC-09` | Balayage du sous-réseau (/24, 64 sockets concurrents, délai 350 ms) seulement sur action explicite « Appareil introuvable ? ». | ✅ (déjà dans le code) |
+| `DISC-10` | Android : le cœur ne peut pas énumérer les interfaces réseau (`net.Interfaces` et `net.InterfaceAddrs` refusés : `netlinkrib: permission denied`, Android 16, mesuré par G2A-09). La plateforme lui fournit adresses, masques et noms d'interfaces par l'action `set_network_info` ; le cœur s'en sert à la place de l'énumération et tolère des erreurs d'envoi UDP passagères (une sur cinq sondes, non reproduite). | ✅ (G2a) |
 
 ---
 
@@ -487,6 +488,7 @@ func SafeRelPath(p string) (string, error) {
 | `STO-06` | À la reprise, vérification des 8 derniers chunks ; mode complet disponible. | ✅ |
 | `STO-07` | Disque plein = pause propre, pas d'échec ni de suppression. | ✅ |
 | `STO-08` | Mémoire du récepteur bornée : `N × 2 × chunk_size` (supprime la table `pending` non bornée du code actuel). | ✅ |
+| `STO-09` | Android : à partir de l'API 30, les fichiers reçus vont directement dans `Download/medXfer/` par chemin ; `.part`, `fsync` et renommage y fonctionnent sans permission (Android 16, G2A-10). Repli MediaStore pour Android 10 et avant, et pour un dossier choisi par l'utilisateur (SAF), avec copie après réception (1 Gio en 2,9 à 3,7 s sur le téléphone de test). | 📏 décision en J6b, Android 10 et SAF non testés |
 
 ---
 
@@ -498,12 +500,14 @@ Le daemon actuel écoute sur `ws://127.0.0.1:19999/ws` avec `CheckOrigin: true`.
 ### 10.2 La solution structurelle : plus de socket de contrôle
 | Id | Exigence | Statut |
 |---|---|---|
-| `API-01` | Le cœur est une **bibliothèque Go** sans socket d'écoute de contrôle. La frontière avec l'interface est de type *passage de messages*, réduite à 4 fonctions : `Start(configJSON)`, `Send(requestJSON)`, `SetEventHandler(callback)`, `Stop()`. | ✅ |
+| `API-01` | Le cœur est une **bibliothèque Go** sans socket d'écoute de contrôle. La frontière avec l'interface est de type *passage de messages*, réduite à 5 fonctions C : `medxfer_start(config)`, `medxfer_call(request)`, `medxfer_next_event(timeout_ms)`, `medxfer_stop()`, `medxfer_free(p)`. Les événements sont **lus** par l'interface (isolat Dart de fond, par lots), jamais poussés par un rappel : `SetEventHandler(callback)` est écarté, il fait planter l'application au redémarrage à chaud (G2a, §10.4). | ✅ (G2a) |
 | `API-02` | Le vocabulaire est celui qui existe déjà (`RequestMessage{id, action, payload}` / `EventMessage{event, data}`), seul le transport change (appel de fonction au lieu de WebSocket). Aucun pointeur n'est partagé : les octets sont copiés, ce qui évite tout conflit entre ramasse-miettes de Dart et de Go. | ✅ |
 | `API-03` | Le CLI `xfer` (Termux, serveur sans écran) appelle le même cœur dans son propre processus. | ✅ |
 | `API-04` | Si une interface loopback HTTP/WebSocket est conservée (mode sans écran, tableau de bord web, développement), elle est **désactivée par défaut** et DOIT appliquer les sept contrôles ci-dessous. Le tableau de bord web suit en plus les règles `DEV-19`. | ✅ |
-| `API-05` | Plateforme de la frontière : bureau en `c-shared` + `dart:ffi` ; mobile par `gomobile` ou `c-shared`. | ❓ gates G2a (Windows, Linux, Android) puis G2b (macOS, iOS) : prototype avant de figer |
+| `API-05` | Plateforme de la frontière : `c-shared` + `dart:ffi` sur Windows, Linux et Android (gate G2a fermée, `g2a-report.md`) ; macOS et iOS restent à trancher par G2b (`c-shared`, `c-archive` ou `gomobile`). | ✅ Windows, Linux, Android · ❓ G2b |
 | `API-06` | Le schéma des messages est versionné et testé (fichiers « golden »). | ✅ |
+| `API-07` | La frontière respecte les règles B1 à B11 du §10.4. | ✅ (G2a) |
+| `API-08` | Android : transferts et écoute tournent sous un service de premier plan. Sans lui, le réseau de l'application est coupé dès qu'elle passe en arrière-plan (port injoignable, transfert figé : G2A-05). | ✅ (G2a) |
 
 ### 10.3 Les sept contrôles si un serveur loopback existe
 1. **Listener dédié** lié à `127.0.0.1` uniquement, séparé de celui du Web Share (aujourd'hui `0.0.0.0` avec un test d'adresse).
@@ -532,6 +536,23 @@ func guard(token, allowedOrigin string, next http.Handler) http.Handler {
     })
 }
 ```
+
+### 10.4 Contrat de la frontière (issu du prototype G2a)
+Vérifié sur Windows, Linux et Android (`g2a-report.md`, §6).
+
+| Règle | Contenu |
+|---|---|
+| B1 | Chaque `char*` rendu par la bibliothèque est libéré par `medxfer_free`, jamais par l'allocateur de l'appelant. |
+| B2 | Aucun pointeur Go ne traverse la frontière : les chaînes sont copiées. |
+| B3 | Messages en JSON UTF-8. |
+| B4 | `medxfer_start` est idempotente : un redémarrage à chaud de Flutter relance Dart, pas le processus. |
+| B5 | Chaque goroutine du cœur récupère ses paniques en événement `core_error` ; une panique dans `medxfer_call` devient une erreur JSON. |
+| B6 | Les chemins viennent de l'appelant (`data_dir`, `download_dir`). |
+| B7 | Événements de progression limités à 10 par seconde et par transfert. |
+| B8 | Le cœur ne garde aucun pointeur vers du code Dart : les événements passent par sa file, lue par `medxfer_next_event`. |
+| B9 | Le lecteur d'événements s'arrête de façon coordonnée : le cœur le réveille par une sentinelle. On ne tue jamais un isolat bloqué dans un appel natif (un événement perdu lors de la mise au point). |
+| B10 | Le lecteur transmet les événements par lots, jusqu'à 256 par message (lenteur de l'interface en rafale : 237 ms un par un, 3 à 5 ms par lots). |
+| B11 | La file du cœur est bornée (65 536) ; un événement sans place est compté (`drops`), le moteur n'attend jamais l'interface. |
 
 ---
 
@@ -668,7 +689,7 @@ Chaque phase est livrable seule (règle R5). Le projet n'étant pas encore publi
 | Gate | Question | Options | Critères de décision | Bloque |
 |---|---|---|---|---|
 | **G1** | Quelle bibliothèque PAKE ? | (a) SPAKE2 (RFC 9382) avec une implémentation Go à identifier ; (b) CPace via `filippo.io/cpace`, marquée expérimentale ; (c) `schollz/pake` (utilisée par `croc`). | Vecteurs de test de la spécification ; constantes publiques fixées sans logarithme connu ; maintenance ; compilation sans CGO sur mobile ; revue externe possible. | Phase 2b seulement |
-| **G2a** | Quelle frontière cœur/UI sur Windows, Linux et Android ? | `c-shared` + `dart:ffi`, ou `gomobile` sur Android. | Prototype : démarrer le cœur, envoyer une requête, recevoir un événement. Réalisable sans Mac. | Phase 4a |
+| **G2a** ✅ fermée (11/10/2026) | Quelle frontière cœur/UI sur Windows, Linux et Android ? | **Retenu :** `c-shared` + `dart:ffi` partout, événements lus par un isolat de fond. `gomobile` non nécessaire. | Résultats et réserves (débit Linux sur machine ancienne, essai sur machine propre) : `g2a-report.md`. | — |
 | **G2b** | Même question sur macOS et iOS. | `c-shared` / `c-archive` ou `gomobile`. | Même prototype ; exige macOS et Xcode (voir G8). Le risque est le plus élevé sur iOS. | Phase 4b |
 | **G8** | Comment obtenir un environnement macOS ? | Mac d'occasion, Mac loué à distance, exécuteurs macOS d'intégration continue (compilation seulement). | Un vrai iPhone branché à un Mac est nécessaire pour valider Bonjour, la permission « réseau local » et le comportement en arrière-plan. | Phase 4b |
 | **G3** | TCP+TLS atteint-il 80 % d'iperf3 ? | Oui / non. | Benchmark §14.3. | Décision QUIC (phase 6) |

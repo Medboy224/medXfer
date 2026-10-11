@@ -146,6 +146,7 @@ Les lots sont indépendants entre eux sauf mention.
 ### P — Prototype G2a (piste parallèle) · 5 à 8 jours, créneau fixe après J1
 Détail complet dans [medxfer-plan-prototype-g2a.md](medxfer-plan-prototype-g2a.md). **Créneau :** juste après J1, avant J3, en une seule séquence. Raison : son résultat conditionne J6, pas J3 ; mais il vaut mieux le connaître avant d'écrire l'API du cœur. **L'étape S0 (installation des outils) peut se faire pendant les attentes de la CI de J0 et J1.**
 **Critère de sortie :** rapport `g2a-report.md` ; gate G2a fermée ou plan B décidé.
+**Résultat (11/10/2026) :** gate G2a fermée, `c-shared` + `dart:ffi` sur Windows, Linux et Android, événements lus par un isolat de fond ; réserves et changements pour J6a dans [g2a-report.md](g2a-report.md).
 
 ---
 
