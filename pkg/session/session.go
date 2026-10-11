@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/manifest"
 )
 
@@ -133,11 +134,24 @@ func (c *Channel) RemoteIP() string {
 	return "Unknown"
 }
 
-// IsEncrypted returns true if the underlying transport is secured with TLS
+// IsEncrypted returns true if the underlying transport is secured with TLS.
 func (c *Channel) IsEncrypted() bool {
-	if c.conn != nil {
-		_, ok := c.conn.(*tls.Conn)
-		return ok
+	_, ok := c.conn.(interface{ ConnectionState() tls.ConnectionState })
+	return ok
+}
+
+// PeerFingerprint is the verified key fingerprint of the peer when the channel runs over a
+// secure channel (pkg/securechan); the zero value otherwise.
+func (c *Channel) PeerFingerprint() identity.Fingerprint {
+	if p, ok := c.conn.(interface{ PeerFingerprint() identity.Fingerprint }); ok {
+		return p.PeerFingerprint()
 	}
-	return false
+	return identity.Fingerprint{}
+}
+
+// Authenticate marks a pairing connection as authenticated (securechan state AUTH).
+func (c *Channel) Authenticate() {
+	if a, ok := c.conn.(interface{ Authenticate() }); ok {
+		a.Authenticate()
+	}
 }
