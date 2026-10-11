@@ -549,6 +549,7 @@ func (s *DaemonServer) sendOneShot(paths []string, targetIP, reqID string) {
 			IsBatch:  true,
 			Batch:    m,
 		}
+		offer.Fingerprint = s.fingerprint()
 		discServer := discovery.NewDiscoveryServer("sender", port, offer)
 		discServer.Start(s.ctx)
 
@@ -561,6 +562,7 @@ func (s *DaemonServer) sendOneShot(paths []string, targetIP, reqID string) {
 			s.mu.Unlock()
 
 			sender := engine.NewSender(s.config.Workers, uint32(s.config.ChunkSizeMB*1024*1024))
+			sender.SetSecure(s.oneShotDataServer())
 			listener := newDaemonListener(s, item.RelPath, item.Size, idx, m.TotalFiles, baseBytes, m.TotalBytes)
 			bindAddr := fmt.Sprintf("0.0.0.0:%d", itemPort)
 			_ = sender.ServeAndSendWithRelPath(itemCtx, bindAddr, item.FullPath, item.RelPath, listener, 0)
@@ -584,6 +586,7 @@ func (s *DaemonServer) sendOneShot(paths []string, targetIP, reqID string) {
 			FileSize: fi.Size(),
 			FileID:   engine.GenerateFileID(filePath),
 		}
+		offer.Fingerprint = s.fingerprint()
 		discServer := discovery.NewDiscoveryServer("sender", port, offer)
 		discServer.Start(s.ctx)
 
@@ -593,6 +596,7 @@ func (s *DaemonServer) sendOneShot(paths []string, targetIP, reqID string) {
 		s.mu.Unlock()
 
 		sender := engine.NewSender(s.config.Workers, uint32(s.config.ChunkSizeMB*1024*1024))
+		sender.SetSecure(s.oneShotDataServer())
 		listener := newDaemonListener(s, filepath.Base(filePath), fi.Size(), 0, 1, 0, fi.Size())
 		bindAddr := fmt.Sprintf("0.0.0.0:%d", port)
 		_ = sender.ServeAndSend(ctx, bindAddr, filePath, listener, 0)
@@ -680,6 +684,7 @@ func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessa
 
 		receiver := engine.NewReceiver(saveDir, s.config.Workers)
 		receiver.SetCollisionPolicy(policy)
+		receiver.SetSecure(s.dataClient())
 
 		var ctx context.Context
 		s.mu.Lock()

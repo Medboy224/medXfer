@@ -28,6 +28,10 @@ type TransferOffer struct {
 	FileID   string             `json:"file_id,omitempty"` // Protects legacy mode integrity
 	IsBatch  bool               `json:"is_batch,omitempty"`
 	Batch    *manifest.Manifest `json:"batch,omitempty"`
+	// Fingerprint of the sender's key (full base32): the receiver pins it on the data
+	// connections (WP-3.4). Only in answers to a query with the right pairing code, never in
+	// beacons (DISC-06).
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // DiscoveryQuery represents an authenticated request sent to a peer's discovery port
@@ -195,6 +199,7 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 						masked.FileSize = 0
 						masked.FileID = ""
 						masked.Batch = nil
+						masked.Fingerprint = ""
 						respPeer.Offer = &masked
 					}
 				}
@@ -230,6 +235,7 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 						masked.FileSize = 0
 						masked.FileID = ""
 						masked.Batch = nil
+						masked.Fingerprint = ""
 						beaconPeer.Offer = &masked
 					}
 					data, err := json.Marshal(beaconPeer)

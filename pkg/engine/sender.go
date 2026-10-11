@@ -23,6 +23,7 @@ type Sender struct {
 	workers    int
 	chunkSize  uint32
 	authorizer AuthorizerFunc
+	secure     SecureFunc
 }
 
 func NewSender(workers int, chunkSize uint32) *Sender {
@@ -225,14 +226,24 @@ func (s *Sender) ServeAndSendWithRelPathReady(ctx context.Context, bindAddr, fil
 		connsMu.Unlock()
 
 		go func(c net.Conn) {
+			raw := c
 			defer wg.Done()
 			defer atomic.AddInt32(&activeStreams, -1)
 			defer func() {
 				connsMu.Lock()
-				delete(activeConns, c)
+				delete(activeConns, raw)
 				connsMu.Unlock()
 				_ = c.Close()
 			}()
+			// The secure channel, here in the connection's goroutine so that a slow handshake
+			// never holds up the accept loop. A connection without the expected key ends here.
+			if s.secure != nil {
+				sc, err := s.secure(ctx, c)
+				if err != nil {
+					return
+				}
+				c = sc
+			}
 
 			bufPtr := getChunkBuffer()
 			defer putChunkBuffer(bufPtr)

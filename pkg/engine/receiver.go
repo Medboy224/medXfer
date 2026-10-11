@@ -21,6 +21,7 @@ type Receiver struct {
 	collisionPolicy CollisionPolicy
 	commitBytes     int64         // 0: defaultCommitBytes
 	commitInterval  time.Duration // 0: defaultCommitInterval
+	secure          SecureFunc
 	pauseMu         sync.Mutex
 	isPaused        bool
 	pauseCond       *sync.Cond
@@ -246,6 +247,17 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 		return err
 	}
 	TuneConn(handshakeConn)
+	if r.secure != nil {
+		sc, err := r.secure(ctx, handshakeConn)
+		if err != nil {
+			err = fmt.Errorf("securing the connection to the sender: %w", err)
+			if listener != nil {
+				listener.OnError(err)
+			}
+			return err
+		}
+		handshakeConn = sc
+	}
 
 	var hsReq [8]byte
 	binary.BigEndian.PutUint16(hsReq[0:2], protocol.MagicBytes)
@@ -568,6 +580,15 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 					if err == nil {
 						TuneConn(c)
 						conn = wrapConn(ConnDialed, c)
+						if r.secure != nil {
+							sc, err := r.secure(workerCtx, conn)
+							if err != nil { // closed by r.secure
+								conn = nil
+								time.Sleep(delays[attempt])
+								continue
+							}
+							conn = sc
+						}
 						connsMu.Lock()
 						activeConns[conn] = struct{}{}
 						connsMu.Unlock()
