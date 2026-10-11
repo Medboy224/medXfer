@@ -25,6 +25,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/hotspot"
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/manifest"
+	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
@@ -111,7 +112,14 @@ type DaemonServer struct {
 	trust       *identity.TrustStore
 	gate        *securechan.Gate // limits unauthenticated control connections (LIM-01)
 	discSrv     *discovery.DiscoveryServer
-	pairingCode string
+	pairingCode string // finds this device on the network; gives no trust (WP-3.6b)
+
+	// Pairing without the code (trust.go): the QR code shown by pair_show, and the unknown
+	// keys waiting for the user's trust_respond.
+	invite       *pairing.Invitation
+	inviteOnce   bool
+	pendingTrust map[string]chan trustDecision
+	trustTimeout time.Duration // 0: defaultTrustTimeout
 
 	benchPongChan     chan session.Message
 	benchBurstAckChan chan session.Message
@@ -1032,25 +1040,28 @@ func (s *DaemonServer) acceptPairing(raw net.Conn) {
 		}
 
 		s.mu.RLock()
-		expectedCode := s.pairingCode
 		devName := s.config.DeviceName
 		s.mu.RUnlock()
 
 		if msg.Type == "pair_request" {
-			normExpected, _ := discovery.NormalizePairingCode(expectedCode)
-			normProvided, _ := discovery.NormalizePairingCode(msg.PairingCode)
-			if normExpected == "" || normProvided == "" || normExpected != normProvided {
-				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "invalid pairing code"})
+			// The pairing code, if any, is ignored: trust comes from the key (WP-3.6b).
+			decision, err := s.admitIncoming(conn, msg, ch.RemoteIP())
+			if err != nil {
+				_ = ch.Send(session.Message{Type: "pair_reject", FileName: err.Error()})
 				ch.Close()
 				return
 			}
+			if err := s.rememberTrust(conn.PeerFingerprint(), msg.DeviceName, ch.RemoteIP(), decision); err != nil {
+				s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": "could not save the trusted device: " + err.Error()}))
+			}
 			ch.Authenticate()
+			_ = conn.SetDeadline(time.Time{})
 			_ = ch.Send(session.Message{
 				Type:       "pair_accept",
 				DeviceName: devName,
 			})
 		} else {
-			_ = ch.Send(session.Message{Type: "pair_reject", FileName: "pairing code required"})
+			_ = ch.Send(session.Message{Type: "pair_reject", FileName: "pair_request expected"})
 			ch.Close()
 			return
 		}
@@ -1122,22 +1133,10 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		s.pairedDeviceName = msg.DeviceName
 		devName := s.config.DeviceName
 		sess := s.activeSession
-		expectedCode := s.pairingCode
 		s.mu.Unlock()
 
+		// Inside a session the peer's key was already admitted: nothing more to check.
 		if sess != nil {
-			normExpected, _ := discovery.NormalizePairingCode(expectedCode)
-			normProvided, _ := discovery.NormalizePairingCode(msg.PairingCode)
-			if normExpected == "" || normProvided == "" || normExpected != normProvided {
-				_ = sess.Send(session.Message{Type: "pair_reject", FileName: "invalid pairing code"})
-				sess.Close()
-				s.mu.Lock()
-				if s.activeSession == sess {
-					s.activeSession = nil
-				}
-				s.mu.Unlock()
-				return
-			}
 			_ = sess.Send(session.Message{
 				Type:       "pair_accept",
 				DeviceName: devName,

@@ -3,7 +3,6 @@ package api
 import (
 	"archive/zip"
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,7 +19,6 @@ import (
 
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/manifest"
-	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/Medboy224/medXfer/pkg/testkit"
 )
 
@@ -1399,84 +1397,6 @@ func TestDaemonPairingCode(t *testing.T) {
 		t.Fatalf("Expected pairing code format XXX-YYY, got %q", st.PairingCode)
 	}
 	t.Logf("VERIFIED: Daemon initialized with pairing code: %s", st.PairingCode)
-}
-
-func TestDaemonNodePairingHandshake(t *testing.T) {
-	server := NewDaemonServer(0, t.TempDir(), "DaemonPairTest")
-	ln, err := server.Listen(0)
-	if err != nil {
-		t.Fatalf("Failed to listen: %v", err)
-	}
-	defer ln.Close()
-
-	go func() {
-		_ = server.Serve(ln)
-	}()
-	defer server.Stop()
-
-	st := server.GetStatus()
-	validCode := st.PairingCode
-	invalidCode := "999-999"
-	if validCode == invalidCode {
-		invalidCode = "111-111"
-	}
-
-	// Serve binds the node listener in the background: wait for it, otherwise
-	// GetNodeAddr returns the default :18887, which may be another daemon.
-	var nodeAddr string
-	for deadline := time.Now().Add(2 * time.Second); ; {
-		server.mu.RLock()
-		ready := server.nodeLn != nil
-		server.mu.RUnlock()
-		if ready {
-			nodeAddr = server.GetNodeAddr()
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("node listener not started")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if strings.HasPrefix(nodeAddr, "0.0.0.0:") {
-		nodeAddr = "127.0.0.1:" + strings.TrimPrefix(nodeAddr, "0.0.0.0:")
-	}
-
-	// 1. Connect with invalid code -> expect pair_reject
-	conn1, err := dialSecure(context.Background(), nodeAddr, testPeerChan(t))
-	if err == nil {
-		defer conn1.Close()
-		ch1 := session.NewChannel(conn1)
-		_ = ch1.Send(session.Message{
-			Type:        "pair_request",
-			DeviceName:  "TestNodeClient",
-			PairingCode: invalidCode,
-		})
-		_ = conn1.SetReadDeadline(time.Now().Add(2 * time.Second))
-		resp1, err := ch1.Read()
-		if err != nil || resp1.Type != "pair_reject" {
-			t.Fatalf("Expected pair_reject for invalid code, got %v (err: %v)", resp1, err)
-		}
-		t.Logf("VERIFIED: Invalid code properly rejected with %s", resp1.Type)
-	}
-
-	// 2. Connect with valid code -> expect pair_accept
-	conn2, err := dialSecure(context.Background(), nodeAddr, testPeerChan(t))
-	if err != nil {
-		t.Fatalf("Failed to connect to daemon node listener at %s: %v", nodeAddr, err)
-	}
-	defer conn2.Close()
-	ch2 := session.NewChannel(conn2)
-	_ = ch2.Send(session.Message{
-		Type:        "pair_request",
-		DeviceName:  "TestNodeClient",
-		PairingCode: validCode,
-	})
-	_ = conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp2, err := ch2.Read()
-	if err != nil || resp2.Type != "pair_accept" {
-		t.Fatalf("Expected pair_accept for valid code, got %v (err: %v)", resp2, err)
-	}
-	t.Logf("VERIFIED: Valid code accepted! Device name: %s", resp2.DeviceName)
 }
 
 func TestDaemonDiskBenchmarkAction(t *testing.T) {

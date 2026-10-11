@@ -246,21 +246,25 @@ func handleNode() {
 		fmt.Fprintf(os.Stderr, "[-] %v\n", err)
 		return
 	}
-	// Control connections: unknown keys start UNAUTH; the pairing code decides (until WP-3.6).
+	// Control connections: unknown keys start UNAUTH. The pairing code only finds this node on
+	// the network; trust comes from the key (WP-3.6b): trusted, QR code secret, or the user.
 	pairCfg := securechan.Config{Identity: nodeID, Trust: nodeTrust, AllowUnknown: true, Gate: securechan.NewGate()}
 	localID = nodeID
+	var invite nodeInvitation // the QR code shown by `pair --show`
 
 	fmt.Println("==================================================")
 	fmt.Println("             medXfer Persistent Node              ")
 	fmt.Println("==================================================")
 	fmt.Printf(" Device Name : %s\n", discServer.GetPeer().DeviceName)
 	fmt.Printf(" Local IP    : %s\n", getLocalIP())
-	fmt.Printf(" Pairing Code: %s\n", nodePairingCode)
+	fmt.Printf(" Find code   : %s   (locates this node; trust comes from its key)\n", nodePairingCode)
 	fmt.Printf(" Fingerprint : %s\n", nodeID.Fingerprint.Short())
 	fmt.Println("--------------------------------------------------")
 	fmt.Println(" Commands:")
 	fmt.Println("   scan              - Find devices on the network")
-	fmt.Println("   pair <code/ip>    - Connect using 6-digit code or IP")
+	fmt.Println("   pair <code|n|ip>  - Connect; both screens compare fingerprints")
+	fmt.Println("   pair --show       - Show a QR code for the other device [--once]")
+	fmt.Println("   pair <medxfer://> - Pair with the device that shows a QR code [--once]")
 	fmt.Println("   send <filepath>   - Send file/folder to paired device")
 	fmt.Println("   stop              - Cancel an active transfer gracefully")
 	fmt.Println("   disconnect        - End pairing session")
@@ -342,15 +346,9 @@ func handleNode() {
 				continue
 			}
 
-			// Verify pairing code
-			normExpected, _ := discovery.NormalizePairingCode(nodePairingCode)
-			normProvided, _ := discovery.NormalizePairingCode(msg.PairingCode)
-
-			if normExpected == "" || normProvided == "" || normExpected != normProvided {
-				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "invalid pairing code"})
+			if msg.Type != "pair_request" {
+				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "pair_request expected"})
 				ch.Close()
-				fmt.Printf("\n[-] Rejected pairing attempt from %s: invalid pairing code '%s'.\n", ch.RemoteIP(), msg.PairingCode)
-				printPrompt()
 				continue
 			}
 
@@ -363,9 +361,19 @@ func handleNode() {
 				printPrompt()
 				continue
 			}
-			// WP-3.3: an unknown key is trusted only if the user says so, never silently.
+			// The pairing code, if any, is ignored (WP-3.6b). A QR code's secret admits its
+			// scanner; otherwise an unknown key is trusted only if the user says so (WP-3.3).
 			answer := trustOnce
-			if conn.State() == securechan.Unauth {
+			if msg.Secret != "" {
+				var ok bool
+				if answer, ok = invite.redeem(msg.Secret); !ok {
+					_ = ch.Send(session.Message{Type: "pair_reject", FileName: pairing.ErrRefused.Error()}) // PAIR-07
+					ch.Close()
+					fmt.Printf("\n[-] Pairing attempt from %s refused: wrong or expired QR code.\n", peerIP)
+					printPrompt()
+					continue
+				}
+			} else if conn.State() == securechan.Unauth {
 				req := &trustRequest{name: msg.DeviceName, ip: peerIP, fp: peerFP,
 					expires: time.Now().Add(trustPromptTimeout), reply: make(chan trustAnswer, 1)}
 				answer = trustRefused
@@ -389,7 +397,6 @@ func handleNode() {
 				fmt.Printf("\n[-] Could not save the trusted device: %v\n", err)
 			}
 
-			// Valid pairing code!
 			ch.Authenticate()
 			_ = ch.Send(session.Message{
 				Type:       "pair_accept",
@@ -400,7 +407,7 @@ func handleNode() {
 			if devLabel == "" {
 				devLabel = "Remote Node"
 			}
-			fmt.Printf("\n\n[+] Device '%s' (%s) paired successfully with code %s! Press Enter to refresh prompt.\n", devLabel, activeSession.RemoteIP(), normProvided)
+			fmt.Printf("\n\n[+] Device '%s' (%s) paired, key %s. Press Enter to refresh prompt.\n", devLabel, activeSession.RemoteIP(), peerFP.Short())
 
 			go func(c *session.Channel) {
 				for {
@@ -543,19 +550,55 @@ func handleNode() {
 					}
 				}
 			case "pair":
-				if len(parts) < 2 {
-					fmt.Println("[-] Usage: pair <6-digit code | index | IP>")
+				args := []string{}
+				if len(parts) == 2 {
+					args = strings.Fields(parts[1])
+				}
+				once := false
+				var rawArg string
+				show := false
+				for _, a := range args {
+					switch a {
+					case "--once":
+						once = true
+					case "--show":
+						show = true
+					default:
+						rawArg = strings.Trim(a, `'"`) // a URI pasted with its quotes
+					}
+				}
+				if show {
+					u, err := invite.renew(nodeID.Fingerprint, getLocalIP(), 18887, once)
+					if err != nil {
+						fmt.Printf("[-] %v\n", err)
+						break
+					}
+					fmt.Println(" On the other device, scan this QR code or run there:")
+					fmt.Printf("   xfer pair '%s'   (or, in xfer node: pair <uri>)\n\n", u)
+					discovery.PrintTerminalQR(u.String())
+					fmt.Printf(" This device: %s   (valid %d s, for one device)\n", nodeID.Fingerprint.Short(), int(pairing.TTL.Seconds()))
 					break
 				}
-				rawArg := strings.TrimSpace(parts[1])
+				if rawArg == "" {
+					fmt.Println("[-] Usage: pair <6-digit code | index | IP | medxfer://...> [--once], or pair --show [--once]")
+					break
+				}
 				targetIP := rawArg
 				targetPort := 18887
 				targetDeviceName := ""
-				pairingCode := ""
+				var qr *pairing.URI
 
-				if normCode, err := discovery.NormalizePairingCode(rawArg); err == nil {
-					pairingCode = normCode
-					fmt.Printf("[*] Searching for device with pairing code '%s'...\n", normCode)
+				if strings.HasPrefix(rawArg, "medxfer://") {
+					u, err := pairing.Parse(rawArg, time.Now())
+					if err != nil {
+						fmt.Printf("[-] %v\n", err)
+						break
+					}
+					qr = &u
+					targetIP, targetPort = u.Host, u.Port
+				} else if normCode, err := discovery.NormalizePairingCode(rawArg); err == nil {
+					// The code only finds the device; its key is checked below.
+					fmt.Printf("[*] Searching for device with code '%s'...\n", normCode)
 					ctxPair, cancelPair := context.WithTimeout(context.Background(), 4*time.Second)
 					peer, err := discovery.ResolvePairingCode(ctxPair, normCode, 4*time.Second)
 					cancelPair()
@@ -582,32 +625,19 @@ func handleNode() {
 					break
 				}
 
-				// If pairing code was NOT specified in the pair argument, prompt for it!
-				if pairingCode == "" {
-					promptTarget := targetDeviceName
-					if promptTarget == "" {
-						promptTarget = targetIP
-					}
-					fmt.Printf("[?] Enter 6-digit pairing code for '%s': ", promptTarget)
-					codeIn := <-inputChan
-					codeIn = strings.TrimSpace(codeIn)
-					norm, err := discovery.NormalizePairingCode(codeIn)
-					if err != nil {
-						fmt.Printf("[-] %v\n", err)
-						break
-					}
-					pairingCode = norm
-				}
-
 				fmt.Printf("[*] Connecting to node at %s:%d...\n", targetIP, targetPort)
-				conn, err := dialSecure(net.JoinHostPort(targetIP, strconv.Itoa(int(targetPort))), pairCfg)
+				dialCfg := pairCfg
+				if qr != nil {
+					dialCfg.Expected, dialCfg.AllowUnknown = qr.Fingerprint, false // the QR code's key
+				}
+				conn, err := dialSecure(net.JoinHostPort(targetIP, strconv.Itoa(int(targetPort))), dialCfg)
 				if err != nil {
 					fmt.Println("[-] Failed to connect:", err)
 					break
 				}
 
 				peerFP := conn.PeerFingerprint()
-				if known, changed := keyChanged(nodeTrust, targetIP, peerFP); changed {
+				if known, changed := keyChanged(nodeTrust, targetIP, peerFP); changed && qr == nil {
 					fmt.Println(keyChangedAlert(known, targetIP, peerFP))
 					conn.Close()
 					break
@@ -615,12 +645,11 @@ func handleNode() {
 
 				ch := session.NewChannel(conn)
 
-				// Authenticate by sending the secret pairing code
-				_ = ch.Send(session.Message{
-					Type:        "pair_request",
-					DeviceName:  discServer.GetPeer().DeviceName,
-					PairingCode: pairingCode,
-				})
+				req := session.Message{Type: "pair_request", DeviceName: discServer.GetPeer().DeviceName}
+				if qr != nil {
+					req.Secret = pairing.EncodeSecret(qr.Secret) // proves we saw the QR code
+				}
+				_ = ch.Send(req)
 
 				// Wait for the answer: the other user may be asked to trust this device.
 				_ = conn.SetReadDeadline(time.Now().Add(trustPromptTimeout + 10*time.Second))
@@ -628,7 +657,10 @@ func handleNode() {
 				_ = conn.SetReadDeadline(time.Time{})
 
 				if err != nil || (resp.Type != "pair_accept" && resp.Type != "pair_hello_ack") {
-					reason := "invalid pairing code"
+					reason := "refused by the other device"
+					if err != nil {
+						reason = err.Error()
+					}
 					if resp.FileName != "" {
 						reason = resp.FileName
 					}
@@ -641,9 +673,14 @@ func handleNode() {
 				if remoteName == "" {
 					remoteName = targetDeviceName
 				}
-				// WP-3.3: an unknown key is trusted only if our user says so.
+				// The QR code's key is trusted; otherwise an unknown key is trusted only if our
+				// user says so (WP-3.3).
 				answer := trustOnce
-				if conn.State() == securechan.Unauth {
+				if qr != nil {
+					if !once {
+						answer = trustAlways
+					}
+				} else if conn.State() == securechan.Unauth {
 					fmt.Print(trustQuestion(remoteName, peerFP, nodeID.Fingerprint))
 					answer = trustRefused
 					select {
@@ -1836,7 +1873,7 @@ func printUsage() {
 		"Usage:\n" +
 		"  xfer daemon [--port 19999] [--web-share]       (Headless daemon & control WebSocket)\n" +
 		"  xfer dev-ui [--port 19999] [--web-share]       (Daemon with the web dashboard; devui builds)\n" +
-		"  xfer node                                      (Persistent interactive CLI mode with pairing code)\n" +
+		"  xfer node                                      (Persistent interactive CLI: QR code or fingerprints)\n" +
 		"  xfer share <file_or_folder...>                 (Instant Web Share with QR code & PIN)\n" +
 		"  xfer send [-i] <file_or_folder> [more...]      (Direct transfer: shows a QR code; -i prompts)\n" +
 		"  xfer recv 'medxfer://...'                      (Receive from the sender's QR code)\n" +
