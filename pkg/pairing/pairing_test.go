@@ -250,10 +250,10 @@ func TestHelloIsDecidedByTheShowersUser(t *testing.T) {
 	ln, inv, u := listen(t, shower, TTL)
 	done := serve(ln, inv, shower)
 
-	if _, err := Ask(context.Background(), u.Addr(), u.Fingerprint, time.Second, intruder); !errors.Is(err, ErrRefused) {
+	if _, err := Ask(context.Background(), u.Addr(), accept(u.Fingerprint), time.Second, intruder); !errors.Is(err, ErrRefused) {
 		t.Fatalf("refused hello: %v, want ErrRefused", err)
 	}
-	r, err := Ask(context.Background(), u.Addr(), u.Fingerprint, time.Second, scanner)
+	r, err := Ask(context.Background(), u.Addr(), accept(u.Fingerprint), time.Second, scanner)
 	if err != nil || r.Fingerprint != shower.Identity.Fingerprint {
 		t.Fatalf("accepted hello: %+v, %v", r, err)
 	}
@@ -271,7 +271,43 @@ func TestHelloWithoutConfirmIsRefused(t *testing.T) {
 	shower := device(t, "pc")
 	ln, inv, u := listen(t, shower, TTL)
 	_ = serve(ln, inv, shower)
-	if _, err := Ask(context.Background(), u.Addr(), u.Fingerprint, time.Second, device(t, "phone")); !errors.Is(err, ErrRefused) {
+	if _, err := Ask(context.Background(), u.Addr(), accept(u.Fingerprint), time.Second, device(t, "phone")); !errors.Is(err, ErrRefused) {
 		t.Fatalf("hello without Confirm: %v, want ErrRefused", err)
+	}
+}
+
+// accept is the scanner's user accepting exactly the key want.
+func accept(want identity.Fingerprint) func(identity.Fingerprint) bool {
+	return func(fp identity.Fingerprint) bool { return fp == want }
+}
+
+// Without a QR code the scanner learns the shower's key from TLS, not from discovery: its user
+// sees that key, and a no sends nothing (the shower's user is never asked).
+func TestAskShowsTheKeyFromTLS(t *testing.T) {
+	shower, scanner := device(t, "pc"), device(t, "phone")
+	asked := make(chan struct{}, 4)
+	shower.Confirm = func(context.Context, Result) bool { asked <- struct{}{}; return true }
+	ln, inv, u := listen(t, shower, TTL)
+	done := serve(ln, inv, shower)
+
+	var seen identity.Fingerprint
+	_, err := Ask(context.Background(), u.Addr(), func(fp identity.Fingerprint) bool { seen = fp; return false }, time.Second, scanner)
+	if !errors.Is(err, ErrDeclined) {
+		t.Fatalf("declined: %v, want ErrDeclined", err)
+	}
+	if seen != shower.Identity.Fingerprint {
+		t.Fatalf("the scanner's user saw %s, the shower is %s", seen.Short(), shower.Identity.Fingerprint.Short())
+	}
+	select {
+	case <-asked:
+		t.Fatal("the shower's user was asked although the scanner declined")
+	case <-time.After(200 * time.Millisecond):
+	}
+	r, err := Ask(context.Background(), u.Addr(), accept(shower.Identity.Fingerprint), time.Second, scanner)
+	if err != nil || r.Fingerprint != shower.Identity.Fingerprint {
+		t.Fatalf("accepted: %+v, %v", r, err)
+	}
+	if s := <-done; s.err != nil || s.r.Fingerprint != scanner.Identity.Fingerprint {
+		t.Fatalf("shower: %+v, %v", s.r, s.err)
 	}
 }

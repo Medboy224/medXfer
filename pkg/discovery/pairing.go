@@ -298,7 +298,7 @@ func probePeerForCode(ctx context.Context, ip, expectedCode string, timeout time
 	}
 	defer conn.Close()
 
-	// Send pairing code query to unmask private transfer offer
+	// Send the pairing code: the device that has it echoes it back
 	query := DiscoveryQuery{PairingCode: expectedCode}
 	queryBytes, _ := json.Marshal(query)
 	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
@@ -313,7 +313,7 @@ func probePeerForCode(ctx context.Context, ip, expectedCode string, timeout time
 	var p Peer
 	if err := json.Unmarshal(respBytes, &p); err == nil && p.Version == AppVersion {
 		normCode, _ := NormalizePairingCode(p.PairingCode)
-		if normCode == expectedCode || (p.Offer != nil && p.Offer.FileName != "[🔒 Private Transfer]") {
+		if normCode == expectedCode { // the device echoes its code only when it matches
 			p.HostIP = ip
 			if p.PairingCode == "" {
 				p.PairingCode = expectedCode

@@ -21,33 +21,29 @@ const (
 	AppVersion     = "1.0.0"
 )
 
-// TransferOffer represents an active file payload offered by a peer
+// TransferOffer represents an active file payload offered by a peer. Only its public part
+// (publicOffer) ever leaves the device through discovery: what is sent travels later, inside
+// the secure channel, with pair_accept (WP-3.5b).
 type TransferOffer struct {
 	FileName string             `json:"file_name"`
 	FileSize int64              `json:"file_size"`
 	FileID   string             `json:"file_id,omitempty"` // Protects legacy mode integrity
 	IsBatch  bool               `json:"is_batch,omitempty"`
 	Batch    *manifest.Manifest `json:"batch,omitempty"`
-	// Fingerprint of the sender's key (full base32): the receiver pins it on the data
-	// connections (WP-3.4). Only in answers to a query with the right pairing code, never in
-	// beacons (DISC-06).
-	Fingerprint string `json:"fingerprint,omitempty"`
 	// PairPort is where the sender waits for its receiver to pair (WP-3.5b): with the QR code's
-	// secret, or asking the sender's user. Hidden like Fingerprint.
+	// secret, or asking the sender's user. It is public: reaching it gives nothing without one
+	// or the other.
 	PairPort int `json:"pair_port,omitempty"`
 }
 
-// maskOffer hides what only a receiver with the pairing code may see: what is sent, and how
-// to reach and authenticate the sender (DISC-06).
-func maskOffer(o *TransferOffer) *TransferOffer {
-	masked := *o
-	masked.FileName = "[🔒 Private Transfer]"
-	masked.FileSize = 0
-	masked.FileID = ""
-	masked.Batch = nil
-	masked.Fingerprint = ""
-	masked.PairPort = 0
-	return &masked
+// PrivateTransfer is the file name every offer shows in discovery.
+const PrivateTransfer = "[🔒 Private Transfer]"
+
+// publicOffer is the part of an offer that discovery may carry (DISC-06): no file name, size
+// or list, and no key; only that a transfer is waiting and where to pair for it. Discovery is
+// unauthenticated and in clear (bible §3.1, rule R2), whatever the pairing code.
+func publicOffer(o *TransferOffer) *TransferOffer {
+	return &TransferOffer{FileName: PrivateTransfer, IsBatch: o.IsBatch, PairPort: o.PairPort}
 }
 
 // DiscoveryQuery represents an authenticated request sent to a peer's discovery port
@@ -162,6 +158,23 @@ func (s *DiscoveryServer) GetPeer() Peer {
 	return s.peer
 }
 
+// answer is the reply to a discovery query: the public offer only. The pairing code, when it
+// matches, is echoed so that the querier knows it found the right device; it unlocks nothing
+// (WP-3.6b): trust comes from the key, checked in the secure channel.
+func (s *DiscoveryServer) answer(q DiscoveryQuery, ip string) Peer {
+	p := s.GetPeer()
+	p.HostIP = ip
+	expected, _ := NormalizePairingCode(p.PairingCode)
+	provided, _ := NormalizePairingCode(q.PairingCode)
+	if expected == "" || expected != provided {
+		p.PairingCode = ""
+	}
+	if p.Offer != nil {
+		p.Offer = publicOffer(p.Offer)
+	}
+	return p
+}
+
 // Start launches the UDP beacon broadcaster and TCP ingress-reflective responder
 func (s *DiscoveryServer) Start(ctx context.Context) {
 	// 1. TCP Ingress-Reflective Responder
@@ -198,22 +211,7 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 				_ = c.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
 				_ = json.NewDecoder(c).Decode(&query)
 
-				respPeer := s.GetPeer()
-				respPeer.HostIP = activeIP
-
-				// Pairing code validation: unmask only if code matches or no code required
-				normExpected, _ := NormalizePairingCode(respPeer.PairingCode)
-				normProvided, _ := NormalizePairingCode(query.PairingCode)
-
-				authenticated := (respPeer.PairingCode == "") || (normExpected != "" && normExpected == normProvided)
-				if !authenticated {
-					// Hide sensitive transfer details from unauthenticated probes
-					respPeer.PairingCode = ""
-					if respPeer.Offer != nil {
-						respPeer.Offer = maskOffer(respPeer.Offer)
-					}
-				}
-
+				respPeer := s.answer(query, activeIP)
 				data, err := json.Marshal(respPeer)
 				if err == nil {
 					_ = c.SetWriteDeadline(time.Now().Add(1 * time.Second))
@@ -240,7 +238,7 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 					beaconPeer.HostIP = target.LocalIP.String()
 					beaconPeer.PairingCode = "" // NEVER broadcast secret pairing code
 					if beaconPeer.Offer != nil {
-						beaconPeer.Offer = maskOffer(beaconPeer.Offer)
+						beaconPeer.Offer = publicOffer(beaconPeer.Offer)
 					}
 					data, err := json.Marshal(beaconPeer)
 					if err != nil {

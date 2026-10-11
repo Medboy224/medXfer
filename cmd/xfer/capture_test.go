@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/engine"
+	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
@@ -226,4 +227,52 @@ func portNum(t *testing.T, addr string) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// The same capture for the path without a QR code (xfer recv <code>): the receiver reads the
+// sender's key in TLS, both users accept, and the offer comes with pair_accept. The discovery
+// reply that found the sender carries nothing of the transfer either (pkg/discovery,
+// TestAnswerRevealsNothingWithTheRightCode).
+func TestCaptureShowsNothingOfTheCodePath(t *testing.T) {
+	const size = 2 << 20
+	path, name, marker := markedFile(t, size)
+	senderID, _ := testDevice(t)
+	receiverID, _ := testDevice(t)
+
+	var peer oneShotPeer
+	dataCapture := startCapture(t, startDataSender(t, path, peer.secure(senderID)))
+	offer := session.Message{FileName: name, FileSize: size, DataPort: portNum(t, dataCapture.addr)}
+	uris := make(chan pairing.URI, 1)
+	paired := make(chan error, 1)
+	confirm := func(_ context.Context, r pairing.Result) bool { return r.Fingerprint == receiverID.Fingerprint }
+	go func() {
+		r, err := serveOneShotPairing(context.Background(), senderID, "127.0.0.1", time.Minute, offer, confirm,
+			func(u pairing.URI) { uris <- u })
+		if err == nil {
+			peer.set(r.Fingerprint)
+		}
+		paired <- err
+	}()
+	u := <-uris
+	pairCapture := startCapture(t, u.Addr())
+
+	accept := func(fp identity.Fingerprint) bool { return fp == senderID.Fingerprint }
+	r, err := pairing.Ask(context.Background(), pairCapture.addr, accept, 10*time.Second, pairing.Options{Identity: receiverID, Once: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-paired; err != nil {
+		t.Fatal(err)
+	}
+	out := pull(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(r.Offer.DataPort)),
+		securechan.ClientFunc(securechan.Config{Identity: receiverID, Expected: r.Fingerprint}))
+	if got, err := os.ReadFile(filepath.Join(out, name)); err != nil || len(got) != size {
+		t.Fatalf("received file differs (%v)", err)
+	}
+	captured := append(pairCapture.bytes(), dataCapture.bytes()...)
+	for what, secret := range map[string][]byte{"the marker": marker, "the file name": []byte(name)} {
+		if bytes.Contains(captured, secret) {
+			t.Errorf("%s appears in the captured bytes", what)
+		}
+	}
 }
