@@ -97,3 +97,14 @@ func TestLiveWorkerRejectsDifferentFileOnSenderRestart(t *testing.T) {
 		t.Fatal("corruption: file 1 on the receiver contains bytes of file 2")
 	}
 }
+
+// The first transfer is throttled so that it can never finish before its cancel, which left
+// no resume state to resume from (issue #46): 4 MiB at 1 MiB/s, cancelled after one chunk.
+func TestEndToEndTransferResumeThrottled(t *testing.T) {
+	testTransferResume(t, 4<<20, func() func() {
+		lim := faultconn.NewLimiter(1 << 20)
+		return SetConnWrapper(func(_ ConnRole, c net.Conn) net.Conn {
+			return faultconn.Wrap(c, faultconn.Plan{Limiter: lim})
+		})
+	})
+}
