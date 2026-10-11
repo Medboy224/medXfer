@@ -34,8 +34,7 @@ int main(int argc, char **argv) {
 
     mfree(start("{}"));
     char *ms = call("{\"id\":\"m\",\"action\":\"memstats\"}");
-    fprintf(stderr, "memstats %s
-", ms);
+    fprintf(stderr, "memstats %s\n", ms);
     mfree(ms);
     char req[4096];
     snprintf(req, sizeof req, "{\"id\":\"s\",\"action\":\"send_file\",\"payload\":{\"path\":\"%s\",\"port\":19988}}", argv[2]);
