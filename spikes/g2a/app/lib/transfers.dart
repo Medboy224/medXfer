@@ -10,7 +10,9 @@ class Transfers {
   Transfers(this.core, this.log);
   final Core core;
   final Log log;
-  late final CallbackSource _src = CallbackSource(core);
+  // MEDXFER_G2A_EVENTS=poll selects the poll model (G2A-06 investigation); callback otherwise.
+  late final EventSource _src =
+      Platform.environment['MEDXFER_G2A_EVENTS'] == 'poll' ? PollSource(core) : CallbackSource(core);
   final _done = <String, Completer<Map<String, dynamic>>>{};
   StreamSubscription<Map<String, dynamic>>? _sub;
 
