@@ -79,8 +79,18 @@ class _TestScreenState extends State<TestScreen> {
     final path = Platform.environment['MEDXFER_G2A_RESULT'] ??
         '${Directory.systemTemp.path}${Platform.pathSeparator}medxfer_g2a_results.json';
     File(path).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(results));
-    // ignore: avoid_print
-    print('G2A_RESULT $json');
+    if (Platform.isAndroid) {
+      // logcat cuts lines near 1,000 characters: numbered chunks, joined by android-run.ps1.
+      const size = 800;
+      final n = (json.length + size - 1) ~/ size;
+      for (var i = 0; i < n; i++) {
+        // ignore: avoid_print
+        print('G2A_RESULT_CHUNK ${i + 1}/$n ${json.substring(i * size, ((i + 1) * size).clamp(0, json.length))}');
+      }
+    } else {
+      // ignore: avoid_print
+      print('G2A_RESULT $json');
+    }
     _log('results written to $path — overall ${results['pass'] == true ? 'PASS' : 'FAIL'}');
     if (mounted) setState(() => _running = false);
     if (exitAfter) exit(results['pass'] == true ? 0 : 1);

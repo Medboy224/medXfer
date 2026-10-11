@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "dev.medxfer.medxfer_g2a"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "30.0.16248370" // NDK already installed; the Go .so files are built by build.ps1
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
