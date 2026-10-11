@@ -971,6 +971,41 @@ func (s *DaemonServer) streamChanConfig() securechan.Config {
 	return securechan.Config{Identity: s.identity, Expected: peer}
 }
 
+// dataServer and dataClient pin the data connections of a transfer to the key of the paired
+// device (WP-3.4): any other key, or a plaintext connection, is refused.
+func (s *DaemonServer) dataServer() engine.SecureFunc {
+	return securechan.ServerFunc(s.streamChanConfig())
+}
+
+func (s *DaemonServer) dataClient() engine.SecureFunc {
+	return securechan.ClientFunc(s.streamChanConfig())
+}
+
+// oneShotDataServer secures a one-shot send: no paired device, so any receiver key is
+// accepted, the data is encrypted, and each receiver's key is reported in the log. The
+// receiver pins this device's key, announced in the discovery offer.
+func (s *DaemonServer) oneShotDataServer() engine.SecureFunc {
+	s.mu.RLock()
+	id := s.identity
+	s.mu.RUnlock()
+	return securechan.OpenServerFunc(id, func(fp identity.Fingerprint, addr net.Addr) {
+		s.Broadcast(NewEvent("log", map[string]string{
+			"level":   "INFO",
+			"message": fmt.Sprintf("Receiver connected from %s with key %s", addr, fp.Short()),
+		}))
+	})
+}
+
+// fingerprint is this device's key fingerprint (full form), or "" before Serve.
+func (s *DaemonServer) fingerprint() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.identity == nil {
+		return ""
+	}
+	return s.identity.Fingerprint.String()
+}
+
 // dialSecure opens a TCP connection with the radio wake-up strategy of session.DialPeer, then
 // the secure channel. There is no plaintext fallback (CHAN-05).
 func dialSecure(ctx context.Context, addr string, cfg securechan.Config) (*securechan.Conn, error) {
@@ -1596,6 +1631,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 				readyChan := make(chan error, 1)
 				go func(fPath, rPath string, p int, bBase int64) {
 					sender := engine.NewSender(s.config.Workers, uint32(s.config.ChunkSizeMB*1024*1024))
+					sender.SetSecure(s.dataServer())
 					listener := newDaemonListener(s, rPath, item.Size, idx, m.TotalFiles, bBase, m.TotalBytes)
 					bindAddr := fmt.Sprintf("0.0.0.0:%d", p)
 					_ = sender.ServeAndSendWithRelPathReady(itemCtx, bindAddr, fPath, rPath, listener, 0, readyChan)
@@ -1779,12 +1815,14 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 
 		policy := s.parseCollisionPolicy(policyStr)
 
+		secure := s.dataClient() // takes s.mu: before the Lock below
 		var ctx context.Context
 		s.mu.Lock()
 		ctx, s.itemCancel = context.WithCancel(s.ctx)
 		s.transferCancel = s.itemCancel
 		receiver := engine.NewReceiver(outDir, s.config.Workers)
 		receiver.SetCollisionPolicy(policy)
+		receiver.SetSecure(secure)
 		s.activeReceiver = receiver
 		if s.isPaused {
 			receiver.Pause()
@@ -1959,6 +1997,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 				s.mu.Unlock()
 
 				sender := engine.NewSender(s.config.Workers, uint32(s.config.ChunkSizeMB*1024*1024))
+				sender.SetSecure(s.dataServer())
 				fi, _ := os.Stat(filePath)
 				size := int64(0)
 				if fi != nil {

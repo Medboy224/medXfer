@@ -23,6 +23,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/hotspot"
+	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/securechan"
@@ -243,6 +244,7 @@ func handleNode() {
 	}
 	// Control connections: unknown keys start UNAUTH; the pairing code decides (until WP-3.6).
 	pairCfg := securechan.Config{Identity: nodeID, Trust: nodeTrust, AllowUnknown: true, Gate: securechan.NewGate()}
+	localID = nodeID
 
 	fmt.Println("==================================================")
 	fmt.Println("             medXfer Persistent Node              ")
@@ -999,6 +1001,7 @@ func runNodeSendWithRelPath(parentCtx context.Context, filePath, relPath string,
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 	sender := engine.NewSender(workers, chunkSize)
+	sender.SetSecure(securechan.ServerFunc(securechan.Config{Identity: localID, Expected: sessionPeer(s)}))
 	listener := &cliListener{cancel: cancel, isSender: true}
 	bindAddr := fmt.Sprintf("0.0.0.0:%d", port)
 	var rChan chan<- error
@@ -1013,6 +1016,7 @@ func runNodeRecv(parentCtx context.Context, ip string, port int, outDir string, 
 	defer cancel()
 	targetAddr := net.JoinHostPort(ip, strconv.Itoa(int(port)))
 	receiver := engine.NewReceiver(outDir, 4)
+	receiver.SetSecure(securechan.ClientFunc(securechan.Config{Identity: localID, Expected: sessionPeer(s)}))
 	listener := &cliListener{cancel: cancel, isSender: false}
 	if len(meta) > 0 && meta[0].ChunkSize > 0 {
 		return receiver.PullWithMetadata(ctx, targetAddr, listener, meta[0], fileID)
@@ -1044,6 +1048,13 @@ func handleSend(args []string) {
 		os.Exit(1)
 	}
 	chunkSize := uint32(*chunkSizeMB * 1024 * 1024)
+
+	id, _, err := loadIdentity(configDir())
+	if err != nil {
+		fmt.Printf("[-] %v\n", err)
+		return
+	}
+	localID = id
 
 	rawPaths := sendCmd.Args()
 	isFolderOrMulti := len(rawPaths) > 1
@@ -1102,6 +1113,8 @@ func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize 
 		FileID:   m.BatchID,
 		IsBatch:  true,
 		Batch:    m,
+		// The receiver pins this key on the data connections (WP-3.4).
+		Fingerprint: localID.Fingerprint.String(),
 	}
 	pCode, _, _ := discovery.GeneratePairingCode(getLocalIP())
 	discServer := discovery.NewDiscoveryServer("sender", port, offer)
@@ -1113,6 +1126,7 @@ func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize 
 	fmt.Println("==================================================")
 	fmt.Printf(" Batch        : %s\n", m.SummaryString())
 	fmt.Printf(" Pairing Code : %s\n", pCode)
+	fmt.Printf(" Fingerprint  : %s\n", localID.Fingerprint.Short())
 	fmt.Printf(" Direct IP    : %s:%d\n", getLocalIP(), port)
 	fmt.Println("--------------------------------------------------")
 	fmt.Println(" On receiving device, run:")
@@ -1133,6 +1147,7 @@ func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize 
 
 		itemCtx, itemCancel := context.WithCancel(ctx)
 		sender := engine.NewSender(workers, chunkSize)
+		sender.SetSecure(oneShotSenderSecure())
 		if interactive {
 			sender.SetAuthorizer(func(remoteAddr net.Addr, fileName string, fileSize int64) bool {
 				batchMu.Lock()
@@ -1204,7 +1219,8 @@ func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint
 
 	offer := &discovery.TransferOffer{
 		FileName: filepath.Base(filePath), FileSize: info.Size(),
-		FileID: engine.GenerateFileID(filePath),
+		FileID:      engine.GenerateFileID(filePath),
+		Fingerprint: localID.Fingerprint.String(), // pinned by the receiver (WP-3.4)
 	}
 	pCode, _, _ := discovery.GeneratePairingCode(getLocalIP())
 	discServer := discovery.NewDiscoveryServer("sender", port, offer)
@@ -1216,6 +1232,7 @@ func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint
 	fmt.Println("==================================================")
 	fmt.Printf(" File         : %s (%.2f MB)\n", offer.FileName, float64(offer.FileSize)/(1024*1024))
 	fmt.Printf(" Pairing Code : %s\n", pCode)
+	fmt.Printf(" Fingerprint  : %s\n", localID.Fingerprint.Short())
 	fmt.Printf(" Direct IP    : %s:%d\n", getLocalIP(), port)
 	fmt.Println("--------------------------------------------------")
 	fmt.Println(" On receiving device, run:")
@@ -1224,6 +1241,7 @@ func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint
 	fmt.Println("[*] Waiting for receiver to connect...")
 
 	sender := engine.NewSender(workers, chunkSize)
+	sender.SetSecure(oneShotSenderSecure())
 	if interactive {
 		sender.SetAuthorizer(func(remoteAddr net.Addr, fileName string, fileSize int64) bool {
 			host, _, _ := net.SplitHostPort(remoteAddr.String())
@@ -1305,6 +1323,30 @@ func handleRecv(args []string) {
 		}
 	}
 
+	id, trust, err := loadIdentity(configDir())
+	if err != nil {
+		fmt.Printf("[-] %v\n", err)
+		return
+	}
+	localID = id
+	if selectedPeer == nil || selectedPeer.Offer == nil {
+		fmt.Println("[-] This device offers no transfer.")
+		return
+	}
+	senderFP, err := identity.ParseFingerprint(selectedPeer.Offer.Fingerprint)
+	if err != nil {
+		fmt.Println("[-] The sender did not announce its key: refusing an unauthenticated download.\n" +
+			"    Update medXfer on the sending device.")
+		return
+	}
+	senderHost, _, _ := net.SplitHostPort(targetAddr)
+	if known, changed := keyChanged(trust, senderHost, senderFP); changed {
+		fmt.Println(keyChangedAlert(known, senderHost, senderFP))
+		return
+	}
+	// Every data connection must come from the key announced by the sender (WP-3.4).
+	recvSecure = securechan.ClientFunc(securechan.Config{Identity: id, Expected: senderFP})
+
 	// Interactive receiver confirmation
 	if selectedPeer != nil && selectedPeer.Offer != nil {
 		fmt.Println("\n==================================================")
@@ -1324,14 +1366,32 @@ func handleRecv(args []string) {
 			fmt.Printf(" File   : %s (%.2f MB)\n", selectedPeer.Offer.FileName, float64(selectedPeer.Offer.FileSize)/(1024*1024))
 		}
 		fmt.Printf(" From   : %s (%s)\n", selectedPeer.DeviceName, targetAddr)
-		fmt.Println("--------------------------------------------------")
-		fmt.Print("[?] Confirm download? [Y/n]: ")
 		reader := bufio.NewReader(os.Stdin)
-		ans, _ := reader.ReadString('\n')
-		ans = strings.TrimSpace(strings.ToLower(ans))
-		if ans != "" && ans != "y" && ans != "yes" && ans != "o" && ans != "oui" {
-			fmt.Println("[-] Download cancelled by user.")
-			return
+		if p, ok := trust.Get(senderFP); ok {
+			fmt.Printf(" Key    : %s (trusted device '%s')\n", senderFP.Short(), p.Alias)
+			fmt.Println("--------------------------------------------------")
+			fmt.Print("[?] Confirm download? [Y/n]: ")
+			ans, _ := reader.ReadString('\n')
+			ans = strings.TrimSpace(strings.ToLower(ans))
+			if ans != "" && ans != "y" && ans != "yes" && ans != "o" && ans != "oui" {
+				fmt.Println("[-] Download cancelled by user.")
+				return
+			}
+			_ = rememberPeer(trust, senderFP, selectedPeer.DeviceName, senderHost, trustOnce)
+		} else {
+			// WP-3.3: an unknown sender is trusted only if the user says so, after comparing
+			// its key with the one shown on the sender's screen. The default is no.
+			fmt.Println("--------------------------------------------------")
+			fmt.Print(trustQuestion(selectedPeer.DeviceName, senderFP, id.Fingerprint))
+			ans, _ := reader.ReadString('\n')
+			answer := parseTrustAnswer(ans)
+			if answer == trustRefused {
+				fmt.Println("[-] Download cancelled: sender not trusted.")
+				return
+			}
+			if err := rememberPeer(trust, senderFP, selectedPeer.DeviceName, senderHost, answer); err != nil {
+				fmt.Printf("[-] Could not save the trusted device: %v\n", err)
+			}
 		}
 	}
 
@@ -1361,6 +1421,7 @@ func handleRecv(args []string) {
 		}
 		fmt.Printf("\n[*] Connecting to sender at %s...\n", targetAddr)
 		receiver := engine.NewReceiver(*outDirFlag, *workersFlag)
+		receiver.SetSecure(recvSecure)
 		listener := &cliListener{cancel: cancel, isSender: false}
 		err := receiver.Pull(ctx, targetAddr, listener, fileID)
 		if err != nil && ctx.Err() == nil {
@@ -1391,6 +1452,7 @@ func runOneShotBatchRecv(ctx context.Context, targetAddr, outDir string, workers
 
 		itemCtx, itemCancel := context.WithCancel(ctx)
 		receiver := engine.NewReceiver(outDir, workers)
+		receiver.SetSecure(recvSecure)
 		listener := &cliListener{cancel: itemCancel, isSender: false}
 		err := receiver.Pull(itemCtx, itemTargetAddr, listener, item.FileID)
 		itemCancel()
