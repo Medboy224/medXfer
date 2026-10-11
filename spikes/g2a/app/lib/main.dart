@@ -12,8 +12,15 @@ import 'package:flutter/material.dart';
 
 import 'core.dart';
 import 'tests.dart';
+import 'transfers.dart';
 
 const _autorunDefine = String.fromEnvironment('AUTORUN');
+const _sizeDefine = String.fromEnvironment('SIZE_MB', defaultValue: '1024');
+const _peerDefine = String.fromEnvironment('PEER');
+const _trialsDefine = String.fromEnvironment('TRIALS', defaultValue: '3');
+
+/// Desktop: environment variable `MEDXFER_G2A_<name>`; Android: --dart-define value.
+String _setting(String name, String define) => Platform.environment['MEDXFER_G2A_$name'] ?? define;
 
 void main() {
   final sinceMain = Stopwatch()..start();
@@ -68,6 +75,8 @@ class _TestScreenState extends State<TestScreen> {
         'after ${widget.coldStart.inMicroseconds / 1000} ms since main()');
     if (widget.autorun == 'quick' || widget.autorun == 'full') {
       WidgetsBinding.instance.addPostFrameCallback((_) => _run(full: widget.autorun == 'full', exitAfter: true));
+    } else if (widget.autorun == 'loopback' || widget.autorun == 'g2a07') {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _runTransfers(widget.autorun, exitAfter: true));
     }
   }
 
@@ -75,6 +84,30 @@ class _TestScreenState extends State<TestScreen> {
     setState(() => _running = true);
     final results = await Suite(widget.core, _log, full: full, only: Platform.environment['MEDXFER_G2A_ONLY'])
         .runAll(widget.coldStart);
+    _finish(results, exitAfter);
+  }
+
+  // S4: loopback (G2A-06) or app <-> CLI between devices (G2A-07, needs PEER = host:port of `xfer send`).
+  Future<void> _runTransfers(String mode, {bool exitAfter = false}) async {
+    setState(() => _running = true);
+    final sizeMB = int.parse(_setting('SIZE_MB', _sizeDefine));
+    final t = Transfers(widget.core, _log);
+    await t.open();
+    Map<String, dynamic> r;
+    try {
+      r = mode == 'loopback'
+          ? await t.loopback(sizeMB: sizeMB, trials: int.parse(_setting('TRIALS', _trialsDefine)))
+          : await t.betweenDevices(sizeMB: sizeMB, peer: _setting('PEER', _peerDefine));
+    } catch (e, st) {
+      r = {'pass': false, 'exception': '$e', 'stack': '$st'};
+    }
+    await t.close();
+    _log('$mode: ${r['pass'] == true ? 'PASS' : 'FAIL'} $r');
+    _finish({'platform': Platform.operatingSystem, 'os_version': Platform.operatingSystemVersion, mode: r,
+      'pass': r['pass'] == true}, exitAfter);
+  }
+
+  void _finish(Map<String, dynamic> results, bool exitAfter) {
     final json = jsonEncode(results);
     final path = Platform.environment['MEDXFER_G2A_RESULT'] ??
         '${Directory.systemTemp.path}${Platform.pathSeparator}medxfer_g2a_results.json';
@@ -105,6 +138,8 @@ class _TestScreenState extends State<TestScreen> {
             child: Wrap(spacing: 8, children: [
               ElevatedButton(onPressed: _running ? null : () => _run(full: false), child: const Text('Quick run')),
               ElevatedButton(onPressed: _running ? null : () => _run(full: true), child: const Text('Full run')),
+              ElevatedButton(
+                  onPressed: _running ? null : () => _runTransfers('loopback'), child: const Text('Loopback transfer')),
             ]),
           ),
           Expanded(

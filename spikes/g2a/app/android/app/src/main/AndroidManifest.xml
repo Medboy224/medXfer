@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- G2a: the Flutter template grants INTERNET to debug and profile builds only; without it a
+         release build cannot open a socket ("socket: operation not permitted"). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="medxfer_g2a"
         android:name="${applicationName}"

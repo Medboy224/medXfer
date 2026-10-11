@@ -1,0 +1,41 @@
+{
+  "platform": "windows",
+  "os_version": "\"Windows 10 Pro\" 10.0 (Build 26200)",
+  "loopback": {
+    "pass": true,
+    "note": "throughput criterion (>= 95 % of the CLI) is checked against xfer send/recv on the same device",
+    "size_mib": 1024,
+    "sha256": "a460202fce137cf88153e8a9174e22e1fb037f9eb54242bf12dd48fbb776cff4",
+    "median_mib_per_s": 437.0465215535638,
+    "runs": [
+      {
+        "trial": 1,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 2.645,
+        "engine_ms": 2586,
+        "mib_per_s": 387.14555765595463,
+        "hash_ok": true
+      },
+      {
+        "trial": 2,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 2.053,
+        "engine_ms": 1969,
+        "mib_per_s": 498.78226984900147,
+        "hash_ok": true
+      },
+      {
+        "trial": 3,
+        "recv_event": "transfer_done",
+        "send_event": "transfer_done",
+        "seconds_dart": 2.343,
+        "engine_ms": 2274,
+        "mib_per_s": 437.0465215535638,
+        "hash_ok": true
+      }
+    ]
+  },
+  "pass": true
+}
