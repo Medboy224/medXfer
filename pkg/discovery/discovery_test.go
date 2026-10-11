@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -210,14 +211,44 @@ func TestAuthenticatedDiscoveryReflector(t *testing.T) {
 	}
 }
 
-func TestMaskOfferHidesTheSender(t *testing.T) {
+func TestPublicOfferHidesTheTransfer(t *testing.T) {
 	o := &TransferOffer{FileName: "a.docx", FileSize: 9, FileID: "id", IsBatch: true,
-		Batch: &manifest.Manifest{}, Fingerprint: "FP", PairPort: 40000}
-	m := maskOffer(o)
-	if m.FileName == o.FileName || m.FileSize != 0 || m.FileID != "" || m.Batch != nil || m.Fingerprint != "" || m.PairPort != 0 {
-		t.Fatalf("masked offer leaks: %+v", m)
+		Batch: &manifest.Manifest{}, PairPort: 40000}
+	p := publicOffer(o)
+	if p.FileName != PrivateTransfer || p.FileSize != 0 || p.FileID != "" || p.Batch != nil {
+		t.Fatalf("public offer leaks: %+v", p)
 	}
-	if o.Fingerprint != "FP" || o.PairPort != 40000 {
-		t.Fatal("maskOffer changed the original offer")
+	if !p.IsBatch || p.PairPort != 40000 {
+		t.Fatalf("public offer lost what the receiver needs: %+v", p)
+	}
+	if o.FileName != "a.docx" || o.Batch == nil {
+		t.Fatal("publicOffer changed the original offer")
+	}
+}
+
+// DISC-06, WP-3.6b: the right pairing code unlocks nothing in discovery. The reply is the same
+// public offer, plus the echoed code that tells the querier it found the right device.
+func TestAnswerRevealsNothingWithTheRightCode(t *testing.T) {
+	offer := &TransferOffer{FileName: "secret-plans.pdf", FileSize: 123456, FileID: "f1",
+		Batch: &manifest.Manifest{Items: []manifest.Item{{RelPath: "dir/other-secret.txt"}}}, PairPort: 40001}
+	srv := NewDiscoveryServer("sender", 18888, offer, "HostDev")
+	srv.SetPairingCode("104-567")
+
+	for _, c := range []struct {
+		code, echo string
+	}{{"104-567", "104-567"}, {"104567", "104-567"}, {"999-999", ""}, {"", ""}} {
+		p := srv.answer(DiscoveryQuery{PairingCode: c.code}, "10.0.0.5")
+		data, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, leak := range []string{"secret-plans", "other-secret", "123456", `"f1"`} {
+			if strings.Contains(string(data), leak) {
+				t.Errorf("code %q: the reply carries %s: %s", c.code, leak, data)
+			}
+		}
+		if p.PairingCode != c.echo || p.Offer == nil || p.Offer.PairPort != 40001 || p.HostIP != "10.0.0.5" {
+			t.Errorf("code %q: reply %+v (offer %+v)", c.code, p, p.Offer)
+		}
 	}
 }

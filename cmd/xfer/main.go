@@ -1154,8 +1154,6 @@ func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize 
 		FileID:   m.BatchID,
 		IsBatch:  true,
 		Batch:    m,
-		// The receiver pins this key on the data connections (WP-3.4).
-		Fingerprint: localID.Fingerprint.String(),
 	}
 	pCode, _, _ := discovery.GeneratePairingCode(getLocalIP())
 	discServer := discovery.NewDiscoveryServer("sender", port, offer)
@@ -1259,8 +1257,7 @@ func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint
 
 	offer := &discovery.TransferOffer{
 		FileName: filepath.Base(filePath), FileSize: info.Size(),
-		FileID:      engine.GenerateFileID(filePath),
-		Fingerprint: localID.Fingerprint.String(), // pinned by the receiver (WP-3.4)
+		FileID: engine.GenerateFileID(filePath),
 	}
 	pCode, _, _ := discovery.GeneratePairingCode(getLocalIP())
 	discServer := discovery.NewDiscoveryServer("sender", port, offer)
@@ -1342,6 +1339,8 @@ func handleRecv(args []string) {
 		pairingCode = norm
 	}
 
+	// Discovery only finds the sender. It carries neither what is sent nor the sender's key
+	// (DISC-06): both come over the secure channel, below.
 	var selectedPeer *discovery.Peer
 	if targetAddr == "" && pairingCode != "" {
 		fmt.Printf("[*] Searching local network for sender with pairing code '%s'...\n", pairingCode)
@@ -1353,20 +1352,20 @@ func handleRecv(args []string) {
 			return
 		}
 		selectedPeer = peer
-		targetAddr = net.JoinHostPort(peer.HostIP, strconv.Itoa(int(peer.Port)))
-		fmt.Printf("[+] Located sender: %s (%s)\n", peer.DeviceName, targetAddr)
+		fmt.Printf("[+] Located sender: %s (%s)\n", peer.DeviceName, peer.HostIP)
 	} else if targetAddr == "" {
 		selectedPeer = selectOneShotSender()
-		if selectedPeer == nil {
-			return
-		}
-		targetAddr = net.JoinHostPort(selectedPeer.HostIP, strconv.Itoa(int(selectedPeer.Port)))
 	} else {
 		host, _, _ := net.SplitHostPort(targetAddr)
-		selectedPeer = fetchPeerOffer(host, pairingCode)
-		if selectedPeer == nil {
-			return
-		}
+		selectedPeer = fetchPeer(host)
+	}
+	if selectedPeer == nil {
+		return
+	}
+	if selectedPeer.Offer == nil || selectedPeer.Offer.PairPort == 0 {
+		fmt.Println("[-] No transfer that authenticates its receiver is waiting on this device.\n" +
+			"    If it is sending, update medXfer on it.")
+		return
 	}
 
 	id, trust, err := loadIdentity(configDir())
@@ -1375,64 +1374,46 @@ func handleRecv(args []string) {
 		return
 	}
 	localID = id
-	if selectedPeer == nil || selectedPeer.Offer == nil {
-		fmt.Println("[-] This device offers no transfer.")
-		return
-	}
-	senderFP, err := identity.ParseFingerprint(selectedPeer.Offer.Fingerprint)
-	if err != nil || selectedPeer.Offer.PairPort == 0 {
-		fmt.Println("[-] The sender does not authenticate its receivers: refusing the download.\n" +
-			"    Update medXfer on the sending device.")
-		return
-	}
-	senderHost, _, _ := net.SplitHostPort(targetAddr)
-	if known, changed := keyChanged(trust, senderHost, senderFP); changed {
-		fmt.Println(keyChangedAlert(known, senderHost, senderFP))
-		return
-	}
-	// Every data connection must come from the key announced by the sender (WP-3.4).
-	recvSecure = securechan.ClientFunc(securechan.Config{Identity: id, Expected: senderFP})
+	in := bufio.NewReader(os.Stdin)
+	senderHost := selectedPeer.HostIP
 
-	printIncoming(selectedPeer.Offer, selectedPeer.DeviceName, targetAddr)
-	reader := bufio.NewReader(os.Stdin)
-	if p, ok := trust.Get(senderFP); ok {
-		fmt.Printf(" Key    : %s (trusted device '%s')\n", senderFP.Short(), p.Alias)
-		fmt.Println("--------------------------------------------------")
-		fmt.Print("[?] Confirm download? [Y/n]: ")
-		ans, _ := reader.ReadString('\n')
-		ans = strings.TrimSpace(strings.ToLower(ans))
-		if ans != "" && ans != "y" && ans != "yes" && ans != "o" && ans != "oui" {
-			fmt.Println("[-] Download cancelled by user.")
-			return
+	// The sender's key comes from the TLS handshake. This device's user accepts it (unless it
+	// is a trusted device's), then the sender's user decides about this device (decision D3).
+	answer, keyNote := trustOnce, "checked on both screens"
+	decide := func(fp identity.Fingerprint) bool {
+		if known, changed := keyChanged(trust, senderHost, fp); changed {
+			fmt.Println(keyChangedAlert(known, senderHost, fp))
+			return false
 		}
-		_ = rememberPeer(trust, senderFP, selectedPeer.DeviceName, senderHost, trustOnce)
-	} else {
-		// WP-3.3: an unknown sender is trusted only if the user says so, after comparing
-		// its key with the one shown on the sender's screen. The default is no.
-		fmt.Println("--------------------------------------------------")
-		fmt.Print(trustQuestion(selectedPeer.DeviceName, senderFP, id.Fingerprint))
-		ans, _ := reader.ReadString('\n')
-		answer := parseTrustAnswer(ans)
-		if answer == trustRefused {
-			fmt.Println("[-] Download cancelled: sender not trusted.")
-			return
+		if p, ok := trustedPeer(trust, fp); ok {
+			keyNote = fmt.Sprintf("trusted device '%s'", p.Alias)
+		} else {
+			fmt.Print(trustQuestion(selectedPeer.DeviceName, fp, id.Fingerprint))
+			ans, _ := in.ReadString('\n')
+			if answer = parseTrustAnswer(ans); answer == trustRefused {
+				fmt.Println("[-] Download cancelled: sender not trusted.")
+				return false
+			}
 		}
-		if err := rememberPeer(trust, senderFP, selectedPeer.DeviceName, senderHost, answer); err != nil {
-			fmt.Printf("[-] Could not save the trusted device: %v\n", err)
-		}
+		fmt.Println("[*] Waiting for the sender to accept this device...")
+		return true
 	}
-
-	// The sender lets this device in: at once if it trusts it, otherwise once its user has
-	// compared the fingerprints too (decision D3).
-	fmt.Println("[*] Waiting for the sender to accept this device...")
-	name, _ := os.Hostname()
 	pairAddr := net.JoinHostPort(senderHost, strconv.Itoa(selectedPeer.Offer.PairPort))
-	o := pairing.Options{Identity: id, Once: true, DeviceName: name}
-	if _, err := pairing.Ask(context.Background(), pairAddr, senderFP, trustPromptTimeout+10*time.Second, o); err != nil {
+	fmt.Printf("[*] Connecting to %s...\n", pairAddr)
+	name, _ := os.Hostname()
+	o := pairing.Options{Identity: id, Trust: trust, Once: true, DeviceName: name}
+	r, err := pairing.Ask(context.Background(), pairAddr, decide, trustPromptTimeout+10*time.Second, o)
+	if errors.Is(err, pairing.ErrDeclined) {
+		return // decide said why
+	}
+	if err != nil {
 		fmt.Printf("[-] The sender did not accept this device: %v\n", err)
 		return
 	}
-	pullOffer(targetAddr, *outDirFlag, *workersFlag, selectedPeer.Offer)
+	if err := rememberPeer(trust, r.Fingerprint, r.Name, senderHost, answer); err != nil {
+		fmt.Printf("[-] Could not save the trusted device: %v\n", err)
+	}
+	receiveAccepted(r, senderHost, keyNote, in, *outDirFlag, *workersFlag)
 }
 
 // recvFromURI receives a one-shot send from its QR code: the sender's key comes from it, so
@@ -1460,20 +1441,27 @@ func recvFromURI(raw, outDir string, workers int) {
 		fmt.Printf("[-] The sender refused this device: %v\n", err)
 		return
 	}
+	receiveAccepted(r, u.Host, "from the QR code", bufio.NewReader(os.Stdin), outDir, workers)
+}
+
+// receiveAccepted shows the offer that came with pair_accept, inside the secure channel, and
+// downloads it if the user confirms. Every data connection is pinned to the key the pairing
+// verified (WP-3.4).
+func receiveAccepted(r pairing.Result, host, keyNote string, in *bufio.Reader, outDir string, workers int) {
 	m := r.Offer
 	if m.DataPort == 0 {
 		fmt.Println("[-] This device offers no transfer (to pair, run: xfer pair <uri>).")
 		return
 	}
 	offer := &discovery.TransferOffer{FileName: m.FileName, FileSize: m.FileSize, FileID: m.FileID, IsBatch: m.Batch != nil, Batch: m.Batch}
-	targetAddr := net.JoinHostPort(u.Host, strconv.Itoa(m.DataPort))
-	recvSecure = securechan.ClientFunc(securechan.Config{Identity: id, Expected: u.Fingerprint})
+	targetAddr := net.JoinHostPort(host, strconv.Itoa(m.DataPort))
+	recvSecure = securechan.ClientFunc(securechan.Config{Identity: localID, Expected: r.Fingerprint})
 
 	printIncoming(offer, r.Name, targetAddr)
-	fmt.Printf(" Key    : %s (from the QR code)\n", u.Fingerprint.Short())
+	fmt.Printf(" Key    : %s (%s)\n", r.Fingerprint.Short(), keyNote)
 	fmt.Println("--------------------------------------------------")
 	fmt.Print("[?] Confirm download? [Y/n]: ")
-	ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	ans, _ := in.ReadString('\n')
 	ans = strings.TrimSpace(strings.ToLower(ans))
 	if ans != "" && ans != "y" && ans != "yes" && ans != "o" && ans != "oui" {
 		fmt.Println("[-] Download cancelled by user.")
@@ -1570,55 +1558,24 @@ func runOneShotBatchRecv(ctx context.Context, targetAddr, outDir string, workers
 	fmt.Printf("\n[+] Folder download complete! All %d files saved successfully.\n", m.TotalFiles)
 }
 
-func fetchPeerOffer(hostIP string, code string) *discovery.Peer {
-	queryOffer := func(cStr string) *discovery.Peer {
-		conn, err := net.DialTimeout("tcp4", net.JoinHostPort(hostIP, strconv.Itoa(int(discovery.DiscoveryPort))), 800*time.Millisecond)
-		if err != nil {
-			return nil
-		}
-		defer conn.Close()
-		if cStr != "" {
-			q := discovery.DiscoveryQuery{PairingCode: cStr}
-			data, _ := json.Marshal(q)
-			_ = conn.SetWriteDeadline(time.Now().Add(800 * time.Millisecond))
-			_, _ = conn.Write(append(data, '\n'))
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
-		data, err := io.ReadAll(conn)
-		if err != nil {
-			return nil
-		}
-		var p discovery.Peer
-		if err := json.Unmarshal(data, &p); err == nil && p.Offer != nil {
-			p.HostIP = hostIP
-			return &p
-		}
+// fetchPeer asks the device at hostIP whether it is sending. Its answer only says that a
+// transfer is waiting and where to pair for it (DISC-06).
+func fetchPeer(hostIP string) *discovery.Peer {
+	conn, err := net.DialTimeout("tcp4", net.JoinHostPort(hostIP, strconv.Itoa(int(discovery.DiscoveryPort))), 800*time.Millisecond)
+	if err != nil {
+		fmt.Printf("[-] No medXfer device answers at %s: %v\n", hostIP, err)
 		return nil
 	}
-
-	p := queryOffer(code)
-	if p == nil {
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
+	data, err := io.ReadAll(conn)
+	var p discovery.Peer
+	if err != nil || json.Unmarshal(data, &p) != nil {
+		fmt.Printf("[-] No medXfer device answers at %s.\n", hostIP)
 		return nil
 	}
-
-	// If offer is masked, sender requires a pairing code
-	if p.Offer != nil && p.Offer.FileName == "[🔒 Private Transfer]" {
-		fmt.Printf("[?] Device at %s requires a 6-digit pairing code: ", hostIP)
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
-		normCode, err := discovery.NormalizePairingCode(input)
-		if err != nil {
-			fmt.Printf("[-] %v\n", err)
-			return nil
-		}
-		p = queryOffer(normCode)
-		if p == nil || p.Offer == nil || p.Offer.FileName == "[🔒 Private Transfer]" {
-			fmt.Println("[-] Invalid pairing code. Access denied.")
-			return nil
-		}
-	}
-	return p
+	p.HostIP = hostIP
+	return &p
 }
 
 func selectOneShotSender() *discovery.Peer {
@@ -1640,14 +1597,13 @@ func selectOneShotSender() *discovery.Peer {
 		if len(senders) == 0 {
 			fmt.Println("  (No active senders found)")
 		} else {
+			// What is sent is shown only once both devices have accepted each other.
 			for i, s := range senders {
-				if s.Offer.IsBatch && s.Offer.FileName != "[🔒 Private Transfer]" {
-					fmt.Printf("  [%d] %s (%s:%d) - Folder: %s\n", i+1, s.DeviceName, s.HostIP, s.Port, s.Offer.FileName)
-				} else if s.Offer.FileName != "[🔒 Private Transfer]" {
-					fmt.Printf("  [%d] %s (%s:%d) - File: %s (%.2f MB)\n", i+1, s.DeviceName, s.HostIP, s.Port, s.Offer.FileName, float64(s.Offer.FileSize)/(1024*1024))
-				} else {
-					fmt.Printf("  [%d] %s (%s:%d) - [🔒 Private Transfer]\n", i+1, s.DeviceName, s.HostIP, s.Port)
+				kind := "file"
+				if s.Offer.IsBatch {
+					kind = "folder"
 				}
+				fmt.Printf("  [%d] %s (%s) - %s waiting\n", i+1, s.DeviceName, s.HostIP, kind)
 			}
 		}
 		fmt.Print("Select an option or enter pairing code [r to refresh, q to quit]: ")
@@ -1661,22 +1617,7 @@ func selectOneShotSender() *discovery.Peer {
 		}
 		if num, err := strconv.Atoi(input); err == nil && num >= 1 && num <= len(senders) {
 			selected := senders[num-1]
-			fmt.Printf("[?] Enter 6-digit pairing code for '%s': ", selected.DeviceName)
-			codeIn, _ := reader.ReadString('\n')
-			codeIn = strings.TrimSpace(codeIn)
-			normCode, err := discovery.NormalizePairingCode(codeIn)
-			if err != nil {
-				fmt.Printf("[-] %v\n", err)
-				continue
-			}
-			ctxQuery, cancelQuery := context.WithTimeout(context.Background(), 3*time.Second)
-			unmaskedPeer, err := discovery.QueryPeerWithCode(ctxQuery, selected.HostIP, normCode, 3*time.Second)
-			cancelQuery()
-			if err != nil || unmaskedPeer == nil || unmaskedPeer.Offer == nil || unmaskedPeer.Offer.FileName == "[🔒 Private Transfer]" {
-				fmt.Println("[-] Invalid pairing code. Access denied.")
-				continue
-			}
-			return unmaskedPeer
+			return &selected
 		}
 		if normCode, err := discovery.NormalizePairingCode(input); err == nil {
 			fmt.Printf("[*] Searching for sender with pairing code '%s'...\n", normCode)

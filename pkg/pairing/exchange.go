@@ -24,6 +24,9 @@ const (
 // replyTimeout bounds the wait for pair_accept after pair_secret: no user is involved.
 const replyTimeout = 10 * time.Second
 
+// ErrDeclined: this side's user did not accept the other device's key (Ask).
+var ErrDeclined = errors.New("pairing: the other device's key was not accepted")
+
 // Result is the device a pairing succeeded with.
 type Result struct {
 	Fingerprint identity.Fingerprint
@@ -152,16 +155,22 @@ func Join(ctx context.Context, u URI, o Options) (Result, error) {
 		return Result{}, ErrExpired
 	}
 	msg := session.Message{Type: TypeSecret, Secret: EncodeSecret(u.Secret), DeviceName: o.DeviceName}
-	return exchange(ctx, u.Addr(), u.Fingerprint, msg, replyTimeout, o)
+	return exchange(ctx, u.Addr(), u.Fingerprint, nil, msg, replyTimeout, o)
 }
 
-// Ask is the scanner's side without a QR code: fp comes from discovery and the scanner's user
-// has accepted it; Ask pins it, sends pair_hello and waits up to wait for the shower's user.
-func Ask(ctx context.Context, addr string, fp identity.Fingerprint, wait time.Duration, o Options) (Result, error) {
-	return exchange(ctx, addr, fp, session.Message{Type: TypeHello, DeviceName: o.DeviceName}, wait, o)
+// Ask is the scanner's side without a QR code. The shower's key is not known in advance (the
+// discovery that found the shower carries no key, DISC-06): Ask reads it in the TLS handshake
+// and passes it to decide, which shows it to the user (or finds it among the trusted devices,
+// or refuses it under ID-05). Only if decide accepts does Ask send pair_hello, then it waits up
+// to wait for the shower's user. A refusal by decide returns ErrDeclined; nothing is sent.
+func Ask(ctx context.Context, addr string, decide func(identity.Fingerprint) bool, wait time.Duration, o Options) (Result, error) {
+	return exchange(ctx, addr, identity.Fingerprint{}, decide, session.Message{Type: TypeHello, DeviceName: o.DeviceName}, wait, o)
 }
 
-func exchange(ctx context.Context, addr string, fp identity.Fingerprint, msg session.Message, wait time.Duration, o Options) (Result, error) {
+// exchange connects to addr, pinning fp when it is set, otherwise asking decide about the key
+// presented, then sends msg and waits up to wait for pair_accept.
+func exchange(ctx context.Context, addr string, fp identity.Fingerprint, decide func(identity.Fingerprint) bool,
+	msg session.Message, wait time.Duration, o Options) (Result, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return Result{}, err
@@ -171,12 +180,24 @@ func exchange(ctx context.Context, addr string, fp identity.Fingerprint, msg ses
 	if err != nil {
 		return Result{}, err
 	}
-	conn, err := securechan.Client(ctx, raw, securechan.Config{Identity: o.Identity, Expected: fp})
+	cfg := securechan.Config{Identity: o.Identity, Expected: fp}
+	if fp.IsZero() {
+		cfg.Trust, cfg.AllowUnknown = o.Trust, true
+	}
+	conn, err := securechan.Client(ctx, raw, cfg)
 	if err != nil {
 		return Result{}, err
 	}
 	ch := session.NewChannel(conn)
 	defer ch.Close()
+	if fp.IsZero() {
+		fp = conn.PeerFingerprint()
+		// The user may take its time: the Unauth deadline must not cut the connection.
+		_ = conn.SetDeadline(time.Now().Add(wait))
+		if decide == nil || !decide(fp) {
+			return Result{}, ErrDeclined
+		}
+	}
 	if err := ch.Send(msg); err != nil {
 		return Result{}, err
 	}
