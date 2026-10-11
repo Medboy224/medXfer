@@ -32,6 +32,22 @@ type TransferOffer struct {
 	// connections (WP-3.4). Only in answers to a query with the right pairing code, never in
 	// beacons (DISC-06).
 	Fingerprint string `json:"fingerprint,omitempty"`
+	// PairPort is where the sender waits for its receiver to pair (WP-3.5b): with the QR code's
+	// secret, or asking the sender's user. Hidden like Fingerprint.
+	PairPort int `json:"pair_port,omitempty"`
+}
+
+// maskOffer hides what only a receiver with the pairing code may see: what is sent, and how
+// to reach and authenticate the sender (DISC-06).
+func maskOffer(o *TransferOffer) *TransferOffer {
+	masked := *o
+	masked.FileName = "[🔒 Private Transfer]"
+	masked.FileSize = 0
+	masked.FileID = ""
+	masked.Batch = nil
+	masked.Fingerprint = ""
+	masked.PairPort = 0
+	return &masked
 }
 
 // DiscoveryQuery represents an authenticated request sent to a peer's discovery port
@@ -194,13 +210,7 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 					// Hide sensitive transfer details from unauthenticated probes
 					respPeer.PairingCode = ""
 					if respPeer.Offer != nil {
-						masked := *respPeer.Offer
-						masked.FileName = "[🔒 Private Transfer]"
-						masked.FileSize = 0
-						masked.FileID = ""
-						masked.Batch = nil
-						masked.Fingerprint = ""
-						respPeer.Offer = &masked
+						respPeer.Offer = maskOffer(respPeer.Offer)
 					}
 				}
 
@@ -230,13 +240,7 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 					beaconPeer.HostIP = target.LocalIP.String()
 					beaconPeer.PairingCode = "" // NEVER broadcast secret pairing code
 					if beaconPeer.Offer != nil {
-						masked := *beaconPeer.Offer
-						masked.FileName = "[🔒 Private Transfer]"
-						masked.FileSize = 0
-						masked.FileID = ""
-						masked.Batch = nil
-						masked.Fingerprint = ""
-						beaconPeer.Offer = &masked
+						beaconPeer.Offer = maskOffer(beaconPeer.Offer)
 					}
 					data, err := json.Marshal(beaconPeer)
 					if err != nil {

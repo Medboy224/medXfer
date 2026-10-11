@@ -7,6 +7,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/Medboy224/medXfer/pkg/manifest"
 )
 
 func TestGenerateAndParsePairingCode(t *testing.T) {
@@ -205,5 +207,17 @@ func TestAuthenticatedDiscoveryReflector(t *testing.T) {
 	_, err = QueryPeerWithCode(ctx, "127.0.0.1", "999-123", 100*time.Millisecond)
 	if err == nil {
 		t.Fatal("expected error with invalid code format in QueryPeerWithCode")
+	}
+}
+
+func TestMaskOfferHidesTheSender(t *testing.T) {
+	o := &TransferOffer{FileName: "a.docx", FileSize: 9, FileID: "id", IsBatch: true,
+		Batch: &manifest.Manifest{}, Fingerprint: "FP", PairPort: 40000}
+	m := maskOffer(o)
+	if m.FileName == o.FileName || m.FileSize != 0 || m.FileID != "" || m.Batch != nil || m.Fingerprint != "" || m.PairPort != 0 {
+		t.Fatalf("masked offer leaks: %+v", m)
+	}
+	if o.Fingerprint != "FP" || o.PairPort != 40000 {
+		t.Fatal("maskOffer changed the original offer")
 	}
 }

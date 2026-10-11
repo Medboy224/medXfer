@@ -981,21 +981,6 @@ func (s *DaemonServer) dataClient() engine.SecureFunc {
 	return securechan.ClientFunc(s.streamChanConfig())
 }
 
-// oneShotDataServer secures a one-shot send: no paired device, so any receiver key is
-// accepted, the data is encrypted, and each receiver's key is reported in the log. The
-// receiver pins this device's key, announced in the discovery offer.
-func (s *DaemonServer) oneShotDataServer() engine.SecureFunc {
-	s.mu.RLock()
-	id := s.identity
-	s.mu.RUnlock()
-	return securechan.OpenServerFunc(id, func(fp identity.Fingerprint, addr net.Addr) {
-		s.Broadcast(NewEvent("log", map[string]string{
-			"level":   "INFO",
-			"message": fmt.Sprintf("Receiver connected from %s with key %s", addr, fp.Short()),
-		}))
-	})
-}
-
 // fingerprint is this device's key fingerprint (full form), or "" before Serve.
 func (s *DaemonServer) fingerprint() string {
 	s.mu.RLock()

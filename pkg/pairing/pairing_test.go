@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/session"
 )
 
 func device(t *testing.T, name string) Options {
@@ -217,5 +218,60 @@ func TestServeExpires(t *testing.T) {
 	}
 	if time.Since(start) > 5*time.Second {
 		t.Fatal("expiry took too long")
+	}
+}
+
+// A one-shot send's offer reaches the scanner with pair_accept (WP-3.5b).
+func TestAcceptCarriesTheOffer(t *testing.T) {
+	shower, scanner := device(t, "pc"), device(t, "phone")
+	shower.Offer = session.Message{FileName: "film.mkv", FileSize: 42, FileID: "abc", DataPort: 18888}
+	ln, inv, u := listen(t, shower, TTL)
+	done := serve(ln, inv, shower)
+	r, err := Join(context.Background(), u, scanner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	o := r.Offer
+	if o.Type != TypeAccept || o.DeviceName != "pc" || o.FileName != "film.mkv" || o.FileSize != 42 || o.FileID != "abc" || o.DataPort != 18888 {
+		t.Fatalf("offer received: %+v", o)
+	}
+}
+
+// Without the QR code, the shower's user decides (D3): a no is neutral and the wait goes on,
+// a yes pairs.
+func TestHelloIsDecidedByTheShowersUser(t *testing.T) {
+	shower, intruder, scanner := device(t, "pc"), device(t, "intruder"), device(t, "phone")
+	var asked []string
+	shower.Confirm = func(_ context.Context, r Result) bool {
+		asked = append(asked, r.Name) // calls are serialised by Serve
+		return r.Fingerprint == scanner.Identity.Fingerprint
+	}
+	ln, inv, u := listen(t, shower, TTL)
+	done := serve(ln, inv, shower)
+
+	if _, err := Ask(context.Background(), u.Addr(), u.Fingerprint, time.Second, intruder); !errors.Is(err, ErrRefused) {
+		t.Fatalf("refused hello: %v, want ErrRefused", err)
+	}
+	r, err := Ask(context.Background(), u.Addr(), u.Fingerprint, time.Second, scanner)
+	if err != nil || r.Fingerprint != shower.Identity.Fingerprint {
+		t.Fatalf("accepted hello: %+v, %v", r, err)
+	}
+	s := <-done
+	if s.err != nil || s.r.Fingerprint != scanner.Identity.Fingerprint {
+		t.Fatalf("shower: %+v, %v", s.r, s.err)
+	}
+	if strings.Join(asked, ",") != "intruder,phone" {
+		t.Fatalf("the shower's user was asked about %v", asked)
+	}
+}
+
+// With no Confirm (xfer pair --show), a hello is refused: only the QR code pairs.
+func TestHelloWithoutConfirmIsRefused(t *testing.T) {
+	shower := device(t, "pc")
+	ln, inv, u := listen(t, shower, TTL)
+	_ = serve(ln, inv, shower)
+	if _, err := Ask(context.Background(), u.Addr(), u.Fingerprint, time.Second, device(t, "phone")); !errors.Is(err, ErrRefused) {
+		t.Fatalf("hello without Confirm: %v, want ErrRefused", err)
 	}
 }
