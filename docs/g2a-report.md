@@ -19,7 +19,7 @@ Ce rapport répond à la question du plan (§1) : *le cœur Go peut-il être cha
 **Quatre réserves**, qui n'invalident pas la décision :
 
 1. **G2A-06 sous Linux : 88 à 89 % du débit de `xfer`**, sous le seuil de 95 %. Mesuré sur un portable de 2011 (i5-2520M, 2 cœurs). L'enquête montre que le pont n'y est pour rien : la même bibliothèque appelée par la frontière C depuis un programme C fait 101,8 %. L'écart vient du processus hôte Flutter sur cette machine faible. Sous Windows (100,4 %) et sur le téléphone (142 %), aucun écart. À remesurer sur un PC Linux récent pendant J6a (§4.3).
-2. **G2A-08 : l'essai sur une machine vraiment propre reste à faire.** Les dépendances sont inventoriées. Le paquet Windows embarque maintenant le runtime Visual C++. Les paquets se lancent hors de l'arbre de compilation avec un environnement vide. À faire avant le premier paquet public (J6b), dans Windows Sandbox ou sur un second PC, et sur une distribution Linux fraîche (§4.6).
+2. **G2A-08 : l'essai sur une machine Linux vraiment propre reste à faire.** Côté Windows, il est **réussi** : un PC sous Windows 10 sans aucun outil de développement a passé la suite rapide, avec le runtime Visual C++ chargé depuis le dossier de l'application. Côté Linux, le paquet se lance hors de l'arbre de compilation avec un environnement vide, et ses dépendances sont inventoriées. L'essai sur une distribution fraîche est à faire avant le premier paquet public, en J6b (§4.6).
 3. **Émulateur Android : un passage complet sur trois** a montré un pic de lenteur isolé et une baisse de mémoire juste au-delà de ±5 %. Le vrai téléphone n'a montré aucun écart (§4.2).
 4. **Windows : à-coups isolés de 230 à 240 ms** dans l'interface, environ une fois toutes les 3 à 4 minutes. Ils apparaissent avec les deux modèles d'événements **et aussi sans aucun événement**. Ils viennent de l'application Flutter sous Windows sur le PC de développement, pas du pont. Aucun événement n'est perdu. À surveiller en J6b avec la vraie interface (§4.2).
 
@@ -53,7 +53,7 @@ Ce rapport répond à la question du plan (§1) : *le cœur Go peut-il être cha
 | **G2A-05** Cycle de vie | ✅ (lecture) · ❌ (rappel) | ✅ | ✅ y compris arrière-plan et arrêt forcé | §4.1, §4.4 |
 | **G2A-06** Moteur intact, débit ≥ 95 % | ✅ 100,4 % | ⚠️ 88 à 89 % | ✅ 142 % | §4.3 |
 | **G2A-07** Transfert entre appareils | ✅ Windows ↔ Android, 1 Gio | non fait (« si possible ») | ✅ | §4.5 |
-| **G2A-08** Empaquetage sans outils | ⚠️ | ⚠️ | — | §4.6 |
+| **G2A-08** Empaquetage sans outils | ✅ PC propre sous Windows 10 | ⚠️ distribution fraîche à essayer | — | §4.6 |
 
 ---
 
@@ -168,7 +168,7 @@ Le premier essai a échoué : le fichier reçu était tronqué à 91 %. Je l'ai 
 | Cœur Go | `medxfer.dll` n'importe que `KERNEL32` et l'UCRT (`api-ms-win-crt-*`), intégrés à Windows 10 et 11 | `libmedxfer.so` ne dépend que de la libc ; glibc ≥ 2.34 (compilée sur Ubuntu 22.04) |
 | Lanceur Flutter | `medxfer_g2a.exe` (MSVC) importe `MSVCP140`, `VCRUNTIME140`, `VCRUNTIME140_1`, absents d'un Windows neuf. **Corrigé dans le prototype** : `InstallRequiredSystemLibraries` copie ces DLL à côté de l'exécutable | Pile GTK3 d'un bureau standard ; le lanceur demande aussi glibc ≥ 2.34 |
 | Lancement hors de l'arbre | Paquet copié ailleurs, `PATH` réduit à `System32` : suite rapide réussie | Paquet copié, `env -i` (aucune variable de développement) : suite rapide réussie |
-| Machine propre | **À faire** (Windows Sandbox n'est pas activé sur le PC) | **À faire** (distribution fraîche) |
+| Machine propre | ✅ **Réussi** sur un PC prêté : Windows 10 Pro 22H2 (build 19045), i5-8250U, 8 Go. Aucun outil de développement (ni Go, ni gcc, ni clang, ni Flutter, ni Visual Studio). Suite rapide : 8 tests sur 8, code de sortie 0. Les DLL `VCRUNTIME140`, `VCRUNTIME140_1` et `MSVCP140` sont chargées depuis le dossier de l'application. Démarrage : 247 ms au premier lancement. | **À faire** (distribution fraîche) |
 
 Pour viser Ubuntu 20.04 (glibc 2.31) ou plus ancien, il faudra compiler sur une base plus ancienne, par exemple un conteneur.
 
@@ -309,7 +309,8 @@ Dans la bible, B1 à B11 forment le §10.4 (`API-07`). B12 devient `DISC-10`, B1
 8. **Empaquetage** :
    - Windows : runtime Visual C++ à côté de l'exécutable (déjà dans le prototype) ;
    - Linux : base de compilation à choisir selon les distributions visées (glibc) ;
-   - essai sur machine propre avant J6b (réserve 2).
+   - essai Linux sur une distribution fraîche avant J6b (réserve 2) ; Windows fait.
+   - Le paquet d'essai Windows (application, `LANCER-ICI.bat`, `check-g2a.ps1`) se lance d'un double-clic, sans installation ni droits administrateur. Il peut resservir pour chaque nouvelle version.
 9. **Remesures** : G2A-06 sur un PC Linux récent ; G2A-07 Linux ↔ Android ; G2A-09 et G2A-10 sur une version d'Android plus ancienne (10 ou 11) ; à-coups de l'interface sous Windows avec la vraie interface, sur un autre PC si possible.
 
 ---
