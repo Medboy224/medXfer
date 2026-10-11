@@ -1,0 +1,25 @@
+medXfer - essai du prototype G2a sur un PC Windows "propre"
+============================================================
+
+But : vérifier que l'application démarre sur un PC qui n'a aucun outil de
+développement (ni Go, ni MinGW, ni Visual Studio, ni Flutter).
+
+Rien n'est installé ni modifié sur ce PC. Aucun droit administrateur n'est
+nécessaire. L'application ne se connecte pas au réseau.
+
+1. Copier tout ce dossier sur le PC (par exemple sur le Bureau), ou le lancer
+   directement depuis la clé USB.
+2. Double-cliquer sur LANCER-ICI.bat.
+   - Si Windows affiche « Windows a protégé votre ordinateur » (SmartScreen) :
+     cliquer sur « Informations complémentaires », puis « Exécuter quand même ».
+     L'application n'est pas signée, c'est normal pour un prototype.
+   - Une fenêtre « medXfer G2a prototype » s'ouvre, fait ses tests pendant
+     environ 1 minute, puis se ferme toute seule.
+3. À la fin, la fenêtre noire affiche RESULTAT GLOBAL : REUSSI ou ECHEC.
+   Appuyer sur une touche pour la fermer.
+4. Rapporter le fichier resultat-g2a.txt (et, s'il y en a, resultat-g2a.json,
+   journal-g2a.txt, erreurs-g2a.txt).
+   Si une fenêtre d'erreur parle d'une DLL manquante, noter son nom ou la
+   photographier.
+
+Ensuite, le dossier peut être supprimé : il n'a rien laissé ailleurs sur le PC.

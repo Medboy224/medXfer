@@ -1,0 +1,143 @@
+{
+  "platform": "windows",
+  "os_version": "\"Windows 10 Pro\" 10.0 (Build 19045)",
+  "dart": "3.13.5",
+  "mode": "quick",
+  "cold_start_ms_main_to_first_ping": 246.618,
+  "G2A-05_lifecycle": {
+    "pass": true,
+    "second_start_already_started": true,
+    "started_after_stop": false,
+    "started_after_restart": true
+  },
+  "G2A-02_ping": {
+    "pass": true,
+    "errors": 0,
+    "latency_us": {
+      "median": 12,
+      "p95": 23,
+      "max": 168
+    },
+    "latency_alert_5ms": false,
+    "rss_mb_checkpoints": {
+      "start": 70.9296875,
+      "after_warmup_10k": 177.78515625,
+      "+10k": 182.40625,
+      "+60k": 183.671875
+    },
+    "go_memstats_start": {
+      "gomaxprocs": 8,
+      "goroutines": 1,
+      "heap_inuse_mb": 2.8125,
+      "id": "r4",
+      "num_cpu": 8,
+      "num_gc": 0,
+      "ok": true,
+      "stack_inuse_mb": 0.125,
+      "sys_mb": 6.51953125
+    },
+    "go_memstats_end": {
+      "gomaxprocs": 8,
+      "goroutines": 1,
+      "heap_inuse_mb": 4.171875,
+      "id": "r5",
+      "num_cpu": 8,
+      "num_gc": 30,
+      "ok": true,
+      "stack_inuse_mb": 0.15625,
+      "sys_mb": 11.64453125
+    },
+    "rss_drift_pct_last_segment": 0.6938495802638341,
+    "rss_drift_segment": "+10k -> +60k",
+    "rss_drift_pct_first_10k_after_warmup": 2.599257355041417
+  },
+  "G2A-04_panic": {
+    "pass": true,
+    "panic_call_error": "panic: test panic in medxfer_call (G2A-04)",
+    "core_error_received": true,
+    "core_error_where": "panic_goroutine",
+    "alive_after": true
+  },
+  "G2A-03_baseline_no_events": {
+    "pass": true,
+    "informative": true,
+    "seconds": 10,
+    "max_ui_lag_ms": 3.0709999999999997,
+    "p99_ui_lag_ms": 1.3829999999999991,
+    "lag_over_50ms": 0,
+    "lag_over_100ms": 0
+  },
+  "G2A-03_callback_steady": {
+    "pass": true,
+    "model": "callback",
+    "count": 1000,
+    "per_sec": 100,
+    "received": 1000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 10.494,
+    "max_ui_lag_ms": 3.2029999999999994,
+    "p99_ui_lag_ms": 1.391,
+    "lag_over_50ms": 0,
+    "lag_over_100ms": 0
+  },
+  "G2A-03_callback_burst": {
+    "pass": true,
+    "model": "callback",
+    "count": 5000,
+    "per_sec": 1000,
+    "received": 5000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 5.503,
+    "max_ui_lag_ms": 1.9250000000000007,
+    "p99_ui_lag_ms": 1.3800000000000008,
+    "lag_over_50ms": 0,
+    "lag_over_100ms": 0
+  },
+  "G2A-03_poll_steady": {
+    "pass": true,
+    "model": "poll",
+    "count": 1000,
+    "per_sec": 100,
+    "received": 1000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 10.293,
+    "max_ui_lag_ms": 2.8000000000000007,
+    "p99_ui_lag_ms": 1.4730000000000008,
+    "lag_over_50ms": 0,
+    "lag_over_100ms": 0
+  },
+  "G2A-03_poll_burst": {
+    "pass": true,
+    "model": "poll",
+    "count": 5000,
+    "per_sec": 1000,
+    "received": 5000,
+    "missing": 0,
+    "missing_seqs_first_10": [],
+    "out_of_order": 0,
+    "duplicates": 0,
+    "core_drops": 0,
+    "timed_out": false,
+    "elapsed_s": 5.303,
+    "max_ui_lag_ms": 1.7119999999999997,
+    "p99_ui_lag_ms": 1.3010000000000002,
+    "lag_over_50ms": 0,
+    "lag_over_100ms": 0
+  },
+  "pass": true
+}

@@ -1,0 +1,31 @@
+﻿medXfer G2a - essai sur machine propre - 2026-10-11 11:28
+Windows : Microsoft Windows 10 Professionnel 10.0.19045 (build 19045), 64 bits
+Processeur : Intel(R) Core(TM) i5-8250U CPU @ 1.60GHz
+Memoire : 7,9 Go
+Outil go                      : absent
+Outil gcc                     : absent
+Outil clang                   : absent
+Outil flutter                 : absent
+Outil dart                    : absent
+Outil cl                      : absent
+Outil x86_64-w64-mingw32-gcc  : absent
+Visual Studio installe : False
+Runtime VC++ du systeme, vcruntime140.dll   : present
+Runtime VC++ du systeme, vcruntime140_1.dll : present
+Runtime VC++ du systeme, msvcp140.dll       : present
+Lancement : D:\g2a-machine-propre\app\medxfer_g2a.exe
+DLL chargee : D:\g2a-machine-propre\app\VCRUNTIME140.dll
+DLL chargee : D:\g2a-machine-propre\app\MSVCP140.dll
+DLL chargee : D:\g2a-machine-propre\app\VCRUNTIME140_1.dll
+DLL chargee : D:\g2a-machine-propre\app\flutter_windows.dll
+Code de sortie : 0 (tout reussi), duree 54 s
+G2A-05_lifecycle            : REUSSI
+G2A-02_ping                 : REUSSI
+G2A-04_panic                : REUSSI
+G2A-03_baseline_no_events   : REUSSI
+G2A-03_callback_steady      : REUSSI
+G2A-03_callback_burst       : REUSSI
+G2A-03_poll_steady          : REUSSI
+G2A-03_poll_burst           : REUSSI
+Demarrage, de main() au premier appel du coeur : 246,6 ms
+RESULTAT GLOBAL : REUSSI
