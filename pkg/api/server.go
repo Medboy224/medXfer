@@ -109,6 +109,7 @@ type DaemonServer struct {
 	// This device's identity and trusted devices (WP-3.1), loaded by Serve.
 	identity    *identity.Identity
 	trust       *identity.TrustStore
+	gate        *securechan.Gate // limits unauthenticated control connections (LIM-01)
 	discSrv     *discovery.DiscoveryServer
 	pairingCode string
 
@@ -148,6 +149,7 @@ func NewDaemonServer(port int, defaultOutDir, deviceName string) *DaemonServer {
 	registerSecrets(pin, token, controlToken, pCode)
 
 	srv := &DaemonServer{
+		gate:               securechan.NewGate(),
 		controlToken:       controlToken,
 		config:             cfg,
 		clients:            make(map[*websocket.Conn]bool),
@@ -954,7 +956,7 @@ func (s *DaemonServer) loadIdentity() error {
 func (s *DaemonServer) pairingChanConfig() securechan.Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return securechan.Config{Identity: s.identity, Trust: s.trust, AllowUnknown: true}
+	return securechan.Config{Identity: s.identity, Trust: s.trust, AllowUnknown: true, Gate: s.gate}
 }
 
 // streamChanConfig pins a data connection to the key of the paired device: any other key,
