@@ -178,6 +178,10 @@ func main() {
 		handleBench(args[1:])
 	case "bundle":
 		handleBundle(args[1:])
+	case "id":
+		handleID(args[1:])
+	case "trust":
+		handleTrust(args[1:])
 	case "help", "h", "?":
 		printUsage()
 		os.Exit(0)
@@ -1613,6 +1617,8 @@ func printUsage() {
 		"  xfer ctl [--script scenario.jsonl]             (Drive an embedded daemon with JSON lines)\n" +
 		"  xfer bench disk|net [...]                      (Disk and network benchmarks)\n" +
 		"  xfer bundle [-o FILE.zip]                      (Diagnostic bundle for a bug report)\n" +
+		"  xfer id                                        (This device's fingerprint)\n" +
+		"  xfer trust list|forget <fingerprint>           (Trusted devices)\n" +
 		"\n" +
 		"Examples on Android / Termux:\n" +
 		"  ./xfer-android-arm64 daemon                    -> Starts Web UI on http://localhost:19999\n" +
