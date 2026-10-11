@@ -1,0 +1,83 @@
+{
+    "background":  {
+                       "seconds":  300,
+                       "pid_before":  "8091",
+                       "probes":  [
+                                      {
+                                          "s":  30,
+                                          "port_open":  false,
+                                          "pid":  "8091"
+                                      },
+                                      {
+                                          "s":  63,
+                                          "port_open":  false,
+                                          "pid":  "8091"
+                                      },
+                                      {
+                                          "s":  96,
+                                          "port_open":  false,
+                                          "pid":  "8091"
+                                      },
+                                      {
+                                          "s":  130,
+                                          "port_open":  false,
+                                          "pid":  "8091"
+                                      },
+                                      {
+                                          "s":  163,
+                                          "port_open":  false,
+                                          "pid":  "8091"
+                                      },
+                                      {
+                                          "s":  196,
+                                          "port_open":  false,
+                                          "pid":  "8091"
+                                      },
+                                      {
+                                          "s":  229,
+                                          "port_open":  false,
+                                          "pid":  "8091"
+                                      },
+                                      {
+                                          "s":  262,
+                                          "port_open":  false,
+                                          "pid":  "8091"
+                                      },
+                                      {
+                                          "s":  296,
+                                          "port_open":  false,
+                                          "pid":  "8091"
+                                      },
+                                      {
+                                          "s":  329,
+                                          "port_open":  false,
+                                          "pid":  "8091"
+                                      }
+                                  ],
+                       "lifecycle":  [
+                                         "AppLifecycleState.inactive",
+                                         "AppLifecycleState.hidden",
+                                         "AppLifecycleState.paused",
+                                         "AppLifecycleState.hidden",
+                                         "AppLifecycleState.inactive",
+                                         "AppLifecycleState.resumed"
+                                     ],
+                       "download_after_foreground":  {
+                                                         "hash_ok":  true,
+                                                         "seconds":  33.6
+                                                     },
+                       "app_sent":  "{event: transfer_done, engine_ms: 370605, path: , role: send, transfer_id: send-1, wall_ms: 370606}"
+                   },
+    "kill":  {
+                 "pid_before":  "10200",
+                 "pids_after_kill":  "",
+                 "port_open_after_kill":  false,
+                 "relaunch_listening":  true,
+                 "download_after_relaunch":  {
+                                                 "hash_ok":  true,
+                                                 "seconds":  32.2
+                                             },
+                 "app_sent":  "{event: transfer_done, engine_ms: 32602, path: , role: send, transfer_id: send-1, wall_ms: 32602}"
+             },
+    "pass":  true
+}
