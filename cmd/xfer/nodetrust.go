@@ -6,14 +6,11 @@ package main
 
 import (
 	"fmt"
-	"net"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/identity"
-	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
 )
 
@@ -121,18 +118,4 @@ func sessionPeer(s *session.Channel) identity.Fingerprint {
 		return identity.Fingerprint{}
 	}
 	return s.PeerFingerprint()
-}
-
-// oneShotSenderSecure encrypts the data of `xfer send`. Any receiver key is accepted (it has
-// the pairing code); each one is shown once, to compare with the receiver's screen. Mutual
-// authentication comes with the pairing URI (WP-3.5).
-func oneShotSenderSecure() engine.SecureFunc {
-	var seen sync.Map
-	return securechan.OpenServerFunc(localID, func(fp identity.Fingerprint, addr net.Addr) {
-		if _, dup := seen.LoadOrStore(fp, true); dup {
-			return
-		}
-		host, _, _ := net.SplitHostPort(addr.String())
-		fmt.Printf("\n[*] Receiver at %s connected with key %s\n", host, fp.Short())
-	})
 }

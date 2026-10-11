@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/hotspot"
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/manifest"
+	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
@@ -1051,7 +1053,7 @@ func handleSend(args []string) {
 	}
 	chunkSize := uint32(*chunkSizeMB * 1024 * 1024)
 
-	id, _, err := loadIdentity(configDir())
+	id, trust, err := loadIdentity(configDir())
 	if err != nil {
 		fmt.Printf("[-] %v\n", err)
 		return
@@ -1072,13 +1074,13 @@ func handleSend(args []string) {
 			fmt.Printf("[-] Failed to scan folder/files: %v\n", err)
 			return
 		}
-		runOneShotBatchSend(m, *portFlag, *workersFlag, chunkSize, *createNetwork, interactive)
+		runOneShotBatchSend(m, *portFlag, *workersFlag, chunkSize, *createNetwork, interactive, trust)
 	} else {
-		runOneShotSingleSend(rawPaths[0], *portFlag, *workersFlag, chunkSize, *createNetwork, interactive)
+		runOneShotSingleSend(rawPaths[0], *portFlag, *workersFlag, chunkSize, *createNetwork, interactive, trust)
 	}
 }
 
-func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize uint32, createHotspot bool, interactive bool) {
+func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize uint32, createHotspot bool, interactive bool, trust *identity.TrustStore) {
 	var hs hotspot.Controller
 	if createHotspot {
 		hs = hotspot.New()
@@ -1127,13 +1129,12 @@ func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize 
 	fmt.Println("             medXfer Secure Sender                ")
 	fmt.Println("==================================================")
 	fmt.Printf(" Batch        : %s\n", m.SummaryString())
-	fmt.Printf(" Pairing Code : %s\n", pCode)
 	fmt.Printf(" Fingerprint  : %s\n", localID.Fingerprint.Short())
 	fmt.Printf(" Direct IP    : %s:%d\n", getLocalIP(), port)
+	fmt.Printf(" Pairing Code : %s   (xfer recv %s: both screens then confirm)\n", pCode, pCode)
 	fmt.Println("--------------------------------------------------")
-	fmt.Println(" On receiving device, run:")
-	fmt.Printf("   xfer recv %s\n", pCode)
-	fmt.Println("==================================================")
+	var peer oneShotPeer
+	startOneShotPairing(ctx, &peer, discServer, *offer, offerMessage(*offer, port), trust)
 	fmt.Println("[*] Waiting for receiver to connect...")
 
 	var batchMu sync.Mutex
@@ -1149,7 +1150,7 @@ func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize 
 
 		itemCtx, itemCancel := context.WithCancel(ctx)
 		sender := engine.NewSender(workers, chunkSize)
-		sender.SetSecure(oneShotSenderSecure())
+		sender.SetSecure(peer.secure(localID))
 		if interactive {
 			sender.SetAuthorizer(func(remoteAddr net.Addr, fileName string, fileSize int64) bool {
 				batchMu.Lock()
@@ -1182,7 +1183,7 @@ func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize 
 	fmt.Printf("\n[+] Folder transfer complete! All %d files sent successfully.\n", m.TotalFiles)
 }
 
-func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint32, createHotspot bool, interactive bool) {
+func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint32, createHotspot bool, interactive bool, trust *identity.TrustStore) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		fmt.Printf("[-] Cannot access file '%s': %v\n", filePath, err)
@@ -1233,17 +1234,16 @@ func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint
 	fmt.Println("             medXfer Secure Sender                ")
 	fmt.Println("==================================================")
 	fmt.Printf(" File         : %s (%.2f MB)\n", offer.FileName, float64(offer.FileSize)/(1024*1024))
-	fmt.Printf(" Pairing Code : %s\n", pCode)
 	fmt.Printf(" Fingerprint  : %s\n", localID.Fingerprint.Short())
 	fmt.Printf(" Direct IP    : %s:%d\n", getLocalIP(), port)
+	fmt.Printf(" Pairing Code : %s   (xfer recv %s: both screens then confirm)\n", pCode, pCode)
 	fmt.Println("--------------------------------------------------")
-	fmt.Println(" On receiving device, run:")
-	fmt.Printf("   xfer recv %s\n", pCode)
-	fmt.Println("==================================================")
+	var peer oneShotPeer
+	startOneShotPairing(ctx, &peer, discServer, *offer, offerMessage(*offer, port), trust)
 	fmt.Println("[*] Waiting for receiver to connect...")
 
 	sender := engine.NewSender(workers, chunkSize)
-	sender.SetSecure(oneShotSenderSecure())
+	sender.SetSecure(peer.secure(localID))
 	if interactive {
 		sender.SetAuthorizer(func(remoteAddr net.Addr, fileName string, fileSize int64) bool {
 			host, _, _ := net.SplitHostPort(remoteAddr.String())
@@ -1275,6 +1275,13 @@ func handleRecv(args []string) {
 	workersFlag := recvCmd.Int("workers", 4, "Number of parallel TCP streams")
 
 	_ = recvCmd.Parse(normalizedArgs)
+
+	// The sender's QR code: its key comes from it, with the secret that lets this device in.
+	if recvCmd.NArg() > 0 && strings.HasPrefix(recvCmd.Arg(0), "medxfer://") {
+		recvFromURI(recvCmd.Arg(0), *outDirFlag, *workersFlag)
+		return
+	}
+
 	targetAddr := *ipFlag
 	if targetAddr != "" && !strings.Contains(targetAddr, ":") {
 		targetAddr = net.JoinHostPort(targetAddr, strconv.Itoa(int(defaultPort)))
@@ -1336,8 +1343,8 @@ func handleRecv(args []string) {
 		return
 	}
 	senderFP, err := identity.ParseFingerprint(selectedPeer.Offer.Fingerprint)
-	if err != nil {
-		fmt.Println("[-] The sender did not announce its key: refusing an unauthenticated download.\n" +
+	if err != nil || selectedPeer.Offer.PairPort == 0 {
+		fmt.Println("[-] The sender does not authenticate its receivers: refusing the download.\n" +
 			"    Update medXfer on the sending device.")
 		return
 	}
@@ -1349,54 +1356,118 @@ func handleRecv(args []string) {
 	// Every data connection must come from the key announced by the sender (WP-3.4).
 	recvSecure = securechan.ClientFunc(securechan.Config{Identity: id, Expected: senderFP})
 
-	// Interactive receiver confirmation
-	if selectedPeer != nil && selectedPeer.Offer != nil {
-		fmt.Println("\n==================================================")
-		fmt.Println("             medXfer Incoming Transfer            ")
-		fmt.Println("==================================================")
-		if selectedPeer.Offer.IsBatch {
-			fileCount := 0
-			if selectedPeer.Offer.Batch != nil {
-				fileCount = selectedPeer.Offer.Batch.TotalFiles
-			}
-			fmt.Printf(" Folder : %s\n", selectedPeer.Offer.FileName)
-			if fileCount > 0 {
-				fmt.Printf(" Files  : %d\n", fileCount)
-			}
-			fmt.Printf(" Size   : %.2f MB\n", float64(selectedPeer.Offer.FileSize)/(1024*1024))
-		} else {
-			fmt.Printf(" File   : %s (%.2f MB)\n", selectedPeer.Offer.FileName, float64(selectedPeer.Offer.FileSize)/(1024*1024))
+	printIncoming(selectedPeer.Offer, selectedPeer.DeviceName, targetAddr)
+	reader := bufio.NewReader(os.Stdin)
+	if p, ok := trust.Get(senderFP); ok {
+		fmt.Printf(" Key    : %s (trusted device '%s')\n", senderFP.Short(), p.Alias)
+		fmt.Println("--------------------------------------------------")
+		fmt.Print("[?] Confirm download? [Y/n]: ")
+		ans, _ := reader.ReadString('\n')
+		ans = strings.TrimSpace(strings.ToLower(ans))
+		if ans != "" && ans != "y" && ans != "yes" && ans != "o" && ans != "oui" {
+			fmt.Println("[-] Download cancelled by user.")
+			return
 		}
-		fmt.Printf(" From   : %s (%s)\n", selectedPeer.DeviceName, targetAddr)
-		reader := bufio.NewReader(os.Stdin)
-		if p, ok := trust.Get(senderFP); ok {
-			fmt.Printf(" Key    : %s (trusted device '%s')\n", senderFP.Short(), p.Alias)
-			fmt.Println("--------------------------------------------------")
-			fmt.Print("[?] Confirm download? [Y/n]: ")
-			ans, _ := reader.ReadString('\n')
-			ans = strings.TrimSpace(strings.ToLower(ans))
-			if ans != "" && ans != "y" && ans != "yes" && ans != "o" && ans != "oui" {
-				fmt.Println("[-] Download cancelled by user.")
-				return
-			}
-			_ = rememberPeer(trust, senderFP, selectedPeer.DeviceName, senderHost, trustOnce)
-		} else {
-			// WP-3.3: an unknown sender is trusted only if the user says so, after comparing
-			// its key with the one shown on the sender's screen. The default is no.
-			fmt.Println("--------------------------------------------------")
-			fmt.Print(trustQuestion(selectedPeer.DeviceName, senderFP, id.Fingerprint))
-			ans, _ := reader.ReadString('\n')
-			answer := parseTrustAnswer(ans)
-			if answer == trustRefused {
-				fmt.Println("[-] Download cancelled: sender not trusted.")
-				return
-			}
-			if err := rememberPeer(trust, senderFP, selectedPeer.DeviceName, senderHost, answer); err != nil {
-				fmt.Printf("[-] Could not save the trusted device: %v\n", err)
-			}
+		_ = rememberPeer(trust, senderFP, selectedPeer.DeviceName, senderHost, trustOnce)
+	} else {
+		// WP-3.3: an unknown sender is trusted only if the user says so, after comparing
+		// its key with the one shown on the sender's screen. The default is no.
+		fmt.Println("--------------------------------------------------")
+		fmt.Print(trustQuestion(selectedPeer.DeviceName, senderFP, id.Fingerprint))
+		ans, _ := reader.ReadString('\n')
+		answer := parseTrustAnswer(ans)
+		if answer == trustRefused {
+			fmt.Println("[-] Download cancelled: sender not trusted.")
+			return
+		}
+		if err := rememberPeer(trust, senderFP, selectedPeer.DeviceName, senderHost, answer); err != nil {
+			fmt.Printf("[-] Could not save the trusted device: %v\n", err)
 		}
 	}
 
+	// The sender lets this device in: at once if it trusts it, otherwise once its user has
+	// compared the fingerprints too (decision D3).
+	fmt.Println("[*] Waiting for the sender to accept this device...")
+	name, _ := os.Hostname()
+	pairAddr := net.JoinHostPort(senderHost, strconv.Itoa(selectedPeer.Offer.PairPort))
+	o := pairing.Options{Identity: id, Once: true, DeviceName: name}
+	if _, err := pairing.Ask(context.Background(), pairAddr, senderFP, trustPromptTimeout+10*time.Second, o); err != nil {
+		fmt.Printf("[-] The sender did not accept this device: %v\n", err)
+		return
+	}
+	pullOffer(targetAddr, *outDirFlag, *workersFlag, selectedPeer.Offer)
+}
+
+// recvFromURI receives a one-shot send from its QR code: the sender's key comes from it, so
+// there is no trust question, and nothing is saved (PAIR-08).
+func recvFromURI(raw, outDir string, workers int) {
+	u, err := pairing.Parse(raw, time.Now())
+	if errors.Is(err, pairing.ErrExpired) {
+		fmt.Println("[-] This QR code has expired: use the one the sender shows now.")
+		return
+	}
+	if err != nil {
+		fmt.Printf("[-] %v\n", err)
+		return
+	}
+	id, _, err := loadIdentity(configDir())
+	if err != nil {
+		fmt.Printf("[-] %v\n", err)
+		return
+	}
+	localID = id
+	name, _ := os.Hostname()
+	fmt.Printf("[*] Connecting to %s (key %s)...\n", u.Addr(), u.Fingerprint.Short())
+	r, err := pairing.Join(context.Background(), u, pairing.Options{Identity: id, Once: true, DeviceName: name})
+	if err != nil {
+		fmt.Printf("[-] The sender refused this device: %v\n", err)
+		return
+	}
+	m := r.Offer
+	if m.DataPort == 0 {
+		fmt.Println("[-] This device offers no transfer (to pair, run: xfer pair <uri>).")
+		return
+	}
+	offer := &discovery.TransferOffer{FileName: m.FileName, FileSize: m.FileSize, FileID: m.FileID, IsBatch: m.Batch != nil, Batch: m.Batch}
+	targetAddr := net.JoinHostPort(u.Host, strconv.Itoa(m.DataPort))
+	recvSecure = securechan.ClientFunc(securechan.Config{Identity: id, Expected: u.Fingerprint})
+
+	printIncoming(offer, r.Name, targetAddr)
+	fmt.Printf(" Key    : %s (from the QR code)\n", u.Fingerprint.Short())
+	fmt.Println("--------------------------------------------------")
+	fmt.Print("[?] Confirm download? [Y/n]: ")
+	ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	ans = strings.TrimSpace(strings.ToLower(ans))
+	if ans != "" && ans != "y" && ans != "yes" && ans != "o" && ans != "oui" {
+		fmt.Println("[-] Download cancelled by user.")
+		return
+	}
+	pullOffer(targetAddr, outDir, workers, offer)
+}
+
+// printIncoming shows what the sender offers.
+func printIncoming(o *discovery.TransferOffer, from, addr string) {
+	fmt.Println("\n==================================================")
+	fmt.Println("             medXfer Incoming Transfer            ")
+	fmt.Println("==================================================")
+	if o.IsBatch {
+		fileCount := 0
+		if o.Batch != nil {
+			fileCount = o.Batch.TotalFiles
+		}
+		fmt.Printf(" Folder : %s\n", o.FileName)
+		if fileCount > 0 {
+			fmt.Printf(" Files  : %d\n", fileCount)
+		}
+		fmt.Printf(" Size   : %.2f MB\n", float64(o.FileSize)/(1024*1024))
+	} else {
+		fmt.Printf(" File   : %s (%.2f MB)\n", o.FileName, float64(o.FileSize)/(1024*1024))
+	}
+	fmt.Printf(" From   : %s (%s)\n", from, addr)
+}
+
+// pullOffer downloads the offer from targetAddr, the sender's data port; recvSecure is set.
+func pullOffer(targetAddr, outDir string, workers int, o *discovery.TransferOffer) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1414,21 +1485,17 @@ func handleRecv(args []string) {
 		}
 	}()
 
-	if selectedPeer != nil && selectedPeer.Offer != nil && selectedPeer.Offer.IsBatch && selectedPeer.Offer.Batch != nil {
-		runOneShotBatchRecv(ctx, targetAddr, *outDirFlag, *workersFlag, selectedPeer.Offer.Batch)
-	} else {
-		fileID := ""
-		if selectedPeer != nil && selectedPeer.Offer != nil {
-			fileID = selectedPeer.Offer.FileID
-		}
-		fmt.Printf("\n[*] Connecting to sender at %s...\n", targetAddr)
-		receiver := engine.NewReceiver(*outDirFlag, *workersFlag)
-		receiver.SetSecure(recvSecure)
-		listener := &cliListener{cancel: cancel, isSender: false}
-		err := receiver.Pull(ctx, targetAddr, listener, fileID)
-		if err != nil && ctx.Err() == nil {
-			fmt.Printf("\n[-] Download failed: %v\n", err)
-		}
+	if o.IsBatch && o.Batch != nil {
+		runOneShotBatchRecv(ctx, targetAddr, outDir, workers, o.Batch)
+		return
+	}
+	fmt.Printf("\n[*] Connecting to sender at %s...\n", targetAddr)
+	receiver := engine.NewReceiver(outDir, workers)
+	receiver.SetSecure(recvSecure)
+	listener := &cliListener{cancel: cancel, isSender: false}
+	err := receiver.Pull(ctx, targetAddr, listener, o.FileID)
+	if err != nil && ctx.Err() == nil {
+		fmt.Printf("\n[-] Download failed: %v\n", err)
 	}
 }
 
@@ -1771,8 +1838,9 @@ func printUsage() {
 		"  xfer dev-ui [--port 19999] [--web-share]       (Daemon with the web dashboard; devui builds)\n" +
 		"  xfer node                                      (Persistent interactive CLI mode with pairing code)\n" +
 		"  xfer share <file_or_folder...>                 (Instant Web Share with QR code & PIN)\n" +
-		"  xfer send [-i] <file_or_folder> [more...]      (Direct transfer with pairing code; -i prompts)\n" +
-		"  xfer recv [pairing_code]                       (Receive via 6-digit code or auto-discover)\n" +
+		"  xfer send [-i] <file_or_folder> [more...]      (Direct transfer: shows a QR code; -i prompts)\n" +
+		"  xfer recv 'medxfer://...'                      (Receive from the sender's QR code)\n" +
+		"  xfer recv [pairing_code]                       (Via 6-digit code or discovery; both confirm)\n" +
 		"  xfer recv --ip <addr>                          (Direct connect by IP)\n" +
 		"  xfer report show|compare|list [--json]         (Transfer diagnostic reports)\n" +
 		"  xfer ctl [--script scenario.jsonl]             (Drive an embedded daemon with JSON lines)\n" +
