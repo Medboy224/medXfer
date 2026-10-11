@@ -3,7 +3,7 @@
   "os_version": "Linux 6.2.0-39-generic #40~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Nov 16 10:53:04 UTC 2",
   "dart": "3.13.5",
   "mode": "full",
-  "cold_start_ms_main_to_first_ping": 6.957,
+  "cold_start_ms_main_to_first_ping": 3.975,
   "G2A-05_lifecycle": {
     "pass": true,
     "second_start_already_started": true,
@@ -11,40 +11,46 @@
     "started_after_restart": true
   },
   "G2A-02_ping": {
-    "pass": false,
+    "pass": true,
     "errors": 0,
     "latency_us": {
       "median": 6,
-      "p95": 21,
-      "max": 155
+      "p95": 14,
+      "max": 54
     },
     "latency_alert_5ms": false,
     "rss_mb_checkpoints": {
-      "start": 179.17578125,
-      "after_warmup_10k": 185.73828125,
-      "+10k": 198.2421875,
-      "+60k": 201.1875,
-      "+160k": 200.88671875
+      "start": 159.3515625,
+      "after_warmup_10k": 177.68359375,
+      "+10k": 182.6328125,
+      "+60k": 186.19140625,
+      "+160k": 185.65234375
     },
     "go_memstats_start": {
+      "gomaxprocs": 4,
       "goroutines": 1,
-      "heap_inuse_mb": 2.625,
+      "heap_inuse_mb": 2.6171875,
       "id": "r4",
+      "num_cpu": 4,
       "num_gc": 0,
       "ok": true,
-      "stack_inuse_mb": 0.40625,
-      "sys_mb": 6.8349761962890625
+      "stack_inuse_mb": 0.375,
+      "sys_mb": 6.5849761962890625
     },
     "go_memstats_end": {
+      "gomaxprocs": 4,
       "goroutines": 1,
-      "heap_inuse_mb": 2.109375,
+      "heap_inuse_mb": 3.3515625,
       "id": "r5",
-      "num_gc": 72,
+      "num_cpu": 4,
+      "num_gc": 68,
       "ok": true,
-      "stack_inuse_mb": 0.46875,
-      "sys_mb": 11.209976196289062
+      "stack_inuse_mb": 0.40625,
+      "sys_mb": 10.959976196289062
     },
-    "rss_drift_pct_10k_after_warmup": 6.732002776083619
+    "rss_drift_pct_last_segment": -0.2895206126088325,
+    "rss_drift_segment": "+60k -> +160k",
+    "rss_drift_pct_first_10k_after_warmup": 2.7854112163914966
   },
   "G2A-04_panic": {
     "pass": true,
@@ -57,8 +63,8 @@
     "pass": true,
     "informative": true,
     "seconds": 60,
-    "max_ui_lag_ms": 0.3100000000000005,
-    "p99_ui_lag_ms": 0.1750000000000007,
+    "max_ui_lag_ms": 1.9169999999999998,
+    "p99_ui_lag_ms": 0.16999999999999993,
     "lag_over_50ms": 0,
     "lag_over_100ms": 0
   },
@@ -74,9 +80,9 @@
     "duplicates": 0,
     "core_drops": 0,
     "timed_out": false,
-    "elapsed_s": 100.516,
-    "max_ui_lag_ms": 6.183,
-    "p99_ui_lag_ms": 0.6880000000000006,
+    "elapsed_s": 100.517,
+    "max_ui_lag_ms": 5.353999999999999,
+    "p99_ui_lag_ms": 0.6869999999999994,
     "lag_over_50ms": 0,
     "lag_over_100ms": 0
   },
@@ -92,9 +98,9 @@
     "duplicates": 0,
     "core_drops": 0,
     "timed_out": false,
-    "elapsed_s": 60.522,
-    "max_ui_lag_ms": 7.587,
-    "p99_ui_lag_ms": 2.2200000000000006,
+    "elapsed_s": 60.521,
+    "max_ui_lag_ms": 13.581,
+    "p99_ui_lag_ms": 2.4399999999999995,
     "lag_over_50ms": 0,
     "lag_over_100ms": 0
   },
@@ -111,8 +117,8 @@
     "core_drops": 0,
     "timed_out": false,
     "elapsed_s": 100.314,
-    "max_ui_lag_ms": 2.4540000000000006,
-    "p99_ui_lag_ms": 0.6329999999999991,
+    "max_ui_lag_ms": 2.1910000000000007,
+    "p99_ui_lag_ms": 0.9399999999999995,
     "lag_over_50ms": 0,
     "lag_over_100ms": 0
   },
@@ -129,10 +135,10 @@
     "core_drops": 0,
     "timed_out": false,
     "elapsed_s": 60.321,
-    "max_ui_lag_ms": 7.774999999999999,
-    "p99_ui_lag_ms": 2.5869999999999997,
+    "max_ui_lag_ms": 9.989999999999998,
+    "p99_ui_lag_ms": 2.521000000000001,
     "lag_over_50ms": 0,
     "lag_over_100ms": 0
   },
-  "pass": false
+  "pass": true
 }
