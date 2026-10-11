@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -8,6 +9,8 @@ import (
 
 	"github.com/Medboy224/medXfer/pkg/api"
 	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/securechan"
+	"github.com/Medboy224/medXfer/pkg/session"
 )
 
 const trustUsage = `Usage:
@@ -89,4 +92,27 @@ func runTrust(w io.Writer, dir string, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown trust subcommand %q\n%s", args[0], trustUsage)
+}
+
+// loadIdentity returns this device's identity and trusted devices, stored in dir.
+func loadIdentity(dir string) (*identity.Identity, *identity.TrustStore, error) {
+	id, err := identity.LoadOrCreate(dir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("device identity: %w", err)
+	}
+	ts, err := identity.OpenTrustStore(filepath.Join(dir, identity.TrustFile))
+	if err != nil {
+		return nil, nil, fmt.Errorf("trusted devices: %w", err)
+	}
+	return id, ts, nil
+}
+
+// dialSecure opens a TCP connection with the radio wake-up strategy of session.DialPeer, then
+// the secure channel. There is no plaintext fallback (CHAN-05).
+func dialSecure(addr string, cfg securechan.Config) (*securechan.Conn, error) {
+	raw, err := session.DialPeer(addr)
+	if err != nil {
+		return nil, err
+	}
+	return securechan.Client(context.Background(), raw, cfg)
 }

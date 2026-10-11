@@ -25,6 +25,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/hotspot"
 	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/protocol"
+	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/Medboy224/medXfer/pkg/ui"
 )
@@ -235,12 +236,21 @@ func handleNode() {
 	discServer.SetPairingCode(nodePairingCode)
 	discServer.Start(ctxDisc)
 
+	nodeID, nodeTrust, err := loadIdentity(configDir())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] %v\n", err)
+		return
+	}
+	// Control connections: unknown keys start UNAUTH; the pairing code decides (until WP-3.6).
+	pairCfg := securechan.Config{Identity: nodeID, Trust: nodeTrust, AllowUnknown: true}
+
 	fmt.Println("==================================================")
 	fmt.Println("             medXfer Persistent Node              ")
 	fmt.Println("==================================================")
 	fmt.Printf(" Device Name : %s\n", discServer.GetPeer().DeviceName)
 	fmt.Printf(" Local IP    : %s\n", getLocalIP())
 	fmt.Printf(" Pairing Code: %s\n", nodePairingCode)
+	fmt.Printf(" Fingerprint : %s\n", nodeID.Fingerprint.Short())
 	fmt.Println("--------------------------------------------------")
 	fmt.Println(" Commands:")
 	fmt.Println("   scan              - Find devices on the network")
@@ -297,16 +307,14 @@ func handleNode() {
 		if err != nil {
 			return
 		}
-		srvTLSConfig, _ := session.ServerTLSConfig()
 		for {
-			conn, err := l.Accept()
+			raw, err := l.Accept()
 			if err != nil {
 				continue
 			}
-			if srvTLSConfig != nil {
-				if upConn, _, err := session.UpgradeToTLSIfClientHello(conn, srvTLSConfig); err == nil {
-					conn = upConn
-				}
+			conn, err := securechan.Server(context.Background(), raw, pairCfg)
+			if err != nil {
+				continue
 			}
 
 			ch := session.NewChannel(conn)
@@ -339,6 +347,7 @@ func handleNode() {
 			}
 
 			// Valid pairing code!
+			ch.Authenticate()
 			_ = ch.Send(session.Message{
 				Type:       "pair_accept",
 				DeviceName: discServer.GetPeer().DeviceName,
@@ -525,7 +534,7 @@ func handleNode() {
 				}
 
 				fmt.Printf("[*] Connecting to node at %s:%d...\n", targetIP, targetPort)
-				conn, err := session.DialTLSPeer(net.JoinHostPort(targetIP, strconv.Itoa(int(targetPort))))
+				conn, err := dialSecure(net.JoinHostPort(targetIP, strconv.Itoa(int(targetPort))), pairCfg)
 				if err != nil {
 					fmt.Println("[-] Failed to connect:", err)
 					break
@@ -555,6 +564,7 @@ func handleNode() {
 					break
 				}
 
+				ch.Authenticate()
 				activeSession = ch
 				remoteName := resp.DeviceName
 				if remoteName == "" {

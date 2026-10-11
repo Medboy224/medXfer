@@ -208,7 +208,7 @@ func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
 	}
 
 	target := net.JoinHostPort(payload.IP, strconv.Itoa(int(port)))
-	connPeer, err := session.DialTLSPeer(target)
+	connPeer, err := dialSecure(s.ctx, target, s.pairingChanConfig())
 	if err != nil {
 		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", target, err)}, req.ID))
 		return
@@ -245,6 +245,7 @@ func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
 		return
 	}
 
+	ch.Authenticate() // pair_accept: the peer knew the pairing code
 	peerDevName := resp.DeviceName
 	if peerDevName == "" {
 		peerDevName = payload.IP
@@ -350,7 +351,7 @@ func (s *DaemonServer) connectAndSend(targetIP, code string, paths []string, id 
 	if !strings.Contains(target, ":") {
 		target = fmt.Sprintf("%s:18887", targetIP)
 	}
-	connPeer, err := session.DialTLSPeer(target)
+	connPeer, err := dialSecure(s.ctx, target, s.pairingChanConfig())
 	if err != nil {
 		s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to connect to %s: %v", target, err)}, id))
 		return
@@ -385,6 +386,7 @@ func (s *DaemonServer) connectAndSend(targetIP, code string, paths []string, id 
 	}
 
 	cleanIP := strings.Split(targetIP, ":")[0]
+	ch.Authenticate() // pair_accept: the peer knew the pairing code
 	peerDevName := resp.DeviceName
 	if peerDevName == "" {
 		peerDevName = cleanIP

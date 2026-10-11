@@ -3,6 +3,7 @@ package api
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1441,7 +1442,7 @@ func TestDaemonNodePairingHandshake(t *testing.T) {
 	}
 
 	// 1. Connect with invalid code -> expect pair_reject
-	conn1, err := session.DialTLSPeer(nodeAddr)
+	conn1, err := dialSecure(context.Background(), nodeAddr, testPeerChan(t))
 	if err == nil {
 		defer conn1.Close()
 		ch1 := session.NewChannel(conn1)
@@ -1459,7 +1460,7 @@ func TestDaemonNodePairingHandshake(t *testing.T) {
 	}
 
 	// 2. Connect with valid code -> expect pair_accept
-	conn2, err := session.DialTLSPeer(nodeAddr)
+	conn2, err := dialSecure(context.Background(), nodeAddr, testPeerChan(t))
 	if err != nil {
 		t.Fatalf("Failed to connect to daemon node listener at %s: %v", nodeAddr, err)
 	}

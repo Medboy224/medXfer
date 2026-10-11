@@ -23,8 +23,10 @@ import (
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/hotspot"
+	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/protocol"
+	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/gorilla/websocket"
 )
@@ -99,10 +101,14 @@ type DaemonServer struct {
 	webShareTransferLastTime  time.Time
 	webShareTransferSpeed     float64
 
-	ctx         context.Context
-	cancel      context.CancelFunc
-	httpSrv     *http.Server
-	nodeLn      net.Listener
+	ctx     context.Context
+	cancel  context.CancelFunc
+	httpSrv *http.Server
+	nodeLn  net.Listener
+
+	// This device's identity and trusted devices (WP-3.1), loaded by Serve.
+	identity    *identity.Identity
+	trust       *identity.TrustStore
 	discSrv     *discovery.DiscoveryServer
 	pairingCode string
 
@@ -484,6 +490,10 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 	s.mu.Lock()
 	s.httpPort = httpPort
 	s.mu.Unlock()
+
+	if err := s.loadIdentity(); err != nil {
+		return err
+	}
 
 	// 1. Start Node Pairing TCP Listener (port 18887 or fallback)
 	nodePort := 18887
@@ -921,21 +931,73 @@ func (s *DaemonServer) NodeListenAddr() string {
 // PairingCode returns the code a peer must present to pair with this daemon.
 func (s *DaemonServer) PairingCode() string { return s.GetStatus().PairingCode }
 
+// loadIdentity reads, or creates on first use, this device's identity and its trusted devices,
+// next to config.json (WP-3.1).
+func (s *DaemonServer) loadIdentity() error {
+	dir := filepath.Dir(GetConfigFilePath())
+	id, err := identity.LoadOrCreate(dir)
+	if err != nil {
+		return fmt.Errorf("device identity: %w", err)
+	}
+	trust, err := identity.OpenTrustStore(filepath.Join(dir, identity.TrustFile))
+	if err != nil {
+		return fmt.Errorf("trusted devices: %w", err)
+	}
+	s.mu.Lock()
+	s.identity, s.trust = id, trust
+	s.mu.Unlock()
+	return nil
+}
+
+// pairingChanConfig is the secure channel of a control connection. An unknown key is
+// accepted in state UNAUTH; the pairing check decides whether it becomes AUTH.
+func (s *DaemonServer) pairingChanConfig() securechan.Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return securechan.Config{Identity: s.identity, Trust: s.trust, AllowUnknown: true}
+}
+
+// streamChanConfig pins a data connection to the key of the paired device: any other key,
+// or no paired device, is refused.
+func (s *DaemonServer) streamChanConfig() securechan.Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var peer identity.Fingerprint
+	if s.activeSession != nil {
+		peer = s.activeSession.PeerFingerprint()
+	}
+	return securechan.Config{Identity: s.identity, Expected: peer}
+}
+
+// dialSecure opens a TCP connection with the radio wake-up strategy of session.DialPeer, then
+// the secure channel. There is no plaintext fallback (CHAN-05).
+func dialSecure(ctx context.Context, addr string, cfg securechan.Config) (*securechan.Conn, error) {
+	raw, err := session.DialPeer(addr)
+	if err != nil {
+		return nil, err
+	}
+	return securechan.Client(ctx, raw, cfg)
+}
+
 func (s *DaemonServer) listenForIncomingPairings(ln net.Listener) {
-	srvTLSConfig, _ := session.ServerTLSConfig()
 	for {
-		conn, err := ln.Accept()
+		raw, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		engine.TuneConn(conn)
+		go s.acceptPairing(raw) // the handshake must not hold up the accept loop
+	}
+}
 
-		if srvTLSConfig != nil {
-			if upConn, _, err := session.UpgradeToTLSIfClientHello(conn, srvTLSConfig); err == nil {
-				conn = upConn
-			}
-		}
-
+// acceptPairing runs the secure handshake of an incoming control connection, then the pairing
+// check, which moves the connection from UNAUTH to AUTH.
+func (s *DaemonServer) acceptPairing(raw net.Conn) {
+	engine.TuneConn(raw)
+	conn, err := securechan.Server(s.ctx, raw, s.pairingChanConfig())
+	if err != nil {
+		return
+	}
+	{
 		ch := session.NewChannel(conn)
 
 		// Read incoming authentication / handshake message with 5s deadline
@@ -944,7 +1006,7 @@ func (s *DaemonServer) listenForIncomingPairings(ln net.Listener) {
 		_ = conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			ch.Close()
-			continue
+			return
 		}
 
 		s.mu.RLock()
@@ -958,8 +1020,9 @@ func (s *DaemonServer) listenForIncomingPairings(ln net.Listener) {
 			if normExpected == "" || normProvided == "" || normExpected != normProvided {
 				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "invalid pairing code"})
 				ch.Close()
-				continue
+				return
 			}
+			ch.Authenticate()
 			_ = ch.Send(session.Message{
 				Type:       "pair_accept",
 				DeviceName: devName,
@@ -967,7 +1030,7 @@ func (s *DaemonServer) listenForIncomingPairings(ln net.Listener) {
 		} else {
 			_ = ch.Send(session.Message{Type: "pair_reject", FileName: "pairing code required"})
 			ch.Close()
-			continue
+			return
 		}
 
 		peerName := msg.DeviceName
@@ -1421,12 +1484,11 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 					defer conn.Close()
 					engine.TuneConn(conn)
 
-					srvTLS, _ := session.ServerTLSConfig()
-					if srvTLS != nil {
-						if upConn, _, err := session.UpgradeToTLSIfClientHello(conn, srvTLS); err == nil {
-							conn = upConn
-						}
+					sc, err := securechan.Server(streamCtx, conn, s.streamChanConfig())
+					if err != nil {
+						return
 					}
+					conn = sc
 
 					listener := newDaemonListener(s, m.RootName, m.TotalBytes, 0, 1, 0, m.TotalBytes)
 					_ = engine.StreamTar(streamCtx, conn, m, listener)
@@ -1659,7 +1721,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		go func(msg session.Message) {
 			defer streamCancel()
 			targetAddr := net.JoinHostPort(s.activeSession.RemoteIP(), strconv.Itoa(int(msg.DataPort)))
-			conn, err := session.DialTLSPeer(targetAddr)
+			conn, err := dialSecure(streamCtx, targetAddr, s.streamChanConfig())
 			if err != nil {
 				s.Broadcast(NewEvent("action_error", map[string]string{"error": err.Error()}))
 				return
