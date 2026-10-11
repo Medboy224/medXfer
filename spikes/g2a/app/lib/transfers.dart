@@ -44,14 +44,21 @@ class Transfers {
   String sha(String path) => ok('sha256', {'path': path})['sha256'] as String;
 
   /// G2A-06: loopback transfer in the app, hash checked, throughput per trial.
-  Future<Map<String, dynamic>> loopback({required int sizeMB, int trials = 3}) async {
+  /// [existing]: an existing source file (same file for the app and the CLI reference, already
+  /// on disk); otherwise a fresh file of [sizeMB] is written first.
+  Future<Map<String, dynamic>> loopback({required int sizeMB, int trials = 3, String? existing}) async {
     final base = '${Directory.systemTemp.path}${Platform.pathSeparator}g2a_xfer';
-    final src = '$base${Platform.pathSeparator}src${Platform.pathSeparator}loop.bin';
+    var src = '$base${Platform.pathSeparator}src${Platform.pathSeparator}loop.bin';
     final out = '$base${Platform.pathSeparator}out';
     ok('remove', {'path': base});
-    Directory('$base${Platform.pathSeparator}src').createSync(recursive: true);
-    final made = ok('make_file', {'path': src, 'size_mb': sizeMB});
-    log('test file $sizeMB MiB written in ${made['ms']} ms');
+    if (existing != null && existing.isNotEmpty) {
+      src = existing;
+      sizeMB = File(src).lengthSync() ~/ 1048576;
+    } else {
+      Directory('$base${Platform.pathSeparator}src').createSync(recursive: true);
+      final made = ok('make_file', {'path': src, 'size_mb': sizeMB});
+      log('test file $sizeMB MiB written in ${made['ms']} ms');
+    }
     final want = sha(src);
     final runs = <Map<String, dynamic>>[];
     for (var i = 1; i <= trials; i++) {
@@ -71,6 +78,7 @@ class Transfers {
         if (recv['error'] != null) 'error': recv['error'],
         'seconds_dart': secs,
         'engine_ms': recv['engine_ms'],
+        'wall_ms': recv['wall_ms'],
         'mib_per_s': sizeMB / secs,
         'hash_ok': got == want,
       };

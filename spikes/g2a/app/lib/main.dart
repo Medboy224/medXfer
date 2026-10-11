@@ -96,7 +96,10 @@ class _TestScreenState extends State<TestScreen> {
     Map<String, dynamic> r;
     try {
       r = mode == 'loopback'
-          ? await t.loopback(sizeMB: sizeMB, trials: int.parse(_setting('TRIALS', _trialsDefine)))
+          ? await t.loopback(
+              sizeMB: sizeMB,
+              trials: int.parse(_setting('TRIALS', _trialsDefine)),
+              existing: Platform.environment['MEDXFER_G2A_SRC'])
           : await t.betweenDevices(sizeMB: sizeMB, peer: _setting('PEER', _peerDefine));
     } catch (e, st) {
       r = {'pass': false, 'exception': '$e', 'stack': '$st'};

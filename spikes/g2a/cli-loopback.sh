@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # G2a, G2A-06 reference: the same loopback transfer as the app, with the CLI (xfer send / xfer recv)
 # on the same machine. Prints the engine time reported by `xfer recv` for each trial.
-# Usage: spikes/g2a/cli-loopback.sh <xfer binary> [size_mb=1024] [trials=3]
+# Usage: spikes/g2a/cli-loopback.sh <xfer binary> [size_mb=1024] [trials=3] [existing source file]
 # Works in Git Bash (Windows), Linux and Termux.
 set -euo pipefail
 export LC_NUMERIC=C
-xfer=$1 size=${2:-1024} trials=${3:-3}
+xfer=$1 size=${2:-1024} trials=${3:-3} existing=${4:-}
 dir=$(mktemp -d "${TMPDIR:-/tmp}/g2a_cli.XXXXXX")
 trap 'rm -rf "$dir"' EXIT
 mkdir -p "$dir/src"
-head -c $((size * 1048576)) /dev/urandom > "$dir/src/loop.bin"
+if [ -n "$existing" ]; then # same file as the app's run, already on disk
+  ln -s "$(realpath "$existing")" "$dir/src/loop.bin"
+else
+  head -c $((size * 1048576)) /dev/urandom > "$dir/src/loop.bin"
+fi
 want=$(sha256sum "$dir/src/loop.bin" | cut -d' ' -f1)
 for i in $(seq 1 "$trials"); do
   rm -rf "$dir/out"; mkdir -p "$dir/out"
