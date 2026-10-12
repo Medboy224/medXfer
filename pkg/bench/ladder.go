@@ -425,6 +425,7 @@ func (o LadderOptions) offer(ctx context.Context, sink transfer.Sink, noSync boo
 		return o.tls(ctx, raw, ladderOffer, o.Size)
 	}
 	r := transfer.NewReceiver(out, join)
+	r.SenderKey = o.Fingerprint
 	r.Workers, r.Sink, r.NoSync = o.Streams, sink, noSync
 	ev := ladderEvents{diag.NewStages()}
 	r.Events = ev

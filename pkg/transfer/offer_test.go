@@ -40,7 +40,7 @@ func tree(t *testing.T, sizes []int) (protocol.Offer, []string, [][]byte) {
 		if err := os.WriteFile(full, data, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		offer.Items = append(offer.Items, protocol.OfferItem{Item: i, Path: rel, Size: int64(size), FileID: fmt.Sprintf("id-%d-%d", i, size)})
+		offer.Items = append(offer.Items, protocol.OfferItem{Item: i, Path: rel, Size: int64(size)})
 		offer.TotalBytes += int64(size)
 		paths = append(paths, full)
 		contents = append(contents, data)
@@ -85,7 +85,21 @@ func (p *offerPair) serve(t *testing.T, offer protocol.Offer, paths []string) *S
 }
 
 func (p *offerPair) receiver(out string) *Receiver {
-	return NewReceiver(out, JoinFunc(securechan.Config{Identity: p.peer, Expected: p.device.Fingerprint}, p.id))
+	r := NewReceiver(out, JoinFunc(securechan.Config{Identity: p.peer, Expected: p.device.Fingerprint}, p.id))
+	r.SenderKey = p.device.Fingerprint // part of the resume key (D2)
+	return r
+}
+
+// again is a new transfer between the same two devices, on the same hub: its partial files
+// are resumed (the resume key holds the sender's key, D2).
+func (p *offerPair) again(t *testing.T) *offerPair {
+	t.Helper()
+	id, _ := NewID()
+	tl, err := p.h.Register(id, p.peer.Fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &offerPair{device: p.device, peer: p.peer, h: p.h, tl: tl, addr: p.addr, id: id}
 }
 
 // recorder keeps the events of a receiver.

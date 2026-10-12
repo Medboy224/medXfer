@@ -101,7 +101,7 @@ func bigOffer(n int) protocol.Offer {
 	o := protocol.Offer{TransferID: "t1", Root: "photos", ChunkSize: protocol.DefaultChunkSize}
 	for i := 0; i < n; i++ {
 		path := fmt.Sprintf("photos/%s/IMG_%06d.jpg", strings.Repeat("album", 15), i)
-		o.Items = append(o.Items, protocol.OfferItem{Item: i, Path: path, Size: int64(i % 5000), FileID: "0123456789abcdef0123456789abcdef"})
+		o.Items = append(o.Items, protocol.OfferItem{Item: i, Path: path, Size: int64(i % 5000)})
 		o.TotalBytes += int64(i % 5000)
 	}
 	return o

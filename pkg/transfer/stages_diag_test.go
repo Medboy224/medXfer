@@ -52,7 +52,7 @@ func TestLimitingStageIsFound(t *testing.T) {
 	}{
 		{"slow disk", StageDiskWrite, func(t *testing.T) {
 			t.Cleanup(engine.SetStorageWrapper(func(f engine.StorageFile, path string) engine.StorageFile {
-				if strings.HasSuffix(path, ".medxfer") {
+				if strings.HasSuffix(path, ".part.state") {
 					return f
 				}
 				return faultfs.Wrap(f, faultfs.Plan{WriteDelay: 25 * time.Millisecond})

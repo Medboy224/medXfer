@@ -24,7 +24,7 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 func TestTreeDiff(t *testing.T) {
 	want, got := t.TempDir(), t.TempDir()
 	writeFiles(t, want, map[string]string{"a.txt": "a", "dir/b.txt": "b", "dir/c.txt": "c"})
-	writeFiles(t, got, map[string]string{"a.txt": "a", "dir/b.txt": "B", "extra.txt": "x", "a.txt.medxfer": "state"})
+	writeFiles(t, got, map[string]string{"a.txt": "a", "dir/b.txt": "B", "extra.txt": "x", "a.txt.part.state": "state"})
 	_ = os.Mkdir(filepath.Join(got, "empty"), 0o755)
 
 	problems, err := treeDiff(want, got)

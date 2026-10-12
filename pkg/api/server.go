@@ -29,6 +29,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
+	"github.com/Medboy224/medXfer/pkg/store"
 	"github.com/Medboy224/medXfer/pkg/transfer"
 	"github.com/gorilla/websocket"
 )
@@ -1340,14 +1341,14 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 	}
 }
 
-func (s *DaemonServer) parseCollisionPolicy(p string) engine.CollisionPolicy {
+func (s *DaemonServer) parseCollisionPolicy(p string) store.Policy {
 	switch p {
 	case "overwrite":
-		return engine.PolicyOverwrite
+		return store.PolicyOverwrite
 	case "skip":
-		return engine.PolicySkip
+		return store.PolicySkip
 	default:
-		return engine.PolicyAutoRename
+		return store.PolicyAutoRename
 	}
 }
 

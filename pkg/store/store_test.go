@@ -44,6 +44,14 @@ func chunkOf(data []byte, i int) []byte {
 	return data[i*testChunk : min((i+1)*testChunk, len(data))]
 }
 
+// writeChunk writes a chunk and lets the group commit run, as the receiver does.
+func writeChunk(f *File, i uint32, data []byte, sum [32]byte) error {
+	if err := f.WriteChunk(i, data, sum); err != nil {
+		return err
+	}
+	return f.CommitIfDue()
+}
+
 func params(size int) Params {
 	return Params{Key: Key{1}, Size: int64(size), ChunkSize: testChunk}
 }
@@ -63,7 +71,7 @@ func TestWriteAndFinalize(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, i := range []int{2, 0, 3, 1} {
-		if err := f.WriteChunk(uint32(i), chunkOf(data, i), sums[i]); err != nil {
+		if err := writeChunk(f, uint32(i), chunkOf(data, i), sums[i]); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -109,7 +117,7 @@ func TestResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, i := range []int{0, 2} {
-		_ = f.WriteChunk(uint32(i), chunkOf(data, i), sums[i])
+		_ = writeChunk(f, uint32(i), chunkOf(data, i), sums[i])
 	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
@@ -125,7 +133,7 @@ func TestResume(t *testing.T) {
 		t.Fatalf("Hashes of an incomplete file: %v", err)
 	}
 	for _, i := range []int{1, 3} {
-		_ = g.WriteChunk(uint32(i), chunkOf(data, i), sums[i])
+		_ = writeChunk(g, uint32(i), chunkOf(data, i), sums[i])
 	}
 	if err := g.Finalize(); err != nil {
 		t.Fatal(err)
@@ -141,7 +149,7 @@ func TestTornTailIsCut(t *testing.T) {
 	data, sums := content(t, 3*testChunk)
 	f, _ := Open(root, "f.bin", params(len(data)))
 	for i := 0; i < 2; i++ {
-		_ = f.WriteChunk(uint32(i), chunkOf(data, i), sums[i])
+		_ = writeChunk(f, uint32(i), chunkOf(data, i), sums[i])
 	}
 	_ = f.Close()
 	journal := filepath.Join(dir, "f.bin"+JournalSuffix)
@@ -170,7 +178,7 @@ func TestLastChunksAreVerified(t *testing.T) {
 		data, sums := content(t, 12*testChunk)
 		f, _ := Open(root, "f.bin", params(len(data)))
 		for i := 0; i < 12; i++ {
-			_ = f.WriteChunk(uint32(i), chunkOf(data, i), sums[i])
+			_ = writeChunk(f, uint32(i), chunkOf(data, i), sums[i])
 		}
 		_ = f.Close()
 		part, _ := os.OpenFile(filepath.Join(dir, "f.bin"+PartSuffix), os.O_WRONLY, 0)
@@ -202,7 +210,7 @@ func TestForeignPartialIsLeftAlone(t *testing.T) {
 	root, dir := openRoot(t)
 	data, sums := content(t, 2*testChunk)
 	f, _ := Open(root, "f.bin", params(len(data)))
-	_ = f.WriteChunk(0, chunkOf(data, 0), sums[0])
+	_ = writeChunk(f, 0, chunkOf(data, 0), sums[0])
 	_ = f.Close()
 	before, _ := os.ReadFile(filepath.Join(dir, "f.bin"+JournalSuffix))
 
@@ -233,7 +241,7 @@ func TestJournalWithoutDataStartsOver(t *testing.T) {
 	root, dir := openRoot(t)
 	data, sums := content(t, 2*testChunk)
 	f, _ := Open(root, "f.bin", params(len(data)))
-	_ = f.WriteChunk(0, chunkOf(data, 0), sums[0])
+	_ = writeChunk(f, 0, chunkOf(data, 0), sums[0])
 	_ = f.Close()
 	_ = os.Remove(filepath.Join(dir, "f.bin"+PartSuffix))
 	g, err := Open(root, "f.bin", params(len(data)))
@@ -250,11 +258,11 @@ func TestFinalizeRules(t *testing.T) {
 	root, dir := openRoot(t)
 	data, sums := content(t, 2*testChunk)
 	f, _ := Open(root, "f.bin", params(len(data)))
-	_ = f.WriteChunk(0, chunkOf(data, 0), sums[0])
+	_ = writeChunk(f, 0, chunkOf(data, 0), sums[0])
 	if err := f.Finalize(); !errors.Is(err, ErrIncomplete) {
 		t.Fatalf("Finalize of an incomplete file: %v", err)
 	}
-	_ = f.WriteChunk(1, chunkOf(data, 1), sums[1])
+	_ = writeChunk(f, 1, chunkOf(data, 1), sums[1])
 	_ = os.WriteFile(filepath.Join(dir, "f.bin"), []byte("appeared meanwhile"), 0o644)
 	if err := f.Finalize(); !errors.Is(err, ErrExists) {
 		t.Fatalf("Finalize over a file that appeared: %v", err)
@@ -293,7 +301,7 @@ func TestRenameIsRetried(t *testing.T) {
 	}
 	data, sums := content(t, 10)
 	f, _ := Open(root, "f.bin", params(len(data)))
-	_ = f.WriteChunk(0, data, sums[0])
+	_ = writeChunk(f, 0, data, sums[0])
 	if err := f.Finalize(); err != nil || fails != 2 || !exists(dir, "f.bin") {
 		t.Fatalf("Finalize = %v after %d failures", err, fails)
 	}
@@ -304,7 +312,7 @@ func TestDiscardRemovesOnlyItsFiles(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "f.bin"), []byte("user's file"), 0o644)
 	data, sums := content(t, 10)
 	f, _ := Open(root, "f.bin", params(len(data)))
-	_ = f.WriteChunk(0, data, sums[0])
+	_ = writeChunk(f, 0, data, sums[0])
 	if err := f.Discard(); err != nil {
 		t.Fatal(err)
 	}
@@ -342,6 +350,7 @@ type memFS struct {
 type memFile struct {
 	fs       *memFS
 	vol, dur []byte
+	failSync bool // Sync fails, as on a disk unplugged
 }
 
 func (m *memFS) open(_ *os.Root, name string, flag int) (handle, error) {
@@ -404,6 +413,9 @@ func (f *memFile) ReadAt(p []byte, off int64) (int, error) {
 func (f *memFile) Sync() error {
 	f.fs.mu.Lock()
 	defer f.fs.mu.Unlock()
+	if f.failSync {
+		return errors.New("disk unplugged")
+	}
 	f.dur = append(f.dur[:0], f.vol...)
 	f.fs.syncs++
 	f.fs.snapshot()
@@ -460,7 +472,7 @@ func TestPowerLossNeverLies(t *testing.T) {
 		}
 		order := mrand.New(mrand.NewPCG(seed, 7)).Perm(11)
 		for _, i := range order {
-			if err := f.WriteChunk(uint32(i), chunkOf(data, i), sums[i]); err != nil {
+			if err := writeChunk(f, uint32(i), chunkOf(data, i), sums[i]); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -498,20 +510,25 @@ func TestGroupCommit(t *testing.T) {
 	p := params(len(data))
 	p.CommitBytes, p.CommitInterval = 3*testChunk, time.Hour
 	f, _ := Open(root, "f.bin", p)
-	journalLen := func() int { return len(m.files["f.bin"+JournalSuffix].dur) }
-	for i := 0; i < 2; i++ {
-		_ = f.WriteChunk(uint32(i), chunkOf(data, i), sums[i])
+	journalLen := func() int { // made by the first commit
+		if j := m.files["f.bin"+JournalSuffix]; j != nil {
+			return len(j.dur)
+		}
+		return 0
 	}
-	if journalLen() != headerLen {
+	for i := 0; i < 2; i++ {
+		_ = writeChunk(f, uint32(i), chunkOf(data, i), sums[i])
+	}
+	if journalLen() != 0 { // the journal is made by the first commit
 		t.Fatal("committed before CommitBytes")
 	}
-	_ = f.WriteChunk(2, chunkOf(data, 2), sums[2])
+	_ = writeChunk(f, 2, chunkOf(data, 2), sums[2])
 	if journalLen() != headerLen+3*recordLen {
 		t.Fatalf("not committed at CommitBytes: journal of %d bytes", journalLen())
 	}
 	f.p.CommitInterval = time.Millisecond
 	time.Sleep(5 * time.Millisecond) // the clock may not move between two close calls (Windows)
-	_ = f.WriteChunk(3, chunkOf(data, 3), sums[3])
+	_ = writeChunk(f, 3, chunkOf(data, 3), sums[3])
 	if journalLen() != headerLen+4*recordLen {
 		t.Fatal("not committed after CommitInterval")
 	}
@@ -527,10 +544,44 @@ func TestNoSync(t *testing.T) {
 	p.NoSync, p.CommitBytes = true, testChunk
 	f, _ := Open(root, "f.bin", p)
 	for i := 0; i < 3; i++ {
-		_ = f.WriteChunk(uint32(i), chunkOf(data, i), sums[i])
+		_ = writeChunk(f, uint32(i), chunkOf(data, i), sums[i])
 	}
 	_ = f.Close()
 	if m.syncs != 0 {
 		t.Fatalf("%d syncs with NoSync", m.syncs)
+	}
+}
+
+// A file received in one go never has a journal (one less file made and removed per small
+// file); a file paused before its end has one, and is resumed.
+func TestJournalOnlyWhenNeeded(t *testing.T) {
+	root, dir := openRoot(t)
+	data, sums := content(t, 10)
+	f, _ := Open(root, "small.bin", params(len(data)))
+	_ = writeChunk(f, 0, data, sums[0])
+	if exists(dir, "small.bin"+JournalSuffix) {
+		t.Fatal("a journal before any commit")
+	}
+	if err := f.Finalize(); err != nil || !exists(dir, "small.bin") || exists(dir, "small.bin"+JournalSuffix) {
+		t.Fatalf("Finalize = %v; the small file must end without journal", err)
+	}
+
+	big, bsums := content(t, 3*testChunk)
+	g, _ := Open(root, "big.bin", params(len(big)))
+	_ = writeChunk(g, 0, chunkOf(big, 0), bsums[0])
+	_ = g.Close()
+	if !exists(dir, "big.bin"+JournalSuffix) {
+		t.Fatal("closed half way without a journal: not resumable")
+	}
+	h, err := Open(root, "big.bin", params(len(big)))
+	if err != nil || !h.Has(0) {
+		t.Fatalf("resume after a pause: %v", err)
+	}
+	h.Close()
+
+	e, _ := Open(root, "empty.bin", params(0))
+	_ = e.Close()
+	if r, err := Resolve(root, "empty.bin", params(0), PolicyAutoRename); err != nil || !r.Resume {
+		t.Fatalf("an empty file closed before its end is not resumable: %+v, %v", r, err)
 	}
 }

@@ -1,6 +1,9 @@
 package engine
 
-import "net"
+import (
+	"io"
+	"net"
+)
 
 // Fault-injection points (DEV-10). In a production build they are identity functions
 // (hooks_prod.go); a build with the "diag" tag lets tests install wrappers from
@@ -14,8 +17,18 @@ const (
 	ConnAccepted                 // accepted by a Sender
 )
 
-// StorageFile is the subset of *os.File that DiskManager uses for the data and state files.
-type StorageFile = fileHandle
+// StorageFile is what pkg/store needs of a data or journal file; *os.File has it.
+type StorageFile interface {
+	io.ReaderAt
+	io.WriterAt
+	Sync() error
+	Truncate(int64) error
+	Close() error
+}
+
+// WrapStorage prepares a file opened by pkg/store: in a diag build, the fault wrapper a test
+// installed (pkg/diag/faultfs); otherwise f itself.
+func WrapStorage(f StorageFile, path string) StorageFile { return wrapStorage(f, path) }
 
 // WrapAccepted prepares a connection accepted outside the engine (pkg/transfer.Hub) the way
 // the engine prepares its own: socket tuning on the raw TCP connection, then the fault

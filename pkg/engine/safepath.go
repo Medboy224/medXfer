@@ -3,8 +3,6 @@ package engine
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -12,9 +10,6 @@ import (
 var (
 	// ErrBadPath is returned for a peer-supplied relative path that is not safe to use on disk.
 	ErrBadPath = errors.New("unsafe path")
-	// ErrPathConflict is returned when a path component already exists with the wrong type
-	// (a file where a folder is needed) or escapes the destination folder. Nothing is deleted.
-	ErrPathConflict = errors.New("path conflict")
 )
 
 const (
@@ -86,53 +81,4 @@ func isWindowsReserved(c string) bool {
 		return base[3] >= '1' && base[3] <= '9'
 	}
 	return false
-}
-
-// ensureSubdirs creates relDir (a SafeRelPath result, "/"-separated) under root,
-// walking ONLY the components below root. It never deletes anything (STO-09, STO-11):
-// a component that exists with the wrong type yields ErrPathConflict. An existing
-// component that is a link is accepted only if it resolves to a folder inside root.
-// The check-then-create window (TOCTOU) is closed in phase 3 by os.Root (STO-13).
-func ensureSubdirs(root, relDir string) error {
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return err
-	}
-	if relDir == "" || relDir == "." {
-		return nil
-	}
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return err
-	}
-	cur := root
-	for _, part := range strings.Split(filepath.ToSlash(relDir), "/") {
-		cur = filepath.Join(cur, part)
-		fi, err := os.Lstat(cur)
-		switch {
-		case os.IsNotExist(err):
-			if e := os.Mkdir(cur, 0o755); e != nil && !os.IsExist(e) {
-				return e
-			}
-		case err != nil:
-			return err
-		case fi.Mode().IsRegular():
-			return fmt.Errorf("%w: %q is a file", ErrPathConflict, part) // no deletion
-		default:
-			// Folder, symlink or other reparse point (Windows junction): resolve and confine.
-			target, e := filepath.EvalSymlinks(cur)
-			if e != nil || !within(realRoot, target) {
-				return fmt.Errorf("%w: %q leads outside the destination", ErrPathConflict, part)
-			}
-			if ti, e := os.Stat(target); e != nil || !ti.IsDir() {
-				return fmt.Errorf("%w: %q is not a folder", ErrPathConflict, part)
-			}
-		}
-	}
-	return nil
-}
-
-// within reports whether p is root itself or below it. Both must be resolved paths.
-func within(root, p string) bool {
-	rel, err := filepath.Rel(root, p)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
