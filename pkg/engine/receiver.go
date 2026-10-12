@@ -182,19 +182,12 @@ type sequencedChunk struct {
 
 func readChunkPayload(conn net.Conn, task chunkTask, buf []byte) (protocol.ChunkMeta, []byte, time.Duration, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(6 * time.Second))
-	header, err := protocol.ReadHeader(conn)
+	// Only a chunk, and no larger than the buffer, is read (XFER-01).
+	header, err := protocol.ReadFrameHeader(conn, protocol.Limits{protocol.TypeChunk: uint32(len(buf))})
 	if err != nil {
 		return protocol.ChunkMeta{}, nil, 0, err
 	}
-
-	if header.Type != protocol.TypeChunk {
-		return protocol.ChunkMeta{}, nil, 0, fmt.Errorf("unexpected frame type: %d", header.Type)
-	}
-
 	payloadLen := int(header.PayloadLen)
-	if payloadLen > len(buf) {
-		return protocol.ChunkMeta{}, nil, 0, fmt.Errorf("payload exceeds buffer size")
-	}
 
 	netStart := time.Now()
 	if _, err := io.ReadFull(conn, buf[:payloadLen]); err != nil {
@@ -276,7 +269,7 @@ func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener Transfe
 
 	// Allow sufficient time (60s) for interactive sender authorization prompts (-i)
 	_ = handshakeConn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	header, err := protocol.ReadHeader(handshakeConn)
+	header, err := protocol.ReadFrameHeader(handshakeConn, protocol.Limits{protocol.TypeHandshake: protocol.MaxHandshake})
 	if err != nil {
 		handshakeConn.Close()
 		if listener != nil {

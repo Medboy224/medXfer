@@ -326,7 +326,7 @@ func gatedSender(t *testing.T, chunk int, content func(int) []byte, gate <-chan 
 				defer c.Close()
 				out := make([]byte, protocol.FrameHeaderSize+protocol.ChunkHeaderSize+chunk)
 				for {
-					h, err := protocol.ReadHeader(c)
+					h, err := protocol.ReadFrameHeader(c, senderFrames)
 					if err != nil {
 						return
 					}

@@ -1017,6 +1017,15 @@ func handleNode() {
 					transferCancel = nil
 				}
 				printPrompt()
+
+			case session.TypeError: // never answered: two peers must not ping-pong errors
+				fmt.Printf("\n[-] The peer could not handle a message: %s (%s)\n", msg.Error, msg.Code)
+				printPrompt()
+
+			default: // bible §8.2: an unknown type gets error{code: unsupported}
+				if activeSession != nil {
+					_ = activeSession.Send(session.Unsupported(msg.Type))
+				}
 			}
 
 		case <-disconnectChan:

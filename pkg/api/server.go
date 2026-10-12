@@ -2003,6 +2003,20 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		s.broadcastTransferComplete(map[string]interface{}{
 			"message": "Receiver confirmed transfer complete",
 		})
+
+	case session.TypeError: // never answered, so that two peers cannot ping-pong errors
+		s.Broadcast(NewEvent("log", map[string]string{
+			"level":   "WARN",
+			"message": fmt.Sprintf("peer error %s: %s", msg.Code, msg.Error),
+		}))
+
+	default: // bible §8.2: an unknown type gets error{code: unsupported}
+		s.mu.RLock()
+		sess := s.activeSession
+		s.mu.RUnlock()
+		if sess != nil {
+			_ = sess.Send(session.Unsupported(msg.Type))
+		}
 	}
 }
 
