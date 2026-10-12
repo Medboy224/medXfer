@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -59,6 +60,23 @@ func TestTornWrite(t *testing.T) {
 	}
 	if n, err := f.WriteAt(data, 0); n != 100 || err != nil {
 		t.Fatalf("write after the tear = %d, %v; want 100, nil (one tear only)", n, err)
+	}
+}
+
+// Writes at the same time share the room left: together they never write past the limit.
+func TestNoSpaceIsSharedByConcurrentWrites(t *testing.T) {
+	f := Wrap(tempFile(t), Plan{NoSpaceAfter: 250})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, _ = f.WriteAt(make([]byte, 100), int64(i)*100)
+		}(i)
+	}
+	wg.Wait()
+	if written, _, _ := f.Stats(); written != 250 {
+		t.Fatalf("%d bytes written by concurrent writes; want exactly the limit, 250", written)
 	}
 }
 

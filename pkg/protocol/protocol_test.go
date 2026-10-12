@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"runtime"
 	"testing"
@@ -112,7 +113,11 @@ func TestOfferValidate(t *testing.T) {
 		"negative":   func(o *Offer) { o.Items[0].Size = -1; o.TotalBytes = 9 },
 		"empty path": func(o *Offer) { o.Items[0].Path = "" },
 		"chunk low":  func(o *Offer) { o.ChunkSize = MinChunkSize - 1 },
-		"chunk high": func(o *Offer) { o.ChunkSize = MaxChunkSize + 1 },
+		// #75: two items on one file, or a file that is the folder of another item.
+		"same path":            func(o *Offer) { o.Items[1].Path = o.Items[0].Path },
+		"same path, backslash": func(o *Offer) { o.Items[0].Path = "dir/b.txt"; o.Items[1].Path = `dir\b.txt` },
+		"file is a folder":     func(o *Offer) { o.Items[0].Path = "dir" },
+		"chunk high":           func(o *Offer) { o.ChunkSize = MaxChunkSize + 1 },
 		"items": func(o *Offer) { // LIM-05: 100 001 items
 			o.Items = make([]OfferItem, MaxOfferItems+1)
 			for i := range o.Items {
@@ -124,7 +129,7 @@ func TestOfferValidate(t *testing.T) {
 			long := string(bytes.Repeat([]byte("p"), 1000))
 			o.Items = make([]OfferItem, 20_000)
 			for i := range o.Items {
-				o.Items[i] = OfferItem{Item: i, Path: long}
+				o.Items[i] = OfferItem{Item: i, Path: fmt.Sprintf("%s%05d", long, i)}
 			}
 			o.TotalBytes = 0
 		},

@@ -51,6 +51,8 @@ func Wrap(f engine.StorageFile, plan Plan) *File {
 	return &File{StorageFile: f, plan: plan}
 }
 
+// WriteAt applies the plan. Concurrent writes are counted in the order they reserve their
+// bytes, under the lock: two writes at once never both fit in the last room (#75).
 func (f *File) WriteAt(p []byte, off int64) (int, error) {
 	f.mu.Lock()
 	written := f.written
@@ -58,27 +60,50 @@ func (f *File) WriteAt(p []byte, off int64) (int, error) {
 	if tear {
 		f.torn = true
 	}
+	var room int64 = -1 // -1: no limit for this write
+	if limit := f.plan.NoSpaceAfter; limit > 0 && written+int64(len(p)) > limit {
+		room = max(limit-written, 0)
+	}
+	reserved := int64(len(p))
+	if room >= 0 {
+		reserved = room
+	}
+	f.written += reserved // given back below if the write falls short
 	f.mu.Unlock()
 
-	if limit := f.plan.NoSpaceAfter; limit > 0 && written+int64(len(p)) > limit {
-		room := limit - written
-		if room <= 0 {
+	if room >= 0 {
+		if room == 0 {
 			return 0, ErrNoSpace
 		}
-		n, err := f.write(p[:room], off)
+		n, err := f.reserved(p[:room], off, reserved)
 		if err != nil {
 			return n, err
 		}
 		return n, ErrNoSpace
 	}
 	if tear {
+		f.mu.Lock()
+		f.written -= reserved // a torn write counts what it writes
+		f.mu.Unlock()
 		n, err := f.write(p[:len(p)/2], off)
 		if err != nil {
 			return n, err
 		}
 		return n, ErrTorn
 	}
-	return f.write(p, off)
+	return f.reserved(p, off, reserved)
+}
+
+// reserved writes p, whose bytes were already counted as reserved, and gives back the part
+// not written.
+func (f *File) reserved(p []byte, off int64, reserved int64) (int, error) {
+	n, err := f.StorageFile.WriteAt(p, off)
+	if short := reserved - int64(n); short > 0 {
+		f.mu.Lock()
+		f.written -= short
+		f.mu.Unlock()
+	}
+	return n, err
 }
 
 func (f *File) write(p []byte, off int64) (int, error) {

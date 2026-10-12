@@ -172,7 +172,7 @@ func (s *Sender) chunk(out, data []byte, item, index uint32) ([]byte, error) {
 		return protocol.AppendChunkError(out, item, index, protocol.ChunkErrNoSuchChunk), nil
 	}
 	it := s.offer.Items[item]
-	if index >= protocol.Chunks(it.Size, s.offer.ChunkSize) {
+	if index >= max(1, protocol.Chunks(it.Size, s.offer.ChunkSize)) { // an empty item is chunk 0, of 0 bytes
 		return protocol.AppendChunkError(out, item, index, protocol.ChunkErrNoSuchChunk), nil
 	}
 	off := int64(index) * int64(s.offer.ChunkSize)
@@ -200,7 +200,7 @@ func (s *Sender) markServed(item int, index uint32, n int64) {
 	defer s.mu.Unlock()
 	bits := s.served[item]
 	if bits == nil {
-		bits = make([]uint64, (protocol.Chunks(s.offer.Items[item].Size, s.offer.ChunkSize)+63)/64)
+		bits = make([]uint64, (max(1, protocol.Chunks(s.offer.Items[item].Size, s.offer.ChunkSize))+63)/64)
 		s.served[item] = bits
 	}
 	w, b := index/64, uint64(1)<<(index%64)

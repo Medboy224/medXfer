@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // OfferItem is one file of an offer (bible §8.3).
@@ -52,7 +53,8 @@ func Chunks(size int64, chunkSize uint32) uint32 {
 }
 
 // Validate checks what a receiver must check before accepting an offer: its size limits
-// (LIM-05, LIM-06), item numbering (0 to n-1, in order), sizes and totals, chunk size.
+// (LIM-05, LIM-06), item numbering (0 to n-1, in order), sizes and totals, chunk size, and
+// that no two items aim at the same file and no file is the folder of another (#75).
 func (o *Offer) Validate() error {
 	bad := func(format string, a ...any) error {
 		return fmt.Errorf("%w: %s", ErrBadOffer, fmt.Sprintf(format, a...))
@@ -64,6 +66,8 @@ func (o *Offer) Validate() error {
 		return bad("chunk size %d outside [%d, %d]", o.ChunkSize, MinChunkSize, MaxChunkSize)
 	}
 	var total, manifest int64
+	files := make(map[string]bool, len(o.Items))
+	dirs := map[string]bool{}
 	for i, it := range o.Items {
 		if it.Item != i {
 			return bad("item %d is numbered %d", i, it.Item)
@@ -77,8 +81,21 @@ func (o *Offer) Validate() error {
 		if Chunks(it.Size, o.ChunkSize) > 1<<24 {
 			return bad("item %d has too many chunks", i)
 		}
+		key := strings.ReplaceAll(it.Path, `\`, "/") // the receiver reads both as separators
+		if files[key] {
+			return bad("item %d repeats the path of another item", i)
+		}
+		files[key] = true
+		for j := strings.LastIndexByte(key, '/'); j > 0; j = strings.LastIndexByte(key[:j], '/') {
+			dirs[key[:j]] = true
+		}
 		total += it.Size
 		manifest += int64(len(it.Path) + len(it.FileID) + 64)
+	}
+	for d := range dirs {
+		if files[d] {
+			return bad("%q is both a file and the folder of other items", d)
+		}
 	}
 	if manifest > MaxManifestBytes {
 		return bad("manifest of about %d bytes, at most %d", manifest, MaxManifestBytes)

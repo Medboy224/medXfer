@@ -38,10 +38,10 @@ func TestOfferPathsCannotEscape(t *testing.T) {
 	if err := os.WriteFile(src, []byte("payload"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	unsafe := []string{"../evil.bin", "a/../../evil.bin", "/abs/evil.bin", `\abs\evil.bin`, `..\evil.bin`}
+	unsafe := []string{"../evil1.bin", "a/../../evil2.bin", "/abs/evil3.bin", `\abs\evil4.bin`, `..\evil5.bin`}
 	if runtime.GOOS == "windows" {
 		// A drive prefix is a plain name on Linux and Android (TestSafeRelPath), a way out on Windows.
-		unsafe = append(unsafe, `C:\evil.bin`, "c:evil.bin")
+		unsafe = append(unsafe, `C:\evil6.bin`, "c:evil7.bin")
 	}
 	offer := protocol.Offer{Root: "x", ChunkSize: testChunk}
 	var paths []string
@@ -77,7 +77,7 @@ func TestOfferPathsCannotEscape(t *testing.T) {
 // The data connections are pinned (WP-3.4, CHAN-06): a receiver expecting another sender's
 // key, or a device the transfer is not registered for, gets nothing.
 func TestDataConnectionsArePinned(t *testing.T) {
-	offer, paths, contents := tree(t, []int{testChunk + 1})
+	offer, paths, _ := tree(t, []int{testChunk + 1})
 	p := newOfferPair(t)
 	p.serve(t, offer, paths)
 	offer.TransferID = p.id.String()
@@ -96,16 +96,10 @@ func TestDataConnectionsArePinned(t *testing.T) {
 		if err == nil || timedOut {
 			t.Errorf("%s: Run = %v; want a refused connection before the timeout", name, err)
 		}
-		// The receiver may have opened the item (folders, a preallocated file) before its
-		// connection was refused; none of the sender's bytes may be there.
-		_ = filepath.Walk(out, func(path string, info os.FileInfo, err error) error {
-			if err == nil && !info.IsDir() {
-				if data, _ := os.ReadFile(path); bytes.Contains(data, contents[0][:64]) {
-					t.Errorf("%s: data of the sender was received in %s", name, path)
-				}
-			}
-			return nil
-		})
+		// Nothing is created before a verified chunk (#75): not even a folder.
+		if entries, _ := os.ReadDir(out); len(entries) != 0 {
+			t.Errorf("%s: the receive folder is not empty: %v", name, entries)
+		}
 	}
 }
 
@@ -293,4 +287,95 @@ func TestNameTakenIsRenamed(t *testing.T) {
 	if err != nil || !bytes.Equal(got, contents[0]) {
 		t.Fatalf("received file not saved as %s (%v)", filepath.Base(renamed), err)
 	}
+}
+
+// #75: nothing is written for an item before its first verified chunk. A sender that never
+// answers (then a cancel), or one whose only chunk never matches its SHA-256, leaves the
+// receive folder empty: no folder, no file, no state.
+func TestNothingIsWrittenWithoutVerifiedData(t *testing.T) {
+	t.Run("silent sender, then cancel", func(t *testing.T) {
+		offer, _, _ := tree(t, []int{3 * testChunk, 10, 0})
+		p := newOfferPair(t) // registered, but nobody serves its connections
+		offer.TransferID = p.id.String()
+		out := t.TempDir()
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		if _, err := p.receiver(out).Run(ctx, p.addr, offer); err == nil {
+			t.Fatal("Run succeeded without a sender")
+		}
+		// The cancel ends reads that wait for the silent sender: Run does not wait for their
+		// one-minute timeout.
+		if d := time.Since(start); d > 5*time.Second {
+			t.Fatalf("Run returned %v after its cancel", d)
+		}
+		if entries, _ := os.ReadDir(out); len(entries) != 0 {
+			t.Fatalf("the receive folder is not empty: %v", entries)
+		}
+	})
+	t.Run("every answer has a wrong hash", func(t *testing.T) {
+		offer, _, contents := tree(t, []int{1000})
+		p := newOfferPair(t)
+		offer.TransferID = p.id.String()
+		lyingSender(t, p.tl, offer, contents, maxChunkAttempts)
+		out := t.TempDir()
+		if res := runOffer(t, p.receiver(out), p.addr, offer); res[0].State != ItemFailed {
+			t.Fatalf("item %v, want failed", res[0].State)
+		}
+		if entries, _ := os.ReadDir(out); len(entries) != 0 {
+			t.Fatalf("the receive folder is not empty: %v", entries)
+		}
+	})
+}
+
+// #75: with the overwrite policy, the user's file under the offered name stays whole until a
+// verified chunk replaces it; a transfer that brings nothing leaves it as it was.
+func TestOverwriteKeepsTheFileUntilDataArrives(t *testing.T) {
+	offer, paths, contents := tree(t, []int{2*testChunk + 5})
+	out := t.TempDir()
+	mine := filepath.Join(out, filepath.FromSlash(offer.Items[0].Path))
+	if err := os.MkdirAll(filepath.Dir(mine), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("the user's own file, to be replaced only by real data")
+	if err := os.WriteFile(mine, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	silent := newOfferPair(t)
+	offer.TransferID = silent.id.String()
+	r := silent.receiver(out)
+	r.Policy = engine.PolicyOverwrite
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	_, _ = r.Run(ctx, silent.addr, offer)
+	cancel()
+	if got, _ := os.ReadFile(mine); !bytes.Equal(got, original) {
+		t.Fatalf("the user's file was changed by a transfer that brought nothing: %q", got)
+	}
+
+	p := newOfferPair(t)
+	p.serve(t, offer, paths)
+	offer.TransferID = p.id.String()
+	r = p.receiver(out)
+	r.Policy = engine.PolicyOverwrite
+	if res := runOffer(t, r, p.addr, offer); res[0].State != ItemDone || res[0].SavedPath != mine {
+		t.Fatalf("run: %+v", res)
+	}
+	checkFiles(t, out, offer, contents, nil)
+}
+
+// An offer of empty files only: each one is confirmed by the sender (chunk 0, of 0 bytes)
+// before it is made (#75), and the transfer ends.
+func TestOfferOfEmptyFilesOnly(t *testing.T) {
+	offer, paths, contents := tree(t, []int{0, 0, 0})
+	p := newOfferPair(t)
+	p.serve(t, offer, paths)
+	out := t.TempDir()
+	offer.TransferID = p.id.String()
+	for _, res := range runOffer(t, p.receiver(out), p.addr, offer) {
+		if res.State != ItemDone {
+			t.Fatalf("item %d: %v", res.Item, res.State)
+		}
+	}
+	checkFiles(t, out, offer, contents, nil)
 }
