@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,4 +246,45 @@ func portNumber(t *testing.T, addr string) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// Bible §8.2: on an established session, a message type the daemon does not know is answered
+// with error{code: unsupported}; the session stays open.
+func TestUnknownMessageIsUnsupported(t *testing.T) {
+	s, n := startOwnIdentity(t, "Daemon")
+	peer := testPeerChan(t)
+	if err := s.TrustDevice(peer.Identity.Fingerprint.String(), "phone"); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := dialSecure(context.Background(), n.PeerAddr(), peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ch := session.NewChannel(conn)
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := ch.Send(session.Message{Type: "pair_request", DeviceName: "phone"}); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := ch.Read(); err != nil || m.Type != "pair_accept" {
+		t.Fatalf("pairing: %+v, %v", m, err)
+	}
+	n.WaitEvent("paired", 0)
+	if err := ch.Send(session.Message{Type: "from_the_future"}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := ch.Read()
+	if err != nil || m.Type != session.TypeError || m.Code != session.CodeUnsupported {
+		t.Fatalf("reply to an unknown type: %+v, %v", m, err)
+	}
+	// An error message itself is not answered: the next message is the reply to a known one.
+	if err := ch.Send(session.Message{Type: session.TypeError, Code: "whatever"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ch.Send(session.Message{Type: "from_the_future_too"}); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := ch.Read(); err != nil || m.Code != session.CodeUnsupported || !strings.Contains(m.Error, "from_the_future_too") {
+		t.Fatalf("after an error message: %+v, %v", m, err)
+	}
 }

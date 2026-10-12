@@ -254,7 +254,7 @@ func (s *Sender) ServeAndSendWithRelPathReady(ctx context.Context, bindAddr, fil
 			frameBuf := *framePtr
 
 			for {
-				header, err := protocol.ReadHeader(c)
+				header, err := protocol.ReadFrameHeader(c, senderFrames)
 				if err != nil {
 					return
 				}
@@ -297,6 +297,9 @@ func (s *Sender) ServeAndSendWithRelPathReady(ctx context.Context, bindAddr, fil
 					}
 
 				case protocol.TypeRequest:
+					if header.PayloadLen != protocol.RequestLen {
+						return // anything else would desynchronise the stream
+					}
 					var reqIndex uint32
 					reqBytes := make([]byte, 4)
 					if _, err := io.ReadFull(c, reqBytes); err != nil {
@@ -323,6 +326,14 @@ func (s *Sender) ServeAndSendWithRelPathReady(ctx context.Context, bindAddr, fil
 			}
 		}(conn)
 	}
+}
+
+// senderFrames are the frames a receiver may send on a data connection, each with its bound
+// (XFER-01): a handshake request is empty.
+var senderFrames = protocol.Limits{
+	protocol.TypeHandshake: 0,
+	protocol.TypeResume:    protocol.ResumeLen,
+	protocol.TypeRequest:   protocol.RequestLen,
 }
 
 func writeContiguousChunk(w io.Writer, outBuf []byte, index uint32, offset uint64, data []byte) error {
