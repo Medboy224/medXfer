@@ -177,6 +177,7 @@ func TestChangedSourceStartsOver(t *testing.T) {
 	out := t.TempDir()
 
 	first := p.receiver(out)
+	first.Workers = 1 // chunks 0 and 1 arrive whole before the valve closes: a partial file exists
 	v := newValve(3 * testChunk)
 	first.dial = v.dial
 	ctx, cancel := context.WithCancel(context.Background())
@@ -184,6 +185,9 @@ func TestChangedSourceStartsOver(t *testing.T) {
 	offer.TransferID = p.id.String()
 	if _, err := first.Run(ctx, p.addr, offer); !errors.Is(err, context.Canceled) {
 		t.Fatalf("first run: %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(offer.Items[0].Path))); err != nil {
+		t.Fatalf("the first run left no partial file: the test proves nothing (%v)", err)
 	}
 
 	// New content under the same name, served as a new transfer.
