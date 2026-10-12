@@ -128,6 +128,8 @@ func (r *Receiver) Run(ctx context.Context, addr string, offer protocol.Offer) (
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	run := newRun(r, offer)
+	run.workers = workers
+	run.stages, _ = r.Events.(StageEvents)
 	r.mu.Lock()
 	r.run = run
 	skips := r.skips
@@ -194,6 +196,26 @@ type run struct {
 	evMu   sync.Mutex
 	speed  *speedMeter
 	chunks uint32 // chunk size
+
+	stages  StageEvents // nil: the stages are not measured
+	workers int
+}
+
+// hashDelay slows every hash down; tests use it to make the hash the limiting stage (DEV-04).
+var hashDelay time.Duration
+
+// stage reports the time a stage took since start, if someone measures (DEV-03).
+func (ru *run) stage(name string, parallel int, start time.Time, bytes int64) {
+	if ru.stages != nil {
+		ru.stages.OnStage(name, parallel, time.Since(start), bytes)
+	}
+}
+
+// observeSync has dm report its group commits as the fsync stage.
+func (ru *run) observeSync(dm *engine.DiskManager) {
+	if ru.stages != nil {
+		dm.SetSyncObserver(func(d time.Duration) { ru.stages.OnStage(StageFsync, 1, d, 0) })
+	}
 }
 
 type item struct {
@@ -391,6 +413,7 @@ func (ru *run) open(st *item) error {
 		if err != nil {
 			return err
 		}
+		ru.observeSync(dm)
 		st.dm = dm
 		ru.bytes.Add(dm.GetDownloadedBytes())
 		st.counted.Add(dm.GetDownloadedBytes())
@@ -416,6 +439,7 @@ func (ru *run) create(st *item) error {
 	if err != nil {
 		return err
 	}
+	ru.observeSync(dm)
 	st.dm = dm
 	st.saved = filepath.Join(r.OutDir, filepath.FromSlash(res.ResolvedName))
 	return nil
@@ -454,7 +478,10 @@ func (ru *run) write(t task, data []byte, sum [32]byte) error {
 		return nil // skipped or failed meanwhile
 	}
 	if st.total > 0 && !st.dm.IsChunkCompleted(t.index) {
-		if _, err := st.dm.WriteChunkAt(data, int64(t.index)*int64(ru.chunks), t.index); err != nil {
+		start := time.Now()
+		_, err := st.dm.WriteChunkAt(data, int64(t.index)*int64(ru.chunks), t.index)
+		ru.stage(StageDiskWrite, ru.workers, start, int64(len(data)))
+		if err != nil {
 			st.mu.RUnlock()
 			ru.endItem(t.item, ItemFailed, err)
 			return nil
@@ -765,7 +792,13 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 	go func() {
 		defer close(writerDone)
 		for rc := range writes {
-			if sha256.Sum256(rc.data) != rc.sum {
+			start := time.Now()
+			if hashDelay > 0 {
+				time.Sleep(hashDelay)
+			}
+			sum := sha256.Sum256(rc.data)
+			ru.stage(StageHash, ru.workers, start, int64(len(rc.data)))
+			if sum != rc.sum {
 				ru.retry(rc.t, true) // XFER-04: never written
 			} else {
 				_ = ru.write(rc.t, rc.data, rc.sum)
@@ -850,7 +883,10 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		_ = conn.SetReadDeadline(time.Now().Add(chunkReadTimeout))
+		// The wait starts once the worker can take a chunk: a slow disk or hash holds the
+		// buffers back, and must not count as network time (DEV-04).
+		readStart := time.Now()
+		_ = conn.SetReadDeadline(readStart.Add(chunkReadTimeout))
 		h, p, err := protocol.ReadFrame(conn, limits, buf)
 		if err != nil {
 			free <- buf
@@ -877,6 +913,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 			continue
 		}
 		item, index, sum, data, err := protocol.ParseChunkData(p)
+		ru.stage(StageNetWait, ru.workers, readStart, int64(len(data)))
 		if err != nil || h.Type != protocol.TypeChunkData || int(item) != t.item || index != t.index {
 			free <- buf
 			inflight = append([]task{t}, inflight...)

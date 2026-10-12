@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/Medboy224/medXfer/pkg/diag"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/transfer"
 	"github.com/Medboy224/medXfer/pkg/ui"
@@ -24,6 +25,8 @@ func offerSummary(o protocol.Offer) string {
 // cliEvents shows a transfer in the terminal: one progress bar for the whole offer, and the
 // items that fail or are skipped.
 type cliEvents struct {
+	*diag.Stages // the time of each stage of each chunk (DEV-03)
+
 	mu        sync.Mutex
 	bar       *ui.ProgressBar
 	sender    bool
@@ -33,7 +36,7 @@ type cliEvents struct {
 }
 
 func newCLIEvents(sender bool, cancel context.CancelFunc) *cliEvents {
-	return &cliEvents{bar: ui.NewProgressBar(), sender: sender, cancel: cancel}
+	return &cliEvents{Stages: diag.NewStages(), bar: ui.NewProgressBar(), sender: sender, cancel: cancel}
 }
 
 func (e *cliEvents) OnProgress(p transfer.Progress) {
@@ -51,6 +54,7 @@ func (e *cliEvents) OnProgress(p transfer.Progress) {
 		e.finished = true
 		e.finish()
 		fmt.Println("\n[+] Transfer completed.")
+		e.printLimiting()
 		if e.cancel != nil {
 			e.cancel()
 		}
@@ -71,6 +75,13 @@ func (e *cliEvents) finish() {
 	if e.bar != nil {
 		e.bar.Finish()
 		e.bar = nil
+	}
+}
+
+// printLimiting names the stage that limited this side of the transfer (DEV-04).
+func (e *cliEvents) printLimiting() {
+	if b := e.Bottleneck(); b.Stage != "" {
+		fmt.Printf("[*] Limiting stage on this device: %s (%s confidence)\n", b.Stage, b.Confidence)
 	}
 }
 

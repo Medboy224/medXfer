@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/Medboy224/medXfer/pkg/engine"
 )
@@ -29,9 +30,10 @@ var ErrTorn = errors.New("faultfs: torn write")
 
 // Plan describes the faults of one file. The zero Plan changes nothing.
 type Plan struct {
-	NoSpaceAfter int64 // once this many bytes are written, writes fail with ErrNoSpace; 0 = never
-	TornWriteAt  int64 // the write that crosses this many bytes writes only its first half, then fails; 0 = never
-	LyingSync    bool  // Sync reports success without syncing
+	NoSpaceAfter int64         // once this many bytes are written, writes fail with ErrNoSpace; 0 = never
+	TornWriteAt  int64         // the write that crosses this many bytes writes only its first half, then fails; 0 = never
+	LyingSync    bool          // Sync reports success without syncing
+	WriteDelay   time.Duration // every write waits this long first: a slow disk (DEV-04)
 }
 
 // File is a storage file with faults. Its counters let a test check what happened.
@@ -54,6 +56,9 @@ func Wrap(f engine.StorageFile, plan Plan) *File {
 // WriteAt applies the plan. Concurrent writes are counted in the order they reserve their
 // bytes, under the lock: two writes at once never both fit in the last room (#75).
 func (f *File) WriteAt(p []byte, off int64) (int, error) {
+	if f.plan.WriteDelay > 0 {
+		time.Sleep(f.plan.WriteDelay)
+	}
 	f.mu.Lock()
 	written := f.written
 	tear := f.plan.TornWriteAt > 0 && !f.torn && written+int64(len(p)) > f.plan.TornWriteAt

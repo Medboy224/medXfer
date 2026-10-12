@@ -13,7 +13,7 @@ import (
 
 // SchemaVersion is the version of the JSON report format (DEV-05). Bump it on any change
 // that an older `xfer report` could misread.
-const SchemaVersion = 1
+const SchemaVersion = 2 // 2: stages and bottleneck (DEV-03, DEV-04)
 
 // AppVersion is written into every report. The program sets it at startup.
 var AppVersion = "dev"
@@ -53,8 +53,12 @@ type Report struct {
 	AvgDiskLatencyMs  float64       `json:"avg_disk_latency_ms"`
 	AvgNetLatencyMs   float64       `json:"avg_net_latency_ms"`
 	PhaseSamples      []PhaseSample `json:"phase_samples"`
-	DiagnosisText     string        `json:"diagnosis_text"`
-	FormattedReport   string        `json:"formatted_report"` // FormatText of this report, for the dashboard
+	// Stages are the per-chunk measures of this device's side (DEV-03), and Bottleneck the
+	// limiting one (DEV-04). Absent from version 1 reports.
+	Stages          map[string]StageStats `json:"stages,omitempty"`
+	Bottleneck      *Bottleneck           `json:"bottleneck,omitempty"`
+	DiagnosisText   string                `json:"diagnosis_text"`
+	FormattedReport string                `json:"formatted_report"` // FormatText of this report, for the dashboard
 }
 
 // FormatText renders the report as the clipboard-ready text shown by the dashboard and by
@@ -74,6 +78,10 @@ func FormatText(r *Report) string {
 		durMinutes, durRemainderSec, r.AvgSpeedMBps, r.PeakSpeedMBps, r.MinSpeedMBps))
 	sb.WriteString(fmt.Sprintf("Bottleneck: %s (Disk Latency: %.1f ms | Net Latency: %.1f ms) | Retries: %d\n",
 		r.PrimaryBottleneck, r.AvgDiskLatencyMs, r.AvgNetLatencyMs, r.Retries))
+	if r.Bottleneck != nil && r.Bottleneck.Stage != "" {
+		sb.WriteString(fmt.Sprintf("Limiting stage: %s (%s confidence)\n", r.Bottleneck.Stage, r.Bottleneck.Confidence))
+		sb.WriteString(FormatStages(r.Stages))
+	}
 	sb.WriteString("Quartile Breakdown:\n")
 	for _, ps := range r.PhaseSamples {
 		sb.WriteString(fmt.Sprintf("  - %s: %5.1f MB/s | Disk: %5.1f ms | Net: %5.1f ms [%s]\n",

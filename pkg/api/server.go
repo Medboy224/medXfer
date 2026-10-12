@@ -1372,6 +1372,18 @@ func (s *DaemonServer) RecordTransferSample(stats engine.TransferStats, progress
 	tracker.RecordSample(stats, progressPercent)
 }
 
+// RecordTransferStage records the time of one stage of one chunk in the active telemetry
+// tracker (DEV-03), creating it on the first measure.
+func (s *DaemonServer) RecordTransferStage(name string, totalFiles int, totalBytes int64, stage string, parallel int, d time.Duration, bytes int64) {
+	s.trackerMu.Lock()
+	if s.activeTracker == nil {
+		s.activeTracker = NewTransferSessionTracker(name, totalFiles, totalBytes)
+	}
+	tracker := s.activeTracker
+	s.trackerMu.Unlock()
+	tracker.OnStage(stage, parallel, d, bytes)
+}
+
 // RecordTransferRetry counts a chunk retry in the active telemetry tracker, if any.
 func (s *DaemonServer) RecordTransferRetry() {
 	s.trackerMu.Lock()

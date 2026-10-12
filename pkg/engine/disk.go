@@ -43,11 +43,12 @@ type DiskManager struct {
 	commitInterval time.Duration
 	now            func() time.Time
 
-	commitMu   sync.Mutex     // serializes flushes: state writes stay in order
-	committing bool           // a background commit is running (guarded by mu)
-	closing    bool           // Close/Finalize started: no new background commit (guarded by mu)
-	commitErr  error          // first background commit failure (guarded by mu)
-	commitWG   sync.WaitGroup // background commits in flight
+	commitMu   sync.Mutex          // serializes flushes: state writes stay in order
+	onSync     func(time.Duration) // observes each group commit (diag, DEV-03)
+	committing bool                // a background commit is running (guarded by mu)
+	closing    bool                // Close/Finalize started: no new background commit (guarded by mu)
+	commitErr  error               // first background commit failure (guarded by mu)
+	commitWG   sync.WaitGroup      // background commits in flight
 }
 
 func newDiskManager(file, stateFile fileHandle, finalPath, statePath string, fileSize int64, completed []bool, downBytes int64) *DiskManager {
@@ -277,6 +278,9 @@ func (dm *DiskManager) flush(batch []uint32) error {
 	}
 	dm.commitMu.Lock()
 	defer dm.commitMu.Unlock()
+	if dm.onSync != nil {
+		defer func(start time.Time) { dm.onSync(time.Since(start)) }(time.Now())
+	}
 	if err := dm.file.Sync(); err != nil {
 		return err
 	}
@@ -331,6 +335,10 @@ func (dm *DiskManager) Close() error {
 	}
 	return err
 }
+
+// SetSyncObserver has f called with the duration of each group commit (data sync, state
+// write and sync). Set it before the first write.
+func (dm *DiskManager) SetSyncObserver(f func(time.Duration)) { dm.onSync = f }
 
 // Discard closes the file and removes it with its state: the receiver starts it over from
 // zero (a digest that did not match, bible §8.3).

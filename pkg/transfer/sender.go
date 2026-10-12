@@ -26,6 +26,7 @@ type Sender struct {
 	offer  protocol.Offer
 	paths  []string
 	events Events
+	stages StageEvents // nil: the stages are not measured (DEV-03)
 
 	mu     sync.Mutex
 	files  map[int]*openFile
@@ -54,8 +55,19 @@ func NewSender(offer protocol.Offer, paths []string) (*Sender, error) {
 		served: make([][]uint64, len(paths)), hashes: make([][][32]byte, len(paths))}, nil
 }
 
-// SetEvents sets who gets the progress events.
-func (s *Sender) SetEvents(e Events) { s.events = e }
+// SetEvents sets who gets the progress events, and the stage times if it wants them.
+func (s *Sender) SetEvents(e Events) {
+	s.events = e
+	s.stages, _ = e.(StageEvents)
+}
+
+// stage reports the time a stage took since start, if someone measures (DEV-03). Every
+// connection runs each stage: the parallelism is the number of connections.
+func (s *Sender) stage(name string, start time.Time, bytes int64) {
+	if s.stages != nil {
+		s.stages.OnStage(name, max(1, int(s.streams.Load())), time.Since(start), bytes)
+	}
+}
 
 // Progress is the current progress: unique chunks served.
 func (s *Sender) Progress() Progress {
@@ -167,8 +179,11 @@ func (s *Sender) serveConn(c net.Conn) {
 		}
 	}()
 	for out := range ready {
-		_ = c.SetWriteDeadline(time.Now().Add(time.Minute))
-		if _, err := c.Write(out); err != nil {
+		start := time.Now()
+		_ = c.SetWriteDeadline(start.Add(time.Minute))
+		_, err := c.Write(out)
+		s.stage(StageNetWrite, start, int64(len(out)))
+		if err != nil {
 			c.Close() // ends the preparing goroutine's read
 			for range ready {
 			}
@@ -216,14 +231,18 @@ func (s *Sender) chunk(out, data []byte, item, index uint32) []byte {
 	if err != nil {
 		return protocol.AppendChunkError(out, item, index, s.readErr(int(item), nil, err))
 	}
+	start := time.Now()
 	_, err = f.ReadAt(data[:n], off) // an error means fewer bytes than asked (a shorter file too)
+	s.stage(StageDiskRead, start, n)
 	if err != nil {
 		code := s.readErr(int(item), f, err)
 		s.release(int(item))
 		return protocol.AppendChunkError(out, item, index, code)
 	}
 	s.release(int(item))
+	start = time.Now()
 	sum := sha256.Sum256(data[:n])
+	s.stage(StageHash, start, n)
 	s.markServed(int(item), index, n, sum)
 	return protocol.AppendChunkData(out, item, index, sum, data[:n])
 }
