@@ -958,18 +958,6 @@ func (s *DaemonServer) streamChanConfig() securechan.Config {
 	return securechan.Config{Identity: s.identity, Expected: peer}
 }
 
-// dataServer and dataClient pin the data connections of a transfer to the key of the paired
-// device (WP-3.4): any other key, or a plaintext connection, is refused.
-// joinClient secures the data connections of transfer id: TLS pinned to the session's peer,
-// then DATA_JOIN naming the transfer on the peer's single port (CHAN-06).
-func (s *DaemonServer) joinClient(id string) (engine.SecureFunc, error) {
-	tid, err := transfer.ParseID(id)
-	if err != nil {
-		return nil, err
-	}
-	return transfer.JoinFunc(s.streamChanConfig(), tid), nil
-}
-
 // devicePort is the port of this device's single listener: control and data (CHAN-01).
 func (s *DaemonServer) devicePort() int {
 	s.mu.RLock()
@@ -984,7 +972,7 @@ func (s *DaemonServer) devicePort() int {
 
 // registerTransfer makes a new transfer joinable on the device's port by the session's peer,
 // and returns its id and the listener of its data connections. Closing the listener (or the
-// end of ServeOn) unregisters it.
+// end of Sender.Serve) unregisters it.
 func (s *DaemonServer) registerTransfer(sess *session.Channel) (transfer.ID, *transfer.Listener, error) {
 	s.mu.RLock()
 	hub := s.hub

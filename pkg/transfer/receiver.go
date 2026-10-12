@@ -17,12 +17,15 @@ import (
 
 // Defaults of the receiver (bible §8.3; parameters, rule R4).
 const (
-	DefaultWorkers   = 4 // data connections (LIM-07: 1 to 8)
-	MaxWorkers       = 8
-	maxInFlight      = 2 // requests in flight per connection (bible §8.3)
-	maxChunkAttempts = 3 // a chunk whose hash does not match is asked again at most 3 times (XFER-04)
-	maxReconnects    = 16
-	chunkReadTimeout = time.Minute
+	DefaultWorkers = 4 // data connections (LIM-07: 1 to 8)
+	// DefaultDialTimeout bounds each attempt to reach the sender (#48): without it, a
+	// firewall that drops the packets would hold a connection attempt for minutes.
+	DefaultDialTimeout = 5 * time.Second
+	MaxWorkers         = 8
+	maxInFlight        = 2 // requests in flight per connection (bible §8.3)
+	maxChunkAttempts   = 3 // a chunk whose hash does not match is asked again at most 3 times (XFER-04)
+	maxReconnects      = 16
+	chunkReadTimeout   = time.Minute
 )
 
 var ErrTransferFailed = errors.New("transfer: no data connection could be kept to the sender")
@@ -45,7 +48,7 @@ type Receiver struct {
 	Policy  engine.CollisionPolicy
 	// Join secures each data connection and names the transfer (JoinFunc).
 	Join        func(context.Context, net.Conn) (net.Conn, error)
-	DialTimeout time.Duration // 0: engine.DefaultDialTimeout
+	DialTimeout time.Duration // 0: DefaultDialTimeout
 	Events      Events
 
 	dial func(ctx context.Context, network, addr string) (net.Conn, error) // tests
@@ -539,7 +542,7 @@ func (ru *run) connect(ctx context.Context, addr string) (net.Conn, error) {
 		}
 		timeout := r.DialTimeout
 		if timeout <= 0 {
-			timeout = engine.DefaultDialTimeout
+			timeout = DefaultDialTimeout
 		}
 		dctx, cancel := context.WithTimeout(ctx, timeout)
 		var raw net.Conn

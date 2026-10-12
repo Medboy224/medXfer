@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/engine"
+	"github.com/Medboy224/medXfer/pkg/protocol"
+	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
 func tempFile(t *testing.T) *os.File {
@@ -72,14 +74,6 @@ func TestLyingSync(t *testing.T) {
 	}
 }
 
-type nopListener struct{}
-
-func (nopListener) OnStart(string, int64, uint32)    {}
-func (nopListener) OnProgress(engine.TransferStats)  {}
-func (nopListener) OnChunkFailed(uint32, int, error) {}
-func (nopListener) OnComplete(string, time.Duration) {}
-func (nopListener) OnError(error)                    {}
-
 // A full disk on the receiver ends the transfer with an error: no hang, no false success.
 func TestEngineReportsFullDisk(t *testing.T) {
 	restore := engine.SetStorageWrapper(func(f engine.StorageFile, path string) engine.StorageFile {
@@ -94,27 +88,29 @@ func TestEngineReportsFullDisk(t *testing.T) {
 	if err := os.WriteFile(src, bytes.Repeat([]byte("medxfer!"), 128*1024), 0o644); err != nil { // 1 MiB
 		t.Fatal(err)
 	}
+	offer, files, err := transfer.BuildOffer([]string{src}, protocol.MinChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer.TransferID = "loopback"
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := ln.Addr().String()
-	ln.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	ready := make(chan error, 1)
-	go func() {
-		_ = engine.NewSender(2, 64*1024).ServeAndSendWithRelPathReady(ctx, addr, src, "f.bin", nopListener{}, 0, ready)
-	}()
-	if err := <-ready; err != nil {
+	sender, err := transfer.NewSender(offer, files)
+	if err != nil {
 		t.Fatal(err)
 	}
-	err = engine.NewReceiver(t.TempDir(), 2).Pull(ctx, addr, nopListener{}, engine.GenerateFileID(src))
-	if err == nil {
-		t.Fatal("Pull succeeded on a full disk")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	go func() { _ = sender.Serve(ctx, ln) }()
+
+	plain := func(_ context.Context, c net.Conn) (net.Conn, error) { return c, nil }
+	results, err := transfer.NewReceiver(t.TempDir(), plain).Run(ctx, ln.Addr().String(), offer)
+	if err == nil && results[0].State == transfer.ItemDone {
+		t.Fatal("the transfer succeeded on a full disk")
 	}
 	if ctx.Err() != nil {
-		t.Fatalf("Pull only stopped at the test timeout: %v", err)
+		t.Fatalf("the transfer only stopped at the test timeout: %v", err)
 	}
 }
