@@ -10,7 +10,7 @@ import (
 // Defaults of the admission gate (bible chapter 12; parameters, rule R4).
 const (
 	DefaultMaxUnauth      = 16 // LIM-01: unauthenticated connections at the same time
-	DefaultPerIPOneMinute = 5  // LIM-01: new connections per minute and per IP
+	DefaultPerIPOneMinute = 5  // LIM-01: new unauthenticated connections per minute and per IP
 )
 
 var (
@@ -20,8 +20,12 @@ var (
 
 // Gate admits incoming connections before authentication (LIM-01): at most MaxUnauth at a
 // time, from the handshake until the connection is authenticated or closed, and at most
-// PerIPOneMinute new connections per minute from one IP address. A connection whose peer is
-// trusted leaves the gate as soon as its handshake ends.
+// PerIPOneMinute new unauthenticated connections per minute from one IP address.
+//
+// A connection whose peer is authenticated by its key during the handshake (a trusted or
+// expected key) leaves the gate at once and is not counted in its address's quota: the limit
+// is on unauthenticated connections, so a paired device may open as many data connections
+// as it needs on the same port (CHAN-01).
 type Gate struct {
 	MaxUnauth      int
 	PerIPOneMinute int
@@ -37,21 +41,23 @@ func NewGate() *Gate {
 	return &Gate{MaxUnauth: DefaultMaxUnauth, PerIPOneMinute: DefaultPerIPOneMinute}
 }
 
-// Admit reserves a place for a connection from addr. release gives it back; calling it more
-// than once has no effect.
-func (g *Gate) Admit(addr net.Addr) (release func(), err error) {
-	ip := addr.String()
-	if host, _, err := net.SplitHostPort(ip); err == nil {
-		ip = host
-	}
-	now := time.Now
-	if g.now != nil {
-		now = g.now
-	}
-	t := now()
+// Admission is the place a connection holds in the gate during its handshake.
+type Admission struct {
+	g       *Gate
+	ip      string
+	once    sync.Once
+	charged sync.Once
+}
 
-	g.mu.Lock()
-	defer g.mu.Unlock()
+func (g *Gate) clock() time.Time {
+	if g.now != nil {
+		return g.now()
+	}
+	return time.Now()
+}
+
+// recentLocked drops the timestamps of ip older than a minute and returns the others.
+func (g *Gate) recentLocked(ip string, t time.Time) []time.Time {
 	if g.recent == nil {
 		g.recent = map[string][]time.Time{}
 	}
@@ -62,20 +68,47 @@ func (g *Gate) Admit(addr net.Addr) (release func(), err error) {
 		}
 	}
 	g.recent[ip] = kept
-	if g.PerIPOneMinute > 0 && len(kept) >= g.PerIPOneMinute {
+	return kept
+}
+
+// Admit reserves a place for a connection from addr, before its handshake. It is refused if
+// the address has used up its quota of unauthenticated connections this minute, or if too
+// many connections are already waiting. The quota itself is only charged by Charge, once the
+// handshake has shown the connection to be unauthenticated.
+func (g *Gate) Admit(addr net.Addr) (*Admission, error) {
+	ip := addr.String()
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+	t := g.clock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.PerIPOneMinute > 0 && len(g.recentLocked(ip, t)) >= g.PerIPOneMinute {
 		return nil, ErrRateLimited
 	}
 	if g.MaxUnauth > 0 && g.active >= g.MaxUnauth {
 		return nil, ErrTooManyUnauth
 	}
-	g.recent[ip] = append(kept, t)
 	g.active++
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			g.mu.Lock()
-			g.active--
-			g.mu.Unlock()
-		})
-	}, nil
+	return &Admission{g: g, ip: ip}, nil
+}
+
+// Charge counts the connection in its address's quota for the minute. Calling it more than
+// once has no effect.
+func (a *Admission) Charge() {
+	a.charged.Do(func() {
+		t := a.g.clock()
+		a.g.mu.Lock()
+		a.g.recent[a.ip] = append(a.g.recentLocked(a.ip, t), t)
+		a.g.mu.Unlock()
+	})
+}
+
+// Release gives the place back. Calling it more than once has no effect.
+func (a *Admission) Release() {
+	a.once.Do(func() {
+		a.g.mu.Lock()
+		a.g.active--
+		a.g.mu.Unlock()
+	})
 }

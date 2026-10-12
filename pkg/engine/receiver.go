@@ -16,6 +16,8 @@ import (
 )
 
 type Receiver struct {
+	dialTimeout     time.Duration                                                     // 0: DefaultDialTimeout
+	dial            func(ctx context.Context, network, addr string) (net.Conn, error) // tests
 	outputDir       string
 	workers         int
 	collisionPolicy CollisionPolicy
@@ -216,21 +218,54 @@ func readAndWriteChunk(conn net.Conn, task chunkTask, buf []byte, dm *DiskManage
 	return err
 }
 
+// DefaultDialTimeout bounds each attempt to reach the sender (#48): without it, a firewall
+// that drops packets held an attempt for the system's delay (21 s on Windows, minutes on
+// Linux and Android). A parameter (rule R4): SetDialTimeout.
+const DefaultDialTimeout = 5 * time.Second
+
+// dialDelays are the waits between the attempts to reach the sender: from 50 ms up to 1 s,
+// 8 attempts in all (XFER-05).
+var dialDelays = []time.Duration{
+	50 * time.Millisecond, 100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond,
+	800 * time.Millisecond, time.Second, time.Second,
+}
+
+// SetDialTimeout changes how long one attempt to reach the sender may take.
+func (r *Receiver) SetDialTimeout(d time.Duration) { r.dialTimeout = d }
+
+// dialSender makes one attempt to reach the sender, bounded by the dial timeout.
+func (r *Receiver) dialSender(ctx context.Context, addr string) (net.Conn, error) {
+	timeout := r.dialTimeout
+	if timeout <= 0 {
+		timeout = DefaultDialTimeout
+	}
+	dctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if r.dial != nil {
+		return r.dial(dctx, "tcp4", addr)
+	}
+	var d net.Dialer
+	return d.DialContext(dctx, "tcp4", addr)
+}
+
 func (r *Receiver) Pull(ctx context.Context, senderAddr string, listener TransferListener, fileID string) error {
 	var handshakeConn net.Conn
-	for attempt := 1; attempt <= 30; attempt++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	for attempt := 0; attempt <= len(dialDelays); attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(dialDelays[attempt-1]):
+			}
 		}
-		var dialer net.Dialer
-		c, err := dialer.DialContext(ctx, "tcp4", senderAddr)
+		c, err := r.dialSender(ctx, senderAddr)
 		if err == nil {
 			handshakeConn = wrapConn(ConnDialed, c)
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 	}
 	if handshakeConn == nil {
 		err := fmt.Errorf("failed to connect to sender on %s", senderAddr)
@@ -568,8 +603,7 @@ func (r *Receiver) PullWithMetadata(ctx context.Context, senderAddr string, list
 						return false
 					default:
 					}
-					var dialer net.Dialer
-					c, err := dialer.DialContext(workerCtx, "tcp4", senderAddr)
+					c, err := r.dialSender(workerCtx, senderAddr)
 					if err == nil {
 						TuneConn(c)
 						conn = wrapConn(ConnDialed, c)

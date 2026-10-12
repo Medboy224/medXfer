@@ -56,6 +56,9 @@ type Config struct {
 	Identity *identity.Identity
 	// Trust holds the trusted devices; nil means none.
 	Trust *identity.TrustStore
+	// Known, when set, accepts more keys as authenticated: the peers a transfer expects on
+	// the device's single port (pkg/transfer.Hub), which need not be trusted devices.
+	Known func(identity.Fingerprint) bool
 	// Expected pins the peer's key (QR code, reconnection, data connection of a transfer).
 	// When set, nothing else is accepted.
 	Expected identity.Fingerprint
@@ -76,6 +79,15 @@ type Conn struct {
 	state      State
 	unauthRead int
 	release    func() // gives the Gate place back (LIM-01)
+	pending    []byte // given back by Unread, read before the connection
+}
+
+// Unread gives bytes back to the connection: the next reads return them first. A reader
+// that looked at the first frame to route the connection hands it over unchanged.
+func (c *Conn) Unread(p []byte) {
+	c.mu.Lock()
+	c.pending = append(append([]byte(nil), p...), c.pending...)
+	c.mu.Unlock()
 }
 
 // PeerFingerprint is the fingerprint of the peer's key, verified during the handshake.
@@ -116,6 +128,12 @@ func (c *Conn) releaseGate() {
 // Read enforces the Unauth read limit (LIM-03): past it, the connection is closed.
 func (c *Conn) Read(p []byte) (int, error) {
 	c.mu.Lock()
+	if len(c.pending) > 0 { // already counted when first read
+		n := copy(p, c.pending)
+		c.pending = c.pending[n:]
+		c.mu.Unlock()
+		return n, nil
+	}
 	if c.state == Unauth {
 		left := UnauthReadLimit - c.unauthRead
 		if left <= 0 {
@@ -170,14 +188,14 @@ func handshake(ctx context.Context, raw net.Conn, cfg Config, server bool) (*Con
 		raw.Close()
 		return nil, errors.New("securechan: no identity")
 	}
-	release := func() {}
+	release, charge := func() {}, func() {}
 	if server && cfg.Gate != nil {
-		r, err := cfg.Gate.Admit(raw.RemoteAddr())
+		adm, err := cfg.Gate.Admit(raw.RemoteAddr())
 		if err != nil {
 			raw.Close()
 			return nil, err
 		}
-		release = r
+		release, charge = adm.Release, adm.Charge
 	}
 	var (
 		peer  identity.Fingerprint
@@ -208,6 +226,8 @@ func handshake(ctx context.Context, raw net.Conn, cfg Config, server bool) (*Con
 				state = Auth
 			case cfg.Trust != nil && cfg.Trust.Contains(fp):
 				state = Auth
+			case cfg.Known != nil && cfg.Known(fp):
+				state = Auth
 			case cfg.AllowUnknown:
 				state = Unauth
 			default:
@@ -227,14 +247,16 @@ func handshake(ctx context.Context, raw net.Conn, cfg Config, server bool) (*Con
 	defer cancel()
 	if err := tconn.HandshakeContext(hctx); err != nil {
 		raw.Close()
+		charge() // a failed handshake was an unauthenticated connection too (LIM-01)
 		release()
 		return nil, fmt.Errorf("securechan: handshake with %s: %w", raw.RemoteAddr(), err)
 	}
 	c := &Conn{Conn: tconn, peer: peer, state: state, release: release}
 	if state == Unauth {
+		charge()
 		_ = tconn.SetDeadline(time.Now().Add(UnauthTimeout))
 	} else {
-		c.releaseGate() // a trusted peer does not count against the unauthenticated limit
+		c.releaseGate() // an authenticated peer neither holds a place nor uses the quota
 	}
 	return c, nil
 }

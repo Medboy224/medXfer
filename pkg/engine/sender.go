@@ -108,7 +108,34 @@ func (s *Sender) ServeAndSendWithRelPathReady(ctx context.Context, bindAddr, fil
 		default:
 		}
 	}
+	return s.serve(ctx, listenerTCP, dm, fileName, fileSize, fileID, listener, resumeOffset, false)
+}
 
+// ServeOn serves filePath on the connections of ln, a listener that hands over connections
+// already secured and joined to this transfer (pkg/transfer.Hub): they are used as they come,
+// without the sender's own tuning, fault wrapper or SecureFunc. The device keeps a single
+// port (CHAN-01). It returns when ctx ends; ln is then closed.
+func (s *Sender) ServeOn(ctx context.Context, ln net.Listener, filePath, relPath string, listener TransferListener, resumeOffset int64) error {
+	defer ln.Close()
+	dm, err := OpenForReading(filePath)
+	if err != nil {
+		if listener != nil {
+			listener.OnError(err)
+		}
+		return fmt.Errorf("failed to open file: %w", err)
+	}
+	defer dm.Close()
+	fileName := filepath.Base(dm.finalPath)
+	if relPath != "" {
+		fileName = filepath.ToSlash(relPath)
+	}
+	return s.serve(ctx, ln, dm, fileName, dm.Size(), GenerateFileID(filePath), listener, resumeOffset, true)
+}
+
+// serve answers the receiver's frames on every connection of listenerTCP. prepared says that
+// the connections are already tuned, wrapped and secured.
+func (s *Sender) serve(ctx context.Context, listenerTCP net.Listener, dm *DiskManager, fileName string, fileSize int64,
+	fileID string, listener TransferListener, resumeOffset int64, prepared bool) error {
 	totalChunks := uint32((fileSize + int64(s.chunkSize) - 1) / int64(s.chunkSize))
 	if listener != nil {
 		listener.OnStart(fileName, fileSize, totalChunks)
@@ -201,8 +228,10 @@ func (s *Sender) ServeAndSendWithRelPathReady(ctx context.Context, bindAddr, fil
 				return err
 			}
 		}
-		TuneConn(conn) // on the raw TCP connection, before any fault wrapper
-		conn = wrapConn(ConnAccepted, conn)
+		if !prepared {
+			TuneConn(conn) // on the raw TCP connection, before any fault wrapper
+			conn = wrapConn(ConnAccepted, conn)
+		}
 
 		if s.authorizer != nil {
 			authOnce.Do(func() {
@@ -237,7 +266,7 @@ func (s *Sender) ServeAndSendWithRelPathReady(ctx context.Context, bindAddr, fil
 			}()
 			// The secure channel, here in the connection's goroutine so that a slow handshake
 			// never holds up the accept loop. A connection without the expected key ends here.
-			if s.secure != nil {
+			if s.secure != nil && !prepared {
 				sc, err := s.secure(ctx, c)
 				if err != nil {
 					return
