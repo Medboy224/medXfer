@@ -194,3 +194,71 @@ func FuzzReadFrame(f *testing.F) {
 		}
 	})
 }
+
+func validOffer() Offer {
+	return Offer{TransferID: "t", ChunkSize: DefaultChunkSize, TotalBytes: 15,
+		Items: []OfferItem{{Item: 0, Path: "a.txt", Size: 5}, {Item: 1, Path: "dir/b.txt", Size: 10}}}
+}
+
+func TestOfferValidate(t *testing.T) {
+	o := validOffer()
+	if err := o.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*Offer){
+		"total":      func(o *Offer) { o.TotalBytes++ },
+		"numbering":  func(o *Offer) { o.Items[1].Item = 5 },
+		"negative":   func(o *Offer) { o.Items[0].Size = -1; o.TotalBytes = 9 },
+		"empty path": func(o *Offer) { o.Items[0].Path = "" },
+		"chunk low":  func(o *Offer) { o.ChunkSize = MinChunkSize - 1 },
+		"chunk high": func(o *Offer) { o.ChunkSize = MaxChunkSize + 1 },
+		"items": func(o *Offer) { // LIM-05: 100 001 items
+			o.Items = make([]OfferItem, MaxOfferItems+1)
+			for i := range o.Items {
+				o.Items[i] = OfferItem{Item: i, Path: "f"}
+			}
+			o.TotalBytes = 0
+		},
+		"manifest": func(o *Offer) { // LIM-05: more than 16 MiB of manifest
+			long := string(bytes.Repeat([]byte("p"), 1000))
+			o.Items = make([]OfferItem, 20_000)
+			for i := range o.Items {
+				o.Items[i] = OfferItem{Item: i, Path: long}
+			}
+			o.TotalBytes = 0
+		},
+	} {
+		o := validOffer()
+		mutate(&o)
+		if err := o.Validate(); !errors.Is(err, ErrBadOffer) {
+			t.Errorf("%s: %v, want ErrBadOffer", name, err)
+		}
+	}
+}
+
+func TestChunkFrames(t *testing.T) {
+	var sum [32]byte
+	sum[0], sum[31] = 7, 9
+	frame := AppendChunkData(nil, 3, 41, sum, []byte("payload"))
+	h, p, err := ReadFrame(bytes.NewReader(frame), Limits{TypeChunkData: ChunkDataHeaderLen + 16}, nil)
+	if err != nil || h.Type != TypeChunkData {
+		t.Fatal(h, err)
+	}
+	item, index, got, data, err := ParseChunkData(p)
+	if err != nil || item != 3 || index != 41 || got != sum || string(data) != "payload" {
+		t.Fatalf("CHUNK: %d %d %v %q %v", item, index, got, data, err)
+	}
+	p[10]++ // the announced length no longer matches
+	if _, _, _, _, err := ParseChunkData(p); err == nil {
+		t.Fatal("a CHUNK with a wrong length was accepted")
+	}
+
+	_, p, _ = ReadFrame(bytes.NewReader(AppendChunkRequest(nil, 2, 99)), Limits{TypeChunkRequest: ChunkRequestLen}, nil)
+	if it, ix, err := ParseChunkRequest(p); err != nil || it != 2 || ix != 99 {
+		t.Fatalf("CHUNK_REQ: %d %d %v", it, ix, err)
+	}
+	_, p, _ = ReadFrame(bytes.NewReader(AppendChunkError(nil, 1, 4, ChunkErrRead)), Limits{TypeChunkError: ChunkErrorLen}, nil)
+	if it, ix, code, err := ParseChunkError(p); err != nil || it != 1 || ix != 4 || code != ChunkErrRead {
+		t.Fatalf("CHUNK_ERR: %d %d %d %v", it, ix, code, err)
+	}
+}

@@ -24,3 +24,10 @@ func WrapAccepted(c net.Conn) net.Conn {
 	TuneConn(c)
 	return wrapConn(ConnAccepted, c)
 }
+
+// WrapDialed prepares a connection opened outside the engine (pkg/transfer receivers) the way
+// the engine prepares its own: socket tuning, then the fault wrapper of diag builds.
+func WrapDialed(c net.Conn) net.Conn {
+	TuneConn(c)
+	return wrapConn(ConnDialed, c)
+}
