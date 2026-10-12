@@ -195,7 +195,7 @@ R5, R6 et `bench matrix` viennent en J4b (WP-4.9). Résultats en `--json`.
 1. **Un seul chemin de transfert.** Tous les transferts (fichier, fichiers, dossier) passent par une seule offre, un seul port par appareil, `DATA_JOIN`, le SHA-256 par chunk et le `digest`. L'ancienne API du moteur n'existe plus.
 2. **Essai réel PC ↔ téléphone :** un dossier de nombreux petits fichiers et un gros fichier, avec des hash identiques, à travers une seule règle de pare-feu.
 3. **Mesures :** le rapport d'un transfert contient les mesures par étape, et l'étape limitante est retrouvée dans 100 % des scénarios synthétiques.
-4. **Performance :** le débit en boucle locale (512 Mio, TLS) ne baisse pas de plus de 10 % par rapport à J3.
+4. **Performance :** le débit ne baisse pas de plus de 10 % par rapport à J3 **entre deux appareils** (gros fichier, passages alternés) ni, en boucle locale, **à la marche R2** de `xfer bench ladder` (TLS, sans la couche SHA-256 choisie par G6). *Recalibré le 12 octobre 2026 (option A du rapport de sortie, §6) : la formulation d'origine, « débit en boucle locale (512 Mio, TLS) », mesurait surtout le SHA-256 haché deux fois sur un même processeur, coût accepté par la gate G6.*
 5. **Issues et gate :** #33, #48 et #54 sont fermées ; G6 est fermée dans la bible.
 
 ## 4. Hors périmètre (J4b)
