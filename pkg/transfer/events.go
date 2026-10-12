@@ -11,6 +11,11 @@ type Progress struct {
 	Streams   int // data connections open
 	ItemsDone int // items finished: received, skipped or failed
 	Items     int
+	// Sender: the receiver said every item ended (DONE). After a resume, a skip or a file
+	// already on the receiver, the sender serves less than Total: only this tells it the
+	// transfer is over (#33). Partial: some items were skipped or failed.
+	Finished bool
+	Partial  bool
 }
 
 // ItemState is where an item of an offer stands.

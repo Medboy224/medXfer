@@ -114,11 +114,21 @@ func runCtl(args []string, stdin io.Reader, stdout io.Writer) error {
 	defer client.Close()
 
 	var outMu sync.Mutex
+	stopped := false
+	// Once runCtl returns, the caller owns stdout: an event that arrives late must not be
+	// written any more (a data race on stdout otherwise). Runs before client.Close.
+	defer func() {
+		outMu.Lock()
+		stopped = true
+		outMu.Unlock()
+	}()
 	if !*quiet {
 		enc := json.NewEncoder(stdout)
 		client.Watch(func(e wsclient.Event) {
 			outMu.Lock()
-			_ = enc.Encode(e)
+			if !stopped {
+				_ = enc.Encode(e)
+			}
 			outMu.Unlock()
 		})
 	}

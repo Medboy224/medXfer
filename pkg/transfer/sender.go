@@ -35,8 +35,10 @@ type Sender struct {
 	served [][]uint64   // per item, the chunks already counted in bytes
 	hashes [][][32]byte // per item, the SHA-256 of the chunks served, for the digest
 
-	bytes   atomic.Int64
-	streams atomic.Int32
+	bytes    atomic.Int64
+	streams  atomic.Int32
+	finished atomic.Bool // the receiver sent DONE
+	partial  atomic.Bool
 }
 
 type openFile struct {
@@ -53,6 +55,8 @@ func NewSender(offer protocol.Offer, paths []string) (*Sender, error) {
 	if err := offer.Validate(); err != nil {
 		return nil, err
 	}
+	// The sender keeps its own items: the caller may reuse or change its offer afterwards.
+	offer.Items = append([]protocol.OfferItem(nil), offer.Items...)
 	return &Sender{offer: offer, paths: paths, files: map[int]*openFile{},
 		served: make([][]uint64, len(paths)), hashes: make([][][32]byte, len(paths))}, nil
 }
@@ -73,7 +77,8 @@ func (s *Sender) stage(name string, start time.Time, bytes int64) {
 
 // Progress is the current progress: unique chunks served.
 func (s *Sender) Progress() Progress {
-	return Progress{Bytes: s.bytes.Load(), Total: s.offer.TotalBytes, Streams: int(s.streams.Load()), Items: len(s.paths)}
+	return Progress{Bytes: s.bytes.Load(), Total: s.offer.TotalBytes, Streams: int(s.streams.Load()), Items: len(s.paths),
+		Finished: s.finished.Load(), Partial: s.partial.Load()}
 }
 
 // Serve answers the receiver's CHUNK_REQ on every connection of ln (the transfer's listener on
@@ -155,6 +160,7 @@ func (s *Sender) serveConn(c net.Conn) {
 		limits := protocol.Limits{
 			protocol.TypeChunkRequest:  protocol.ChunkRequestLen,
 			protocol.TypeDigestRequest: protocol.DigestRequestLen,
+			protocol.TypeDone:          protocol.DoneLen,
 		}
 		req := make([]byte, protocol.ChunkRequestLen)
 		data := make([]byte, s.offer.ChunkSize)
@@ -162,6 +168,13 @@ func (s *Sender) serveConn(c net.Conn) {
 			h, p, err := protocol.ReadFrame(c, limits, req)
 			if err != nil {
 				return
+			}
+			if h.Type == protocol.TypeDone {
+				status, err := protocol.ParseDone(p)
+				if err == nil {
+					s.receiverDone(status)
+				}
+				return // the receiver is done with this connection
 			}
 			out := <-free
 			if h.Type == protocol.TypeDigestRequest {
@@ -192,6 +205,18 @@ func (s *Sender) serveConn(c net.Conn) {
 			return
 		}
 		free <- out
+	}
+}
+
+// receiverDone records the receiver's DONE (once, whatever the connection) and reports it at
+// once.
+func (s *Sender) receiverDone(status byte) {
+	if !s.finished.CompareAndSwap(false, true) {
+		return
+	}
+	s.partial.Store(status != protocol.DoneComplete)
+	if s.events != nil {
+		s.events.OnProgress(s.Progress())
 	}
 }
 

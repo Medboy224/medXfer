@@ -27,12 +27,11 @@ func offerSummary(o protocol.Offer) string {
 type cliEvents struct {
 	*diag.Stages // the time of each stage of each chunk (DEV-03)
 
-	mu        sync.Mutex
-	bar       *ui.ProgressBar
-	sender    bool
-	cancel    context.CancelFunc // sender: called once the receiver is done
-	sawStream bool
-	finished  bool
+	mu       sync.Mutex
+	bar      *ui.ProgressBar
+	sender   bool
+	cancel   context.CancelFunc // sender: called once the receiver is done
+	finished bool
 }
 
 func newCLIEvents(sender bool, cancel context.CancelFunc) *cliEvents {
@@ -42,18 +41,22 @@ func newCLIEvents(sender bool, cancel context.CancelFunc) *cliEvents {
 func (e *cliEvents) OnProgress(p transfer.Progress) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if p.Finished && !p.Partial {
+		p.Bytes = p.Total // a resume or a file already there: the receiver has everything
+	}
 	if e.bar != nil {
 		e.bar.Render(p.Bytes, p.Total, p.SpeedMBps)
 	}
-	if p.Streams > 0 {
-		e.sawStream = true
-	}
-	// The sender is done once every chunk was served AND the receiver, which closes its
-	// connections when it has written everything, has gone (#44).
-	if e.sender && !e.finished && e.sawStream && p.Bytes >= p.Total && p.Streams == 0 {
+	// The sender is done when the receiver says so (DONE): not when every chunk was served,
+	// which a resume or a skip never reaches (#33), nor while the receiver writes (#44).
+	if e.sender && !e.finished && p.Finished {
 		e.finished = true
 		e.finish()
-		fmt.Println("\n[+] Transfer completed.")
+		if p.Partial {
+			fmt.Println("\n[*] Transfer ended: the receiver did not take every file.")
+		} else {
+			fmt.Println("\n[+] Transfer completed.")
+		}
 		e.printLimiting()
 		if e.cancel != nil {
 			e.cancel()

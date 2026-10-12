@@ -569,7 +569,6 @@ type daemonEvents struct {
 	mu         sync.Mutex
 	lastUpdate time.Time
 	current    int // the item last started, for the progress line
-	sawStream  bool
 	finished   bool
 }
 
@@ -584,12 +583,11 @@ func (e *daemonEvents) OnStage(stage string, parallel int, d time.Duration, byte
 
 func (e *daemonEvents) OnProgress(p transfer.Progress) {
 	e.mu.Lock()
-	if p.Streams > 0 {
-		e.sawStream = true
+	if p.Finished && !p.Partial {
+		p.Bytes = p.Total // a resume or a file already there: the receiver has everything
 	}
-	// The sender is done once every chunk was served AND the receiver, which closes its
-	// connections when it has written everything, has gone (#44).
-	if e.sender && !e.finished && e.sawStream && p.Bytes >= p.Total && p.Streams == 0 {
+	// The sender is done when the receiver says so (DONE, #33, #44).
+	if e.sender && !e.finished && p.Finished {
 		e.finished = true
 		if e.cancel != nil {
 			e.cancel()

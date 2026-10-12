@@ -134,9 +134,8 @@ func TestReceiverRejoinsARestartedSender(t *testing.T) {
 
 	out := t.TempDir()
 	r := p.receiver(out)
-	r.dial = slowDial
-	rec := &recorder{}
-	r.Events = rec
+	v := newValve(3 * testChunk)
+	r.dial = v.dial
 	done := make(chan error, 1)
 	var results []ItemResult
 	go func() {
@@ -148,13 +147,10 @@ func TestReceiverRejoinsARestartedSender(t *testing.T) {
 	}()
 
 	// Stop the sender once a few chunks arrived, then serve the same transfer again.
-	for deadline := time.Now().Add(30 * time.Second); first.Progress().Bytes < 3*testChunk; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the first sender served nothing")
-		}
-	}
+	v.wait(t)
 	stop()
 	<-stopped
+	v.open()
 	if first.Progress().Bytes >= offer.TotalBytes {
 		t.Fatal("the sender was not stopped half way")
 	}
@@ -181,26 +177,10 @@ func TestChangedSourceStartsOver(t *testing.T) {
 	out := t.TempDir()
 
 	first := p.receiver(out)
-	first.dial = slowDial
-	rec := &recorder{}
-	first.Events = rec
+	v := newValve(3 * testChunk)
+	first.dial = v.dial
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		for ctx.Err() == nil {
-			rec.mu.Lock()
-			n := len(rec.progress)
-			var got int64
-			if n > 0 {
-				got = rec.progress[n-1].Bytes
-			}
-			rec.mu.Unlock()
-			if got >= 3*testChunk {
-				cancel()
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-	}()
+	go func() { <-v.reached; cancel() }()
 	offer.TransferID = p.id.String()
 	if _, err := first.Run(ctx, p.addr, offer); !errors.Is(err, context.Canceled) {
 		t.Fatalf("first run: %v, want context.Canceled", err)
