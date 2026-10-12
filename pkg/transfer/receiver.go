@@ -615,6 +615,32 @@ func (ru *run) startOver(i int) {
 	r.mu.Unlock()
 }
 
+// sendDone tells the sender on conn that every item ended (bible §8.3, step 7; D8): DONE, with
+// a partial status if some item was skipped or failed. Never after a cancel.
+func (ru *run) sendDone(ctx context.Context, conn net.Conn) {
+	if conn == nil || ctx.Err() != nil || !ru.allEnded() {
+		return
+	}
+	status := protocol.DoneComplete
+	if ru.partial() {
+		status = protocol.DonePartial
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_, _ = conn.Write(protocol.AppendDone(nil, status))
+}
+
+// partial reports whether some item was skipped or failed.
+func (ru *run) partial() bool {
+	ru.r.mu.Lock()
+	defer ru.r.mu.Unlock()
+	for _, st := range ru.items {
+		if st.state != ItemDone {
+			return true
+		}
+	}
+	return false
+}
+
 // chunkErr is the error of an item the sender answered with CHUNK_ERR code.
 func chunkErr(path string, code uint16) error {
 	switch code {
@@ -877,6 +903,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 			switch status {
 			case allEnded:
 				if len(inflight) == 0 {
+					ru.sendDone(ctx, conn)
 					return nil
 				}
 				break fill

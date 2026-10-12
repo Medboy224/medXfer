@@ -199,3 +199,18 @@ func TestDigestFrames(t *testing.T) {
 		}
 	}
 }
+
+func TestDoneFrame(t *testing.T) {
+	for _, status := range []byte{DoneComplete, DonePartial} {
+		h, p, err := ReadFrame(bytes.NewReader(AppendDone(nil, status)), Limits{TypeDone: DoneLen}, nil)
+		if err != nil || h.Type != TypeDone {
+			t.Fatal(h, err)
+		}
+		if got, err := ParseDone(p); err != nil || got != status {
+			t.Fatalf("status %d read as %d (%v)", status, got, err)
+		}
+	}
+	if _, err := ParseDone(nil); err == nil {
+		t.Fatal("an empty DONE was accepted")
+	}
+}

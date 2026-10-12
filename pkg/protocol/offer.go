@@ -123,12 +123,16 @@ const (
 	// the sender's chunk hashes and compares it with its own (bible §8.3, step 6).
 	TypeDigestRequest byte = 0x24 // DIGEST_REQ: item u32
 	TypeDigest        byte = 0x25 // DIGEST: item u32, digest (32 bytes)
+	// The end of the transfer (decision D8 of the J4a plan; bible §8.3, step 7): the receiver
+	// says every item ended, so the sender stops waiting.
+	TypeDone byte = 0x26 // DONE: status u8
 
 	ChunkRequestLen    = 8
 	ChunkDataHeaderLen = 44
 	ChunkErrorLen      = 10
 	DigestRequestLen   = 4
 	DigestLen          = 36
+	DoneLen            = 1
 
 	// DigestIndex is the index of a CHUNK_ERR that answers a DIGEST_REQ.
 	DigestIndex uint32 = 0xFFFFFFFF
@@ -232,6 +236,23 @@ func ParseDigest(p []byte) (item uint32, digest [32]byte, err error) {
 	}
 	copy(digest[:], p[4:])
 	return binary.BigEndian.Uint32(p[0:4]), digest, nil
+}
+
+// Status of a DONE.
+const (
+	DoneComplete byte = 0 // every item was received
+	DonePartial  byte = 1 // some items were skipped or failed
+)
+
+// AppendDone appends a DONE frame to dst.
+func AppendDone(dst []byte, status byte) []byte { return AppendFrame(dst, TypeDone, []byte{status}) }
+
+// ParseDone reads the payload of a DONE.
+func ParseDone(p []byte) (status byte, err error) {
+	if len(p) != DoneLen {
+		return 0, fmt.Errorf("protocol: DONE of %d bytes", len(p))
+	}
+	return p[0], nil
 }
 
 // FileDigest is the digest of an item from the SHA-256 of its n chunks, in order:
