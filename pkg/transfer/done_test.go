@@ -73,7 +73,7 @@ func TestSenderLearnsTheEndAfterAResume(t *testing.T) {
 	go func() { <-v.reached; cancel() }()
 	_, _ = first.Run(ctx, p.addr, offer)
 
-	q := newOfferPair(t)
+	q := p.again(t)
 	again := q.serve(t, offer, paths)
 	offer.TransferID = q.id.String()
 	runOffer(t, q.receiver(out), q.addr, offer)

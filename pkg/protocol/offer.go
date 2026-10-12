@@ -11,11 +11,10 @@ import (
 
 // OfferItem is one file of an offer (bible §8.3).
 type OfferItem struct {
-	Item   int    `json:"item"`
-	Path   string `json:"path"` // relative, "/"-separated; the receiver checks it (SafeRelPath)
-	Size   int64  `json:"size"`
-	MTime  int64  `json:"mtime,omitempty"`   // unix nanoseconds: a changed source is detected (WP-4.4)
-	FileID string `json:"file_id,omitempty"` // resume key of the current storage, until J4b
+	Item  int    `json:"item"`
+	Path  string `json:"path"` // relative, "/"-separated; the receiver checks it (SafeRelPath)
+	Size  int64  `json:"size"`
+	MTime int64  `json:"mtime,omitempty"` // unix nanoseconds: a changed source is detected (WP-4.4)
 }
 
 // Offer covers a file, several files or a folder in one transfer (bible §8.3): the receiver
@@ -98,7 +97,7 @@ func (o *Offer) Validate() error {
 			dirs[key[:j]] = true
 		}
 		total += it.Size
-		manifest += int64(len(it.Path) + len(it.FileID) + 64)
+		manifest += int64(len(it.Path) + 64)
 	}
 	for d := range dirs {
 		if files[d] {

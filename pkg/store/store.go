@@ -10,13 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/Medboy224/medXfer/pkg/engine"
 )
 
 // Defaults of the group commit (STO-04; parameters, rule R4).
@@ -41,6 +42,9 @@ var (
 	ErrExists = errors.New("store: the final name already exists")
 	// ErrIncomplete: Finalize was called before every chunk was written.
 	ErrIncomplete = errors.New("store: the file is not complete")
+	// ErrPathConflict: a component of the path exists with the wrong type (a file where a
+	// folder is needed), or leads outside the destination. Nothing is deleted (STO-11).
+	ErrPathConflict = errors.New("store: path conflict")
 )
 
 // Key identifies what a partial file is a part of (bible §8.3): resume only what has the
@@ -86,17 +90,16 @@ func (p Params) chunks() uint32 {
 }
 
 // handle is what the store needs of a file; *os.File has it, tests replace it.
-type handle interface {
-	io.ReaderAt
-	io.WriterAt
-	Sync() error
-	Truncate(int64) error
-	Close() error
-}
+type handle = engine.StorageFile
 
-// openFile opens name in root; tests replace it to simulate a power loss.
+// openFile opens name in root; tests replace it to simulate a power loss. In a diag build,
+// a test may wrap the file with faults (pkg/diag/faultfs).
 var openFile = func(root *os.Root, name string, flag int) (handle, error) {
-	return root.OpenFile(name, flag, 0o644)
+	f, err := root.OpenFile(name, flag, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	return engine.WrapStorage(f, name), nil
 }
 
 // rename renames in root; tests replace it to simulate a file held by an antivirus.
@@ -160,7 +163,7 @@ func Open(root *os.Root, name string, p Params) (*File, error) {
 	partName, journalName := f.osName(PartSuffix), f.osName(JournalSuffix)
 	if dir := path.Dir(name); dir != "." {
 		if err := root.MkdirAll(filepath.FromSlash(dir), 0o755); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %s: %v", ErrPathConflict, dir, err)
 		}
 	}
 
@@ -197,32 +200,40 @@ func Open(root *os.Root, name string, p Params) (*File, error) {
 	}
 
 	// No journal: a new file. A .part without a journal is not ours either.
-	if _, err := root.Lstat(partName); err == nil {
+	part, err := openFile(root, partName, os.O_RDWR|os.O_CREATE|os.O_EXCL)
+	if errors.Is(err, os.ErrExist) {
 		return nil, fmt.Errorf("%w: %s has data but no journal", ErrForeign, name)
 	}
-	part, err := openFile(root, partName, os.O_RDWR|os.O_CREATE|os.O_EXCL)
 	if err != nil {
 		return nil, err
 	}
-	journal, err = openFile(root, journalName, os.O_RDWR|os.O_CREATE|os.O_EXCL)
-	if err != nil {
-		part.Close()
-		_ = root.Remove(partName) // just created by us
-		return nil, err
-	}
-	f.part, f.journal = part, journal
-	if _, err := journal.WriteAt(f.header(), 0); err != nil {
-		f.closeFiles()
-		return nil, err
-	}
-	if !p.NoSync {
-		if err := journal.Sync(); err != nil {
-			f.closeFiles()
-			return nil, err
-		}
-	}
-	f.journalEnd = headerLen
+	// The journal is made by the first commit (or Close): a file finished in one go never has
+	// one (Finalize). A power loss before the first commit leaves a .part without journal,
+	// which does not read as this transfer's: never deleted (STO-09), the next attempt takes
+	// "name (1)".
+	f.part = part
 	return f, nil
+}
+
+// ensureJournal creates the journal with its header, if this file has none yet. Called with
+// commitMu held, or once nothing else uses the file.
+func (f *File) ensureJournal() error {
+	if f.journal != nil {
+		return nil
+	}
+	j, err := openFile(f.root, f.osName(JournalSuffix), os.O_RDWR|os.O_CREATE|os.O_EXCL)
+	if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("%w: %s", ErrForeign, f.name)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := j.WriteAt(f.header(), 0); err != nil {
+		j.Close()
+		return err
+	}
+	f.journal, f.journalEnd = j, headerLen
+	return nil
 }
 
 func (f *File) osName(suffix string) string { return filepath.FromSlash(f.name + suffix) }
@@ -335,8 +346,9 @@ func (f *File) Hashes() ([][32]byte, error) {
 	return append([][32]byte(nil), f.hashes...), nil
 }
 
-// WriteChunk writes chunk i, whose SHA-256 the caller checked, and commits the journal once
-// 64 MiB or 2 s are pending. Several goroutines may write different chunks at once.
+// WriteChunk writes chunk i, whose SHA-256 the caller checked. Several goroutines may write
+// different chunks at once. The chunk is in the journal once a commit makes it durable:
+// CommitIfDue after each write keeps the group commit going.
 func (f *File) WriteChunk(i uint32, data []byte, sum [32]byte) error {
 	if i >= f.n || int64(len(data)) != f.chunkLen(i) {
 		return fmt.Errorf("store: chunk %d of %d bytes does not fit %s", i, len(data), f.name)
@@ -348,7 +360,15 @@ func (f *File) WriteChunk(i uint32, data []byte, sum [32]byte) error {
 	f.have[i], f.hashes[i] = true, sum
 	f.pending = append(f.pending, record{i, sum})
 	f.pendingBytes += int64(len(data))
-	due := f.pendingBytes >= f.p.CommitBytes || time.Since(f.lastCommit) >= f.p.CommitInterval
+	f.mu.Unlock()
+	return nil
+}
+
+// CommitIfDue commits once 64 MiB or 2 s are pending (STO-04). It is apart from WriteChunk
+// so that a caller measures the write and the fsync as two stages (DEV-03).
+func (f *File) CommitIfDue() error {
+	f.mu.Lock()
+	due := len(f.pending) > 0 && (f.pendingBytes >= f.p.CommitBytes || time.Since(f.lastCommit) >= f.p.CommitInterval)
 	f.mu.Unlock()
 	if due {
 		return f.Commit()
@@ -395,6 +415,9 @@ func (f *File) commit(batch []record) error {
 		binary.BigEndian.PutUint32(rec[36:40], crc32.ChecksumIEEE(rec[:36]))
 		buf = append(buf, rec[:]...)
 	}
+	if err := f.ensureJournal(); err != nil {
+		return err
+	}
 	if _, err := f.journal.WriteAt(buf, f.journalEnd); err != nil { // 2. it is noted
 		return err
 	}
@@ -407,6 +430,25 @@ func (f *File) commit(batch []record) error {
 	return nil
 }
 
+// notePending writes the pending records to the journal and syncs it, once the data is known
+// durable (Finalize synced it): the file can be resumed after a failed rename.
+func (f *File) notePending() error {
+	f.commitMu.Lock()
+	defer f.commitMu.Unlock()
+	f.mu.Lock()
+	batch := f.pending
+	f.pending, f.pendingBytes = nil, 0
+	f.mu.Unlock()
+	saved := f.p.NoSync
+	f.p.NoSync = true // the data sync is done: write the records, then sync the journal below
+	err := f.commit(batch)
+	f.p.NoSync = saved
+	if err == nil && !saved {
+		err = f.journal.Sync()
+	}
+	return err
+}
+
 // Close commits and closes the files: the partial file stays, resumable (pause, cancel, a
 // lost sender).
 func (f *File) Close() error {
@@ -414,6 +456,14 @@ func (f *File) Close() error {
 		return nil
 	}
 	err := f.Commit()
+	if err == nil && f.journal == nil { // nothing to commit (an empty file): resumable all the same
+		f.commitMu.Lock()
+		err = f.ensureJournal()
+		if err == nil && !f.p.NoSync {
+			err = f.journal.Sync()
+		}
+		f.commitMu.Unlock()
+	}
 	if cerr := f.closeFiles(); err == nil {
 		err = cerr
 	}
@@ -450,14 +500,11 @@ func (f *File) Finalize() error {
 	if _, err := f.Hashes(); err != nil {
 		return err
 	}
-	// Everything in the journal first: if the rename fails (a name taken meanwhile, a file
-	// held), the file stays resumable as it is.
-	if err := f.Commit(); err != nil {
-		return err
-	}
 	if f.markClosed() {
 		return fmt.Errorf("store: %s is closed", f.name)
 	}
+	// One fsync: the data. The journal is not needed to finish; it is written only if the
+	// rename fails, so that the file stays resumable (its data is durable: invariant J holds).
 	if !f.p.NoSync {
 		if err := f.part.Sync(); err != nil {
 			f.mu.Lock()
@@ -467,32 +514,42 @@ func (f *File) Finalize() error {
 		}
 	}
 	if err := f.part.Close(); err != nil {
-		f.journal.Close()
+		f.closeJournal()
 		return err
 	}
 	final := filepath.FromSlash(f.name)
-	if !f.p.Overwrite {
-		if _, err := f.root.Lstat(final); err == nil {
-			f.journal.Close()
-			return fmt.Errorf("%w: %s", ErrExists, f.name)
-		}
-	}
 	var err error
-	for _, wait := range renameTries {
-		time.Sleep(wait)
-		if err = rename(f.root, f.osName(PartSuffix), final); err == nil {
-			break
+	if _, lerr := f.root.Lstat(final); lerr == nil && !f.p.Overwrite {
+		err = fmt.Errorf("%w: %s", ErrExists, f.name)
+	} else {
+		for _, wait := range renameTries {
+			time.Sleep(wait)
+			if err = rename(f.root, f.osName(PartSuffix), final); err == nil {
+				break
+			}
 		}
 	}
 	if err != nil {
-		f.journal.Close()
+		if nerr := f.notePending(); nerr != nil {
+			err = errors.Join(err, nerr)
+		}
+		f.closeJournal()
 		return err
 	}
 	if runtime.GOOS != "windows" && !f.p.NoSync {
 		f.syncDir()
 	}
-	f.journal.Close()
+	if f.journal == nil { // finished in one go: it never had one
+		return nil
+	}
+	f.closeJournal()
 	return f.root.Remove(f.osName(JournalSuffix))
+}
+
+func (f *File) closeJournal() {
+	if f.journal != nil {
+		_ = f.journal.Close()
+	}
 }
 
 // syncDir makes the rename durable on Unix: fsync of the folder that holds the file.
@@ -512,8 +569,10 @@ func (f *File) Discard() error {
 	f.markClosed()
 	f.closeFiles()
 	err := f.root.Remove(f.osName(PartSuffix))
-	if jerr := f.root.Remove(f.osName(JournalSuffix)); err == nil {
-		err = jerr
+	if f.journal != nil {
+		if jerr := f.root.Remove(f.osName(JournalSuffix)); err == nil {
+			err = jerr
+		}
 	}
 	return err
 }

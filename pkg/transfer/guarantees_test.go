@@ -12,12 +12,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/securechan"
+	"github.com/Medboy224/medXfer/pkg/store"
 )
 
 func runOffer(t *testing.T, r *Receiver, addr string, offer protocol.Offer) []ItemResult {
@@ -167,8 +168,8 @@ func TestReceiverRejoinsARestartedSender(t *testing.T) {
 	checkFiles(t, out, offer, contents, nil)
 }
 
-// The source changed between two attempts (same name and size, new content, so a new
-// FileID): the partial file of the first attempt is not resumed. The new content is received
+// The source changed between two attempts (same name and size, new content and date, so a new
+// resume key): the partial file of the first attempt is not resumed. The new content is received
 // whole under a free name (the stale partial file is left as it is until J4b's journal).
 func TestChangedSourceStartsOver(t *testing.T) {
 	offer, paths, _ := tree(t, []int{12 * testChunk})
@@ -186,7 +187,7 @@ func TestChangedSourceStartsOver(t *testing.T) {
 	if _, err := first.Run(ctx, p.addr, offer); !errors.Is(err, context.Canceled) {
 		t.Fatalf("first run: %v, want context.Canceled", err)
 	}
-	if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(offer.Items[0].Path))); err != nil {
+	if _, err := os.Stat(filepath.Join(out, filepath.FromSlash(offer.Items[0].Path)) + store.PartSuffix); err != nil {
 		t.Fatalf("the first run left no partial file: the test proves nothing (%v)", err)
 	}
 
@@ -196,7 +197,11 @@ func TestChangedSourceStartsOver(t *testing.T) {
 	if err := os.WriteFile(paths[0], fresh, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	offer.Items[0].FileID = "id-changed"
+	fi, err := os.Stat(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer.Items[0].MTime = fi.ModTime().UnixNano() // its new date: another resume key (D2)
 	q := newOfferPair(t)
 	q.serve(t, offer, paths)
 	offer.TransferID = q.id.String()
@@ -229,7 +234,7 @@ func TestCompleteFileIsNotFetchedAgain(t *testing.T) {
 	again := q.serve(t, offer, paths)
 	offer.TransferID = q.id.String()
 	r := NewReceiver(out, JoinFunc(securechan.Config{Identity: q.peer, Expected: q.device.Fingerprint}, q.id))
-	r.Policy = engine.PolicySkip
+	r.Policy = store.PolicySkip
 	if res := runOffer(t, r, q.addr, offer); res[0].State != ItemDone {
 		t.Fatalf("second run: %+v", res)
 	}
@@ -258,7 +263,7 @@ func TestNameTakenIsRenamed(t *testing.T) {
 	p.serve(t, offer, paths)
 	offer.TransferID = p.id.String()
 	r := p.receiver(out)
-	r.Policy = engine.PolicyAutoRename
+	r.Policy = store.PolicyAutoRename
 	if res := runOffer(t, r, p.addr, offer); res[0].State != ItemDone {
 		t.Fatalf("run: %+v", res)
 	}
@@ -329,7 +334,7 @@ func TestOverwriteKeepsTheFileUntilDataArrives(t *testing.T) {
 	silent := newOfferPair(t)
 	offer.TransferID = silent.id.String()
 	r := silent.receiver(out)
-	r.Policy = engine.PolicyOverwrite
+	r.Policy = store.PolicyOverwrite
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	_, _ = r.Run(ctx, silent.addr, offer)
 	cancel()
@@ -341,7 +346,7 @@ func TestOverwriteKeepsTheFileUntilDataArrives(t *testing.T) {
 	p.serve(t, offer, paths)
 	offer.TransferID = p.id.String()
 	r = p.receiver(out)
-	r.Policy = engine.PolicyOverwrite
+	r.Policy = store.PolicyOverwrite
 	if res := runOffer(t, r, p.addr, offer); res[0].State != ItemDone || res[0].SavedPath != mine {
 		t.Fatalf("run: %+v", res)
 	}
@@ -362,4 +367,78 @@ func TestOfferOfEmptyFilesOnly(t *testing.T) {
 		}
 	}
 	checkFiles(t, out, offer, contents, nil)
+}
+
+// STO-01: while a file is received, only its .part and journal exist; it gets its name at the
+// end.
+func TestNoFinalNameBeforeTheEnd(t *testing.T) {
+	offer, paths, contents := tree(t, []int{8 * testChunk})
+	p := newOfferPair(t)
+	p.serve(t, offer, paths)
+	out := t.TempDir()
+	offer.TransferID = p.id.String()
+	r := p.receiver(out)
+	r.Workers = 1
+	v := newValve(3 * testChunk)
+	r.dial = v.dial
+	done := make(chan []ItemResult, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		res, _ := r.Run(ctx, p.addr, offer)
+		done <- res
+	}()
+	v.wait(t)
+	final := filepath.Join(out, filepath.FromSlash(offer.Items[0].Path))
+	if _, err := os.Stat(final); err == nil {
+		t.Fatal("the file has its final name while it is being received")
+	}
+	if _, err := os.Stat(final + store.PartSuffix); err != nil {
+		t.Fatalf("no .part while the file is received: %v", err)
+	}
+	v.open()
+	if res := <-done; res[0].State != ItemDone {
+		t.Fatalf("result %+v", res[0])
+	}
+	checkFiles(t, out, offer, contents, nil)
+	if _, err := os.Stat(final + store.JournalSuffix); err == nil {
+		t.Fatal("the journal is left after the end")
+	}
+}
+
+// D2: the resume key holds the sender's key. Another device offering the same path, size and
+// date does not resume the first one's partial file: it is received under another name, and
+// the partial file stays as it was.
+func TestOtherSenderDoesNotResume(t *testing.T) {
+	offer, paths, contents := tree(t, []int{8 * testChunk})
+	p := newOfferPair(t)
+	p.serve(t, offer, paths)
+	out := t.TempDir()
+	offer.TransferID = p.id.String()
+	first := p.receiver(out)
+	first.Workers = 1
+	v := newValve(3 * testChunk)
+	first.dial = v.dial
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-v.reached; cancel() }()
+	_, _ = first.Run(ctx, p.addr, offer)
+	part := filepath.Join(out, filepath.FromSlash(offer.Items[0].Path)) + store.PartSuffix
+	before, err := os.ReadFile(part)
+	if err != nil {
+		t.Fatalf("the first run left no partial file: %v", err)
+	}
+
+	q := newOfferPair(t) // another device
+	q.serve(t, offer, paths)
+	offer.TransferID = q.id.String()
+	res := runOffer(t, q.receiver(out), q.addr, offer)
+	if res[0].State != ItemDone || res[0].SavedPath == strings.TrimSuffix(part, store.PartSuffix) {
+		t.Fatalf("result %+v: another sender's file took the first one's place", res[0])
+	}
+	if got, _ := os.ReadFile(res[0].SavedPath); !bytes.Equal(got, contents[0]) {
+		t.Fatal("the second file differs")
+	}
+	if after, _ := os.ReadFile(part); !bytes.Equal(before, after) {
+		t.Fatal("the first sender's partial file was changed")
+	}
 }

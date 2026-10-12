@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/protocol"
+	"github.com/Medboy224/medXfer/pkg/store"
 )
 
 // withMTimes puts the modification time of each source in the offer, as BuildOffer does.
@@ -91,9 +91,10 @@ func TestSourceChangedDuringSending(t *testing.T) {
 	}
 }
 
-// Bible §8.3: a partial file altered on disk between two sessions is caught by the digest and
-// received again from zero; the file ends up whole.
-func TestTamperedPartialFileStartsOver(t *testing.T) {
+// Bible §9.5: a partial file altered on disk between two sessions is caught on resume (the last
+// 8 chunks of the journal are checked again, STO-06): only the altered chunk is asked again,
+// and the file ends up whole.
+func TestTamperedPartialFileIsRepaired(t *testing.T) {
 	offer, paths, contents := tree(t, []int{12 * testChunk})
 	offer = withMTimes(t, offer, paths)
 	p := newOfferPair(t)
@@ -111,14 +112,13 @@ func TestTamperedPartialFileStartsOver(t *testing.T) {
 		t.Fatalf("first run: %v, want context.Canceled", err)
 	}
 
-	// The first session left a partial file to resume: without the digest, the second would
-	// not ask for those chunks again.
+	// The first session left a partial file whose journal holds chunks 0 and 1 at least.
 	it := offer.Items[0]
-	if resumed, _ := engine.PeekResumeOffset(out, it.Path, it.FileID, it.Size, offer.ChunkSize); resumed < testChunk {
-		t.Fatalf("the first session left %d bytes to resume; the test needs chunk 0 at least", resumed)
+	part := filepath.Join(out, filepath.FromSlash(it.Path)) + store.PartSuffix
+	if fi, err := os.Stat(part + ".state"); err != nil || fi.Size() < 57+2*40 {
+		t.Fatalf("the first session left no journal with two chunks (%v)", err)
 	}
-	// Chunk 0, already on disk and marked done in the state, is altered.
-	part := filepath.Join(out, filepath.FromSlash(it.Path))
+	// Chunk 0, on disk and declared in the journal, is altered.
 	f, err := os.OpenFile(part, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestTamperedPartialFileStartsOver(t *testing.T) {
 	}
 	f.Close()
 
-	q := newOfferPair(t)
+	q := p.again(t)
 	again := q.serve(t, offer, paths)
 	offer.TransferID = q.id.String()
 	r := q.receiver(out)
@@ -136,8 +136,11 @@ func TestTamperedPartialFileStartsOver(t *testing.T) {
 		t.Fatalf("second run: %+v", res[0])
 	}
 	checkFiles(t, out, offer, contents, nil)
-	if served := again.Progress().Bytes; served != offer.TotalBytes {
-		t.Fatalf("the second sender served %d bytes; the file had to start over (%d)", served, offer.TotalBytes)
+	// The altered chunk was caught on resume (one of the last 8 of the journal, STO-06) and
+	// asked again; the good chunks of the first session were not.
+	if served := again.Progress().Bytes; served >= offer.TotalBytes || served < 11*testChunk {
+		t.Fatalf("the second sender served %d bytes; want the missing chunks plus the altered one (%d to %d)",
+			served, 11*testChunk, offer.TotalBytes-1)
 	}
 }
 

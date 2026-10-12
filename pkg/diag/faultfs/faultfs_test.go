@@ -95,7 +95,7 @@ func TestLyingSync(t *testing.T) {
 // A full disk on the receiver ends the transfer with an error: no hang, no false success.
 func TestEngineReportsFullDisk(t *testing.T) {
 	restore := engine.SetStorageWrapper(func(f engine.StorageFile, path string) engine.StorageFile {
-		if strings.HasSuffix(path, ".medxfer") {
+		if strings.HasSuffix(path, ".part.state") {
 			return f
 		}
 		return Wrap(f, Plan{NoSpaceAfter: 256 * 1024})

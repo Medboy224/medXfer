@@ -18,6 +18,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/session"
+	"github.com/Medboy224/medXfer/pkg/store"
 	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
@@ -291,14 +292,16 @@ func (s *DaemonServer) refuseOffer(id, code string, err error) {
 
 // receive downloads an accepted offer into saveDir, driven by the dashboard's queue: the
 // items the user already skipped or paused stay so.
-func (s *DaemonServer) receive(sess *session.Channel, m *session.Message, saveDir string, policy engine.CollisionPolicy, reqID string) {
+func (s *DaemonServer) receive(sess *session.Channel, m *session.Message, saveDir string, policy store.Policy, reqID string) {
 	offer := *m.Offer
 	tid, err := transfer.ParseID(offer.TransferID)
 	if err != nil {
 		s.refuseOffer(offer.TransferID, "", err)
 		return
 	}
-	rx := transfer.NewReceiver(saveDir, transfer.JoinFunc(s.streamChanConfig(), tid))
+	cfg := s.streamChanConfig()
+	rx := transfer.NewReceiver(saveDir, transfer.JoinFunc(cfg, tid))
+	rx.SenderKey = cfg.Expected // part of each file's resume key (D2)
 	rx.Policy = policy
 	ev := newDaemonEvents(s, offer, false, nil)
 	rx.Events = ev

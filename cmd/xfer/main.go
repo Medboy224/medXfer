@@ -1263,6 +1263,7 @@ func pullOffer(targetAddr, outDir string, workers int, offer protocol.Offer, cfg
 // it (bible §8.3). It returns nil only when every item was received.
 func receiveOffer(ctx context.Context, targetAddr, outDir string, workers int, offer protocol.Offer, cfg securechan.Config, base transfer.ID) error {
 	rx := transfer.NewReceiver(outDir, transfer.JoinFunc(cfg, base))
+	rx.SenderKey = cfg.Expected // part of each file's resume key (D2)
 	rx.Workers = workers
 	events := newCLIEvents(false, nil)
 	rx.Events = events

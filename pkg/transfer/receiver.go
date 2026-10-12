@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/engine"
+	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/protocol"
+	"github.com/Medboy224/medXfer/pkg/store"
 )
 
 // Defaults of the receiver (bible §8.3; parameters, rule R4).
@@ -45,7 +48,12 @@ var dialDelays = []time.Duration{
 type Receiver struct {
 	OutDir  string
 	Workers int
-	Policy  engine.CollisionPolicy
+	Policy  store.Policy
+	// SenderKey is the sender's key, part of the resume key of every file (D2): a partial file
+	// is resumed only for the same sender, path, size and date.
+	SenderKey identity.Fingerprint
+	// VerifyFull checks every chunk of a partial file on resume, not only the last 8 (STO-06).
+	VerifyFull bool
 	// Join secures each data connection and names the transfer (JoinFunc).
 	Join        func(context.Context, net.Conn) (net.Conn, error)
 	DialTimeout time.Duration // 0: DefaultDialTimeout
@@ -134,6 +142,17 @@ func (r *Receiver) Run(ctx context.Context, addr string, offer protocol.Offer) (
 	run := newRun(r, offer)
 	run.workers = workers
 	run.stages, _ = r.Events.(StageEvents)
+	if r.Sink != SinkNull { // every file operation goes through the destination's root (STO-13)
+		if err := os.MkdirAll(r.OutDir, 0o755); err != nil {
+			return nil, err
+		}
+		root, err := os.OpenRoot(r.OutDir)
+		if err != nil {
+			return nil, err
+		}
+		defer root.Close()
+		run.root = root
+	}
 	r.mu.Lock()
 	r.run = run
 	skips := r.skips
@@ -203,6 +222,7 @@ type run struct {
 
 	stages  StageEvents // nil: the stages are not measured
 	workers int
+	root    *os.Root // the destination; nil with the null sink
 }
 
 // hashDelay slows every hash down; tests use it to make the hash the limiting stage (DEV-04).
@@ -215,12 +235,19 @@ func (ru *run) stage(name string, parallel int, start time.Time, bytes int64) {
 	}
 }
 
-// observeSync has dm report its group commits as the fsync stage, and applies NoSync.
-func (ru *run) observeSync(dm *engine.DiskManager) {
-	dm.SetNoSync(ru.r.NoSync)
-	if ru.stages != nil {
-		dm.SetSyncObserver(func(d time.Duration) { ru.stages.OnStage(StageFsync, 1, d, 0) })
+// params are the storage parameters of item st. Its resume key ties a partial file to this
+// sender, path, size and date (D2); the group commits are measured as the fsync stage.
+func (ru *run) params(st *item, overwrite bool) store.Params {
+	r := ru.r
+	p := store.Params{
+		Key:  store.ResumeKey(r.SenderKey, st.it.Path, st.it.Size, st.it.MTime),
+		Size: st.it.Size, ChunkSize: ru.chunks,
+		VerifyFull: r.VerifyFull, NoSync: r.NoSync, Overwrite: overwrite,
 	}
+	if ru.stages != nil {
+		p.OnSync = func(d time.Duration) { ru.stages.OnStage(StageFsync, 1, d, 0) }
+	}
+	return p
 }
 
 type item struct {
@@ -232,19 +259,20 @@ type item struct {
 	state    ItemState // under r.mu once ended
 	err      error     // under r.mu: why it failed
 
-	// mu: chunks are written under the read lock, in parallel (DiskManager takes care of
+	// mu: chunks are written under the read lock, in parallel (store.File takes care of
 	// concurrent writes); opening, finalizing and closing take the write lock.
 	mu        sync.RWMutex
 	opened    bool
 	closed    bool
-	safe      string              // the item's path, checked (SafeRelPath)
-	dm        *engine.DiskManager // nil until the first verified chunk, unless resuming (#75)
+	safe      string      // the item's path, checked (SafeRelPath)
+	place     store.Place // where it goes, found by open
+	f         *store.File // nil until the first verified chunk, unless resuming (#75)
 	saved     string
 	processed atomic.Uint32 // chunks handled: written, or found on disk
 
-	// The digest (bible §8.3, step 6). hashes[i] is chunk i's SHA-256: from its verified CHUNK
-	// (fresh[i]) or read back from disk for a chunk of an earlier session. Distinct chunks are
-	// written by distinct goroutines; local is set once they are all handled.
+	// The digest (bible §8.3, step 6). hashes[i] is chunk i's SHA-256 from its verified CHUNK
+	// (fresh[i]); the chunks of an earlier session keep the hash of their journal. Distinct
+	// chunks are written by distinct goroutines; local is set once they are all handled.
 	hashes    [][32]byte
 	fresh     []bool
 	local     [32]byte
@@ -379,7 +407,7 @@ func (ru *run) prepare(t task) bool {
 		}
 	}
 	// An empty item is requested too: the sender's answer confirms it before it is made (#75).
-	onDisk := st.total > 0 && st.dm != nil && st.dm.IsChunkCompleted(t.index)
+	onDisk := st.total > 0 && st.f != nil && st.f.Has(t.index)
 	st.mu.Unlock()
 	if onDisk {
 		if ru.countChunk(st) {
@@ -404,54 +432,45 @@ func (ru *run) open(st *item) error {
 	if err != nil {
 		return err
 	}
-	res, err := engine.ResolveCollision(r.OutDir, safe, st.it.FileID, st.it.Size, ru.chunks, r.Policy)
+	place, err := store.Resolve(ru.root, safe, ru.params(st, false), r.Policy)
 	if err != nil {
 		return err
 	}
 	st.opened = true
 	st.safe = safe
-	st.saved = filepath.Join(r.OutDir, filepath.FromSlash(res.ResolvedName))
+	st.place = place
+	st.saved = filepath.Join(r.OutDir, filepath.FromSlash(place.Name))
 	ru.emitItem(ItemEvent{Item: st.it.Item, Path: st.it.Path, Size: st.it.Size, State: ItemStarted})
-	if res.IsDuplicate { // the same file is already complete on disk
+	if place.Done { // PolicySkip: a file of that name is already there
 		ru.bytes.Add(st.it.Size)
 		st.closed = true
 		ru.endItem(st.it.Item, ItemDone, nil) // ItemDone does not take st.mu
 		return nil
 	}
-	if res.IsResume {
-		dm, err := engine.CreateAndPreallocate(r.OutDir, res.ResolvedName, st.it.Size, ru.chunks, st.it.FileID)
+	if place.Resume { // its own partial file, which exists already
+		f, err := store.Open(ru.root, place.Name, ru.params(st, place.Overwrite))
 		if err != nil {
 			return err
 		}
-		ru.observeSync(dm)
-		st.dm = dm
-		ru.bytes.Add(dm.GetDownloadedBytes())
-		st.counted.Add(dm.GetDownloadedBytes())
+		st.f = f
+		ru.bytes.Add(f.Resumed())
+		st.counted.Add(f.Resumed())
 	}
 	return nil
 }
 
-// create makes the item's file on its first verified chunk (#75); an empty item has one, of 0
-// bytes, which the sender's answer confirms. Until then a refused connection, a silent or lying sender
-// or a cancel leaves nothing behind, and an existing file the policy would overwrite stays
-// whole. The name is resolved again, so a file that appeared meanwhile is never emptied.
-// Called with st.mu held.
+// create makes the item's .part and journal on its first verified chunk (#75); an empty item
+// has one, of 0 bytes, which the sender's answer confirms. Until then a refused connection, a
+// silent or lying sender or a cancel leaves nothing behind. A file of the user is never
+// touched before the end: the bytes go to the .part, and Finalize does not replace a file
+// that took the name meanwhile unless the policy is to overwrite (STO-01). Called with st.mu
+// held.
 func (ru *run) create(st *item) error {
-	r := ru.r
-	res, err := engine.ResolveCollision(r.OutDir, st.safe, st.it.FileID, st.it.Size, ru.chunks, r.Policy)
+	f, err := store.Open(ru.root, st.place.Name, ru.params(st, st.place.Overwrite))
 	if err != nil {
 		return err
 	}
-	if res.IsDuplicate || res.IsResume {
-		return fmt.Errorf("%q: the destination changed during the transfer", st.it.Path)
-	}
-	dm, err := engine.CreateAndPreallocate(r.OutDir, res.ResolvedName, st.it.Size, ru.chunks, st.it.FileID)
-	if err != nil {
-		return err
-	}
-	ru.observeSync(dm)
-	st.dm = dm
-	st.saved = filepath.Join(r.OutDir, filepath.FromSlash(res.ResolvedName))
+	st.f = f
 	return nil
 }
 
@@ -483,11 +502,11 @@ func (ru *run) write(t task, data []byte, sum [32]byte) error {
 		return nil
 	}
 	st.mu.RLock()
-	if st.dm == nil && !st.closed { // the item's first verified chunk: its file is made now
+	if st.f == nil && !st.closed { // the item's first verified chunk: its file is made now
 		st.mu.RUnlock()
 		st.mu.Lock()
 		var err error
-		if st.dm == nil && !st.closed {
+		if st.f == nil && !st.closed {
 			err = ru.create(st)
 		}
 		st.mu.Unlock()
@@ -497,14 +516,17 @@ func (ru *run) write(t task, data []byte, sum [32]byte) error {
 		}
 		st.mu.RLock()
 	}
-	if st.closed || st.dm == nil {
+	if st.closed || st.f == nil {
 		st.mu.RUnlock()
 		return nil // skipped or failed meanwhile
 	}
-	if st.total > 0 && !st.dm.IsChunkCompleted(t.index) {
+	if st.total > 0 && !st.f.Has(t.index) {
 		start := time.Now()
-		_, err := st.dm.WriteChunkAt(data, int64(t.index)*int64(ru.chunks), t.index)
+		err := st.f.WriteChunk(t.index, data, sum)
 		ru.stage(StageDiskWrite, ru.workers, start, int64(len(data)))
+		if err == nil {
+			err = st.f.CommitIfDue() // its fsync is measured as the fsync stage
+		}
 		if err != nil {
 			st.mu.RUnlock()
 			ru.endItem(t.item, ItemFailed, err)
@@ -526,7 +548,8 @@ func (ru *run) write(t task, data []byte, sum [32]byte) error {
 // complete is called once every chunk of item i is handled. A file of at most one chunk, all
 // received now, needs nothing more: its digest follows from that chunk's verified hash. Any
 // other file is checked against the sender's digest (bible §8.3, step 6): the receiver makes
-// its own, reading back the chunks of an earlier session, then asks for the sender's.
+// its own from the hashes it checked, those of an earlier session coming from the journal
+// (verified on resume, STO-06), then asks for the sender's.
 func (ru *run) complete(i int) {
 	st := ru.items[i]
 	if st.total == 0 || (st.total == 1 && st.fresh[0]) {
@@ -534,25 +557,21 @@ func (ru *run) complete(i int) {
 		return
 	}
 	st.mu.Lock()
-	if st.closed || (st.dm == nil && ru.r.Sink != SinkNull) {
+	if st.closed || (st.f == nil && ru.r.Sink != SinkNull) {
 		st.mu.Unlock()
 		return
 	}
-	buf := make([]byte, ru.chunks)
-	for index := range st.hashes {
-		if st.fresh[index] {
-			continue
-		}
-		off := int64(index) * int64(ru.chunks)
-		n := min(int64(ru.chunks), st.it.Size-off)
-		if _, err := st.dm.ReadChunkAt(buf[:n], off); err != nil {
+	hashes := st.hashes // the null sink: every chunk was checked in this session
+	if st.f != nil {
+		h, err := st.f.Hashes()
+		if err != nil {
 			st.mu.Unlock()
-			ru.endItem(i, ItemFailed, fmt.Errorf("%q: reading back chunk %d: %w", st.it.Path, index, err))
+			ru.endItem(i, ItemFailed, fmt.Errorf("%q: %w", st.it.Path, err))
 			return
 		}
-		st.hashes[index] = sha256.Sum256(buf[:n])
+		hashes = h
 	}
-	st.local = protocol.FileDigest(st.hashes)
+	st.local = protocol.FileDigest(hashes)
 	st.mu.Unlock()
 	r := ru.r
 	r.mu.Lock()
@@ -599,9 +618,9 @@ func (ru *run) startOver(i int) {
 		st.mu.Unlock()
 		return
 	}
-	if st.dm != nil {
-		_ = st.dm.Discard()
-		st.dm = nil
+	if st.f != nil {
+		_ = st.f.Discard() // this transfer's partial file only (STO-09)
+		st.f = nil
 	}
 	st.processed.Store(0)
 	for k := range st.fresh {
@@ -661,8 +680,8 @@ func (ru *run) finish(i int) {
 		return
 	}
 	var err error
-	if st.dm != nil {
-		err = st.dm.Finalize()
+	if st.f != nil {
+		err = st.f.Finalize()
 	}
 	st.closed = true
 	st.mu.Unlock()
@@ -682,8 +701,8 @@ func (ru *run) endItem(i int, state ItemState, err error) {
 	st := ru.items[i]
 	if state != ItemDone {
 		st.mu.Lock()
-		if !st.closed && st.dm != nil {
-			_ = st.dm.Close()
+		if !st.closed && st.f != nil {
+			_ = st.f.Close()
 		}
 		st.closed = true
 		st.mu.Unlock()
@@ -716,8 +735,8 @@ func (ru *run) allEnded() bool {
 func (ru *run) closeAll() {
 	for _, st := range ru.items {
 		st.mu.Lock()
-		if !st.closed && st.dm != nil {
-			_ = st.dm.Close()
+		if !st.closed && st.f != nil {
+			_ = st.f.Close()
 			st.closed = true
 		}
 		st.mu.Unlock()

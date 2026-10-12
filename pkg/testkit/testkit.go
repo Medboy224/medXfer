@@ -255,7 +255,8 @@ func (p *Pair) WaitTransferDone(timeout time.Duration) Event {
 }
 
 // AssertTreesEqual fails the test unless directories want and got hold the same files with
-// the same contents. Empty directories and *.medxfer state files are ignored.
+// the same contents. Empty directories and the files of a transfer in progress (*.part,
+// *.part.state) are ignored.
 func AssertTreesEqual(t testing.TB, want, got string) {
 	t.Helper()
 	problems, err := treeDiff(want, got)
@@ -299,7 +300,7 @@ func treeDiff(want, got string) ([]string, error) {
 func readTree(root string) (map[string][]byte, error) {
 	files := map[string][]byte{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || strings.HasSuffix(path, ".medxfer") {
+		if err != nil || d.IsDir() || strings.HasSuffix(path, ".part") || strings.HasSuffix(path, ".part.state") {
 			return err
 		}
 		data, err := os.ReadFile(path)
