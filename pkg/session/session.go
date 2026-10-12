@@ -64,6 +64,7 @@ type Message struct {
 	ResumeBytes int64                `json:"resume_bytes,omitempty"`  // Sent back by the receiver on accept
 	Batch       *manifest.Manifest   `json:"batch,omitempty"`         // Batch/Folder manifest
 	ItemIndex   int                  `json:"item_index,omitempty"`    // Current item in batch (0-indexed)
+	Item        *int                 `json:"item,omitempty"`          // skip, pause, resume: one item of the transfer; none: all of it
 	TransferID  string               `json:"transfer_id,omitempty"`   // the transfer its data connections join (DATA_JOIN, CHAN-06)
 	Offer       *protocol.Offer      `json:"offer,omitempty"`         // a transfer offer (bible §8.3); its head when paged
 	Items       []protocol.OfferItem `json:"items,omitempty"`         // offer_items: a page of a paged offer (D2)

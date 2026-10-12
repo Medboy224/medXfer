@@ -27,7 +27,6 @@ import (
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/pairing"
-	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/Medboy224/medXfer/pkg/transfer"
@@ -46,45 +45,35 @@ type IPAuthRecord struct {
 
 // DaemonServer manages the headless background engine and WebSocket connections
 type DaemonServer struct {
-	controlToken        string // 256-bit secret required on every control route (API-04)
-	controlDisabled     bool   // share-only mode: no dashboard, /ws, /status or /api/fs/*
-	mu                  sync.RWMutex
-	config              Config
-	clients             map[*websocket.Conn]bool
-	clientsMu           sync.Mutex
-	activeSession       *session.Channel
-	pairedDeviceName    string
-	pendingOffer        *session.Message
-	lastOfferedManifest *manifest.Manifest
-	lastOfferedFile     string
-	webSharedManifest   *manifest.Manifest
-	webSharedFile       string
-	webShareEnabled     bool
-	webSharePIN         string
-	webShareToken       string
-	webShareAutoAccept  bool
-	pendingWebUploads   map[string]*WebUploadRequest
-	lastOfferedListener *transfer.Listener // data connections of the file last offered (CHAN-06)
-	transferCancel      context.CancelFunc
-	itemCancel          context.CancelFunc
-	activeReceiver      *engine.Receiver
-	isPaused            bool
-	batchCanceled       bool
-	currentBatchIndex   int
-	skippedFiles        map[int]bool
-	pausedFiles         map[int]bool
-	batchResumeChan     chan struct{}
-	currentBatchItems   []BatchFileInfo
-	itemDoneChan        chan bool
-	batchTotalFiles     int
-	batchTotalBytes     int64
-	batchBaseBytes      int64
-	sessionGraceTimer   *time.Timer
-	isReconnecting      bool
-	hotspotCtrl         hotspot.Controller
-	activeHotspot       *hotspot.NetworkInfo
-	hotspotMu           sync.Mutex
-	httpPort            int
+	controlToken       string // 256-bit secret required on every control route (API-04)
+	controlDisabled    bool   // share-only mode: no dashboard, /ws, /status or /api/fs/*
+	mu                 sync.RWMutex
+	config             Config
+	clients            map[*websocket.Conn]bool
+	clientsMu          sync.Mutex
+	activeSession      *session.Channel
+	pairedDeviceName   string
+	pendingOffer       *session.Message // a complete offer waiting for respond_offer
+	incomingOffer      *session.Message // an offer whose pages are still arriving (D2)
+	lastOffered        *outgoingOffer   // what this device offered, until the peer answers
+	webSharedManifest  *manifest.Manifest
+	webSharedFile      string
+	webShareEnabled    bool
+	webSharePIN        string
+	webShareToken      string
+	webShareAutoAccept bool
+	pendingWebUploads  map[string]*WebUploadRequest
+	transferCancel     context.CancelFunc // set while a transfer is active (LIM-08)
+	activeTransferID   string
+	activeReceiver     *transfer.Receiver // this side's scheduler, when it receives
+	isPaused           bool
+	currentBatchItems  []BatchFileInfo // the queue the dashboard shows
+	sessionGraceTimer  *time.Timer
+	isReconnecting     bool
+	hotspotCtrl        hotspot.Controller
+	activeHotspot      *hotspot.NetworkInfo
+	hotspotMu          sync.Mutex
+	httpPort           int
 
 	authFailMu   sync.Mutex
 	lastAuthFail map[string]time.Time
@@ -163,10 +152,6 @@ func NewDaemonServer(port int, defaultOutDir, deviceName string) *DaemonServer {
 		controlToken:       controlToken,
 		config:             cfg,
 		clients:            make(map[*websocket.Conn]bool),
-		itemDoneChan:       make(chan bool, 1),
-		skippedFiles:       make(map[int]bool),
-		pausedFiles:        make(map[int]bool),
-		batchResumeChan:    make(chan struct{}, 1),
 		webSharePIN:        pin,
 		webShareToken:      token,
 		webShareEnabled:    false,
@@ -338,16 +323,6 @@ func randomPIN(digits int) (string, error) {
 // secureEq compares secrets in constant time.
 func secureEq(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
-}
-
-func (s *DaemonServer) calculateCompletedBatchBytes() int64 {
-	var total int64 = 0
-	for _, item := range s.currentBatchItems {
-		if item.Status == "completed" {
-			total += item.Size
-		}
-	}
-	return total
 }
 
 func (s *DaemonServer) RegisterWebShareTransfer(direction, clientIP, fileName string, cancelFunc context.CancelFunc, destPath string) {
@@ -800,7 +775,7 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 		pairedIP = s.activeSession.RemoteIP()
 		pairedDevice = s.pairedDeviceName
 	}
-	if s.transferCancel != nil || s.itemCancel != nil {
+	if s.transferCancel != nil {
 		status = "transferring"
 		if s.isPaused {
 			status = "paused"
@@ -842,7 +817,7 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 		Paired:             paired,
 		PairedIP:           pairedIP,
 		PairedDevice:       pairedDevice,
-		ActiveTransfer:     s.transferCancel != nil || s.itemCancel != nil,
+		ActiveTransfer:     s.transferCancel != nil,
 		IsPaused:           s.isPaused,
 		Version:            "1.0.0",
 		LocalIP:            localIP,
@@ -1265,10 +1240,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			s.activeSession = nil
 		}
 		s.pairedDeviceName = ""
-		if s.transferCancel != nil {
-			s.transferCancel()
-			s.transferCancel = nil
-		}
+		s.dropTransfers()
 		s.mu.Unlock()
 		s.Broadcast(NewEvent("disconnected", map[string]string{"reason": "peer requested disconnect"}))
 
@@ -1327,643 +1299,42 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		default:
 		}
 
-	case "offer":
-		s.mu.Lock()
-		s.pendingOffer = &msg
-		devName := msg.DeviceName
-		if devName == "" {
-			devName = s.pairedDeviceName
-		}
-		if devName == "" {
-			devName = "Peer"
-		}
-		s.mu.Unlock()
+	case "offer", session.TypeOfferItems: // one offer, in pages when large (D2)
+		s.takeOffer(msg)
 
-		s.Broadcast(NewEvent("incoming_offer", IncomingOfferData{
-			SenderIP:   s.activeSession.RemoteIP(),
-			DeviceName: devName,
-			IsBatch:    false,
-			FileName:   msg.FileName,
-			FileSize:   msg.FileSize,
-			TotalFiles: 1,
-		}))
-
-	case "batch_offer":
-		totalFiles := 0
-		totalBytes := int64(0)
-		batchID := ""
-		var batchItems []BatchFileInfo
-		if msg.Batch != nil {
-			totalFiles = msg.Batch.TotalFiles
-			totalBytes = msg.Batch.TotalBytes
-			batchID = msg.Batch.BatchID
-			for i, it := range msg.Batch.Items {
-				batchItems = append(batchItems, BatchFileInfo{
-					Index:   i,
-					RelPath: it.RelPath,
-					Size:    it.Size,
-					Status:  "pending",
-				})
-			}
+	case "pause", "resume": // the whole transfer, or one item of it (D6)
+		if msg.Item != nil {
+			s.itemAction(msg.Type, *msg.Item, true, "")
+		} else {
+			s.pauseAll(msg.Type == "pause", true, "")
 		}
 
-		s.mu.Lock()
-		s.pendingOffer = &msg
-		s.batchTotalFiles = totalFiles
-		s.batchTotalBytes = totalBytes
-		s.batchBaseBytes = 0
-		s.currentBatchIndex = 0
-		s.skippedFiles = make(map[int]bool)
-		s.currentBatchItems = batchItems
-		s.batchCanceled = false
-		s.isPaused = false
-		devName := msg.DeviceName
-		if devName == "" {
-			devName = s.pairedDeviceName
+	case "skip": // D6
+		if msg.Item != nil {
+			s.itemAction(itemSkip, *msg.Item, true, "")
 		}
-		if devName == "" {
-			devName = "Peer"
-		}
-		s.mu.Unlock()
-
-		s.Broadcast(NewEvent("incoming_offer", IncomingOfferData{
-			SenderIP:   s.activeSession.RemoteIP(),
-			DeviceName: devName,
-			IsBatch:    true,
-			FileName:   msg.Batch.SummaryString(),
-			FileSize:   totalBytes,
-			TotalFiles: totalFiles,
-			BatchID:    batchID,
-			Items:      batchItems,
-		}))
-
-	case "pause":
-		s.mu.Lock()
-		s.isPaused = true
-		if s.activeReceiver != nil {
-			s.activeReceiver.Pause()
-		}
-		s.mu.Unlock()
-		s.Broadcast(NewEvent("transfer_paused", map[string]string{"message": "Transfer paused by peer"}))
-
-	case "resume":
-		s.mu.Lock()
-		s.isPaused = false
-		if s.activeReceiver != nil {
-			s.activeReceiver.Resume()
-		}
-		s.mu.Unlock()
-		s.Broadcast(NewEvent("transfer_resumed", map[string]string{"message": "Transfer resumed by peer"}))
 
 	case "cancel":
-		s.mu.Lock()
-		s.isPaused = false
-		s.batchCanceled = true
-		s.pausedFiles = make(map[int]bool)
-		if s.activeReceiver != nil {
-			s.activeReceiver.Resume()
-		}
-		if s.itemCancel != nil {
-			s.itemCancel()
-			s.itemCancel = nil
-		}
-		if s.transferCancel != nil {
-			s.transferCancel()
-			s.transferCancel = nil
-		}
-		s.mu.Unlock()
-		select {
-		case s.batchResumeChan <- struct{}{}:
-		default:
-		}
-		s.Broadcast(NewEvent("transfer_canceled", map[string]string{"message": "Transfer canceled by peer"}))
-
-	case "skip_file":
-		s.mu.Lock()
-		skipIdx := msg.ItemIndex
-		s.skippedFiles[skipIdx] = true
-		for i := range s.currentBatchItems {
-			if s.currentBatchItems[i].Index == skipIdx {
-				s.currentBatchItems[i].Status = "skipped"
-			}
-		}
-		currIdx := s.currentBatchIndex
-		itemCancel := s.itemCancel
-		items := s.currentBatchItems
-		s.mu.Unlock()
-
-		s.Broadcast(NewEvent("file_skipped", map[string]interface{}{
-			"item_index": skipIdx,
-			"items":      items,
-		}))
-
-		if skipIdx == currIdx && itemCancel != nil {
-			itemCancel()
-		}
-
-	case "pause_file":
-		s.mu.Lock()
-		pauseIdx := msg.ItemIndex
-		s.pausedFiles[pauseIdx] = true
-		for i := range s.currentBatchItems {
-			if s.currentBatchItems[i].Index == pauseIdx {
-				s.currentBatchItems[i].Status = "paused"
-			}
-		}
-		currIdx := s.currentBatchIndex
-		itemCancel := s.itemCancel
-		items := s.currentBatchItems
-		s.mu.Unlock()
-
-		s.Broadcast(NewEvent("file_paused", map[string]interface{}{
-			"item_index": pauseIdx,
-			"items":      items,
-		}))
-
-		if pauseIdx == currIdx && itemCancel != nil {
-			itemCancel()
-		}
-
-	case "resume_file":
-		s.mu.Lock()
-		resumeIdx := msg.ItemIndex
-		delete(s.pausedFiles, resumeIdx)
-		for i := range s.currentBatchItems {
-			if s.currentBatchItems[i].Index == resumeIdx && s.currentBatchItems[i].Status == "paused" {
-				s.currentBatchItems[i].Status = "pending"
-			}
-		}
-		items := s.currentBatchItems
-		s.mu.Unlock()
-
-		s.Broadcast(NewEvent("file_resumed", map[string]interface{}{
-			"item_index": resumeIdx,
-			"items":      items,
-		}))
-
-		select {
-		case s.batchResumeChan <- struct{}{}:
-		default:
-		}
+		s.cancelTransfer(true, "")
 
 	case "reject":
 		s.mu.Lock()
-		if s.lastOfferedListener != nil {
-			s.lastOfferedListener.Close() // the offer is over: nobody may join it any more
-			s.lastOfferedListener = nil
+		if s.lastOffered != nil && (msg.TransferID == "" || msg.TransferID == s.lastOffered.offer.TransferID) {
+			s.lastOffered.close() // the offer is over: nobody may join it any more
+			s.lastOffered = nil
 		}
 		s.mu.Unlock()
-		s.Broadcast(NewEvent("transfer_rejected", map[string]string{"message": "Peer rejected transfer"}))
-
-	case "batch_accept":
-		s.mu.Lock()
-		m := s.lastOfferedManifest
-		s.batchCanceled = false
-		s.isPaused = false
-		s.pausedFiles = make(map[int]bool)
-		items := s.currentBatchItems
-		s.mu.Unlock()
-
-		if m == nil {
-			return
+		message := "Peer rejected transfer"
+		if msg.Code == "busy" {
+			message = "Peer is busy with another transfer"
 		}
-
-		s.Broadcast(NewEvent("batch_accepted", map[string]interface{}{
-			"summary": m.SummaryString(),
-			"items":   items,
-		}))
-
-		go func(m *manifest.Manifest) {
-			for {
-				s.mu.Lock()
-				if s.batchCanceled {
-					s.mu.Unlock()
-					return
-				}
-
-				nextIdx := -1
-				hasPaused := false
-
-				for i := range s.currentBatchItems {
-					idx := s.currentBatchItems[i].Index
-					status := s.currentBatchItems[i].Status
-					if status == "completed" || status == "skipped" {
-						continue
-					}
-					if s.pausedFiles[idx] || status == "paused" {
-						hasPaused = true
-						continue
-					}
-					if nextIdx == -1 {
-						nextIdx = idx
-					}
-				}
-
-				if nextIdx == -1 {
-					if hasPaused {
-						s.mu.Unlock()
-						s.Broadcast(NewEvent("batch_paused_waiting", map[string]interface{}{
-							"message": "Remaining files are paused. Click Resume on any file to continue.",
-							"items":   s.currentBatchItems,
-						}))
-						select {
-						case <-s.ctx.Done():
-							return
-						case <-s.batchResumeChan:
-							continue
-						}
-					} else {
-						s.mu.Unlock()
-						break
-					}
-				}
-
-				// Drain any residual signal before starting an item
-				select {
-				case <-s.itemDoneChan:
-				default:
-				}
-
-				idx := nextIdx
-				item := m.Items[idx]
-				s.currentBatchIndex = idx
-				for i := range s.currentBatchItems {
-					if s.currentBatchItems[i].Index == idx {
-						s.currentBatchItems[i].Status = "transferring"
-					}
-				}
-				baseBytes := s.calculateCompletedBatchBytes()
-				items := s.currentBatchItems
-				sess := s.activeSession
-				s.mu.Unlock()
-
-				s.Broadcast(NewEvent("batch_item_transferring", map[string]interface{}{
-					"item_index": idx,
-					"items":      items,
-				}))
-
-				itemCtx, itemCancel := context.WithCancel(s.ctx)
-				s.mu.Lock()
-				s.itemCancel = itemCancel
-				s.transferCancel = itemCancel
-				s.mu.Unlock()
-
-				// The item is registered on the device's single port before the receiver hears
-				// of it, so that its first DATA_JOIN finds it (CHAN-06).
-				var tid transfer.ID
-				var tl *transfer.Listener
-				regErr := errors.New("no active session with peer")
-				if sess != nil {
-					tid, tl, regErr = s.registerTransfer(sess)
-				}
-				if regErr == nil {
-					go func(fPath, rPath string, bBase int64) {
-						sender := engine.NewSender(s.config.Workers, uint32(s.config.ChunkSizeMB*1024*1024))
-						listener := newDaemonListener(s, rPath, item.Size, idx, m.TotalFiles, bBase, m.TotalBytes)
-						_ = sender.ServeOn(itemCtx, tl, fPath, rPath, listener, 0)
-					}(item.FullPath, item.RelPath, baseBytes)
-				}
-
-				if bindErr := regErr; bindErr != nil {
-					itemCancel()
-					s.mu.Lock()
-					for i := range s.currentBatchItems {
-						if s.currentBatchItems[i].Index == idx {
-							s.currentBatchItems[i].Status = "failed"
-						}
-					}
-					failedItems := s.currentBatchItems
-					s.mu.Unlock()
-
-					s.Broadcast(NewEvent("item_failed", map[string]interface{}{
-						"item_index": idx,
-						"items":      failedItems,
-						"error":      bindErr.Error(),
-					}))
-					continue
-				}
-
-				sess.Send(session.Message{
-					Type:       "batch_item",
-					FileName:   item.RelPath,
-					FileSize:   item.Size,
-					FileID:     item.FileID,
-					DataPort:   s.devicePort(),
-					TransferID: tid.String(),
-					ItemIndex:  idx,
-					ChunkSize:  uint32(s.config.ChunkSizeMB * 1024 * 1024),
-				})
-
-				select {
-				case <-itemCtx.Done():
-					s.mu.Lock()
-					isCanceled := s.batchCanceled
-					s.mu.Unlock()
-					if isCanceled {
-						return
-					}
-				case success := <-s.itemDoneChan:
-					itemCancel()
-					if success {
-						s.mu.Lock()
-						for i := range s.currentBatchItems {
-							if s.currentBatchItems[i].Index == idx && s.currentBatchItems[i].Status != "skipped" && s.currentBatchItems[i].Status != "paused" && s.currentBatchItems[i].Status != "failed" {
-								s.currentBatchItems[i].Status = "completed"
-							}
-						}
-						completedItems := s.currentBatchItems
-						s.mu.Unlock()
-
-						s.Broadcast(NewEvent("item_completed", map[string]interface{}{
-							"item_index": idx,
-							"items":      completedItems,
-						}))
-					}
-				case <-time.After(60 * time.Second):
-					// Watchdog: If an item transfer is completely silent for 60s without progress/complete, advance safely
-					itemCancel()
-					s.mu.Lock()
-					for i := range s.currentBatchItems {
-						if s.currentBatchItems[i].Index == idx {
-							s.currentBatchItems[i].Status = "failed"
-						}
-					}
-					failedItems := s.currentBatchItems
-					s.mu.Unlock()
-
-					s.Broadcast(NewEvent("item_failed", map[string]interface{}{
-						"item_index": idx,
-						"items":      failedItems,
-						"error":      "item transfer timed out after 60s with no response from peer",
-					}))
-				}
-			}
-
-			s.mu.Lock()
-			s.itemCancel = nil
-			s.transferCancel = nil
-			finalItems := s.currentBatchItems
-			s.mu.Unlock()
-
-			if s.activeSession != nil {
-				s.activeSession.Send(session.Message{Type: "batch_complete"})
-			}
-			s.broadcastTransferComplete(map[string]interface{}{
-				"message": "All batch files sent successfully",
-				"items":   finalItems,
-			})
-		}(m)
-
-	case "batch_item":
-		s.mu.RLock()
-		outDir := s.config.DownloadDir
-		policyStr := s.config.CollisionPolicy
-		bTotalFiles := s.batchTotalFiles
-		bTotalBytes := s.batchTotalBytes
-		s.mu.RUnlock()
-
-		bBaseBytes := s.calculateCompletedBatchBytes()
-
-		s.mu.Lock()
-		if s.batchCanceled {
-			s.mu.Unlock()
-			return
-		}
-		if s.skippedFiles[msg.ItemIndex] {
-			s.mu.Unlock()
-			if s.activeSession != nil {
-				s.activeSession.Send(session.Message{Type: "item_skipped", ItemIndex: msg.ItemIndex})
-			}
-			return
-		}
-		// Sender is sending this item: unpause on receiver
-		delete(s.pausedFiles, msg.ItemIndex)
-		s.currentBatchIndex = msg.ItemIndex
-		for i := range s.currentBatchItems {
-			if s.currentBatchItems[i].Index == msg.ItemIndex {
-				s.currentBatchItems[i].Status = "transferring"
-			}
-		}
-		itemTransferringList := s.currentBatchItems
-		s.mu.Unlock()
-
-		s.Broadcast(NewEvent("batch_item_transferring", map[string]interface{}{
-			"item_index": msg.ItemIndex,
-			"items":      itemTransferringList,
-		}))
-
-		policy := s.parseCollisionPolicy(policyStr)
-
-		secure, err := s.joinClient(msg.TransferID) // takes s.mu: before the Lock below
-		if err != nil {
-			s.Broadcast(NewEvent("transfer_error", map[string]string{"file": msg.FileName, "error": err.Error()}))
-			if s.activeSession != nil {
-				s.activeSession.Send(session.Message{Type: "item_failed", ItemIndex: msg.ItemIndex, FileName: msg.FileName, Error: err.Error()})
-			}
-			return
-		}
-		var ctx context.Context
-		s.mu.Lock()
-		ctx, s.itemCancel = context.WithCancel(s.ctx)
-		s.transferCancel = s.itemCancel
-		receiver := engine.NewReceiver(outDir, s.config.Workers)
-		receiver.SetCollisionPolicy(policy)
-		receiver.SetSecure(secure)
-		s.activeReceiver = receiver
-		if s.isPaused {
-			receiver.Pause()
-		}
-		s.mu.Unlock()
-
-		go func(msg session.Message, bBase, bTotal int64, bCount int) {
-			listener := newDaemonListener(s, msg.FileName, msg.FileSize, msg.ItemIndex, bCount, bBase, bTotal)
-			targetAddr := net.JoinHostPort(s.activeSession.RemoteIP(), strconv.Itoa(int(msg.DataPort)))
-
-			var err error
-			if msg.ChunkSize > 0 {
-				meta := protocol.FileMetadata{
-					FileName:  msg.FileName,
-					FileSize:  msg.FileSize,
-					FileID:    msg.FileID,
-					ChunkSize: msg.ChunkSize,
-				}
-				err = receiver.PullWithMetadata(ctx, targetAddr, listener, meta, msg.FileID)
-			} else {
-				err = receiver.Pull(ctx, targetAddr, listener, msg.FileID)
-			}
-			s.mu.Lock()
-			isSkipped := s.skippedFiles[msg.ItemIndex]
-			isPaused := s.pausedFiles[msg.ItemIndex]
-			isCanceled := s.batchCanceled
-			s.mu.Unlock()
-
-			if err == nil {
-				s.mu.Lock()
-				s.batchBaseBytes += msg.FileSize
-				for i := range s.currentBatchItems {
-					if s.currentBatchItems[i].Index == msg.ItemIndex {
-						s.currentBatchItems[i].Status = "completed"
-					}
-				}
-				completedItems := s.currentBatchItems
-				s.mu.Unlock()
-
-				s.Broadcast(NewEvent("item_completed", map[string]interface{}{
-					"item_index": msg.ItemIndex,
-					"items":      completedItems,
-				}))
-
-				if s.activeSession != nil {
-					s.activeSession.Send(session.Message{Type: "item_complete", ItemIndex: msg.ItemIndex})
-				}
-			} else if !isSkipped && !isPaused && !isCanceled && ctx.Err() == nil {
-				s.mu.Lock()
-				for i := range s.currentBatchItems {
-					if s.currentBatchItems[i].Index == msg.ItemIndex {
-						s.currentBatchItems[i].Status = "failed"
-					}
-				}
-				failedItems := s.currentBatchItems
-				s.mu.Unlock()
-
-				s.Broadcast(NewEvent("transfer_error", map[string]string{
-					"file":  msg.FileName,
-					"error": err.Error(),
-				}))
-				s.Broadcast(NewEvent("item_failed", map[string]interface{}{
-					"item_index": msg.ItemIndex,
-					"items":      failedItems,
-					"error":      err.Error(),
-				}))
-
-				if s.activeSession != nil {
-					s.activeSession.Send(session.Message{
-						Type:      "item_failed",
-						ItemIndex: msg.ItemIndex,
-						FileName:  msg.FileName,
-						Error:     err.Error(),
-					})
-				}
-			}
-		}(msg, bBaseBytes, bTotalBytes, bTotalFiles)
-
-	case "item_complete":
-		s.mu.Lock()
-		for i := range s.currentBatchItems {
-			if s.currentBatchItems[i].Index == msg.ItemIndex {
-				s.currentBatchItems[i].Status = "completed"
-			}
-		}
-		completedItems := s.currentBatchItems
-		s.mu.Unlock()
-
-		s.Broadcast(NewEvent("item_completed", map[string]interface{}{
-			"item_index": msg.ItemIndex,
-			"items":      completedItems,
-		}))
-
-		select {
-		case s.itemDoneChan <- true:
-		default:
-		}
-
-	case "item_failed":
-		s.mu.Lock()
-		for i := range s.currentBatchItems {
-			if s.currentBatchItems[i].Index == msg.ItemIndex {
-				s.currentBatchItems[i].Status = "failed"
-			}
-		}
-		failedItems := s.currentBatchItems
-		s.mu.Unlock()
-
-		s.Broadcast(NewEvent("item_failed", map[string]interface{}{
-			"item_index": msg.ItemIndex,
-			"items":      failedItems,
-			"error":      msg.Error,
-		}))
-
-		select {
-		case s.itemDoneChan <- false:
-		default:
-		}
-
-	case "item_skipped":
-		s.mu.Lock()
-		for i := range s.currentBatchItems {
-			if s.currentBatchItems[i].Index == msg.ItemIndex {
-				s.currentBatchItems[i].Status = "skipped"
-			}
-		}
-		skippedItems := s.currentBatchItems
-		s.mu.Unlock()
-
-		s.Broadcast(NewEvent("file_skipped", map[string]interface{}{
-			"item_index": msg.ItemIndex,
-			"items":      skippedItems,
-		}))
-
-		select {
-		case s.itemDoneChan <- false:
-		default:
-		}
-
-	case "batch_complete":
-		s.mu.Lock()
-		if s.itemCancel != nil {
-			s.itemCancel()
-			s.itemCancel = nil
-		}
-		if s.transferCancel != nil {
-			s.transferCancel()
-			s.transferCancel = nil
-		}
-		finalItems := s.currentBatchItems
-		s.mu.Unlock()
-		s.broadcastTransferComplete(map[string]interface{}{
-			"message": "All batch files mirrored successfully",
-			"items":   finalItems,
-		})
+		s.Broadcast(NewEvent("transfer_rejected", map[string]string{"message": message}))
 
 	case "accept":
-		s.mu.Lock()
-		offeredFile := s.lastOfferedFile
-		offered := s.lastOfferedListener
-		s.lastOfferedListener = nil
-		s.mu.Unlock()
-
-		s.Broadcast(NewEvent("transfer_accepted", map[string]interface{}{
-			"resume_bytes": msg.ResumeBytes,
-		}))
-
-		if offeredFile != "" && offered != nil {
-			go func(filePath string, tl *transfer.Listener, resume int64) {
-				var ctx context.Context
-				s.mu.Lock()
-				ctx, s.transferCancel = context.WithCancel(s.ctx)
-				s.mu.Unlock()
-
-				sender := engine.NewSender(s.config.Workers, uint32(s.config.ChunkSizeMB*1024*1024))
-				fi, _ := os.Stat(filePath)
-				size := int64(0)
-				if fi != nil {
-					size = fi.Size()
-				}
-				listener := newDaemonListener(s, filepath.Base(filePath), size, 0, 1, 0, size)
-				_ = sender.ServeOn(ctx, tl, filePath, "", listener, resume)
-			}(offeredFile, offered, msg.ResumeBytes)
-		}
+		s.serveAccepted(msg)
 
 	case "complete":
-		s.mu.Lock()
-		if s.transferCancel != nil {
-			s.transferCancel()
-			s.transferCancel = nil
-		}
-		s.mu.Unlock()
-		s.broadcastTransferComplete(map[string]interface{}{
-			"message": "Receiver confirmed transfer complete",
-		})
+		s.peerCompleted(msg)
 
 	case session.TypeError: // never answered, so that two peers cannot ping-pong errors
 		s.Broadcast(NewEvent("log", map[string]string{

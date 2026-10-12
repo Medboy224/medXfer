@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -232,10 +231,7 @@ func (s *DaemonServer) handleDisconnect(conn *websocket.Conn, req RequestMessage
 		s.activeSession = nil
 	}
 	s.pairedDeviceName = ""
-	if s.transferCancel != nil {
-		s.transferCancel()
-		s.transferCancel = nil
-	}
+	s.dropTransfers()
 	s.mu.Unlock()
 
 	s.Broadcast(NewEvent("disconnected", map[string]string{"reason": "user requested disconnect"}, req.ID))
@@ -288,114 +284,6 @@ func (s *DaemonServer) connectAndSend(targetIP string, paths []string, id string
 	_ = s.sendOverSession(paths, id)
 }
 
-func (s *DaemonServer) sendOverSession(paths []string, reqID string) error {
-	s.mu.RLock()
-	sess := s.activeSession
-	devName := s.config.DeviceName
-	s.mu.RUnlock()
-
-	if sess == nil {
-		return fmt.Errorf("no active session with peer")
-	}
-
-	isFolder := false
-	if len(paths) == 1 {
-		if fi, err := os.Stat(paths[0]); err == nil && fi.IsDir() {
-			isFolder = true
-		}
-	}
-	isFolderOrMulti := len(paths) > 1 || isFolder
-
-	if isFolderOrMulti {
-		m, err := manifest.Build(paths)
-		if err != nil {
-			s.Broadcast(NewEvent("action_error", map[string]string{"error": err.Error()}, reqID))
-			return err
-		}
-
-		var batchItems []BatchFileInfo
-		for i, it := range m.Items {
-			batchItems = append(batchItems, BatchFileInfo{
-				Index:   i,
-				RelPath: it.RelPath,
-				Size:    it.Size,
-				Status:  "pending",
-			})
-		}
-
-		s.mu.Lock()
-		s.lastOfferedManifest = m
-		s.currentBatchItems = batchItems
-		s.skippedFiles = make(map[int]bool)
-		s.batchCanceled = false
-		s.isPaused = false
-		s.mu.Unlock()
-
-		err = sess.Send(session.Message{
-			Type:       "batch_offer",
-			DeviceName: devName,
-			Batch:      m,
-		})
-		if err != nil {
-			s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed sending batch offer: %v", err)}, reqID))
-			return err
-		}
-
-		s.Broadcast(NewEvent("batch_offered", map[string]interface{}{
-			"summary":     m.SummaryString(),
-			"total_files": m.TotalFiles,
-			"total_bytes": m.TotalBytes,
-			"items":       batchItems,
-		}, reqID))
-		return nil
-
-	} else {
-		filePath := paths[0]
-		fi, err := os.Stat(filePath)
-		if err != nil {
-			s.Broadcast(NewEvent("action_error", map[string]string{"error": err.Error()}, reqID))
-			return err
-		}
-
-		// The transfer is joinable from the offer on, so the receiver's first DATA_JOIN after
-		// accepting finds it (CHAN-06). A new offer replaces the previous one.
-		tid, tl, err := s.registerTransfer(sess)
-		if err != nil {
-			s.Broadcast(NewEvent("action_error", map[string]string{"error": err.Error()}, reqID))
-			return err
-		}
-		s.mu.Lock()
-		if s.lastOfferedListener != nil {
-			s.lastOfferedListener.Close()
-		}
-		s.lastOfferedFile = filePath
-		s.lastOfferedListener = tl
-		s.mu.Unlock()
-
-		fileID := engine.GenerateFileIDFromInfo(fi)
-		err = sess.Send(session.Message{
-			Type:       "offer",
-			DeviceName: devName,
-			FileName:   filepath.Base(filePath),
-			FileSize:   fi.Size(),
-			FileID:     fileID,
-			DataPort:   s.devicePort(),
-			TransferID: tid.String(),
-		})
-		if err != nil {
-			tl.Close()
-			s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed sending offer: %v", err)}, reqID))
-			return err
-		}
-
-		s.Broadcast(NewEvent("file_offered", map[string]interface{}{
-			"file_name": filepath.Base(filePath),
-			"file_size": fi.Size(),
-		}, reqID))
-		return nil
-	}
-}
-
 func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessage) {
 	var payload RespondOfferPayload
 	if err := json.Unmarshal(req.Payload, &payload); err != nil {
@@ -415,7 +303,7 @@ func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessa
 	}
 
 	if !payload.Accept {
-		sess.Send(session.Message{Type: "reject"})
+		sess.Send(session.Message{Type: "reject", TransferID: offer.TransferID})
 		s.Broadcast(NewEvent("transfer_rejected", map[string]string{"message": "Transfer rejected by user"}, req.ID))
 		return
 	}
@@ -464,104 +352,19 @@ func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessa
 		}
 	}(saveDir)
 
-	policy := s.parseCollisionPolicy(policyStr)
-
-	if offer.Type == "batch_offer" {
-		sess.Send(session.Message{Type: "batch_accept"})
-		s.Broadcast(NewEvent("batch_accepted", map[string]interface{}{
-			"save_dir": saveDir,
-		}, req.ID))
-	} else {
-		resumeBytes, _ := engine.PeekResumeOffset(saveDir, offer.FileName, offer.FileID, offer.FileSize, 2*1024*1024)
-		sess.Send(session.Message{Type: "accept", ResumeBytes: resumeBytes})
-
-		secure, err := s.joinClient(offer.TransferID)
-		if err != nil {
-			s.Broadcast(NewEvent("transfer_error", map[string]string{"error": err.Error()}, req.ID))
-			return
-		}
-		receiver := engine.NewReceiver(saveDir, s.config.Workers)
-		receiver.SetCollisionPolicy(policy)
-		receiver.SetSecure(secure)
-
-		var ctx context.Context
-		s.mu.Lock()
-		ctx, s.transferCancel = context.WithCancel(s.ctx)
-		s.activeReceiver = receiver
-		if s.isPaused {
-			receiver.Pause()
-		}
-		s.mu.Unlock()
-
-		go func(offer *session.Message, resume int64) {
-			listener := newDaemonListener(s, offer.FileName, offer.FileSize, 0, 1, 0, offer.FileSize)
-			targetAddr := net.JoinHostPort(sess.RemoteIP(), strconv.Itoa(int(offer.DataPort)))
-
-			err := receiver.Pull(ctx, targetAddr, listener, offer.FileID)
-			if err == nil {
-				sess.Send(session.Message{Type: "complete"})
-				s.broadcastTransferComplete(map[string]interface{}{
-					"message": "File received successfully",
-				})
-			} else if ctx.Err() == nil {
-				s.Broadcast(NewEvent("transfer_error", map[string]string{"error": err.Error()}))
-			}
-		}(offer, resumeBytes)
-	}
+	s.receive(sess, offer, saveDir, s.parseCollisionPolicy(policyStr), req.ID)
 }
 
 func (s *DaemonServer) handlePause(conn *websocket.Conn, req RequestMessage) {
-	s.mu.Lock()
-	s.isPaused = true
-	if s.activeReceiver != nil {
-		s.activeReceiver.Pause()
-	}
-	sess := s.activeSession
-	s.mu.Unlock()
-
-	if sess != nil {
-		_ = sess.Send(session.Message{Type: "pause"})
-	}
-	s.Broadcast(NewEvent("transfer_paused", map[string]string{"message": "Transfer paused by user"}, req.ID))
+	s.pauseAll(true, false, req.ID)
 }
 
 func (s *DaemonServer) handleResume(conn *websocket.Conn, req RequestMessage) {
-	s.mu.Lock()
-	s.isPaused = false
-	if s.activeReceiver != nil {
-		s.activeReceiver.Resume()
-	}
-	sess := s.activeSession
-	s.mu.Unlock()
-
-	if sess != nil {
-		_ = sess.Send(session.Message{Type: "resume"})
-	}
-	s.Broadcast(NewEvent("transfer_resumed", map[string]string{"message": "Transfer resumed by user"}, req.ID))
+	s.pauseAll(false, false, req.ID)
 }
 
 func (s *DaemonServer) handleCancel(conn *websocket.Conn, req RequestMessage) {
-	s.mu.Lock()
-	s.isPaused = false
-	s.batchCanceled = true
-	if s.activeReceiver != nil {
-		s.activeReceiver.Resume()
-	}
-	if s.itemCancel != nil {
-		s.itemCancel()
-		s.itemCancel = nil
-	}
-	if s.transferCancel != nil {
-		s.transferCancel()
-		s.transferCancel = nil
-	}
-	sess := s.activeSession
-	s.mu.Unlock()
-
-	if sess != nil {
-		_ = sess.Send(session.Message{Type: "cancel"})
-	}
-	s.Broadcast(NewEvent("transfer_canceled", map[string]string{"message": "Transfer canceled by user"}, req.ID))
+	s.cancelTransfer(false, req.ID)
 }
 
 func (s *DaemonServer) handleSkipFile(conn *websocket.Conn, req RequestMessage) {
@@ -570,32 +373,7 @@ func (s *DaemonServer) handleSkipFile(conn *websocket.Conn, req RequestMessage) 
 		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid skip_file payload"}, req.ID))
 		return
 	}
-
-	s.mu.Lock()
-	skipIdx := payload.ItemIndex
-	s.skippedFiles[skipIdx] = true
-	for i := range s.currentBatchItems {
-		if s.currentBatchItems[i].Index == skipIdx {
-			s.currentBatchItems[i].Status = "skipped"
-		}
-	}
-	currIdx := s.currentBatchIndex
-	itemCancel := s.itemCancel
-	sess := s.activeSession
-	items := s.currentBatchItems
-	s.mu.Unlock()
-
-	if sess != nil {
-		_ = sess.Send(session.Message{Type: "skip_file", ItemIndex: skipIdx})
-	}
-	s.Broadcast(NewEvent("file_skipped", map[string]interface{}{
-		"item_index": skipIdx,
-		"items":      items,
-	}, req.ID))
-
-	if skipIdx == currIdx && itemCancel != nil {
-		itemCancel()
-	}
+	s.itemAction(itemSkip, payload.ItemIndex, false, req.ID)
 }
 
 func (s *DaemonServer) handlePauseFile(conn *websocket.Conn, req RequestMessage) {
@@ -604,32 +382,7 @@ func (s *DaemonServer) handlePauseFile(conn *websocket.Conn, req RequestMessage)
 		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid pause_file payload"}, req.ID))
 		return
 	}
-
-	s.mu.Lock()
-	pauseIdx := payload.ItemIndex
-	s.pausedFiles[pauseIdx] = true
-	for i := range s.currentBatchItems {
-		if s.currentBatchItems[i].Index == pauseIdx {
-			s.currentBatchItems[i].Status = "paused"
-		}
-	}
-	currIdx := s.currentBatchIndex
-	itemCancel := s.itemCancel
-	sess := s.activeSession
-	items := s.currentBatchItems
-	s.mu.Unlock()
-
-	if sess != nil {
-		_ = sess.Send(session.Message{Type: "pause_file", ItemIndex: pauseIdx})
-	}
-	s.Broadcast(NewEvent("file_paused", map[string]interface{}{
-		"item_index": pauseIdx,
-		"items":      items,
-	}, req.ID))
-
-	if pauseIdx == currIdx && itemCancel != nil {
-		itemCancel()
-	}
+	s.itemAction(itemPause, payload.ItemIndex, false, req.ID)
 }
 
 func (s *DaemonServer) handleResumeFile(conn *websocket.Conn, req RequestMessage) {
@@ -638,160 +391,7 @@ func (s *DaemonServer) handleResumeFile(conn *websocket.Conn, req RequestMessage
 		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid resume_file payload"}, req.ID))
 		return
 	}
-
-	s.mu.Lock()
-	resumeIdx := payload.ItemIndex
-	delete(s.pausedFiles, resumeIdx)
-	for i := range s.currentBatchItems {
-		if s.currentBatchItems[i].Index == resumeIdx && s.currentBatchItems[i].Status == "paused" {
-			s.currentBatchItems[i].Status = "pending"
-		}
-	}
-	sess := s.activeSession
-	items := s.currentBatchItems
-	s.mu.Unlock()
-
-	if sess != nil {
-		_ = sess.Send(session.Message{Type: "resume_file", ItemIndex: resumeIdx})
-	}
-	s.Broadcast(NewEvent("file_resumed", map[string]interface{}{
-		"item_index": resumeIdx,
-		"items":      items,
-	}, req.ID))
-
-	select {
-	case s.batchResumeChan <- struct{}{}:
-	default:
-	}
-}
-
-// daemonListener bridges engine.TransferListener callbacks into JSON WebSocket broadcasts
-type daemonListener struct {
-	server          *DaemonServer
-	currentFile     string
-	fileSize        int64
-	fileIndex       int
-	totalFiles      int
-	baseBatchBytes  int64
-	totalBatchBytes int64
-	lastUpdate      time.Time
-}
-
-func newDaemonListener(server *DaemonServer, fileName string, fileSize int64, fileIdx, totalFiles int, baseBatchBytes, totalBatchBytes int64) *daemonListener {
-	if totalFiles <= 0 {
-		totalFiles = 1
-	}
-	if totalBatchBytes <= 0 {
-		totalBatchBytes = fileSize
-	}
-	return &daemonListener{
-		server:          server,
-		currentFile:     fileName,
-		fileSize:        fileSize,
-		fileIndex:       fileIdx,
-		totalFiles:      totalFiles,
-		baseBatchBytes:  baseBatchBytes,
-		totalBatchBytes: totalBatchBytes,
-		lastUpdate:      time.Now(),
-	}
-}
-
-func (l *daemonListener) OnStart(fileName string, fileSize int64, chunkCount uint32) {
-	l.server.Broadcast(NewEvent("transfer_start", map[string]interface{}{
-		"current_file":      fileName,
-		"file_size":         fileSize,
-		"file_index":        l.fileIndex + 1,
-		"total_files":       l.totalFiles,
-		"batch_total_bytes": l.totalBatchBytes,
-	}))
-}
-
-func (l *daemonListener) OnProgress(stats engine.TransferStats) {
-	now := time.Now()
-	if now.Sub(l.lastUpdate) < 100*time.Millisecond && stats.ProgressPercent < 100 {
-		return // Throttle WebSocket telemetry to 10 updates/second to avoid flooding UI
-	}
-	l.lastUpdate = now
-
-	fileBytes := stats.BytesTransferred
-	fileTotal := stats.TotalBytes
-	if fileTotal <= 0 {
-		fileTotal = l.fileSize
-	}
-
-	cumulativeBatchBytes := l.baseBatchBytes + fileBytes
-	if cumulativeBatchBytes > l.totalBatchBytes {
-		cumulativeBatchBytes = l.totalBatchBytes
-	}
-
-	batchPercent := 0.0
-	if l.totalBatchBytes > 0 {
-		batchPercent = (float64(cumulativeBatchBytes) / float64(l.totalBatchBytes)) * 100.0
-		if batchPercent > 100.0 {
-			batchPercent = 100.0
-		}
-	} else {
-		batchPercent = stats.ProgressPercent
-	}
-
-	eta := 0
-	if stats.SpeedMBps > 0 && l.totalBatchBytes > cumulativeBatchBytes {
-		remainingBytes := l.totalBatchBytes - cumulativeBatchBytes
-		eta = int(float64(remainingBytes) / (stats.SpeedMBps * 1024 * 1024))
-	} else if stats.SpeedMBps > 0 && fileTotal > fileBytes {
-		remainingBytes := fileTotal - fileBytes
-		eta = int(float64(remainingBytes) / (stats.SpeedMBps * 1024 * 1024))
-	}
-
-	l.server.mu.RLock()
-	isPaused := l.server.isPaused
-	l.server.mu.RUnlock()
-
-	speed := stats.SpeedMBps
-	if isPaused {
-		speed = 0
-		eta = 0
-	}
-
-	l.server.RecordTransferSample(stats, batchPercent, l.currentFile, l.totalFiles, l.totalBatchBytes)
-
-	l.server.Broadcast(NewEvent("transfer_progress", TransferProgressData{
-		CurrentFile:        l.currentFile,
-		FileIndex:          l.fileIndex + 1,
-		TotalFiles:         l.totalFiles,
-		FileBytes:          fileBytes,
-		FileTotalBytes:     fileTotal,
-		BatchBytes:         cumulativeBatchBytes,
-		BatchTotalBytes:    l.totalBatchBytes,
-		SpeedMBps:          speed,
-		FilePercent:        stats.ProgressPercent,
-		BatchPercent:       batchPercent,
-		EtaSeconds:         eta,
-		IsPaused:           isPaused,
-		DiskWriteLatencyMs: stats.DiskWriteLatencyMs,
-		NetReadLatencyMs:   stats.NetReadLatencyMs,
-		Bottleneck:         stats.Bottleneck,
-		BottleneckReason:   stats.BottleneckReason,
-	}))
-}
-
-func (l *daemonListener) OnChunkFailed(chunkIndex uint32, retryCount int, err error) {
-	l.server.RecordTransferRetry()
-}
-
-func (l *daemonListener) OnComplete(savePath string, duration time.Duration) {
-	l.server.Broadcast(NewEvent("file_complete", map[string]interface{}{
-		"file":        l.currentFile,
-		"save_path":   savePath,
-		"duration_ms": duration.Milliseconds(),
-	}))
-}
-
-func (l *daemonListener) OnError(err error) {
-	l.server.Broadcast(NewEvent("transfer_error", map[string]string{
-		"file":  l.currentFile,
-		"error": err.Error(),
-	}))
+	s.itemAction(itemResume, payload.ItemIndex, false, req.ID)
 }
 
 type HotspotStartPayload struct {

@@ -8,30 +8,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/transfer"
 	"github.com/Medboy224/medXfer/pkg/ui"
 )
-
-// buildOffer describes paths (a file, several files or a folder) as one offer, and returns the
-// file behind each item.
-func buildOffer(paths []string, chunkSize uint32) (protocol.Offer, []string, error) {
-	m, err := manifest.Build(paths)
-	if err != nil {
-		return protocol.Offer{}, nil, err
-	}
-	offer := protocol.Offer{Root: m.RootName, ChunkSize: chunkSize, TotalBytes: m.TotalBytes}
-	files := make([]string, len(m.Items))
-	for i, it := range m.Items {
-		offer.Items = append(offer.Items, protocol.OfferItem{Item: i, Path: it.RelPath, Size: it.Size, FileID: it.FileID})
-		files[i] = it.FullPath
-	}
-	if offer.Root == "" && len(offer.Items) == 1 {
-		offer.Root = offer.Items[0].Path
-	}
-	return offer, files, offer.Validate()
-}
 
 // offerSummary is how the terminal names an offer: a file, or a folder with its count.
 func offerSummary(o protocol.Offer) string {

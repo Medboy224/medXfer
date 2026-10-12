@@ -337,7 +337,11 @@ Le champ CRC32 est supprimé : TLS authentifie chaque enregistrement. Le contrô
 | `0x22` | `CHUNK` | `item` u32 ‖ `index` u32 ‖ `length` u32 ‖ `sha256` (32 octets) ‖ données. Taille de l'en-tête de chunk : **44 octets**. |
 | `0x23` | `CHUNK_ERR` | `item` u32 ‖ `index` u32 ‖ `code` u16 (`SOURCE_CHANGED`, `READ_ERROR`) |
 
-Messages `CONTROL` (champ `type`) : `hello`, `pair_secret`, `pair_pake`, `pair_confirm`, `offer`, `accept`, `reject`, `pause`, `resume`, `cancel`, `digest_req`, `digest`, `done`, `error`. Les champs JSON inconnus sont ignorés ; un type inconnu provoque `error{code: unsupported}`.
+Messages `CONTROL` (champ `type`) : `hello`, `pair_secret`, `pair_pake`, `pair_confirm`, `offer`, `offer_items`, `accept`, `reject`, `pause`, `resume`, `skip`, `cancel`, `digest_req`, `digest`, `done`, `error`. Les champs JSON inconnus sont ignorés ; un type inconnu provoque `error{code: unsupported}`.
+
+- `offer_items{transfer_id, items}` : page suivante d'une offre de plus de 1 Mio. L'`offer` porte alors l'en-tête, les premiers éléments et `count`, le nombre total d'éléments ; le receveur valide l'offre complète avant de l'afficher (plan J4a, D2).
+- `pause{transfer_id, item?}` et `resume{transfer_id, item?}` : sans `item`, tout le transfert ; avec `item`, un seul élément. `skip{transfer_id, item}` abandonne un élément. Ces décisions s'appliquent chez le receveur, dont l'ordonnanceur cesse ou reprend ses `CHUNK_REQ` ; une demande de l'émetteur lui est transmise (plan J4a, D6).
+- `reject{transfer_id, code?}` : `code: busy` quand un transfert est déjà actif avec cet appareil (`LIM-08`).
 
 ### 8.3 Déroulement d'un transfert
 1. **Offre.** L'émetteur envoie `offer` : `transfer_id` (128 bits aléatoires), liste d'éléments `{item, path, size}`, `total_bytes`, `chunk_size` proposée. Un seul `offer` couvre un fichier, plusieurs fichiers ou un dossier.

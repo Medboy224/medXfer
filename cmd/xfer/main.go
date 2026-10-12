@@ -709,7 +709,7 @@ func handleNode() {
 				}
 
 				// One offer for a file, several files or a folder (bible §8.3).
-				offer, files, err := buildOffer(rawPaths, protocol.DefaultChunkSize)
+				offer, files, err := transfer.BuildOffer(rawPaths, protocol.DefaultChunkSize)
 				if err != nil {
 					fmt.Printf("[-] Cannot send: %v\n", err)
 					break
@@ -943,7 +943,7 @@ func handleSend(args []string) {
 	localID = id
 
 	// One offer for a file, several files or a folder (bible §8.3).
-	offer, files, err := buildOffer(sendCmd.Args(), uint32(*chunkSizeMB)<<20)
+	offer, files, err := transfer.BuildOffer(sendCmd.Args(), uint32(*chunkSizeMB)<<20)
 	if err != nil {
 		fmt.Printf("[-] Cannot send: %v\n", err)
 		return

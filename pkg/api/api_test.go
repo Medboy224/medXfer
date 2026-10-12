@@ -188,10 +188,10 @@ func TestPauseResumeAndSkipWebSocketCommands(t *testing.T) {
 	node.Request("skip_file", `{"item_index": 2}`)
 	node.WaitEvent("file_skipped", 0)
 	server.mu.RLock()
-	skipped := server.skippedFiles[2]
+	status := server.currentBatchItems[2].Status
 	server.mu.RUnlock()
-	if !skipped {
-		t.Fatalf("File index 2 should be in skippedFiles")
+	if status != "skipped" {
+		t.Fatalf("item 2 is %q; want skipped", status)
 	}
 
 	// 4. "cancel"
@@ -239,31 +239,31 @@ func TestPerFilePauseAndResumeWebSocketCommands(t *testing.T) {
 	}
 	server.mu.Unlock()
 
-	itemState := func(i int) (paused bool, status string) {
+	itemState := func(i int) string {
 		server.mu.RLock()
 		defer server.mu.RUnlock()
-		return server.pausedFiles[i], server.currentBatchItems[i].Status
+		return server.currentBatchItems[i].Status
 	}
 
 	// 1. "pause_file" for the item in progress
 	node.Request("pause_file", `{"item_index": 0}`)
 	node.WaitEvent("file_paused", 0)
-	if paused, status := itemState(0); !paused || status != "paused" {
-		t.Fatalf("item 0: paused=%v status=%q; want true, paused", paused, status)
+	if status := itemState(0); status != "paused" {
+		t.Fatalf("item 0 is %q; want paused", status)
 	}
 
 	// 2. "pause_file" for a pending item
 	node.Request("pause_file", `{"item_index": 2}`)
 	node.WaitEvent("file_paused", 0)
-	if paused, status := itemState(2); !paused || status != "paused" {
-		t.Fatalf("item 2: paused=%v status=%q; want true, paused", paused, status)
+	if status := itemState(2); status != "paused" {
+		t.Fatalf("item 2 is %q; want paused", status)
 	}
 
 	// 3. "resume_file" for item 0
 	node.Request("resume_file", `{"item_index": 0}`)
 	node.WaitEvent("file_resumed", 0)
-	if paused, status := itemState(0); paused || status != "pending" {
-		t.Fatalf("item 0 after resume: paused=%v status=%q; want false, pending", paused, status)
+	if status := itemState(0); status != "pending" {
+		t.Fatalf("item 0 after resume is %q; want pending", status)
 	}
 }
 
@@ -1434,18 +1434,20 @@ func TestBatchItemFailedAdvance(t *testing.T) {
 	recvServer := NewDaemonServer(0, recvDir, "ReceiverNode")
 	pair := testkit.StartPair(t, NewDaemonServer(0, sendDir, "SenderNode"), recvServer)
 
-	// Item 1 is skipped on the receiver before the transfer: the batch must go on without it.
-	recvServer.mu.Lock()
-	recvServer.skippedFiles[1] = true
-	recvServer.mu.Unlock()
-
+	// Item 1 is skipped on the receiver before it accepts: the transfer goes on without it.
 	pair.Send([]string{folderToShare}, testkit.SendOptions{})
-	pair.AcceptOffer(0)
+	pair.Receiver.WaitEvent("incoming_offer", 0)
+	pair.Receiver.Request("skip_file", `{"item_index": 1}`)
+	pair.Receiver.WaitEvent("file_skipped", 0)
+	pair.Receiver.Request("respond_offer", map[string]any{"accept": true})
 	pair.WaitTransferDone(0)
 
 	for _, name := range []string{"file_0.txt", "file_2.txt"} {
 		if _, err := os.Stat(filepath.Join(recvDir, "batch_with_skip", name)); err != nil {
 			t.Fatalf("Expected %s to exist: %v", name, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(recvDir, "batch_with_skip", "file_1.txt")); err == nil {
+		t.Fatal("the skipped file_1.txt was received")
 	}
 }
