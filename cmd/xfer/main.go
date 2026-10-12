@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -25,13 +24,11 @@ import (
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/hotspot"
 	"github.com/Medboy224/medXfer/pkg/identity"
-	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/Medboy224/medXfer/pkg/transfer"
-	"github.com/Medboy224/medXfer/pkg/ui"
 )
 
 const defaultPort = 18888
@@ -63,65 +60,6 @@ func isLocalIP(ipStr string) bool {
 
 func getLocalIP() string {
 	return discovery.GetPrimaryLocalIP()
-}
-
-type cliListener struct {
-	bar      *ui.ProgressBar
-	cancel   context.CancelFunc
-	finished bool
-	isSender bool
-}
-
-func (l *cliListener) OnStart(fileName string, fileSize int64, chunkCount uint32) {
-	l.bar = ui.NewProgressBar()
-	l.finished = false
-}
-
-func (l *cliListener) OnProgress(stats engine.TransferStats) {
-	if l.bar != nil {
-		l.bar.Render(stats.BytesTransferred, stats.TotalBytes, stats.SpeedMBps)
-	}
-	// The sender counts bytes written to its sockets, not bytes received: at 100 % the end of
-	// the file may still sit in the send buffers. It is done once the receiver, which closes
-	// its connections after finalizing the file, has gone (#44).
-	if l.isSender && !l.finished && stats.TotalBytes > 0 && stats.BytesTransferred >= stats.TotalBytes &&
-		stats.ActiveStreams == 0 {
-		l.finished = true
-		if l.cancel != nil {
-			go func() {
-				time.Sleep(100 * time.Millisecond)
-				fmt.Println("\n[+] Transfer completed.")
-				l.cancel()
-			}()
-		}
-	}
-}
-
-func (l *cliListener) OnChunkFailed(chunkIndex uint32, retryCount int, err error) {}
-
-func (l *cliListener) OnComplete(savePath string, duration time.Duration) {
-	if l.bar != nil {
-		l.bar.Finish()
-		l.bar = nil
-	}
-	if !l.isSender {
-		fmt.Printf("\n[+] Transfer completed in %s\n", duration.Round(time.Millisecond))
-	}
-	if !l.finished && l.cancel != nil {
-		l.finished = true
-		l.cancel()
-	}
-}
-
-func (l *cliListener) OnError(err error) {
-	if l.bar != nil {
-		l.bar.Finish()
-		l.bar = nil
-	}
-	if !l.finished && l.cancel != nil {
-		l.finished = true
-		l.cancel()
-	}
 }
 
 // normalizeCommand tolerates how the subcommand reaches us from Termux and Windows scripts:
@@ -278,15 +216,12 @@ func handleNode() {
 	fmt.Println("--------------------------------------------------")
 
 	var activeSession *session.Channel
-	var pendingOffer *session.Message
+	var incomingOffer *session.Message // an offer whose pages are still arriving (D2)
+	var pendingOffer *session.Message  // a complete offer waiting for the user's answer
 	var lastScannedPeers []discovery.Peer
-	var lastOfferedFile string
-	var lastOfferedRelPath string
-	var lastOfferedListener *transfer.Listener // data connections of the file last offered
-	var lastOfferedManifest *manifest.Manifest
+	var lastOffered *nodeOffer // what this node offered last, until the peer answers
 	var transferCancel context.CancelFunc
 	var printPrompt func()
-	itemDoneChan := make(chan bool, 1)
 
 	// Global gracefully shutdown trap for Ctrl+C
 	sigChan := make(chan os.Signal, 1)
@@ -433,11 +368,7 @@ func handleNode() {
 			return
 		}
 		if pendingOffer != nil {
-			if pendingOffer.Type == "batch_offer" && pendingOffer.Batch != nil {
-				fmt.Printf("\n[?] Accept folder %s? [Y/n]: ", pendingOffer.Batch.SummaryString())
-			} else {
-				fmt.Printf("\n[?] Accept '%s' (%.2f MB)? [Y/n]: ", pendingOffer.FileName, float64(pendingOffer.FileSize)/(1024*1024))
-			}
+			fmt.Printf("\n[?] Accept %s? [Y/n]: ", offerSummary(*pendingOffer.Offer))
 		} else if activeSession != nil {
 			fmt.Printf("\n[Paired: %s] > ", activeSession.RemoteIP())
 		} else {
@@ -445,6 +376,23 @@ func handleNode() {
 		}
 	}
 	printPrompt()
+
+	// takeNodeOffer adds a page to the offer being received; once it is complete and valid,
+	// it asks the user. A bad offer is refused.
+	takeNodeOffer := func(page []protocol.OfferItem) *session.Message {
+		tid := incomingOffer.Offer.TransferID
+		m, err := completeNodeOffer(&incomingOffer, page)
+		if err != nil {
+			fmt.Printf("\n[-] Refused the peer's offer: %v\n", err)
+			if activeSession != nil {
+				_ = activeSession.Send(session.Message{Type: "reject", TransferID: tid})
+			}
+			printPrompt()
+		} else if m != nil {
+			printPrompt()
+		}
+		return m
+	}
 
 	for {
 		select {
@@ -470,52 +418,44 @@ func handleNode() {
 				continue
 			}
 			if pendingOffer != nil {
-				if strings.ToLower(text) == "n" {
-					activeSession.Send(session.Message{Type: "reject"})
-					fmt.Println("[-] Transfer rejected.")
-					pendingOffer = nil
+				m := pendingOffer
+				pendingOffer = nil
+				if activeSession == nil {
 					printPrompt()
 					continue
 				}
-
-				if pendingOffer.Type == "batch_offer" {
-					if transferCancel != nil {
-						transferCancel()
-						transferCancel = nil
-					}
-					fmt.Printf("[+] Batch accepted! Preparing to receive %d files...\n", pendingOffer.Batch.TotalFiles)
-					activeSession.Send(session.Message{Type: "batch_accept"})
-					pendingOffer = nil
+				if strings.ToLower(text) == "n" {
+					activeSession.Send(session.Message{Type: "reject", TransferID: m.Offer.TransferID})
+					fmt.Println("[-] Transfer rejected.")
+					printPrompt()
 					continue
 				}
-
-				// Single file transfer
 				if transferCancel != nil {
 					transferCancel()
 					transferCancel = nil
 				}
-
-				resumeBytes, _ := engine.PeekResumeOffset(".", pendingOffer.FileName, pendingOffer.FileID, pendingOffer.FileSize, 2*1024*1024)
-
-				if resumeBytes > 0 {
-					fmt.Printf("[+] Transfer accepted. Resuming from %.2f MB (%.1f%%)...\n", float64(resumeBytes)/(1024*1024), float64(resumeBytes)/float64(pendingOffer.FileSize)*100.0)
-				} else {
-					fmt.Println("[+] Transfer accepted. Starting download...")
+				offer := *m.Offer
+				tid, err := transfer.ParseID(offer.TransferID)
+				if err != nil {
+					fmt.Printf("[-] Invalid offer: %v\n", err)
+					activeSession.Send(session.Message{Type: "reject", TransferID: offer.TransferID})
+					printPrompt()
+					continue
 				}
-				activeSession.Send(session.Message{Type: "accept", ResumeBytes: resumeBytes})
+				fmt.Printf("[+] Transfer accepted. Receiving %s...\n", offerSummary(offer))
+				activeSession.Send(session.Message{Type: "accept", TransferID: offer.TransferID})
 
 				var ctx context.Context
 				ctx, transferCancel = context.WithCancel(context.Background())
-
-				go func(ctx context.Context, ip string, port int, fileID, transferID string) {
-					err := runNodeRecv(ctx, ip, port, ".", activeSession, fileID, transferID)
-					if err == nil {
-						activeSession.Send(session.Message{Type: "complete"})
+				addr := net.JoinHostPort(activeSession.RemoteIP(), strconv.Itoa(m.DataPort))
+				// Every data connection is pinned to the session's peer and joins its transfer (CHAN-06).
+				cfg := securechan.Config{Identity: localID, Expected: sessionPeer(activeSession)}
+				go func(ctx context.Context, s *session.Channel) {
+					defer printPrompt()
+					if receiveOffer(ctx, addr, ".", transfer.DefaultWorkers, offer, cfg, tid) == nil {
+						s.Send(session.Message{Type: "complete", TransferID: offer.TransferID})
 					}
-					printPrompt()
-				}(ctx, activeSession.RemoteIP(), pendingOffer.DataPort, pendingOffer.FileID, pendingOffer.TransferID)
-
-				pendingOffer = nil
+				}(ctx, activeSession)
 				continue
 			}
 
@@ -725,6 +665,8 @@ func handleNode() {
 					activeSession.Send(session.Message{Type: "disconnect"})
 					activeSession.Close()
 					activeSession = nil
+					lastOffered.close() // its data connections end with the session
+					lastOffered, incomingOffer, pendingOffer = nil, nil, nil
 					fmt.Println("[*] Disconnected.")
 				}
 			case "stop":
@@ -766,66 +708,31 @@ func handleNode() {
 					rawPaths = []string{rawArg}
 				}
 
-				// Check if the target is a folder or multiple files
-				isFolderOrMulti := len(rawPaths) > 1
-				if len(rawPaths) == 1 {
-					if info, err := os.Stat(rawPaths[0]); err == nil && info.IsDir() {
-						isFolderOrMulti = true
-					}
+				// One offer for a file, several files or a folder (bible §8.3).
+				offer, files, err := buildOffer(rawPaths, protocol.DefaultChunkSize)
+				if err != nil {
+					fmt.Printf("[-] Cannot send: %v\n", err)
+					break
 				}
+				if transferCancel != nil {
+					transferCancel()
+					transferCancel = nil
+				}
+				// Joinable from the offer on: the receiver's first DATA_JOIN finds it.
+				tid, tl, err := registerNodeTransfer(nodeHub, activeSession)
+				if err != nil {
+					fmt.Printf("[-] %v\n", err)
+					break
+				}
+				lastOffered.close()
+				offer.TransferID = tid.String()
+				lastOffered = &nodeOffer{offer: offer, files: files, l: tl}
 
-				if isFolderOrMulti {
-					fmt.Println("[*] Scanning directory to build manifest...")
-					m, err := manifest.Build(rawPaths)
-					if err != nil {
-						fmt.Printf("[-] Failed to build manifest: %v\n", err)
-						break
-					}
-					if transferCancel != nil {
-						transferCancel()
-						transferCancel = nil
-					}
-					lastOfferedManifest = m
-					offer := session.Message{
-						Type:  "batch_offer",
-						Batch: m,
-					}
-					fmt.Printf("[*] Offering folder %s... Waiting for peer response.\n", m.SummaryString())
-					activeSession.Send(offer)
-				} else {
-					filePath := rawPaths[0]
-					info, err := os.Stat(filePath)
-					if err != nil {
-						fmt.Println("[-] Cannot read file:", err)
-						break
-					}
-
-					if transferCancel != nil {
-						transferCancel()
-						transferCancel = nil
-					}
-
-					// Joinable from the offer on: the receiver's first DATA_JOIN finds it.
-					tid, tl, err := registerNodeTransfer(nodeHub, activeSession)
-					if err != nil {
-						fmt.Printf("[-] %v\n", err)
-						break
-					}
-					if lastOfferedListener != nil {
-						lastOfferedListener.Close()
-					}
-					lastOfferedFile = filePath
-					lastOfferedListener = tl
-					lastOfferedRelPath = ""
-					lastOfferedManifest = nil
-					fileID := engine.GenerateFileID(filePath)
-
-					offer := session.Message{
-						Type: "offer", FileName: filepath.Base(filePath), FileSize: info.Size(),
-						FileID: fileID, DataPort: nodePort, TransferID: tid.String(),
-					}
-					fmt.Println("[*] Sending offer to peer... Waiting for response.")
-					activeSession.Send(offer)
+				msg, follow := session.OfferMessages(session.Message{Type: "offer", DataPort: nodePort, TransferID: offer.TransferID}, offer)
+				fmt.Printf("[*] Offering %s... Waiting for peer response.\n", offerSummary(offer))
+				activeSession.Send(msg)
+				for _, m := range follow {
+					activeSession.Send(m)
 				}
 
 			default:
@@ -840,6 +747,8 @@ func handleNode() {
 				if activeSession != nil {
 					activeSession.Close()
 					activeSession = nil
+					lastOffered.close() // its data connections end with the session
+					lastOffered, incomingOffer, pendingOffer = nil, nil, nil
 				}
 				if transferCancel != nil {
 					transferCancel()
@@ -847,168 +756,51 @@ func handleNode() {
 				}
 				printPrompt()
 
-			case "offer", "batch_offer":
+			case "offer":
 				if transferCancel != nil {
 					transferCancel()
 					transferCancel = nil
 				}
-				pendingOffer = &msg
-				printPrompt()
+				incomingOffer, pendingOffer = nil, nil
+				if msg.Offer == nil {
+					fmt.Println("\n[-] The peer sent an offer without its items.")
+					printPrompt()
+					break
+				}
+				m := msg
+				incomingOffer = &m
+				pendingOffer = takeNodeOffer(nil)
+
+			case session.TypeOfferItems: // the next page of a paged offer (D2)
+				if incomingOffer == nil || msg.TransferID != incomingOffer.Offer.TransferID {
+					break
+				}
+				pendingOffer = takeNodeOffer(msg.Items)
 
 			case "reject":
-				if lastOfferedListener != nil {
-					lastOfferedListener.Close() // nobody may join a refused offer
-					lastOfferedListener = nil
-				}
+				lastOffered.close() // nobody may join a refused offer
+				lastOffered = nil
 				fmt.Println("\n[-] Peer rejected the file transfer.")
 				printPrompt()
 
-			case "batch_accept":
-				if lastOfferedManifest == nil {
-					fmt.Println("[-] No active batch manifest found.")
-					printPrompt()
-					continue
-				}
-				fmt.Printf("\n[+] Peer accepted batch! Starting transfer of %s...\n", lastOfferedManifest.SummaryString())
-				var ctx context.Context
-				ctx, transferCancel = context.WithCancel(context.Background())
-
-				go func(ctx context.Context, m *manifest.Manifest) {
-					defer printPrompt()
-					for idx, item := range m.Items {
-						select {
-						case <-ctx.Done():
-							fmt.Println("\n[*] Batch transfer canceled.")
-							return
-						default:
-						}
-
-						fmt.Printf("\n[%d/%d] Sending '%s' (%.2f MB)...\n", idx+1, m.TotalFiles, item.RelPath, float64(item.Size)/(1024*1024))
-
-						// Clear any previous done signal
-						select {
-						case <-itemDoneChan:
-						default:
-						}
-
-						// Register the item FIRST: the receiver joins it as soon as it hears of it.
-						itemCtx, itemCancel := context.WithCancel(ctx)
-						tid, tl, err := registerNodeTransfer(nodeHub, activeSession)
-						if err != nil {
-							fmt.Printf("\n[-] Failed to serve '%s': %v (skipping)\n", item.RelPath, err)
-							itemCancel()
-							continue
-						}
-						go func(fPath, rPath string) {
-							_ = runNodeServe(itemCtx, tl, fPath, rPath, 4, 2*1024*1024, 0)
-						}(item.FullPath, item.RelPath)
-
-						activeSession.Send(session.Message{
-							Type:       "batch_item",
-							FileName:   item.RelPath,
-							FileSize:   item.Size,
-							FileID:     item.FileID,
-							DataPort:   nodePort,
-							TransferID: tid.String(),
-							ItemIndex:  idx,
-							ChunkSize:  2 * 1024 * 1024,
-						})
-
-						select {
-						case <-ctx.Done():
-							itemCancel()
-							return
-						case success := <-itemDoneChan:
-							itemCancel()
-							if !success {
-								fmt.Printf("\n[-] Peer failed to download '%s'\n", item.RelPath)
-							}
-						case <-time.After(60 * time.Second):
-							itemCancel()
-							fmt.Printf("\n[-] Timeout on '%s' (no response after 60s, skipping)\n", item.RelPath)
-						}
-					}
-					fmt.Printf("\n[+] Batch transfer complete! All %d files mirrored successfully.\n", m.TotalFiles)
-					activeSession.Send(session.Message{Type: "batch_complete"})
-				}(ctx, lastOfferedManifest)
-
-			case "batch_item":
-				resumeBytes, _ := engine.PeekResumeOffset(".", msg.FileName, msg.FileID, msg.FileSize, 2*1024*1024)
-
-				if msg.FileSize > 0 && resumeBytes == msg.FileSize {
-					fmt.Printf("\n[%d] '%s' is already complete (skipping).\n", msg.ItemIndex+1, msg.FileName)
-					activeSession.Send(session.Message{Type: "item_complete", ItemIndex: msg.ItemIndex})
-					continue
-				}
-
-				if resumeBytes > 0 {
-					fmt.Printf("\n[%d] Resuming '%s' from %.2f MB (%.1f%%)...\n", msg.ItemIndex+1, msg.FileName, float64(resumeBytes)/(1024*1024), float64(resumeBytes)/float64(msg.FileSize)*100.0)
-				} else {
-					fmt.Printf("\n[%d] Receiving '%s' (%.2f MB)...\n", msg.ItemIndex+1, msg.FileName, float64(msg.FileSize)/(1024*1024))
-				}
-
-				var itemRecvCtx context.Context
-				itemRecvCtx, transferCancel = context.WithCancel(context.Background())
-
-				go func(ctx context.Context, ip string, port int, fileID, transferID string, itemIdx int, meta protocol.FileMetadata) {
-					err := runNodeRecv(ctx, ip, port, ".", activeSession, fileID, transferID, meta)
-					if err == nil {
-						activeSession.Send(session.Message{Type: "item_complete", ItemIndex: itemIdx})
-					} else {
-						fmt.Printf("\n[-] Failed to receive '%s': %v\n", meta.FileName, err)
-						activeSession.Send(session.Message{
-							Type:      "item_failed",
-							ItemIndex: itemIdx,
-							FileName:  meta.FileName,
-							Error:     err.Error(),
-						})
-					}
-				}(itemRecvCtx, activeSession.RemoteIP(), msg.DataPort, msg.FileID, msg.TransferID, msg.ItemIndex, protocol.FileMetadata{
-					FileName:  msg.FileName,
-					FileSize:  msg.FileSize,
-					FileID:    msg.FileID,
-					ChunkSize: msg.ChunkSize,
-				})
-
-			case "item_complete":
-				select {
-				case itemDoneChan <- true:
-				default:
-				}
-
-			case "item_failed":
-				select {
-				case itemDoneChan <- false:
-				default:
-				}
-
-			case "batch_complete":
-				fmt.Println("\n[+] Batch transfer complete! All files mirrored successfully.")
-				if transferCancel != nil {
-					transferCancel()
-					transferCancel = nil
-				}
-				printPrompt()
-
 			case "accept":
-				if msg.ResumeBytes > 0 {
-					fmt.Printf("\n[+] Peer accepted! Resuming from %.2f MB... Sending...\n", float64(msg.ResumeBytes)/(1024*1024))
-				} else {
-					fmt.Println("\n[+] Peer accepted! Sending...")
+				o := lastOffered
+				lastOffered = nil
+				if o == nil || msg.TransferID != o.offer.TransferID {
+					fmt.Println("\n[-] The peer accepted an offer this node no longer makes.")
+					o.close()
+					printPrompt()
+					break
 				}
+				fmt.Println("\n[+] Peer accepted! Sending...")
 				var ctx context.Context
 				ctx, transferCancel = context.WithCancel(context.Background())
-
-				offered := lastOfferedListener
-				lastOfferedListener = nil
-				go func(offeredFile, offeredRelPath string, tl *transfer.Listener, resumeOffset int64) {
-					if tl != nil {
-						_ = runNodeServe(ctx, tl, offeredFile, offeredRelPath, 4, 2*1024*1024, resumeOffset)
+				go func() {
+					defer printPrompt()
+					if err := runNodeServe(ctx, o); err != nil {
+						fmt.Printf("\n[-] Transfer error: %v\n", err)
 					}
-					if lastOfferedManifest == nil {
-						printPrompt()
-					}
-				}(lastOfferedFile, lastOfferedRelPath, offered, msg.ResumeBytes)
+				}()
 
 			case "cancel":
 				fmt.Println("\n[-] Peer cancelled the transfer.")
@@ -1041,6 +833,8 @@ func handleNode() {
 				fmt.Println("\n[*] Connection lost.")
 				activeSession.Close()
 				activeSession = nil
+				lastOffered.close() // its data connections end with the session
+				lastOffered, incomingOffer, pendingOffer = nil, nil, nil
 				if transferCancel != nil {
 					transferCancel()
 					transferCancel = nil
@@ -1066,32 +860,56 @@ func registerNodeTransfer(hub *transfer.Hub, s *session.Channel) (transfer.ID, *
 	return id, l, err
 }
 
-// runNodeServe serves filePath on the data connections of a registered transfer.
-func runNodeServe(parentCtx context.Context, tl *transfer.Listener, filePath, relPath string, workers int, chunkSize uint32, resumeOffset int64) error {
-	ctx, cancel := context.WithCancel(parentCtx)
-	defer cancel()
-	sender := engine.NewSender(workers, chunkSize)
-	listener := &cliListener{cancel: cancel, isSender: true}
-	return sender.ServeOn(ctx, tl, filePath, relPath, listener, resumeOffset)
+// nodeOffer is what a node offered its peer, until the peer accepts or rejects it.
+type nodeOffer struct {
+	offer protocol.Offer
+	files []string
+	l     *transfer.Listener // the offer's data connections, joinable by the peer only
 }
 
-// runNodeRecv downloads a transfer from the paired device's port: every data connection is
-// pinned to its key and joins the transfer by its id (CHAN-06).
-func runNodeRecv(parentCtx context.Context, ip string, port int, outDir string, s *session.Channel, fileID, transferID string, meta ...protocol.FileMetadata) error {
-	tid, err := transfer.ParseID(transferID)
+// close withdraws the offer: nobody may join it any more.
+func (o *nodeOffer) close() {
+	if o != nil && o.l != nil {
+		o.l.Close()
+	}
+}
+
+// completeNodeOffer adds page to the offer being received and returns it once all its items
+// are there and it is valid (LIM-05). A bad offer is dropped, with the error to report.
+func completeNodeOffer(incoming **session.Message, page []protocol.OfferItem) (*session.Message, error) {
+	m := *incoming
+	if page != nil {
+		if err := m.Offer.AddPage(page); err != nil {
+			*incoming = nil
+			return nil, err
+		}
+	}
+	if !m.Offer.Complete() {
+		return nil, nil
+	}
+	*incoming = nil
+	m.Offer.Count = 0
+	if err := m.Offer.Validate(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// runNodeServe serves an accepted offer on its data connections, until the receiver has
+// everything or ctx ends.
+func runNodeServe(parentCtx context.Context, o *nodeOffer) error {
+	ctx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
+	defer o.close()
+	sender, err := transfer.NewSender(o.offer, o.files)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithCancel(parentCtx)
-	defer cancel()
-	targetAddr := net.JoinHostPort(ip, strconv.Itoa(int(port)))
-	receiver := engine.NewReceiver(outDir, 4)
-	receiver.SetSecure(transfer.JoinFunc(securechan.Config{Identity: localID, Expected: sessionPeer(s)}, tid))
-	listener := &cliListener{cancel: cancel, isSender: false}
-	if len(meta) > 0 && meta[0].ChunkSize > 0 {
-		return receiver.PullWithMetadata(ctx, targetAddr, listener, meta[0], fileID)
+	sender.SetEvents(newCLIEvents(true, cancel))
+	if err := sender.Serve(ctx, o.l); err != nil && ctx.Err() == nil {
+		return err
 	}
-	return receiver.Pull(ctx, targetAddr, listener, fileID)
+	return nil
 }
 
 // =====================================================================
@@ -1100,9 +918,8 @@ func runNodeRecv(parentCtx context.Context, ip string, port int, outDir string, 
 func handleSend(args []string) {
 	normalizedArgs := reorderArgs(args)
 	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
-	portFlag := sendCmd.Int("port", defaultPort, "TCP port to bind sender on")
-	workersFlag := sendCmd.Int("workers", 4, "Number of parallel TCP streams")
-	chunkSizeMB := sendCmd.Int("chunk", 2, "Chunk slice size in MB")
+	portFlag := sendCmd.Int("port", defaultPort, "TCP port of this device (pairing and data)")
+	chunkSizeMB := sendCmd.Int("chunk", protocol.DefaultChunkSize>>20, "Chunk size in MB (1 to 8)")
 	createNetwork := sendCmd.Bool("create-network", false, "Create a dedicated Wi-Fi Direct network")
 	var interactive bool
 	sendCmd.BoolVar(&interactive, "i", false, "Require confirmation before sending")
@@ -1117,7 +934,6 @@ func handleSend(args []string) {
 		fmt.Println("Error: -chunk must be between 1 and 8 (MB).")
 		os.Exit(1)
 	}
-	chunkSize := uint32(*chunkSizeMB * 1024 * 1024)
 
 	id, trust, err := loadIdentity(configDir())
 	if err != nil {
@@ -1126,148 +942,18 @@ func handleSend(args []string) {
 	}
 	localID = id
 
-	rawPaths := sendCmd.Args()
-	isFolderOrMulti := len(rawPaths) > 1
-	if len(rawPaths) == 1 {
-		if info, err := os.Stat(rawPaths[0]); err == nil && info.IsDir() {
-			isFolderOrMulti = true
-		}
+	// One offer for a file, several files or a folder (bible §8.3).
+	offer, files, err := buildOffer(sendCmd.Args(), uint32(*chunkSizeMB)<<20)
+	if err != nil {
+		fmt.Printf("[-] Cannot send: %v\n", err)
+		return
 	}
-
-	if isFolderOrMulti {
-		m, err := manifest.Build(rawPaths)
-		if err != nil {
-			fmt.Printf("[-] Failed to scan folder/files: %v\n", err)
-			return
-		}
-		runOneShotBatchSend(m, *portFlag, *workersFlag, chunkSize, *createNetwork, interactive, trust)
-	} else {
-		runOneShotSingleSend(rawPaths[0], *portFlag, *workersFlag, chunkSize, *createNetwork, interactive, trust)
-	}
+	runOneShotSend(offer, files, *portFlag, *createNetwork, interactive, trust)
 }
 
-func runOneShotBatchSend(m *manifest.Manifest, port int, workers int, chunkSize uint32, createHotspot bool, interactive bool, trust *identity.TrustStore) {
-	var hs hotspot.Controller
-	if createHotspot {
-		hs = hotspot.New()
-		ssid, pass := hotspot.GenerateCredentials()
-		fmt.Println("[*] Creating dedicated Wi-Fi Direct network...")
-		if netInfo, err := hs.Start(hotspot.Config{SSID: ssid, Password: pass, Band: hotspot.Band5GHz}); err == nil {
-			defer func() { fmt.Println("\n[*] Tearing down Wi-Fi Direct network..."); _ = hs.Stop() }()
-			fmt.Printf(" [NETWORK READY] %s (%s, Channel %d)\n Password: %s\n", netInfo.SSID, netInfo.Band, netInfo.Channel, netInfo.Password)
-		} else {
-			fmt.Printf("[-] Network Creation Failed: %v\n", err)
-		}
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigChan)
-
-	go func() {
-		select {
-		case <-sigChan:
-			fmt.Println("\n[*] Batch transfer canceled by user.")
-			cancel()
-			os.Exit(0)
-		case <-ctx.Done():
-		}
-	}()
-
-	// The device's single port: the receiver pairs on it, then joins the transfer (CHAN-01).
-	hub, hubLn, err := startOneShotHub("0.0.0.0", port, trust)
-	if err != nil {
-		fmt.Printf("[-] Cannot listen on port %d: %v\n", port, err)
-		return
-	}
-	defer hubLn.Close()
-	base, err := transfer.NewID()
-	if err != nil {
-		fmt.Printf("[-] %v\n", err)
-		return
-	}
-	send := newOneShotSend(hub, base, len(m.Items))
-
-	offer := &discovery.TransferOffer{
-		FileName: m.SummaryString(),
-		FileSize: m.TotalBytes,
-		FileID:   m.BatchID,
-		IsBatch:  true,
-		Batch:    m,
-	}
-	pCode, _, _ := discovery.GeneratePairingCode(getLocalIP())
-	discServer := discovery.NewDiscoveryServer("sender", port, offer)
-	discServer.SetPairingCode(pCode)
-	discServer.Start(ctx)
-
-	fmt.Println("==================================================")
-	fmt.Println("             medXfer Secure Sender                ")
-	fmt.Println("==================================================")
-	fmt.Printf(" Batch        : %s\n", m.SummaryString())
-	fmt.Printf(" Fingerprint  : %s\n", localID.Fingerprint.Short())
-	fmt.Printf(" Direct IP    : %s:%d\n", getLocalIP(), port)
-	fmt.Printf(" Pairing Code : %s   (xfer recv %s: both screens then confirm)\n", pCode, pCode)
-	fmt.Println("--------------------------------------------------")
-	startOneShotPairing(ctx, send, port, offerMessage(*offer, port, base), trust)
-	fmt.Println("[*] Waiting for receiver to connect...")
-
-	var batchMu sync.Mutex
-	var batchPrompted bool
-	var batchAllowed bool = true
-
-	for idx, item := range m.Items {
-		if ctx.Err() != nil {
-			return
-		}
-		tl := send.listener(ctx, idx) // registered for the paired receiver only (CHAN-06)
-		if tl == nil {
-			return
-		}
-		fmt.Printf("\n[%d/%d] Serving '%s' (%.2f MB)...\n", idx+1, m.TotalFiles, item.RelPath, float64(item.Size)/(1024*1024))
-
-		itemCtx, itemCancel := context.WithCancel(ctx)
-		sender := engine.NewSender(workers, chunkSize)
-		if interactive {
-			sender.SetAuthorizer(func(remoteAddr net.Addr, fileName string, fileSize int64) bool {
-				batchMu.Lock()
-				defer batchMu.Unlock()
-				if batchPrompted {
-					return batchAllowed
-				}
-				batchPrompted = true
-				host, _, _ := net.SplitHostPort(remoteAddr.String())
-				fmt.Printf("\n[?] Receiver at %s connected.\n    Authorize sending folder '%s' (%d files, %.2f MB)? [Y/n]: ", host, m.SummaryString(), m.TotalFiles, float64(m.TotalBytes)/(1024*1024))
-				reader := bufio.NewReader(os.Stdin)
-				ans, _ := reader.ReadString('\n')
-				ans = strings.TrimSpace(strings.ToLower(ans))
-				batchAllowed = (ans == "" || ans == "y" || ans == "yes" || ans == "o" || ans == "oui")
-				if !batchAllowed {
-					fmt.Println("[-] Transfer aborted: declined by sender.")
-				}
-				return batchAllowed
-			})
-		}
-		listener := &cliListener{cancel: itemCancel, isSender: true}
-		err := sender.ServeOn(itemCtx, tl, item.FullPath, item.RelPath, listener, 0)
-		itemCancel()
-		if err != nil && ctx.Err() == nil {
-			fmt.Printf("\n[-] Transfer error on '%s': %v\n", item.RelPath, err)
-			return
-		}
-	}
-	fmt.Printf("\n[+] Folder transfer complete! All %d files sent successfully.\n", m.TotalFiles)
-}
-
-func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint32, createHotspot bool, interactive bool, trust *identity.TrustStore) {
-	info, err := os.Stat(filePath)
-	if err != nil {
-		fmt.Printf("[-] Cannot access file '%s': %v\n", filePath, err)
-		return
-	}
-
+// runOneShotSend offers files on the device's single port: the receiver pairs on it (QR code,
+// or both users' confirmation), then pulls the whole offer on its data connections.
+func runOneShotSend(offer protocol.Offer, files []string, port int, createHotspot bool, interactive bool, trust *identity.TrustStore) {
 	var hs hotspot.Controller
 	if createHotspot {
 		hs = hotspot.New()
@@ -1310,50 +996,50 @@ func runOneShotSingleSend(filePath string, port int, workers int, chunkSize uint
 		fmt.Printf("[-] %v\n", err)
 		return
 	}
-	send := newOneShotSend(hub, base, 0)
-
-	offer := &discovery.TransferOffer{
-		FileName: filepath.Base(filePath), FileSize: info.Size(),
-		FileID: engine.GenerateFileID(filePath),
+	offer.TransferID = base.String()
+	send := newOneShotSend(hub, base)
+	if interactive {
+		send.authorize = func(r pairing.Result) bool {
+			fmt.Printf("\n[?] Receiver '%s' (%s) is paired.\n    Authorize sending %s? [Y/n]: ", r.Name, r.Address, offerSummary(offer))
+			ans := strings.TrimSpace(strings.ToLower(askLine(ctx)))
+			allowed := ans == "" || ans == "y" || ans == "yes" || ans == "o" || ans == "oui"
+			if !allowed {
+				fmt.Println("[-] Transfer aborted: declined by sender.")
+			}
+			return allowed
+		}
 	}
+
+	// Discovery only says that a transfer waits (DISC-06).
+	public := &discovery.TransferOffer{FileName: offer.Root, FileSize: offer.TotalBytes, IsBatch: len(offer.Items) > 1}
 	pCode, _, _ := discovery.GeneratePairingCode(getLocalIP())
-	discServer := discovery.NewDiscoveryServer("sender", port, offer)
+	discServer := discovery.NewDiscoveryServer("sender", port, public)
 	discServer.SetPairingCode(pCode)
 	discServer.Start(ctx)
 
 	fmt.Println("==================================================")
 	fmt.Println("             medXfer Secure Sender                ")
 	fmt.Println("==================================================")
-	fmt.Printf(" File         : %s (%.2f MB)\n", offer.FileName, float64(offer.FileSize)/(1024*1024))
+	fmt.Printf(" Sending      : %s\n", offerSummary(offer))
 	fmt.Printf(" Fingerprint  : %s\n", localID.Fingerprint.Short())
 	fmt.Printf(" Direct IP    : %s:%d\n", getLocalIP(), port)
 	fmt.Printf(" Pairing Code : %s   (xfer recv %s: both screens then confirm)\n", pCode, pCode)
 	fmt.Println("--------------------------------------------------")
-	startOneShotPairing(ctx, send, port, offerMessage(*offer, port, base), trust)
+	msg, follow := session.OfferMessages(session.Message{DataPort: port, TransferID: base.String()}, offer)
+	startOneShotPairing(ctx, send, port, msg, follow, trust)
 	fmt.Println("[*] Waiting for receiver to connect...")
-	tl := send.listener(ctx, 0) // registered for the paired receiver only (CHAN-06)
+
+	tl := send.listener(ctx) // registered for the paired receiver only (CHAN-06)
 	if tl == nil {
 		return
 	}
-
-	sender := engine.NewSender(workers, chunkSize)
-	if interactive {
-		sender.SetAuthorizer(func(remoteAddr net.Addr, fileName string, fileSize int64) bool {
-			host, _, _ := net.SplitHostPort(remoteAddr.String())
-			fmt.Printf("\n[?] Receiver at %s connected.\n    Authorize sending '%s' (%.2f MB)? [Y/n]: ", host, fileName, float64(fileSize)/(1024*1024))
-			reader := bufio.NewReader(os.Stdin)
-			ans, _ := reader.ReadString('\n')
-			ans = strings.TrimSpace(strings.ToLower(ans))
-			allowed := (ans == "" || ans == "y" || ans == "yes" || ans == "o" || ans == "oui")
-			if !allowed {
-				fmt.Println("[-] Transfer aborted: declined by sender.")
-			}
-			return allowed
-		})
+	sender, err := transfer.NewSender(offer, files)
+	if err != nil {
+		fmt.Printf("[-] %v\n", err)
+		return
 	}
-	listener := &cliListener{cancel: cancel, isSender: true}
-	err = sender.ServeOn(ctx, tl, filePath, "", listener, 0)
-	if err != nil && ctx.Err() == nil {
+	sender.SetEvents(newCLIEvents(true, cancel))
+	if err := sender.Serve(ctx, tl); err != nil && ctx.Err() == nil {
 		fmt.Printf("\n[-] Transfer error: %v\n", err)
 	}
 }
@@ -1504,15 +1190,19 @@ func recvFromURI(raw, outDir string, workers int) {
 
 // receiveAccepted shows the offer that came with pair_accept, inside the secure channel, and
 // downloads it if the user confirms. Every data connection is pinned to the key the pairing
-// verified (WP-3.4).
+// verified and joins the transfer (CHAN-06).
 func receiveAccepted(r pairing.Result, host, keyNote string, in *bufio.Reader, outDir string, workers int) {
 	m := r.Offer
-	base, err := transfer.ParseID(m.TransferID)
-	if m.DataPort == 0 || err != nil {
+	if m.Offer == nil || m.DataPort == 0 {
 		fmt.Println("[-] This device offers no transfer (to pair, run: xfer pair <uri>).")
 		return
 	}
-	offer := &discovery.TransferOffer{FileName: m.FileName, FileSize: m.FileSize, FileID: m.FileID, IsBatch: m.Batch != nil, Batch: m.Batch}
+	offer := *m.Offer
+	base, err := transfer.ParseID(offer.TransferID)
+	if err != nil {
+		fmt.Printf("[-] Invalid offer: %v\n", err)
+		return
+	}
 	targetAddr := net.JoinHostPort(host, strconv.Itoa(m.DataPort))
 	cfg := securechan.Config{Identity: localID, Expected: r.Fingerprint}
 
@@ -1530,30 +1220,23 @@ func receiveAccepted(r pairing.Result, host, keyNote string, in *bufio.Reader, o
 }
 
 // printIncoming shows what the sender offers.
-func printIncoming(o *discovery.TransferOffer, from, addr string) {
+func printIncoming(o protocol.Offer, from, addr string) {
 	fmt.Println("\n==================================================")
 	fmt.Println("             medXfer Incoming Transfer            ")
 	fmt.Println("==================================================")
-	if o.IsBatch {
-		fileCount := 0
-		if o.Batch != nil {
-			fileCount = o.Batch.TotalFiles
-		}
-		fmt.Printf(" Folder : %s\n", o.FileName)
-		if fileCount > 0 {
-			fmt.Printf(" Files  : %d\n", fileCount)
-		}
-		fmt.Printf(" Size   : %.2f MB\n", float64(o.FileSize)/(1024*1024))
+	if len(o.Items) == 1 {
+		fmt.Printf(" File   : %s (%.2f MB)\n", o.Items[0].Path, float64(o.TotalBytes)/(1024*1024))
 	} else {
-		fmt.Printf(" File   : %s (%.2f MB)\n", o.FileName, float64(o.FileSize)/(1024*1024))
+		fmt.Printf(" Folder : %s\n", o.Root)
+		fmt.Printf(" Files  : %d\n", len(o.Items))
+		fmt.Printf(" Size   : %.2f MB\n", float64(o.TotalBytes)/(1024*1024))
 	}
 	fmt.Printf(" From   : %s (%s)\n", from, addr)
 }
 
-// pullOffer downloads the offer from targetAddr, the sender's single port. Every data
-// connection is pinned to the sender's key (cfg) and joins its transfer: base for a file,
-// base.Item(i) for item i of a folder (CHAN-06).
-func pullOffer(targetAddr, outDir string, workers int, o *discovery.TransferOffer, cfg securechan.Config, base transfer.ID) {
+// pullOffer downloads the whole offer from targetAddr, the sender's single port: one transfer,
+// every data connection pinned to the sender's key (cfg) and joining it (bible §8.3).
+func pullOffer(targetAddr, outDir string, workers int, offer protocol.Offer, cfg securechan.Config, base transfer.ID) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1571,41 +1254,42 @@ func pullOffer(targetAddr, outDir string, workers int, o *discovery.TransferOffe
 		}
 	}()
 
-	if o.IsBatch && o.Batch != nil {
-		runOneShotBatchRecv(ctx, targetAddr, outDir, workers, o.Batch, cfg, base)
-		return
-	}
 	fmt.Printf("\n[*] Connecting to sender at %s...\n", targetAddr)
-	receiver := engine.NewReceiver(outDir, workers)
-	receiver.SetSecure(transfer.JoinFunc(cfg, base))
-	listener := &cliListener{cancel: cancel, isSender: false}
-	err := receiver.Pull(ctx, targetAddr, listener, o.FileID)
-	if err != nil && ctx.Err() == nil {
-		fmt.Printf("\n[-] Download failed: %v\n", err)
-	}
+	_ = receiveOffer(ctx, targetAddr, outDir, workers, offer, cfg, base)
 }
 
-func runOneShotBatchRecv(ctx context.Context, targetAddr, outDir string, workers int, m *manifest.Manifest, cfg securechan.Config, base transfer.ID) {
-	fmt.Printf("\n[+] Downloading folder %s from %s...\n", m.SummaryString(), targetAddr)
-
-	for idx, item := range m.Items {
-		if ctx.Err() != nil {
-			return
+// receiveOffer downloads offer from targetAddr, the sender's single port, and tells the user
+// how it went: one transfer, every data connection pinned to the sender's key (cfg) and joining
+// it (bible §8.3). It returns nil only when every item was received.
+func receiveOffer(ctx context.Context, targetAddr, outDir string, workers int, offer protocol.Offer, cfg securechan.Config, base transfer.ID) error {
+	rx := transfer.NewReceiver(outDir, transfer.JoinFunc(cfg, base))
+	rx.Workers = workers
+	events := newCLIEvents(false, nil)
+	rx.Events = events
+	start := time.Now()
+	results, err := rx.Run(ctx, targetAddr, offer)
+	events.done()
+	if err != nil {
+		if ctx.Err() == nil {
+			fmt.Printf("\n[-] Download failed: %v\n", err)
 		}
-		fmt.Printf("\n[%d/%d] Receiving '%s' (%.2f MB)...\n", idx+1, m.TotalFiles, item.RelPath, float64(item.Size)/(1024*1024))
-
-		itemCtx, itemCancel := context.WithCancel(ctx)
-		receiver := engine.NewReceiver(outDir, workers)
-		receiver.SetSecure(transfer.JoinFunc(cfg, base.Item(idx)))
-		listener := &cliListener{cancel: itemCancel, isSender: false}
-		err := receiver.Pull(itemCtx, targetAddr, listener, item.FileID)
-		itemCancel()
-		if err != nil && ctx.Err() == nil {
-			fmt.Printf("\n[-] Download failed on '%s': %v\n", item.RelPath, err)
-			return
+		return err
+	}
+	failed := 0
+	for _, res := range results {
+		if res.State != transfer.ItemDone {
+			failed++
 		}
 	}
-	fmt.Printf("\n[+] Folder download complete! All %d files saved successfully.\n", m.TotalFiles)
+	if failed > 0 {
+		fmt.Printf("\n[-] %d of %d files could not be received.\n", failed, len(results))
+		return fmt.Errorf("%d of %d files not received", failed, len(results))
+	}
+	fmt.Printf("\n[+] Transfer completed in %s\n", time.Since(start).Round(time.Millisecond))
+	if len(results) > 1 {
+		fmt.Printf("[+] All %d files saved.\n", len(results))
+	}
+	return nil
 }
 
 // fetchPeer asks the device at hostIP whether it is sending. Its answer only says that a

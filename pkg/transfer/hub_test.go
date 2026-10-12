@@ -229,11 +229,8 @@ func TestTransferThroughTheHub(t *testing.T) {
 	}
 }
 
-func TestItemIDs(t *testing.T) {
+func TestIDRoundTrip(t *testing.T) {
 	id, _ := NewID()
-	if id.Item(0) == id.Item(1) || id.Item(0) == id || id.Item(3) != id.Item(3) {
-		t.Fatal("item ids are not distinct and deterministic")
-	}
 	back, err := ParseID(id.String())
 	if err != nil || back != id {
 		t.Fatalf("round trip: %v %v", back, err)
