@@ -15,6 +15,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
+	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
 func testDevice(t *testing.T) (*identity.Identity, *identity.TrustStore) {
@@ -31,46 +32,73 @@ func testDevice(t *testing.T) (*identity.Identity, *identity.TrustStore) {
 	return id, ts
 }
 
-// dataDial runs the receiver's side of a data connection against secure, the sender's side.
-func dataDial(t *testing.T, secure func(context.Context, net.Conn) (net.Conn, error), client, sender *identity.Identity) error {
+// startTestHub serves a one-shot hub for sender on the loopback; it returns the hub and its
+// address.
+func startTestHub(t *testing.T, sender *identity.Identity) (*transfer.Hub, string) {
 	t.Helper()
-	a, b := net.Pipe()
-	defer a.Close()
-	defer b.Close()
-	done := make(chan error, 1)
-	go func() {
-		c, err := secure(context.Background(), b)
-		if err == nil {
-			_, err = c.Write([]byte("x")) // finishes the handshake on the client's side
-		}
-		done <- err
-	}()
-	c, err := securechan.Client(context.Background(), a, securechan.Config{Identity: client, Expected: sender.Fingerprint})
-	if err == nil {
-		_, err = c.Read(make([]byte, 1))
+	localID = sender
+	hub, ln, err := startOneShotHub("127.0.0.1", 0, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if serr := <-done; serr != nil {
-		return serr
-	}
-	return err
+	t.Cleanup(func() { ln.Close() })
+	return hub, ln.Addr().String()
 }
 
-// The data listener lets nobody in before pairing, then only the paired receiver.
-func TestOneShotPeerSecure(t *testing.T) {
+// joinData opens a data connection to addr as client and joins transfer id; it reports
+// whether the hub kept it (false: closed by the hub).
+func joinData(t *testing.T, addr string, client, sender *identity.Identity, id transfer.ID) bool {
+	t.Helper()
+	raw, err := net.Dial("tcp4", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := transfer.JoinFunc(securechan.Config{Identity: client, Expected: sender.Fingerprint}, id)(context.Background(), raw)
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	_ = c.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	_, err = c.Read(make([]byte, 1))
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout() // still open: nobody wrote, nobody closed
+}
+
+// CHAN-06 for a one-shot send: before the pairing nobody may join the transfer; after it, the
+// paired receiver only, and only one receiver is ever registered.
+func TestOneShotSendAdmitsOnlyThePairedReceiver(t *testing.T) {
 	sender, _ := testDevice(t)
 	receiver, _ := testDevice(t)
 	other, _ := testDevice(t)
-	var peer oneShotPeer
-	secure := peer.secure(sender)
-	if err := dataDial(t, secure, receiver, sender); !errors.Is(err, errNoReceiver) {
-		t.Fatalf("before pairing: %v, want errNoReceiver", err)
+	hub, addr := startTestHub(t, sender)
+	base, _ := transfer.NewID()
+	send := newOneShotSend(hub, base, 0)
+
+	if joinData(t, addr, receiver, sender, base) {
+		t.Fatal("a data connection was kept before any receiver was paired")
 	}
-	peer.set(receiver.Fingerprint)
-	if err := dataDial(t, secure, receiver, sender); err != nil {
-		t.Fatalf("paired receiver: %v", err)
+	if err := send.register(pairing.Result{Fingerprint: receiver.Fingerprint}); err != nil {
+		t.Fatal(err)
 	}
-	if err := dataDial(t, secure, other, sender); err == nil {
-		t.Fatal("another key got in on the data connections")
+	if !joinData(t, addr, receiver, sender, base) {
+		t.Fatal("the paired receiver could not join")
+	}
+	if joinData(t, addr, other, sender, base) {
+		t.Fatal("another key joined the transfer")
+	}
+	if err := send.register(pairing.Result{Fingerprint: other.Fingerprint}); err == nil {
+		t.Fatal("a second receiver was registered")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if send.listener(ctx, 0) == nil {
+		t.Fatal("no listener after the pairing")
+	}
+
+	// A folder: each item has its own transfer, derived from the base, even with one item.
+	folder := newOneShotSend(hub, base.Item(99), 1)
+	if folder.id(0) != base.Item(99).Item(0) {
+		t.Fatal("a folder's item 0 is not derived from the base")
 	}
 }
 
@@ -121,11 +149,13 @@ func TestReceiverConfirm(t *testing.T) {
 	}
 }
 
-// The QR code of xfer send is renewed when it expires, on a new port; the latest one pairs
-// and carries the offer.
+// The QR code of xfer send is renewed when it expires, with a new secret on the same port;
+// the latest one pairs, registers the receiver before pair_accept, and carries the offer.
 func TestServeOneShotPairingRenewsTheQRCode(t *testing.T) {
 	sender, _ := testDevice(t)
 	receiver, _ := testDevice(t)
+	hub, addr := startTestHub(t, sender)
+	port := portNum(t, addr)
 	var mu sync.Mutex
 	var uris []pairing.URI
 	shown := func(u pairing.URI) {
@@ -141,14 +171,16 @@ func TestServeOneShotPairingRenewsTheQRCode(t *testing.T) {
 		}
 		return uris[len(uris)-1], len(uris)
 	}
+	var registered identity.Fingerprint
+	before := func(r pairing.Result) error { registered = r.Fingerprint; return nil }
 	type result struct {
 		r   pairing.Result
 		err error
 	}
 	done := make(chan result, 1)
 	go func() {
-		r, err := serveOneShotPairing(context.Background(), sender, "127.0.0.1", 300*time.Millisecond,
-			session.Message{FileName: "a.bin", DataPort: 18888}, nil, shown)
+		r, err := serveOneShotPairing(context.Background(), hub, sender, "127.0.0.1", port, 300*time.Millisecond,
+			session.Message{FileName: "a.bin", DataPort: port}, nil, before, shown)
 		done <- result{r, err}
 	}()
 	var u pairing.URI
@@ -164,13 +196,12 @@ func TestServeOneShotPairingRenewsTheQRCode(t *testing.T) {
 	mu.Lock()
 	first := uris[0]
 	mu.Unlock()
-	if first.Secret == u.Secret {
-		t.Fatal("a renewed QR code kept the old secret")
+	if first.Secret == u.Secret || first.Port != u.Port || u.Port != port {
+		t.Fatal("a renewed QR code must keep the device's port and change its secret")
 	}
-	// Join with the URI shown last; retry if it expired meanwhile.
 	var r pairing.Result
 	var err error
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 5; i++ { // retry if the code expired meanwhile
 		u, _ = latest()
 		if r, err = pairing.Join(context.Background(), u, pairing.Options{Identity: receiver, Once: true}); err == nil {
 			break
@@ -179,10 +210,10 @@ func TestServeOneShotPairingRenewsTheQRCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	if r.Offer.FileName != "a.bin" || r.Offer.DataPort != 18888 {
+	if r.Offer.FileName != "a.bin" || r.Offer.DataPort != port {
 		t.Fatalf("offer: %+v", r.Offer)
 	}
-	if s := <-done; s.err != nil || s.r.Fingerprint != receiver.Fingerprint {
-		t.Fatalf("sender: %+v, %v", s.r, s.err)
+	if s := <-done; s.err != nil || s.r.Fingerprint != receiver.Fingerprint || registered != receiver.Fingerprint {
+		t.Fatalf("sender: %+v, %v (registered %s)", s.r, s.err, registered.Short())
 	}
 }

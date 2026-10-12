@@ -51,6 +51,10 @@ type Options struct {
 	// trust, confirmed by the user (WP-3.3, decision D3). Nil refuses every pair_hello. Calls
 	// come one at a time; ctx ends when the wait is over.
 	Confirm func(ctx context.Context, r Result) bool
+	// BeforeAccept (shower), when set, runs once the scanner is accepted and before pair_accept
+	// is sent: a one-shot send registers there the transfer the scanner will join on the data
+	// connections, so that its first DATA_JOIN finds it. An error refuses the pairing.
+	BeforeAccept func(r Result) error
 }
 
 func remember(o Options, r Result) error {
@@ -63,6 +67,7 @@ func remember(o Options, r Result) error {
 // Serve is the shower's side: it waits on ln until a scanner presents the invitation's secret,
 // or one without it is accepted by o.Confirm, or the invitation expires. Refusals are neutral
 // and the wait goes on. On success the scanner's key is trusted (unless o.Once) and returned.
+// ln may be the control listener of a pkg/transfer.Hub, whose connections are already secure.
 func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Result, error) {
 	ctx, cancel := context.WithDeadline(ctx, inv.Expires())
 	defer cancel()
@@ -101,9 +106,14 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 }
 
 func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gate *securechan.Gate, confirmMu *sync.Mutex) (Result, error) {
-	conn, err := securechan.Server(ctx, raw, securechan.Config{Identity: o.Identity, Trust: o.Trust, AllowUnknown: true, Gate: gate})
-	if err != nil {
-		return Result{}, err
+	// A connection routed by the device's single port (pkg/transfer.Hub) is already secure.
+	conn, ok := raw.(*securechan.Conn)
+	if !ok {
+		var err error
+		conn, err = securechan.Server(ctx, raw, securechan.Config{Identity: o.Identity, Trust: o.Trust, AllowUnknown: true, Gate: gate})
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	ch := session.NewChannel(conn)
 	defer ch.Close()
@@ -139,6 +149,12 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 	conn.Authenticate() // also lifts the Unauth deadline, which the user's answer may have passed
 	if err := remember(o, r); err != nil {
 		return Result{}, fmt.Errorf("saving the trusted device: %w", err)
+	}
+	if o.BeforeAccept != nil {
+		if err := o.BeforeAccept(r); err != nil {
+			_, _ = reject()
+			return Result{}, err
+		}
 	}
 	accept := o.Offer
 	accept.Type, accept.DeviceName = TypeAccept, o.DeviceName

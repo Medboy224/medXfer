@@ -213,12 +213,12 @@ func TestAuthenticatedDiscoveryReflector(t *testing.T) {
 
 func TestPublicOfferHidesTheTransfer(t *testing.T) {
 	o := &TransferOffer{FileName: "a.docx", FileSize: 9, FileID: "id", IsBatch: true,
-		Batch: &manifest.Manifest{}, PairPort: 40000}
+		Batch: &manifest.Manifest{}}
 	p := publicOffer(o)
 	if p.FileName != PrivateTransfer || p.FileSize != 0 || p.FileID != "" || p.Batch != nil {
 		t.Fatalf("public offer leaks: %+v", p)
 	}
-	if !p.IsBatch || p.PairPort != 40000 {
+	if !p.IsBatch {
 		t.Fatalf("public offer lost what the receiver needs: %+v", p)
 	}
 	if o.FileName != "a.docx" || o.Batch == nil {
@@ -230,7 +230,7 @@ func TestPublicOfferHidesTheTransfer(t *testing.T) {
 // public offer, plus the echoed code that tells the querier it found the right device.
 func TestAnswerRevealsNothingWithTheRightCode(t *testing.T) {
 	offer := &TransferOffer{FileName: "secret-plans.pdf", FileSize: 123456, FileID: "f1",
-		Batch: &manifest.Manifest{Items: []manifest.Item{{RelPath: "dir/other-secret.txt"}}}, PairPort: 40001}
+		Batch: &manifest.Manifest{Items: []manifest.Item{{RelPath: "dir/other-secret.txt"}}}}
 	srv := NewDiscoveryServer("sender", 18888, offer, "HostDev")
 	srv.SetPairingCode("104-567")
 
@@ -247,7 +247,7 @@ func TestAnswerRevealsNothingWithTheRightCode(t *testing.T) {
 				t.Errorf("code %q: the reply carries %s: %s", c.code, leak, data)
 			}
 		}
-		if p.PairingCode != c.echo || p.Offer == nil || p.Offer.PairPort != 40001 || p.HostIP != "10.0.0.5" {
+		if p.PairingCode != c.echo || p.Offer == nil || p.Port != 18888 || p.HostIP != "10.0.0.5" {
 			t.Errorf("code %q: reply %+v (offer %+v)", c.code, p, p.Offer)
 		}
 	}

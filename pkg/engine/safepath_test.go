@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
@@ -171,46 +170,27 @@ func TestPeekResumeOffsetRejectsBadPath(t *testing.T) {
 	}
 }
 
-func writeTar(t *testing.T, names ...string) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	for _, n := range names {
-		if strings.HasSuffix(n, "/") {
-			_ = tw.WriteHeader(&tar.Header{Name: n, Typeflag: tar.TypeDir, Mode: 0o755})
-			continue
+// The rules the tar extraction used to check, now without it (StreamTar is gone, plan J4a D3).
+func TestPathRules(t *testing.T) {
+	// "..foo" is a legitimate name (an old prefix check rejected it).
+	for _, ok := range []string{"dir/..foo", "a..b.txt"} {
+		if _, err := SafeRelPath(ok); err != nil {
+			t.Fatalf("SafeRelPath(%q) = %v; want accepted", ok, err)
 		}
-		_ = tw.WriteHeader(&tar.Header{Name: n, Typeflag: tar.TypeReg, Mode: 0o644, Size: 2})
-		_, _ = tw.Write([]byte("ok"))
-	}
-	_ = tw.Close()
-	return &buf
-}
-
-func TestExtractTarPathRules(t *testing.T) {
-	// "..foo" is a legitimate name (the old prefix check rejected it); directory entries end with "/".
-	dst := t.TempDir()
-	if err := ExtractTar(context.Background(), writeTar(t, "dir/", "dir/..foo", "a..b.txt"), dst, 6, 2, nil); err != nil {
-		t.Fatalf("ExtractTar rejected legitimate names: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dst, "dir", "..foo")); err != nil {
-		t.Fatalf("..foo not extracted: %v", err)
 	}
 
 	// A file where a folder is needed: conflict, nothing deleted.
-	dst = t.TempDir()
+	dst := t.TempDir()
 	_ = os.WriteFile(filepath.Join(dst, "a"), []byte("keep"), 0o644)
-	err := ExtractTar(context.Background(), writeTar(t, "a/b.txt"), dst, 2, 1, nil)
-	if !errors.Is(err, ErrPathConflict) {
-		t.Fatalf("ExtractTar error = %v; want ErrPathConflict", err)
+	if err := ensureSubdirs(dst, "a"); !errors.Is(err, ErrPathConflict) {
+		t.Fatalf("ensureSubdirs over a file = %v; want ErrPathConflict", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(dst, "a")); string(got) != "keep" {
 		t.Fatalf("file 'a' was damaged: %q", got)
 	}
 
 	// Windows reserved names: rejected only when the receiver runs Windows.
-	_, err = safeRelPath("dir/CON.txt", true)
-	if !errors.Is(err, ErrBadPath) {
+	if _, err := safeRelPath("dir/CON.txt", true); !errors.Is(err, ErrBadPath) {
 		t.Fatalf("reserved name accepted under Windows rules: %v", err)
 	}
 }

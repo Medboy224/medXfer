@@ -308,10 +308,6 @@ const IndexHTML = `<!DOCTYPE html>
           <button id="sendTransferBtn" class="btn btn-success" style="flex: 1;" onclick="sendTransfer()">🚀 Send to Paired Device</button>
           <button id="shareWebBtn" class="btn" style="flex: 1; background: #0284c7;" onclick="shareToWebPortal()">🌐 Share to Web Portal</button>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted);">
-          <input type="checkbox" id="useTarStreamCheck" style="width: auto; cursor: pointer;">
-          <label for="useTarStreamCheck" style="margin: 0; cursor: pointer; color: var(--muted);" title="Packs all folder contents into a single raw TAR stream without per-file resume. Only recommended for folders with thousands of tiny files.">⚡ Raw Archive Stream (StreamTar, no per-file resume)</label>
-        </div>
 
         <!-- Web Shared Files Status -->
         <div id="webSharedFilesSummary" style="margin-top: 10px; padding: 8px 12px; background: #111e38; border: 1px solid #1e3a8a; border-radius: 6px; font-size: 12px; color: #34d399; display: none;">
@@ -1825,8 +1821,7 @@ const IndexHTML = `<!DOCTYPE html>
         alert("Please select files/folders or enter path(s) first!");
         return;
       }
-      const useTar = document.getElementById("useTarStreamCheck") ? document.getElementById("useTarStreamCheck").checked : false;
-      sendCmd("send", { paths: paths, target_ip: ip, use_tar_stream: useTar });
+      sendCmd("send", { paths: paths, target_ip: ip });
     }
 
     function disconnectNode() {
@@ -1848,12 +1843,11 @@ const IndexHTML = `<!DOCTYPE html>
         }
         const isPaired = document.getElementById("pairedBox").style.display === "block";
         const inputIP = document.getElementById("pairIPInput").value.trim();
-        const useTar = document.getElementById("useTarStreamCheck") ? document.getElementById("useTarStreamCheck").checked : false;
 
         if (isPaired) {
-          sendCmd("send", { paths: paths, use_tar_stream: useTar });
+          sendCmd("send", { paths: paths });
         } else if (inputIP) {
-          sendCmd("send", { paths: paths, target_ip: inputIP, use_tar_stream: useTar });
+          sendCmd("send", { paths: paths, target_ip: inputIP });
         } else {
           alert("Please pair with a device first, or click 'Send' next to a device in the Nearby Devices list below.");
         }

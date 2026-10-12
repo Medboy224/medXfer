@@ -259,17 +259,17 @@ func (s *DaemonServer) handleSend(conn *websocket.Conn, req RequestMessage) {
 
 	// If a specific target IP was provided and we have no session or session is with someone else:
 	if payload.TargetIP != "" && (sess == nil || sess.RemoteIP() != cleanTarget) {
-		go s.connectAndSend(payload.TargetIP, payload.Paths, req.ID, payload.UseTarStream)
+		go s.connectAndSend(payload.TargetIP, payload.Paths, req.ID)
 		return
 	}
 
 	// If we have an active session, send over it
 	if sess != nil {
 		go func() {
-			err := s.sendOverSession(payload.Paths, req.ID, payload.UseTarStream)
+			err := s.sendOverSession(payload.Paths, req.ID)
 			if err != nil && payload.TargetIP != "" {
 				// Old session failed (stale/broken connection), immediately reconnect and retry!
-				s.connectAndSend(payload.TargetIP, payload.Paths, req.ID, payload.UseTarStream)
+				s.connectAndSend(payload.TargetIP, payload.Paths, req.ID)
 			} else if err != nil {
 				s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 			}
@@ -280,16 +280,15 @@ func (s *DaemonServer) handleSend(conn *websocket.Conn, req RequestMessage) {
 	s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "not paired with any device and no target_ip specified"}, req.ID))
 }
 
-func (s *DaemonServer) connectAndSend(targetIP string, paths []string, id string, useTarStream ...bool) {
+func (s *DaemonServer) connectAndSend(targetIP string, paths []string, id string) {
 	if _, err := s.pairWith(targetIP, nil, false, id); err != nil {
 		s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", targetIP, err)}, id))
 		return
 	}
-	tarOpt := len(useTarStream) > 0 && useTarStream[0]
-	_ = s.sendOverSession(paths, id, tarOpt)
+	_ = s.sendOverSession(paths, id)
 }
 
-func (s *DaemonServer) sendOverSession(paths []string, reqID string, useTarStream ...bool) error {
+func (s *DaemonServer) sendOverSession(paths []string, reqID string) error {
 	s.mu.RLock()
 	sess := s.activeSession
 	devName := s.config.DeviceName
@@ -324,27 +323,18 @@ func (s *DaemonServer) sendOverSession(paths []string, reqID string, useTarStrea
 			})
 		}
 
-		// Tar streaming is used when explicitly requested via "Raw Archive Stream"
-		isStream := false
-		if len(useTarStream) > 0 && useTarStream[0] {
-			isStream = true
-		}
-
 		s.mu.Lock()
 		s.lastOfferedManifest = m
 		s.currentBatchItems = batchItems
 		s.skippedFiles = make(map[int]bool)
 		s.batchCanceled = false
 		s.isPaused = false
-		s.lastOfferedIsStream = isStream
-		s.activePort++
 		s.mu.Unlock()
 
 		err = sess.Send(session.Message{
 			Type:       "batch_offer",
 			DeviceName: devName,
 			Batch:      m,
-			IsStream:   isStream,
 		})
 		if err != nil {
 			s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed sending batch offer: %v", err)}, reqID))
@@ -367,11 +357,19 @@ func (s *DaemonServer) sendOverSession(paths []string, reqID string, useTarStrea
 			return err
 		}
 
+		// The transfer is joinable from the offer on, so the receiver's first DATA_JOIN after
+		// accepting finds it (CHAN-06). A new offer replaces the previous one.
+		tid, tl, err := s.registerTransfer(sess)
+		if err != nil {
+			s.Broadcast(NewEvent("action_error", map[string]string{"error": err.Error()}, reqID))
+			return err
+		}
 		s.mu.Lock()
-		s.activePort++
-		port := s.activePort
+		if s.lastOfferedListener != nil {
+			s.lastOfferedListener.Close()
+		}
 		s.lastOfferedFile = filePath
-		s.lastOfferedPort = port
+		s.lastOfferedListener = tl
 		s.mu.Unlock()
 
 		fileID := engine.GenerateFileIDFromInfo(fi)
@@ -381,9 +379,11 @@ func (s *DaemonServer) sendOverSession(paths []string, reqID string, useTarStrea
 			FileName:   filepath.Base(filePath),
 			FileSize:   fi.Size(),
 			FileID:     fileID,
-			DataPort:   port,
+			DataPort:   s.devicePort(),
+			TransferID: tid.String(),
 		})
 		if err != nil {
+			tl.Close()
 			s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed sending offer: %v", err)}, reqID))
 			return err
 		}
@@ -475,9 +475,14 @@ func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessa
 		resumeBytes, _ := engine.PeekResumeOffset(saveDir, offer.FileName, offer.FileID, offer.FileSize, 2*1024*1024)
 		sess.Send(session.Message{Type: "accept", ResumeBytes: resumeBytes})
 
+		secure, err := s.joinClient(offer.TransferID)
+		if err != nil {
+			s.Broadcast(NewEvent("transfer_error", map[string]string{"error": err.Error()}, req.ID))
+			return
+		}
 		receiver := engine.NewReceiver(saveDir, s.config.Workers)
 		receiver.SetCollisionPolicy(policy)
-		receiver.SetSecure(s.dataClient())
+		receiver.SetSecure(secure)
 
 		var ctx context.Context
 		s.mu.Lock()
