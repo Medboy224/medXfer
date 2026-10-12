@@ -16,7 +16,7 @@ func BuildOffer(paths []string, chunkSize uint32) (protocol.Offer, []string, err
 	offer := protocol.Offer{Root: m.RootName, ChunkSize: chunkSize, TotalBytes: m.TotalBytes}
 	files := make([]string, len(m.Items))
 	for i, it := range m.Items {
-		offer.Items = append(offer.Items, protocol.OfferItem{Item: i, Path: it.RelPath, Size: it.Size, FileID: it.FileID})
+		offer.Items = append(offer.Items, protocol.OfferItem{Item: i, Path: it.RelPath, Size: it.Size, MTime: it.MTime, FileID: it.FileID})
 		files[i] = it.FullPath
 	}
 	if offer.Root == "" && len(offer.Items) == 1 {

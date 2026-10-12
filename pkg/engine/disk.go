@@ -332,6 +332,21 @@ func (dm *DiskManager) Close() error {
 	return err
 }
 
+// Discard closes the file and removes it with its state: the receiver starts it over from
+// zero (a digest that did not match, bible §8.3).
+func (dm *DiskManager) Discard() error {
+	err := dm.Close()
+	for _, p := range []string{dm.finalPath, dm.statePath} {
+		if p == "" {
+			continue
+		}
+		if e := os.Remove(p); e != nil && !os.IsNotExist(e) && err == nil {
+			err = e
+		}
+	}
+	return err
+}
+
 // Finalize makes the data durable BEFORE removing the state file. If the sync fails,
 // the state is kept so the transfer stays resumable, and the error is returned.
 func (dm *DiskManager) Finalize() error {

@@ -153,7 +153,7 @@ Ordre : **4.0 → 4.1 → 4.2 → 4.3 → 4.4 → 4.5**. La partie « échelle R
 **Chunk dont le hash ne correspond pas :** il n'est pas écrit. Il est redemandé, sur une autre connexion si possible, 3 fois au plus ; après cela, le fichier échoue (`XFER-04`).
 
 **Fin d'un fichier :**
-- le receveur envoie `digest_req` ;
+- le receveur envoie `DIGEST_REQ` sur une connexion de données (D7) ;
 - l'émetteur répond `digest = SHA-256("medxfer-v1-filedigest" ‖ n ‖ hash_0 ‖ … ‖ hash_{n-1})` ;
 - en cas de différence, le fichier est repris à zéro (bible §8.3).
 - Les chunks déjà écrits lors d'une session précédente (reprise) sont relus et hachés pour le `digest`. En J4b, le journal gardera leurs hash et cette relecture disparaîtra.
@@ -217,3 +217,4 @@ R5, R6 et `bench matrix` viennent en J4b (WP-4.9). Résultats en `--json`.
 | D4 | Taille de chunk acceptée en J4a : **256 Kio à 8 Mio**, 4 Mio par défaut. Le minimum suit `XFER-02` ; le maximum reste à 8 Mio (taille des tampons actuels). | `XFER-02` est 📏 : `bench matrix` (J4b) balaie 1 à 8 Mio, et sa conclusion fixera les bornes. Pas besoin de tampons de 16 Mio d'ici là (mémoire sur mobile : N × 2 × chunk). |
 | D5 | Pas de compatibilité avec les versions d'avant J4a : l'ALPN reste `medxfer/1`, et la v1 est le protocole de ce jalon. | Aucune version n'est publiée ; les appareils d'essai sont mis à jour ensemble. `XFER-06` s'appliquera à partir de la première version publiée. |
 | D6 | On ajoute **`skip{transfer_id, item}`** au vocabulaire `CONTROL`. La pause et la reprise d'un seul fichier sont des décisions locales du receveur ; une demande venue de l'émetteur lui est transmise. | L'interface sait déjà sauter ou mettre en pause un fichier d'un lot (`skip_file`, `pause_file`, `resume_file`) ; la liste de la bible (§8.2) ne couvre que le transfert entier. La bible §8.2 est complétée dans la PR de WP-4.3. |
+| D7 | `digest_req` et `digest` deviennent les trames de données **`DIGEST_REQ`** (0x24) et **`DIGEST`** (0x25), envoyées sur les connexions du transfert ; une erreur répond `CHUNK_ERR` à l'index `0xFFFFFFFF`. Un élément d'un seul chunk reçu en entier dans la session se passe de `DIGEST_REQ`. | `pkg/transfer` ne dépend pas de la session de contrôle (D1) : la vérification de fin marche à l'identique pour `xfer send`, `xfer node` et le daemon. Les connexions de données sont déjà chiffrées et liées au transfert (`CHAN-06`). Pour un seul chunk, le digest découle du hash déjà vérifié : pas d'aller-retour de plus par petit fichier. |
