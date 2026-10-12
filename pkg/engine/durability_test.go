@@ -2,19 +2,15 @@ package engine
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/Medboy224/medXfer/pkg/protocol"
 )
 
 // memFile is an in-memory fileHandle that models the OS page cache: writes land in
@@ -215,35 +211,19 @@ func TestCommitByBytesAndByTime(t *testing.T) {
 	}
 }
 
-type countListener struct {
-	mu        sync.Mutex
-	completes int
-	errs      int
-}
-
-func (l *countListener) OnStart(string, int64, uint32)    {}
-func (l *countListener) OnProgress(TransferStats)         {}
-func (l *countListener) OnChunkFailed(uint32, int, error) {}
-func (l *countListener) OnComplete(string, time.Duration) { l.mu.Lock(); l.completes++; l.mu.Unlock() }
-func (l *countListener) OnError(error)                    { l.mu.Lock(); l.errs++; l.mu.Unlock() }
-
+// A failed sync of the data must not count as a finished file: Finalize fails and the state
+// file stays, so the transfer can be resumed (the receiver of pkg/transfer relies on it).
 func TestFinalizeSyncFailureKeepsState(t *testing.T) {
 	dm, data, _ := newMemDisk(t, strings.Repeat("i", 32), 1, 10)
 	if err := os.WriteFile(dm.statePath, []byte("state"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	data.syncErr = errors.New("disk unplugged")
-
-	l := &countListener{}
-	err := NewReceiver(t.TempDir(), 1).finalize(dm, l, 0)
-	if err == nil {
-		t.Fatal("finalize succeeded although the data sync failed")
+	if err := dm.Finalize(); err == nil {
+		t.Fatal("Finalize succeeded although the data sync failed")
 	}
-	if _, statErr := os.Stat(dm.statePath); statErr != nil {
-		t.Fatalf("state file removed after a failed sync: %v", statErr)
-	}
-	if l.completes != 0 || l.errs != 1 {
-		t.Fatalf("listener: %d complete, %d errors; want 0 and 1", l.completes, l.errs)
+	if _, err := os.Stat(dm.statePath); err != nil {
+		t.Fatalf("state file removed after a failed sync: %v", err)
 	}
 }
 
@@ -286,105 +266,5 @@ func TestFinalizeClosesDataFileBeforeReturning(t *testing.T) {
 	}
 	if err := os.Remove(moved); err != nil {
 		t.Fatalf("cannot delete the received file right after Finalize: %v", err)
-	}
-}
-
-func TestDispatcherNoDeadlockAfterRetries(t *testing.T) {
-	td := &taskDispatcher{}
-	td.Push(chunkTask{index: 7}) // two workers failed: 7 then 0 pushed back
-	td.Push(chunkTask{index: 0})
-
-	if task, ok, _ := td.PopWithin(5); !ok || task.index != 0 {
-		t.Fatalf("PopWithin(5) = %d, %v; want chunk 0", task.index, ok)
-	}
-	if _, ok, blocked := td.PopWithin(5); ok || !blocked {
-		t.Fatalf("PopWithin(5) = ok %v, blocked %v; want blocked on chunk 7", ok, blocked)
-	}
-	if task, ok, _ := td.PopWithin(8); !ok || task.index != 7 {
-		t.Fatalf("PopWithin(8) = %d, %v; want chunk 7", task.index, ok)
-	}
-	if _, ok, blocked := td.PopWithin(100); ok || blocked {
-		t.Fatalf("empty dispatcher: ok %v, blocked %v; want neither", ok, blocked)
-	}
-}
-
-// gatedSender serves chunks like the real sender but holds chunk 0 until gate closes.
-func gatedSender(t *testing.T, chunk int, content func(int) []byte, gate <-chan struct{}) string {
-	t.Helper()
-	ln, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				defer c.Close()
-				out := make([]byte, protocol.FrameHeaderSize+protocol.ChunkHeaderSize+chunk)
-				for {
-					h, err := protocol.ReadFrameHeader(c, senderFrames)
-					if err != nil {
-						return
-					}
-					payload := make([]byte, h.PayloadLen)
-					if _, err := io.ReadFull(c, payload); err != nil {
-						return
-					}
-					if h.Type != protocol.TypeRequest {
-						continue // resume frame
-					}
-					idx := int(payload[0])<<24 | int(payload[1])<<16 | int(payload[2])<<8 | int(payload[3])
-					if idx == 0 {
-						<-gate
-					}
-					if writeContiguousChunk(c, out, uint32(idx), uint64(idx*chunk), content(idx)) != nil {
-						return
-					}
-				}
-			}(c)
-		}
-	}()
-	return ln.Addr().String()
-}
-
-func TestValidateMeta(t *testing.T) {
-	cases := []struct {
-		meta protocol.FileMetadata
-		ok   bool
-	}{
-		{protocol.FileMetadata{FileSize: 1 << 30, ChunkSize: 4 << 20}, true},
-		{protocol.FileMetadata{FileSize: 0, ChunkSize: 64 << 10}, true},
-		{protocol.FileMetadata{FileSize: 1 << 40, ChunkSize: 1}, false},        // tiny chunks: millions of tasks
-		{protocol.FileMetadata{FileSize: -1, ChunkSize: 4 << 20}, false},       // negative size
-		{protocol.FileMetadata{FileSize: 10, ChunkSize: 16 << 20}, false},      // above buffer size
-		{protocol.FileMetadata{FileSize: 1 << 40, ChunkSize: 64 << 10}, false}, // > 2^21 chunks
-	}
-	for _, c := range cases {
-		if err := validateMeta(c.meta); (err == nil) != c.ok {
-			t.Errorf("validateMeta(%+v) = %v; want ok=%v", c.meta, err, c.ok)
-		}
-	}
-	// Rejected before any allocation or disk access.
-	err := NewReceiver(t.TempDir(), 1).PullWithMetadata(context.Background(), "127.0.0.1:1", nil,
-		protocol.FileMetadata{FileName: "x", FileSize: 1 << 40, ChunkSize: 1}, "")
-	if err == nil {
-		t.Fatal("PullWithMetadata accepted ChunkSize=1 for a 1 TiB file")
-	}
-}
-
-func TestSenderClampsChunkSize(t *testing.T) {
-	for in, want := range map[uint32]uint32{
-		16 << 20: 4 << 20, // would overflow the 8 MiB buffer and panic when serving
-		1024:     4 << 20,
-		1 << 20:  1 << 20,
-		8 << 20:  8 << 20,
-	} {
-		if got := NewSender(4, in).chunkSize; got != want {
-			t.Errorf("NewSender(4, %d).chunkSize = %d; want %d", in, got, want)
-		}
 	}
 }

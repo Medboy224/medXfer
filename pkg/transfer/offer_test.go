@@ -52,6 +52,7 @@ func tree(t *testing.T, sizes []int) (protocol.Offer, []string, [][]byte) {
 // device and the address to pull from.
 type offerPair struct {
 	device, peer *identity.Identity
+	h            *Hub
 	tl           *Listener
 	addr         string
 	id           ID
@@ -66,7 +67,7 @@ func newOfferPair(t *testing.T) *offerPair {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &offerPair{device: device, peer: peer, tl: tl, addr: addr, id: id}
+	return &offerPair{device: device, peer: peer, h: h, tl: tl, addr: addr, id: id}
 }
 
 func (p *offerPair) serve(t *testing.T, offer protocol.Offer, paths []string) *Sender {

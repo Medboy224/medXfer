@@ -2,10 +2,8 @@ package protocol
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 )
 
@@ -88,57 +86,4 @@ func AppendFrame(dst []byte, typ byte, payload []byte) []byte {
 func WriteFrame(w io.Writer, typ byte, payload []byte) error {
 	_, err := w.Write(AppendFrame(make([]byte, 0, FrameHeaderSize+len(payload)), typ, payload))
 	return err
-}
-
-// ReadHandshakePayload parses the JSON metadata sent by the sender; payloadLen comes from a
-// header checked against MaxHandshake.
-func ReadHandshakePayload(r io.Reader, payloadLen uint32) (FileMetadata, error) {
-	if payloadLen > MaxHandshake {
-		return FileMetadata{}, fmt.Errorf("%w: %d bytes of metadata", ErrFrameTooLarge, payloadLen)
-	}
-	buf := make([]byte, payloadLen)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return FileMetadata{}, err
-	}
-	var meta FileMetadata
-	if err := json.Unmarshal(buf, &meta); err != nil {
-		return FileMetadata{}, err
-	}
-	return meta, nil
-}
-
-// WriteHandshake sends the JSON metadata to the receiver
-func WriteHandshake(w io.Writer, meta FileMetadata) error {
-	payload, err := json.Marshal(meta)
-	if err != nil {
-		return err
-	}
-	if len(payload) > MaxHandshake {
-		return fmt.Errorf("%w: %d bytes of metadata", ErrFrameTooLarge, len(payload))
-	}
-	return WriteFrame(w, TypeHandshake, payload)
-}
-
-// ParseChunkPayload separates the 20-byte chunk metadata from the raw file bytes
-func ParseChunkPayload(payload []byte) (ChunkMeta, []byte, error) {
-	if len(payload) < ChunkHeaderSize {
-		return ChunkMeta{}, nil, fmt.Errorf("payload too small for chunk header")
-	}
-	meta := ChunkMeta{
-		Index:  binary.BigEndian.Uint32(payload[0:4]),
-		Offset: binary.BigEndian.Uint64(payload[4:12]),
-		Length: binary.BigEndian.Uint32(payload[12:16]),
-	}
-	expectedCRC := binary.BigEndian.Uint32(payload[16:20])
-	data := payload[ChunkHeaderSize:]
-
-	if CalculateChecksum(data) != expectedCRC {
-		return ChunkMeta{}, nil, fmt.Errorf("CRC checksum mismatch: data may be corrupted")
-	}
-	return meta, data, nil
-}
-
-// CalculateChecksum generates a rapid CRC32 hash for integrity checks
-func CalculateChecksum(data []byte) uint32 {
-	return crc32.ChecksumIEEE(data)
 }

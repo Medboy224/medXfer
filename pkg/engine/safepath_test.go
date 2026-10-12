@@ -2,15 +2,11 @@ package engine
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/Medboy224/medXfer/pkg/protocol"
 )
 
 func TestSafeRelPath(t *testing.T) {
@@ -87,39 +83,6 @@ func TestEnsureSubdirsNeverDeletes(t *testing.T) {
 	}
 	if got, err := os.ReadFile(victim); err != nil || !bytes.Equal(got, content) {
 		t.Fatalf("victim file damaged: %q, %v", got, err)
-	}
-}
-
-type errListener struct{ errs []error }
-
-func (l *errListener) OnStart(string, int64, uint32)    {}
-func (l *errListener) OnProgress(TransferStats)         {}
-func (l *errListener) OnChunkFailed(uint32, int, error) {}
-func (l *errListener) OnComplete(string, time.Duration) {}
-func (l *errListener) OnError(err error)                { l.errs = append(l.errs, err) }
-
-func TestPullRejectsTraversalOffer(t *testing.T) {
-	base := t.TempDir()
-	recvDir := filepath.Join(base, "recv")
-	if err := os.Mkdir(recvDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"../x.txt", "a/../../x.txt", "/etc/x.txt", `..\x.txt`} {
-		l := &errListener{}
-		r := NewReceiver(recvDir, 1)
-		// The address is never dialed: validation fails first.
-		err := r.PullWithMetadata(context.Background(), "127.0.0.1:1", l,
-			protocol.FileMetadata{FileName: name, FileSize: 10, ChunkSize: 64 * 1024}, "")
-		if !errors.Is(err, ErrBadPath) {
-			t.Errorf("PullWithMetadata(%q) = %v; want ErrBadPath", name, err)
-		}
-		if len(l.errs) != 1 {
-			t.Errorf("PullWithMetadata(%q): listener got %d errors; want 1", name, len(l.errs))
-		}
-	}
-	entries, _ := os.ReadDir(base)
-	if len(entries) != 1 {
-		t.Fatalf("something was written outside the receive folder: %v", entries)
 	}
 }
 

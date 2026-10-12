@@ -1,18 +1,13 @@
 package transfer
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
 	"io"
 	"net"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/securechan"
@@ -189,42 +184,28 @@ func TestHubFirstFrameRules(t *testing.T) {
 	}
 }
 
-// A whole file through the device's single port: the engine's sender serves on the hub's
-// transfer listener, the receiver joins with DATA_JOIN on every connection.
+// A whole offer through the device's single port: the sender serves on the hub's transfer
+// listener, the receiver joins with DATA_JOIN on every connection, and once the sender stops
+// the transfer is no longer registered.
 func TestTransferThroughTheHub(t *testing.T) {
-	device, peer := newID(t), newID(t)
-	h, addr := startHub(t, device)
-	data := make([]byte, 3<<20+12345)
-	_, _ = rand.Read(data)
-	src := filepath.Join(t.TempDir(), "file.bin")
-	if err := os.WriteFile(src, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	id, _ := NewID()
-	tl, err := h.Register(id, peer.Fingerprint)
+	offer, paths, contents := tree(t, []int{3<<20 + 12345, 10})
+	p := newOfferPair(t)
+	offer.TransferID = p.id.String()
+	s, err := NewSender(offer, paths)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	served := make(chan error, 1)
-	go func() { served <- engine.NewSender(4, 1<<20).ServeOn(ctx, tl, src, "", nil, 0) }()
+	go func() { served <- s.Serve(ctx, p.tl) }()
 
 	out := t.TempDir()
-	r := engine.NewReceiver(out, 4)
-	r.SetSecure(JoinFunc(securechan.Config{Identity: peer, Expected: device.Fingerprint}, id))
-	pctx, pcancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer pcancel()
-	if err := r.Pull(pctx, addr, nil, ""); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(filepath.Join(out, "file.bin"))
-	if err != nil || !bytes.Equal(got, data) {
-		t.Fatalf("received file differs (%v)", err)
-	}
+	runOffer(t, p.receiver(out), p.addr, offer)
+	checkFiles(t, out, offer, contents, nil)
 	cancel()
 	<-served
-	if h.Known(peer.Fingerprint) {
+	if p.h.Known(p.peer.Fingerprint) {
 		t.Fatal("the transfer stayed registered after the sender stopped")
 	}
 }

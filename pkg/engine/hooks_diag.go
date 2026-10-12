@@ -46,19 +46,3 @@ func wrapStorage(f StorageFile, path string) StorageFile {
 	}
 	return f
 }
-
-// buffersInUse / buffersPeak count borrowed chunk buffers; tests use them to check the
-// receiver's memory bound (STO-08). Diag builds only (issue #26).
-var buffersInUse, buffersPeak atomic.Int64
-
-func countBufferGet() {
-	n := buffersInUse.Add(1)
-	for {
-		p := buffersPeak.Load()
-		if n <= p || buffersPeak.CompareAndSwap(p, n) {
-			return
-		}
-	}
-}
-
-func countBufferPut() { buffersInUse.Add(-1) }

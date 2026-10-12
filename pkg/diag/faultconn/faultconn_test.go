@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/engine"
+	"github.com/Medboy224/medXfer/pkg/protocol"
+	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
 // tcpPair returns the two ends of a loopback TCP connection.
@@ -106,16 +108,9 @@ func TestJitterIsDeterministic(t *testing.T) {
 	}
 }
 
-type nopListener struct{}
-
-func (nopListener) OnStart(string, int64, uint32)    {}
-func (nopListener) OnProgress(engine.TransferStats)  {}
-func (nopListener) OnChunkFailed(uint32, int, error) {}
-func (nopListener) OnComplete(string, time.Duration) {}
-func (nopListener) OnError(error)                    {}
-
-// transfer sends size bytes through the engine on loopback and returns the elapsed time.
-func transfer(t *testing.T, size int, chunk uint32) time.Duration {
+// sendFile sends size bytes on loopback with protocol v1 (pkg/transfer), without TLS, and
+// returns the elapsed time. The receiver's connections go through the engine's wrapper.
+func sendFile(t *testing.T, size int, chunk uint32) time.Duration {
 	t.Helper()
 	src := filepath.Join(t.TempDir(), "f.bin")
 	data := make([]byte, size)
@@ -125,26 +120,31 @@ func transfer(t *testing.T, size int, chunk uint32) time.Duration {
 	if err := os.WriteFile(src, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	offer, files, err := transfer.BuildOffer([]string{src}, chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer.TransferID = "loopback"
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := ln.Addr().String()
-	ln.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	ready := make(chan error, 1)
-	go func() {
-		_ = engine.NewSender(2, chunk).ServeAndSendWithRelPathReady(ctx, addr, src, "f.bin", nopListener{}, 0, ready)
-	}()
-	if err := <-ready; err != nil {
+	sender, err := transfer.NewSender(offer, files)
+	if err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	go func() { _ = sender.Serve(ctx, ln) }()
+
 	dst := t.TempDir()
+	plain := func(_ context.Context, c net.Conn) (net.Conn, error) { return c, nil }
+	r := transfer.NewReceiver(dst, plain)
+	r.Workers = 2
 	start := time.Now()
-	if err := engine.NewReceiver(dst, 2).Pull(ctx, addr, nopListener{}, engine.GenerateFileID(src)); err != nil {
-		t.Fatalf("Pull: %v", err)
+	results, err := r.Run(ctx, ln.Addr().String(), offer)
+	if err != nil || results[0].State != transfer.ItemDone {
+		t.Fatalf("Run: %+v, %v", results, err)
 	}
 	elapsed := time.Since(start)
 	got, err := os.ReadFile(filepath.Join(dst, "f.bin"))
@@ -163,7 +163,7 @@ func TestEngineTransferThrottled(t *testing.T) {
 	})
 	defer restore()
 
-	if elapsed := transfer(t, 1<<20, 64*1024); elapsed < 300*time.Millisecond {
+	if elapsed := sendFile(t, 1<<20, protocol.MinChunkSize); elapsed < 300*time.Millisecond {
 		t.Fatalf("1 MiB at 2 MiB/s took %v; the limiter was not applied", elapsed)
 	}
 }
@@ -172,15 +172,15 @@ func TestEngineTransferThrottled(t *testing.T) {
 func TestEngineTransferSurvivesCut(t *testing.T) {
 	var dialed atomic.Int32
 	restore := engine.SetConnWrapper(func(role engine.ConnRole, c net.Conn) net.Conn {
-		if role == engine.ConnDialed && dialed.Add(1) == 2 { // 1 = handshake, 2 = first data worker
+		if role == engine.ConnDialed && dialed.Add(1) == 1 { // the first data connection
 			return Wrap(c, Plan{CutAfter: 200 * 1024, Reset: true})
 		}
 		return c
 	})
 	defer restore()
 
-	transfer(t, 1<<20, 64*1024)
-	if dialed.Load() < 3 {
+	sendFile(t, 1<<20, protocol.MinChunkSize)
+	if dialed.Load() < 3 { // 2 workers, then at least one reconnection
 		t.Fatalf("only %d connections dialed; the receiver did not reconnect after the cut", dialed.Load())
 	}
 }

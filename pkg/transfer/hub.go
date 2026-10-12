@@ -268,8 +268,7 @@ func (l *Listener) Addr() net.Addr {
 }
 
 // JoinFunc secures a data connection to a peer's device port with cfg, then names the
-// transfer it joins (DATA_JOIN). It has the shape of engine.SecureFunc: the engine's receiver
-// uses it on every connection it opens.
+// transfer it joins (DATA_JOIN). The Receiver uses it on every connection it opens.
 func JoinFunc(cfg securechan.Config, id ID) func(context.Context, net.Conn) (net.Conn, error) {
 	return func(ctx context.Context, c net.Conn) (net.Conn, error) {
 		sc, err := securechan.Client(ctx, c, cfg)
