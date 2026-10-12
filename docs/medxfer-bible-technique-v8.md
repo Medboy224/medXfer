@@ -348,7 +348,7 @@ Messages `CONTROL` (champ `type`) : `hello`, `pair_secret`, `pair_pake`, `pair_c
 2. **Décision.** Le receveur affiche nom, taille, nombre de fichiers et expéditeur, puis répond `accept{transfer_id, chunk_size}` (peut réduire la taille) ou `reject`.
 3. **Flux de données.** Le receveur ouvre *N* connexions (défaut 4, de 1 à 8 📏), chacune commence par `DATA_JOIN`.
 4. **Le receveur pilote (modèle « pull »).** Il envoie `CHUNK_REQ` pour les plus petits index manquants, avec au plus 2 requêtes en vol par connexion. Les écritures restent presque séquentielles (utile pour les disques durs) et la mémoire est bornée : `N × 2 × chunk_size`.
-5. **Vérification à l'arrivée.** À réception d'un `CHUNK`, le receveur recalcule le SHA-256 et compare à celui reçu *avant* d'écrire.
+5. **Vérification à l'arrivée.** À réception d'un `CHUNK`, le receveur recalcule le SHA-256 et compare à celui reçu *avant* d'écrire. Rien n'est créé sur disque pour un élément (dossiers, fichier, état) avant son **premier chunk vérifié** ; le nom de destination est résolu une dernière fois à ce moment-là. Une connexion refusée, un émetteur muet, une annulation ou des hash toujours faux ne laissent donc rien, et un fichier existant que la politique « écraser » remplacerait reste intact tant qu'aucune donnée vérifiée n'est arrivée (#75). Un élément vide se demande comme le chunk 0, de longueur nulle : la réponse de l'émetteur le confirme avant qu'il soit créé.
 6. **Fin.** Quand tous les chunks d'un élément sont écrits, le receveur envoie `digest_req`. L'émetteur répond `digest` = `SHA-256("medxfer-v1-filedigest" ‖ n ‖ hash_0 ‖ … ‖ hash_{n-1})` (hash des hash). Le receveur compare avec le sien. Voir §9 pour la finalisation.
 7. **Clôture.** `done{transfer_id, status}`.
 

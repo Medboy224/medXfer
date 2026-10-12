@@ -209,7 +209,8 @@ type item struct {
 	mu        sync.RWMutex
 	opened    bool
 	closed    bool
-	dm        *engine.DiskManager
+	safe      string              // the item's path, checked (SafeRelPath)
+	dm        *engine.DiskManager // nil until the first verified chunk, unless resuming (#75)
 	saved     string
 	processed atomic.Uint32 // chunks handled: written, or found on disk
 }
@@ -274,7 +275,7 @@ func (ru *run) next(ctx context.Context, block bool) (task, schedStatus) {
 				}
 				sched := st.total
 				if sched == 0 {
-					sched = 1 // an empty file is one task: create it
+					sched = 1 // an empty file is one request: chunk 0, of 0 bytes
 				}
 				if st.next < sched {
 					st.next++
@@ -333,7 +334,8 @@ func (ru *run) prepare(t task) bool {
 			return true
 		}
 	}
-	onDisk := st.total == 0 || st.dm.IsChunkCompleted(t.index)
+	// An empty item is requested too: the sender's answer confirms it before it is made (#75).
+	onDisk := st.total > 0 && st.dm != nil && st.dm.IsChunkCompleted(t.index)
 	st.mu.Unlock()
 	if onDisk {
 		if ru.countChunk(st) {
@@ -344,7 +346,9 @@ func (ru *run) prepare(t task) bool {
 	return false
 }
 
-// open creates (or reopens, to resume) the item's file. Called with st.mu held.
+// open finds where the item goes before its first request, and writes nothing (#75): a safe
+// path, then the same file already complete, the partial file of a resume (reopened, it
+// exists already), or a free name for later. Called with st.mu held.
 func (ru *run) open(st *item) error {
 	r := ru.r
 	safe, err := engine.SafeRelPath(st.it.Path)
@@ -356,6 +360,7 @@ func (ru *run) open(st *item) error {
 		return err
 	}
 	st.opened = true
+	st.safe = safe
 	st.saved = filepath.Join(r.OutDir, filepath.FromSlash(res.ResolvedName))
 	ru.emitItem(ItemEvent{Item: st.it.Item, Path: st.it.Path, Size: st.it.Size, State: ItemStarted})
 	if res.IsDuplicate { // the same file is already complete on disk
@@ -364,12 +369,37 @@ func (ru *run) open(st *item) error {
 		ru.endItem(st.it.Item, ItemDone, nil) // ItemDone does not take st.mu
 		return nil
 	}
+	if res.IsResume {
+		dm, err := engine.CreateAndPreallocate(r.OutDir, res.ResolvedName, st.it.Size, ru.chunks, st.it.FileID)
+		if err != nil {
+			return err
+		}
+		st.dm = dm
+		ru.bytes.Add(dm.GetDownloadedBytes())
+	}
+	return nil
+}
+
+// create makes the item's file on its first verified chunk (#75); an empty item has one, of 0
+// bytes, which the sender's answer confirms. Until then a refused connection, a silent or lying sender
+// or a cancel leaves nothing behind, and an existing file the policy would overwrite stays
+// whole. The name is resolved again, so a file that appeared meanwhile is never emptied.
+// Called with st.mu held.
+func (ru *run) create(st *item) error {
+	r := ru.r
+	res, err := engine.ResolveCollision(r.OutDir, st.safe, st.it.FileID, st.it.Size, ru.chunks, r.Policy)
+	if err != nil {
+		return err
+	}
+	if res.IsDuplicate || res.IsResume {
+		return fmt.Errorf("%q: the destination changed during the transfer", st.it.Path)
+	}
 	dm, err := engine.CreateAndPreallocate(r.OutDir, res.ResolvedName, st.it.Size, ru.chunks, st.it.FileID)
 	if err != nil {
 		return err
 	}
 	st.dm = dm
-	ru.bytes.Add(dm.GetDownloadedBytes())
+	st.saved = filepath.Join(r.OutDir, filepath.FromSlash(res.ResolvedName))
 	return nil
 }
 
@@ -387,11 +417,25 @@ func (ru *run) countChunk(st *item) bool {
 func (ru *run) write(t task, data []byte) error {
 	st := ru.items[t.item]
 	st.mu.RLock()
+	if st.dm == nil && !st.closed { // the item's first verified chunk: its file is made now
+		st.mu.RUnlock()
+		st.mu.Lock()
+		var err error
+		if st.dm == nil && !st.closed {
+			err = ru.create(st)
+		}
+		st.mu.Unlock()
+		if err != nil {
+			ru.endItem(t.item, ItemFailed, err)
+			return nil
+		}
+		st.mu.RLock()
+	}
 	if st.closed || st.dm == nil {
 		st.mu.RUnlock()
 		return nil // skipped or failed meanwhile
 	}
-	if !st.dm.IsChunkCompleted(t.index) {
+	if st.total > 0 && !st.dm.IsChunkCompleted(t.index) {
 		if _, err := st.dm.WriteChunkAt(data, int64(t.index)*int64(ru.chunks), t.index); err != nil {
 			st.mu.RUnlock()
 			ru.endItem(t.item, ItemFailed, err)
@@ -609,6 +653,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 	}()
 	var out []byte
 	var conn net.Conn
+	var stopClosing func() bool
 	var inflight []task
 	reconnects := 0
 	drop := func() {
@@ -617,6 +662,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 		}
 		inflight = nil
 		if conn != nil {
+			stopClosing()
 			conn.Close()
 			conn = nil
 			ru.conns.Add(-1)
@@ -637,6 +683,8 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 				return err
 			}
 			conn = c
+			// A cancel closes the connection: a read waiting for a silent sender ends at once.
+			stopClosing = context.AfterFunc(ctx, func() { c.Close() })
 			reconnects++
 			ru.conns.Add(1)
 		}
