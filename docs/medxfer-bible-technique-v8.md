@@ -444,7 +444,7 @@ Avant l'`accept` : espace libre ≥ taille totale + max(1 %, 64 Mio). Si le disq
 | `STO-10` | Chaque transfert multi-éléments est reçu dans **un dossier racine neuf** (`<destination>/<racine>`), dont le nom est résolu *une fois* par la politique de collision (renommer, ignorer ou écraser). À l'intérieur, rien n'est fusionné avec l'existant. | Les conflits ne se produisent qu'au niveau racine. |
 | `STO-11` | Si un composant de chemin existe déjà avec le mauvais type (fichier au lieu de dossier), l'élément échoue avec l'erreur `PATH_CONFLICT` ; rien n'est supprimé. | — |
 | `STO-12` | Tout chemin reçu passe par `SafeRelPath` (ci-dessous) **avant** toute opération disque. | — |
-| `STO-13` | Les opérations sur fichiers du receveur DOIVENT passer par `os.Root` (Go ≥ 1.24) ouvert sur le dossier de destination, qui refuse `..` et les liens symboliques sortants sans fenêtre TOCTOU. Selon la version de Go, `Root` peut ne pas offrir `MkdirAll` : créer les dossiers composant par composant. | `go.mod` indique Go 1.22 : monter la version. |
+| `STO-13` | Les opérations sur fichiers du receveur DOIVENT passer par `os.Root` (Go ≥ 1.24) ouvert sur le dossier de destination, qui refuse `..` et les liens symboliques sortants sans fenêtre TOCTOU. Go 1.25 offre `Root.MkdirAll` et `Root.Rename`. | `go.mod` est en Go 1.25 depuis J4b (plan J4b, D4). |
 | `STO-14` | Après normalisation, deux chemins identiques à la casse près (`A.txt`, `a.txt`) ou en doublon DOIVENT faire rejeter l'offre : ils s'écraseraient sous Windows et macOS. | — |
 
 ```go
