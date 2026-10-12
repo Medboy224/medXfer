@@ -45,8 +45,10 @@ type Options struct {
 	Once bool
 	// DeviceName is sent to the other side, which shows it and uses it as the alias.
 	DeviceName string
-	// Offer (shower) is sent with pair_accept: the transfer a one-shot send offers.
-	Offer session.Message
+	// Offer (shower) is sent with pair_accept: the transfer a one-shot send offers, and Follow
+	// right after it: the pages of an offer too big for one message (session.OfferMessages).
+	Offer  session.Message
+	Follow []session.Message
 	// Confirm (shower) decides a pair_hello, sent by a device that has no QR code: provisional
 	// trust, confirmed by the user (WP-3.3, decision D3). Nil refuses every pair_hello. Calls
 	// come one at a time; ctx ends when the wait is over.
@@ -161,6 +163,11 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 	if err := ch.Send(accept); err != nil {
 		return Result{}, err
 	}
+	for _, m := range o.Follow {
+		if err := ch.Send(m); err != nil {
+			return Result{}, err
+		}
+	}
 	return r, nil
 }
 
@@ -224,6 +231,13 @@ func exchange(ctx context.Context, addr string, fp identity.Fingerprint, decide 
 	}
 	if resp.Type != TypeAccept {
 		return Result{}, ErrRefused
+	}
+	if resp.Offer != nil { // a one-shot send: the offer, with its pages (D2), checked (LIM-05)
+		offer, err := session.ReadOffer(ch, resp)
+		if err != nil {
+			return Result{}, err
+		}
+		resp.Offer = &offer
 	}
 	r := Result{Fingerprint: fp, Name: resp.DeviceName, Address: host, Offer: resp}
 	if err := remember(o, r); err != nil {

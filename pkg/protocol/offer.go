@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -24,6 +25,9 @@ type Offer struct {
 	TotalBytes int64       `json:"total_bytes"`
 	ChunkSize  uint32      `json:"chunk_size"`
 	Kind       string      `json:"kind,omitempty"` // "" or "bench" (DEV-08)
+	// Count is the number of items when the offer comes in pages (decision D2): the head
+	// carries the first items, offer_items messages the others. 0: all items are here.
+	Count int `json:"count,omitempty"`
 }
 
 // Limits of an offer (LIM-05) and of the chunk size (XFER-02, plan J4a D4). All are
@@ -162,4 +166,50 @@ func ParseChunkError(p []byte) (item, index uint32, code uint16, err error) {
 		return 0, 0, 0, fmt.Errorf("protocol: CHUNK_ERR of %d bytes", len(p))
 	}
 	return binary.BigEndian.Uint32(p[0:4]), binary.BigEndian.Uint32(p[4:8]), binary.BigEndian.Uint16(p[8:10]), nil
+}
+
+// Split cuts the offer into a head and pages whose items each take at most maxBytes of JSON,
+// so that every message fits in a CONTROL frame (LIM-04; decision D2). The head carries the
+// offer's fields, Count and the first items.
+func (o Offer) Split(maxBytes int) (Offer, [][]OfferItem) {
+	var pages [][]OfferItem
+	var page []OfferItem
+	size := 0
+	for _, it := range o.Items {
+		b, _ := json.Marshal(it)
+		if len(page) > 0 && size+len(b)+1 > maxBytes {
+			pages = append(pages, page)
+			page, size = nil, 0
+		}
+		page = append(page, it)
+		size += len(b) + 1
+	}
+	if len(page) > 0 || len(pages) == 0 {
+		pages = append(pages, page)
+	}
+	head := o
+	head.Items = pages[0]
+	head.Count = 0
+	if len(pages) > 1 {
+		head.Count = len(o.Items)
+	}
+	return head, pages[1:]
+}
+
+// Complete reports whether every item of a paged offer has arrived.
+func (o *Offer) Complete() bool { return o.Count == 0 || len(o.Items) >= o.Count }
+
+// AddPage appends a page of items received after the head: the numbering must go on, and the
+// offer may not grow past Count or MaxOfferItems (LIM-05).
+func (o *Offer) AddPage(items []OfferItem) error {
+	if o.Count <= 0 || o.Count > MaxOfferItems || len(o.Items)+len(items) > o.Count {
+		return fmt.Errorf("%w: more items than announced (%d)", ErrBadOffer, o.Count)
+	}
+	for _, it := range items {
+		if it.Item != len(o.Items) {
+			return fmt.Errorf("%w: item %d arrives as %d", ErrBadOffer, len(o.Items), it.Item)
+		}
+		o.Items = append(o.Items, it)
+	}
+	return nil
 }

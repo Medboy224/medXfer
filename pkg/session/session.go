@@ -53,23 +53,25 @@ func DialPeer(target string) (*net.TCPConn, error) {
 }
 
 type Message struct {
-	Type        string             `json:"type"`
-	DeviceName  string             `json:"device_name,omitempty"`
-	PairingCode string             `json:"pairing_code,omitempty"`
-	Secret      string             `json:"secret,omitempty"` // QR pairing secret, base64url (pkg/pairing)
-	FileName    string             `json:"file_name,omitempty"`
-	FileSize    int64              `json:"file_size,omitempty"`
-	FileID      string             `json:"file_id,omitempty"` // Unique Cryptographic Hash
-	DataPort    int                `json:"data_port,omitempty"`
-	ResumeBytes int64              `json:"resume_bytes,omitempty"`  // Sent back by the receiver on accept
-	Batch       *manifest.Manifest `json:"batch,omitempty"`         // Batch/Folder manifest
-	ItemIndex   int                `json:"item_index,omitempty"`    // Current item in batch (0-indexed)
-	TransferID  string             `json:"transfer_id,omitempty"`   // the transfer its data connections join (DATA_JOIN, CHAN-06)
-	ChunkSize   uint32             `json:"chunk_size,omitempty"`    // Chunk size used by sender (e.g. 4MB)
-	BenchPingTS int64              `json:"bench_ping_ts,omitempty"` // Timestamp in nanoseconds for RTT calculation
-	BenchSize   int64              `json:"bench_size,omitempty"`    // Requested size for bandwidth burst
-	Error       string             `json:"error,omitempty"`         // Error message for item_failed or transfer failures
-	Code        string             `json:"code,omitempty"`          // Machine-readable reason of an "error" message (bible §8.2)
+	Type        string               `json:"type"`
+	DeviceName  string               `json:"device_name,omitempty"`
+	PairingCode string               `json:"pairing_code,omitempty"`
+	Secret      string               `json:"secret,omitempty"` // QR pairing secret, base64url (pkg/pairing)
+	FileName    string               `json:"file_name,omitempty"`
+	FileSize    int64                `json:"file_size,omitempty"`
+	FileID      string               `json:"file_id,omitempty"` // Unique Cryptographic Hash
+	DataPort    int                  `json:"data_port,omitempty"`
+	ResumeBytes int64                `json:"resume_bytes,omitempty"`  // Sent back by the receiver on accept
+	Batch       *manifest.Manifest   `json:"batch,omitempty"`         // Batch/Folder manifest
+	ItemIndex   int                  `json:"item_index,omitempty"`    // Current item in batch (0-indexed)
+	TransferID  string               `json:"transfer_id,omitempty"`   // the transfer its data connections join (DATA_JOIN, CHAN-06)
+	Offer       *protocol.Offer      `json:"offer,omitempty"`         // a transfer offer (bible §8.3); its head when paged
+	Items       []protocol.OfferItem `json:"items,omitempty"`         // offer_items: a page of a paged offer (D2)
+	ChunkSize   uint32               `json:"chunk_size,omitempty"`    // Chunk size used by sender (e.g. 4MB)
+	BenchPingTS int64                `json:"bench_ping_ts,omitempty"` // Timestamp in nanoseconds for RTT calculation
+	BenchSize   int64                `json:"bench_size,omitempty"`    // Requested size for bandwidth burst
+	Error       string               `json:"error,omitempty"`         // Error message for item_failed or transfer failures
+	Code        string               `json:"code,omitempty"`          // Machine-readable reason of an "error" message (bible §8.2)
 }
 
 // TypeError is the message that answers a message the peer cannot handle; its Code says why.

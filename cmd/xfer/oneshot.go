@@ -33,69 +33,48 @@ import (
 const sendQRTTL = 10 * time.Minute
 
 // oneShotSend is the sender's side of `xfer send` on the device's single port (CHAN-01): the
-// pairing (QR code, or both users' confirmation) and the data connections, which only the
-// paired receiver may join (CHAN-06). A single file is the transfer base; item i of a folder
-// is base.Item(i), as the receiver derives it.
+// pairing (QR code, or both users' confirmation) and the data connections of the one transfer
+// that carries the whole offer, which only the paired receiver may join (CHAN-06).
 type oneShotSend struct {
-	hub   *transfer.Hub
-	base  transfer.ID
-	items int // 0 for a single file, the item count of a folder
+	hub  *transfer.Hub
+	base transfer.ID
+	// authorize, when set (xfer send -i), asks the sender's user once the receiver is paired.
+	authorize func(pairing.Result) bool
 
-	once      sync.Once
-	paired    chan struct{} // closed once the receiver is paired and its transfers registered
-	listeners []*transfer.Listener
+	once   sync.Once
+	paired chan struct{} // closed once the receiver is paired and the transfer registered
+	l      *transfer.Listener
 }
 
-func newOneShotSend(hub *transfer.Hub, base transfer.ID, items int) *oneShotSend {
-	return &oneShotSend{hub: hub, base: base, items: items, paired: make(chan struct{})}
+func newOneShotSend(hub *transfer.Hub, base transfer.ID) *oneShotSend {
+	return &oneShotSend{hub: hub, base: base, paired: make(chan struct{})}
 }
 
-// count is the number of transfers to register.
-func (o *oneShotSend) count() int {
-	if o.items == 0 {
-		return 1
-	}
-	return o.items
-}
-
-// id is the transfer id of item i (0 for a single file).
-func (o *oneShotSend) id(i int) transfer.ID {
-	if o.items == 0 {
-		return o.base
-	}
-	return o.base.Item(i)
-}
-
-// register makes the transfers of this send joinable by the paired receiver. The pairing calls
-// it before pair_accept, so the receiver's first DATA_JOIN finds them. Only one receiver is
-// ever registered.
+// register makes the transfer joinable by the paired receiver. The pairing calls it before
+// pair_accept, so the receiver's first DATA_JOIN finds it. Only one receiver is ever
+// registered.
 func (o *oneShotSend) register(r pairing.Result) error {
 	err := errors.New("a receiver is already paired")
 	o.once.Do(func() {
-		ls := make([]*transfer.Listener, 0, o.count())
-		for i := 0; i < o.count(); i++ {
-			l, rerr := o.hub.Register(o.id(i), r.Fingerprint)
-			if rerr != nil {
-				for _, done := range ls {
-					done.Close()
-				}
-				err = rerr
-				return
-			}
-			ls = append(ls, l)
+		if o.authorize != nil && !o.authorize(r) {
+			err = errors.New("declined by the sender")
+			return
 		}
-		o.listeners, err = ls, nil
-		close(o.paired)
+		var l *transfer.Listener
+		if l, err = o.hub.Register(o.base, r.Fingerprint); err == nil {
+			o.l = l
+			close(o.paired)
+		}
 	})
 	return err
 }
 
-// listener waits for the pairing and returns the data listener of item i, or nil if ctx ends
-// first.
-func (o *oneShotSend) listener(ctx context.Context, i int) *transfer.Listener {
+// listener waits for the pairing and returns the transfer's data listener, or nil if ctx
+// ends first.
+func (o *oneShotSend) listener(ctx context.Context) *transfer.Listener {
 	select {
 	case <-o.paired:
-		return o.listeners[i]
+		return o.l
 	case <-ctx.Done():
 		return nil
 	}
@@ -119,10 +98,10 @@ func startOneShotHub(bind string, port int, trust *identity.TrustStore) (*transf
 // new one each time the previous expires (same port, new secret). before runs once the
 // receiver is accepted, before pair_accept.
 func serveOneShotPairing(ctx context.Context, hub *transfer.Hub, id *identity.Identity, host string, port int,
-	ttl time.Duration, offer session.Message, confirm func(context.Context, pairing.Result) bool,
+	ttl time.Duration, offer session.Message, follow []session.Message, confirm func(context.Context, pairing.Result) bool,
 	before func(pairing.Result) error, shown func(pairing.URI)) (pairing.Result, error) {
 	name, _ := os.Hostname()
-	o := pairing.Options{Identity: id, Once: true, DeviceName: name, Offer: offer, Confirm: confirm, BeforeAccept: before}
+	o := pairing.Options{Identity: id, Once: true, DeviceName: name, Offer: offer, Follow: follow, Confirm: confirm, BeforeAccept: before}
 	for {
 		ln := hub.Control()
 		inv, err := pairing.NewInvitation(ttl)
@@ -142,7 +121,7 @@ func serveOneShotPairing(ctx context.Context, hub *transfer.Hub, id *identity.Id
 
 // startOneShotPairing runs serveOneShotPairing for `xfer send`: it prints the receive command
 // and the QR code, and registers the transfers for the paired receiver.
-func startOneShotPairing(ctx context.Context, send *oneShotSend, port int, data session.Message, trust *identity.TrustStore) {
+func startOneShotPairing(ctx context.Context, send *oneShotSend, port int, data session.Message, follow []session.Message, trust *identity.TrustStore) {
 	first := true
 	ready := make(chan struct{})
 	var readyOnce sync.Once
@@ -156,7 +135,7 @@ func startOneShotPairing(ctx context.Context, send *oneShotSend, port int, data 
 	}
 	confirm := receiverConfirm(os.Stdout, askLine, trust)
 	go func() {
-		r, err := serveOneShotPairing(ctx, send.hub, localID, getLocalIP(), port, sendQRTTL, data, confirm, send.register, shown)
+		r, err := serveOneShotPairing(ctx, send.hub, localID, getLocalIP(), port, sendQRTTL, data, follow, confirm, send.register, shown)
 		readyOnce.Do(func() { close(ready) })
 		if err != nil {
 			if ctx.Err() == nil {
@@ -234,10 +213,4 @@ func askLine(ctx context.Context) string {
 		fmt.Println("\n[-] No answer: refused.")
 	}
 	return ""
-}
-
-// offerMessage is what a one-shot send tells its receiver with pair_accept.
-func offerMessage(o discovery.TransferOffer, port int, base transfer.ID) session.Message {
-	return session.Message{FileName: o.FileName, FileSize: o.FileSize, FileID: o.FileID, Batch: o.Batch,
-		DataPort: port, TransferID: base.String()}
 }

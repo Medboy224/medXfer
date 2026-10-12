@@ -3,6 +3,7 @@ package pairing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/session"
 )
 
@@ -222,9 +224,21 @@ func TestServeExpires(t *testing.T) {
 }
 
 // A one-shot send's offer reaches the scanner with pair_accept (WP-3.5b).
+// pair_accept carries the one-shot send's offer; an offer too big for one CONTROL frame comes
+// in pages (decision D2), which Join reads and checks before it returns.
 func TestAcceptCarriesTheOffer(t *testing.T) {
 	shower, scanner := device(t, "pc"), device(t, "phone")
-	shower.Offer = session.Message{FileName: "film.mkv", FileSize: 42, FileID: "abc", DataPort: 18888}
+	offer := protocol.Offer{TransferID: "t1", Root: "photos", ChunkSize: protocol.DefaultChunkSize}
+	for i := 0; i < 30000; i++ {
+		offer.Items = append(offer.Items, protocol.OfferItem{Item: i, Path: fmt.Sprintf("photos/%s/%06d.jpg", strings.Repeat("x", 80), i), Size: 7})
+		offer.TotalBytes += 7
+	}
+	var follow []session.Message
+	shower.Offer, follow = session.OfferMessages(session.Message{DataPort: 18888}, offer)
+	if len(follow) == 0 {
+		t.Fatal("the test offer fits in one message: it does not test the pages")
+	}
+	shower.Follow = follow
 	ln, inv, u := listen(t, shower, TTL)
 	done := serve(ln, inv, shower)
 	r, err := Join(context.Background(), u, scanner)
@@ -233,8 +247,11 @@ func TestAcceptCarriesTheOffer(t *testing.T) {
 	}
 	<-done
 	o := r.Offer
-	if o.Type != TypeAccept || o.DeviceName != "pc" || o.FileName != "film.mkv" || o.FileSize != 42 || o.FileID != "abc" || o.DataPort != 18888 {
+	if o.Type != TypeAccept || o.DeviceName != "pc" || o.DataPort != 18888 || o.Offer == nil {
 		t.Fatalf("offer received: %+v", o)
+	}
+	if got := o.Offer; len(got.Items) != len(offer.Items) || got.Count != 0 || got.Items[29999].Path != offer.Items[29999].Path {
+		t.Fatalf("offer of %d items received, want %d", len(got.Items), len(offer.Items))
 	}
 }
 

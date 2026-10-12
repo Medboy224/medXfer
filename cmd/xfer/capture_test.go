@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/pairing"
+	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/Medboy224/medXfer/pkg/transfer"
@@ -100,42 +100,53 @@ func markedFile(t *testing.T, size int) (string, string, []byte) {
 	return path, name, marker
 }
 
-// startDataSender serves path on loopback with secure (nil: plaintext), as xfer send does.
-func startDataSender(t *testing.T, path string, secure engine.SecureFunc) string {
+// joinFunc secures a data connection and joins a transfer (transfer.JoinFunc); the plaintext
+// control uses the raw connection.
+type joinFunc = func(context.Context, net.Conn) (net.Conn, error)
+
+func plaintext(_ context.Context, c net.Conn) (net.Conn, error) { return c, nil }
+
+// fileOffer is the offer xfer send makes for path, in 512 KiB chunks.
+func fileOffer(t *testing.T, path string, id transfer.ID) (protocol.Offer, []string) {
+	t.Helper()
+	offer, files, err := buildOffer([]string{path}, protocol.MinChunkSize*2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer.TransferID = id.String()
+	return offer, files
+}
+
+// startDataSender serves offer on loopback without TLS: what a capture of an unprotected
+// transfer would see.
+func startDataSender(t *testing.T, offer protocol.Offer, files []string) string {
 	t.Helper()
 	l, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := l.Addr().String()
-	l.Close()
-	s := engine.NewSender(2, 512<<10)
-	if secure != nil {
-		s.SetSecure(secure)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	ready, done := make(chan error, 1), make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = s.ServeAndSendWithRelPathReady(ctx, addr, path, "", nil, 0, ready)
-	}()
-	if err := <-ready; err != nil {
+	s, err := transfer.NewSender(offer, files)
+	if err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = s.Serve(ctx, l)
+	}()
 	t.Cleanup(func() { cancel(); <-done })
-	return addr
+	return l.Addr().String()
 }
 
-func pull(t *testing.T, addr string, secure engine.SecureFunc) string {
+func pull(t *testing.T, addr string, offer protocol.Offer, join joinFunc) string {
 	t.Helper()
 	out := t.TempDir()
-	r := engine.NewReceiver(out, 2)
-	if secure != nil {
-		r.SetSecure(secure)
-	}
+	r := transfer.NewReceiver(out, join)
+	r.Workers = 2
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := r.Pull(ctx, addr, nil, ""); err != nil {
+	if _, err := r.Run(ctx, addr, offer); err != nil {
 		t.Fatal(err)
 	}
 	return out
@@ -152,18 +163,21 @@ func oneShotThroughCapture(t *testing.T, sender *identity.Identity, path, name s
 	relay := startCapture(t, addr)
 	port := portNum(t, relay.addr)
 	base, _ := transfer.NewID()
-	send := newOneShotSend(hub, base, 0)
-	offer := session.Message{FileName: name, FileSize: int64(size), DataPort: port, TransferID: base.String()}
+	send := newOneShotSend(hub, base)
+	offer, files := fileOffer(t, path, base)
+	msg, follow := session.OfferMessages(session.Message{DataPort: port, TransferID: base.String()}, offer)
 	uris := make(chan pairing.URI, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_, _ = serveOneShotPairing(ctx, hub, sender, "127.0.0.1", port, time.Minute, offer, confirm, send.register,
+		_, _ = serveOneShotPairing(ctx, hub, sender, "127.0.0.1", port, time.Minute, msg, follow, confirm, send.register,
 			func(u pairing.URI) { uris <- u })
 	}()
 	go func() {
-		if tl := send.listener(ctx, 0); tl != nil {
-			_ = engine.NewSender(2, 512<<10).ServeOn(ctx, tl, path, "", nil, 0)
+		if tl := send.listener(ctx); tl != nil {
+			if s, err := transfer.NewSender(offer, files); err == nil {
+				_ = s.Serve(ctx, tl)
+			}
 		}
 	}()
 	return relay, <-uris, base
@@ -181,11 +195,14 @@ func TestCaptureShowsNothingOfTheTransfer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := transfer.ParseID(r.Offer.TransferID)
-	if err != nil || r.Offer.FileName != name {
-		t.Fatalf("offer: %+v (%v)", r.Offer, err)
+	if r.Offer.Offer == nil || r.Offer.Offer.Root != name {
+		t.Fatalf("offer: %+v", r.Offer)
 	}
-	out := pull(t, relay.addr, transfer.JoinFunc(securechan.Config{Identity: receiverID, Expected: u.Fingerprint}, id))
+	id, err := transfer.ParseID(r.Offer.Offer.TransferID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := pull(t, relay.addr, *r.Offer.Offer, transfer.JoinFunc(securechan.Config{Identity: receiverID, Expected: u.Fingerprint}, id))
 	got, err := os.ReadFile(filepath.Join(out, name))
 	if err != nil || len(got) != size || !bytes.Equal(got[:64], marker) {
 		t.Fatalf("received file differs (%v)", err)
@@ -208,14 +225,16 @@ func TestCaptureShowsNothingOfTheTransfer(t *testing.T) {
 	}
 }
 
-// The control: the same capture of a transfer without TLS does show the marker and the name,
-// so the test above would see a leak.
+// The control: the same capture of a transfer without TLS does show the marker (the name now
+// travels only in the offer, on the control connection), so the test above would see a leak.
 func TestCaptureSeesAPlaintextTransfer(t *testing.T) {
-	path, name, marker := markedFile(t, 1<<20)
-	c := startCapture(t, startDataSender(t, path, nil))
-	pull(t, c.addr, nil)
+	path, _, marker := markedFile(t, 1<<20)
+	id, _ := transfer.NewID()
+	offer, files := fileOffer(t, path, id)
+	c := startCapture(t, startDataSender(t, offer, files))
+	pull(t, c.addr, offer, plaintext)
 	captured := c.bytes()
-	if !bytes.Contains(captured, marker) || !bytes.Contains(captured, []byte(name)) {
+	if !bytes.Contains(captured, marker) {
 		t.Fatal("the capture misses a plaintext transfer: it proves nothing")
 	}
 }
@@ -250,11 +269,14 @@ func TestCaptureShowsNothingOfTheCodePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := transfer.ParseID(r.Offer.TransferID)
+	if r.Offer.Offer == nil {
+		t.Fatalf("no offer with pair_accept: %+v", r.Offer)
+	}
+	id, err := transfer.ParseID(r.Offer.Offer.TransferID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := pull(t, relay.addr, transfer.JoinFunc(securechan.Config{Identity: receiverID, Expected: r.Fingerprint}, id))
+	out := pull(t, relay.addr, *r.Offer.Offer, transfer.JoinFunc(securechan.Config{Identity: receiverID, Expected: r.Fingerprint}, id))
 	if got, err := os.ReadFile(filepath.Join(out, name)); err != nil || len(got) != size {
 		t.Fatalf("received file differs (%v)", err)
 	}

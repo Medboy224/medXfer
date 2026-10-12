@@ -6,8 +6,6 @@ package transfer
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 )
@@ -37,19 +35,4 @@ func ParseID(s string) (ID, error) {
 	}
 	copy(id[:], b)
 	return id, nil
-}
-
-// Item derives the id of item i of a batch. Until WP-4.3 carries all the items of an offer on
-// the same data connections, each item is a transfer of its own; both sides derive its id
-// from the batch's, so that no extra message is needed.
-func (id ID) Item(i int) ID {
-	h := sha256.New()
-	h.Write([]byte("medxfer-v1-item"))
-	h.Write(id[:])
-	var n [8]byte
-	binary.BigEndian.PutUint64(n[:], uint64(i))
-	h.Write(n[:])
-	var item ID
-	copy(item[:], h.Sum(nil))
-	return item
 }

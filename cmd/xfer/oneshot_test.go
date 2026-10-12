@@ -13,6 +13,7 @@ import (
 
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/pairing"
+	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/Medboy224/medXfer/pkg/transfer"
@@ -72,7 +73,7 @@ func TestOneShotSendAdmitsOnlyThePairedReceiver(t *testing.T) {
 	other, _ := testDevice(t)
 	hub, addr := startTestHub(t, sender)
 	base, _ := transfer.NewID()
-	send := newOneShotSend(hub, base, 0)
+	send := newOneShotSend(hub, base)
 
 	if joinData(t, addr, receiver, sender, base) {
 		t.Fatal("a data connection was kept before any receiver was paired")
@@ -91,14 +92,8 @@ func TestOneShotSendAdmitsOnlyThePairedReceiver(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if send.listener(ctx, 0) == nil {
+	if send.listener(ctx) == nil {
 		t.Fatal("no listener after the pairing")
-	}
-
-	// A folder: each item has its own transfer, derived from the base, even with one item.
-	folder := newOneShotSend(hub, base.Item(99), 1)
-	if folder.id(0) != base.Item(99).Item(0) {
-		t.Fatal("a folder's item 0 is not derived from the base")
 	}
 }
 
@@ -178,9 +173,11 @@ func TestServeOneShotPairingRenewsTheQRCode(t *testing.T) {
 		err error
 	}
 	done := make(chan result, 1)
+	offer := protocol.Offer{Root: "a.bin", Items: []protocol.OfferItem{{Path: "a.bin", Size: 1}}, TotalBytes: 1, ChunkSize: protocol.DefaultChunkSize}
+	msg, follow := session.OfferMessages(session.Message{DataPort: port}, offer)
 	go func() {
 		r, err := serveOneShotPairing(context.Background(), hub, sender, "127.0.0.1", port, 300*time.Millisecond,
-			session.Message{FileName: "a.bin", DataPort: port}, nil, before, shown)
+			msg, follow, nil, before, shown)
 		done <- result{r, err}
 	}()
 	var u pairing.URI
@@ -210,7 +207,7 @@ func TestServeOneShotPairingRenewsTheQRCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("join: %v", err)
 	}
-	if r.Offer.FileName != "a.bin" || r.Offer.DataPort != port {
+	if r.Offer.Offer == nil || r.Offer.Offer.Root != "a.bin" || r.Offer.DataPort != port {
 		t.Fatalf("offer: %+v", r.Offer)
 	}
 	if s := <-done; s.err != nil || s.r.Fingerprint != receiver.Fingerprint || registered != receiver.Fingerprint {
