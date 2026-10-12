@@ -114,28 +114,31 @@ func TestFileWhereAFolderIsNeeded(t *testing.T) {
 	}
 }
 
-// STO-13: a link that leads out of the destination is refused by os.Root; one inside it is
-// followed.
+// STO-13: os.Root follows a relative link that stays in the destination, and refuses one that
+// leads out of it, or an absolute one even if it points inside (os.Root cannot tell where an
+// absolute link goes without leaving the root). Nothing is ever written outside.
 func TestLinks(t *testing.T) {
 	root, dir := openRoot(t)
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(dir, "out")); err != nil {
 		t.Skipf("cannot create a link here: %v", err)
 	}
-	if _, err := Open(root, "out/x.txt", params(10)); err == nil {
-		t.Fatal("a file was opened through a link out of the destination")
+	_ = os.Mkdir(filepath.Join(dir, "real"), 0o755)
+	_ = os.Symlink(filepath.Join(dir, "real"), filepath.Join(dir, "absolute"))
+	_ = os.Symlink("real", filepath.Join(dir, "relative"))
+
+	for _, name := range []string{"out/x.txt", "absolute/x.txt"} {
+		if f, err := Open(root, name, params(10)); err == nil {
+			f.Close()
+			t.Errorf("%s: opened through a link os.Root must refuse", name)
+		}
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
 		t.Fatalf("something was written outside the destination: %v", entries)
 	}
-
-	_ = os.Mkdir(filepath.Join(dir, "real"), 0o755)
-	if err := os.Symlink(filepath.Join(dir, "real"), filepath.Join(dir, "alias")); err != nil {
-		t.Skipf("cannot create a link here: %v", err)
-	}
-	f, err := Open(root, "alias/sub/x.txt", params(10))
+	f, err := Open(root, "relative/sub/x.txt", params(10))
 	if err != nil {
-		t.Fatalf("a link inside the destination was refused: %v", err)
+		t.Fatalf("a relative link inside the destination was refused: %v", err)
 	}
 	f.Close()
 	if _, err := os.Stat(filepath.Join(dir, "real", "sub", "x.txt"+PartSuffix)); err != nil {
