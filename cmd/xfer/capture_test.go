@@ -109,7 +109,7 @@ func plaintext(_ context.Context, c net.Conn) (net.Conn, error) { return c, nil 
 // fileOffer is the offer xfer send makes for path, in 512 KiB chunks.
 func fileOffer(t *testing.T, path string, id transfer.ID) (protocol.Offer, []string) {
 	t.Helper()
-	offer, files, err := buildOffer([]string{path}, protocol.MinChunkSize*2)
+	offer, files, err := transfer.BuildOffer([]string{path}, protocol.MinChunkSize*2)
 	if err != nil {
 		t.Fatal(err)
 	}
