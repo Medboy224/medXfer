@@ -8,7 +8,7 @@ Ce rapport répond au critère de sortie du plan (§3) : *un seul chemin de tran
 
 ## 1. Verdict
 
-**Le protocole v1 est livré** : une offre, un port, `DATA_JOIN`, SHA-256 par chunk, digest de fin, source modifiée détectée, mesures par étape. **Quatre critères sur cinq sont remplis**, le cinquième l'étant à la fusion de #81. **Le critère 4 (performance en boucle locale) ne l'est pas**, pour une raison connue et chiffrée (§2, §6) : il te revient de trancher.
+**J4a est terminé.** Le protocole v1 est livré : une offre, un port, `DATA_JOIN`, SHA-256 par chunk, digest de fin, source modifiée détectée, mesures par étape. **Les cinq critères de sortie sont remplis** (§2), le quatrième dans sa forme recalibrée le 12 octobre 2026 (option A, §6) : la formulation d'origine mesurait surtout le coût du SHA-256 en boucle locale, accepté par la gate G6.
 
 | Avant J4a | Après J4a |
 |---|---|
@@ -19,7 +19,7 @@ Ce rapport répond au critère de sortie du plan (§3) : *un seul chemin de tran
 | Diagnostic par latences approximatives | **Mesures par étape** (`DEV-03`), **étape limitante** validée à 100 % (`DEV-04`), offre `bench` et `xfer bench ladder` R1 à R4 (`DEV-07` à `DEV-09`) |
 
 **Réserves** (détail au §8) :
-1. **Critère 4 :** en boucle locale, J4a est environ 39 % moins rapide que J3. C'est le coût du SHA-256 haché deux fois sur le même processeur. Entre deux appareils réels, J4a n'est pas plus lent (§6).
+1. **Coût du SHA-256 en boucle locale :** sur un même processeur, J4a est environ 39 % moins rapide que J3, chaque chunk étant haché deux fois. Entre deux appareils réels, J4a n'est pas plus lent (§6). Ce coût est accepté (critère 4 recalibré) et suivi par `xfer bench ladder`.
 2. **Pas de journal ni de `fsync` groupé nouveau :** la reprise repose encore sur les fichiers `.medxfer` actuels, comme prévu (J4b).
 3. **Fichier de 4 Gio et chaos 1 000 itérations :** non faits, hors du périmètre de J4a (J4b, WP-4.9).
 
@@ -32,8 +32,8 @@ Ce rapport répond au critère de sortie du plan (§3) : *un seul chemin de tran
 | 1 | Un seul chemin de transfert : offre, port unique, `DATA_JOIN`, SHA-256 par chunk, `digest` ; l'ancienne API n'existe plus | ✅ | `xfer send` / `recv`, `xfer node` (#72) et le daemon (#73) passent par `pkg/transfer` ; `engine.Sender` / `Receiver`, les trames v0 et le CRC32 supprimés (#74, −2 877 lignes) ; digest (#77) |
 | 2 | Essai réel PC ↔ téléphone : dossier de nombreux petits fichiers et gros fichier, hash identiques, une seule règle de pare-feu | ✅ | §5 : **2 000 fichiers de 4 Kio et un fichier de 512 Mio dans une seule offre**, PC → téléphone, 1 min 24 s, 2 001 SHA-256 identiques, un seul port (18888) |
 | 3 | Mesures par étape dans le rapport ; étape limitante retrouvée dans 100 % des scénarios synthétiques | ✅ | #78 : rapport en schéma 2 (`stages`, `bottleneck`) ; `TestLimitingStageIsFound` : disque lent, réseau bridé, hash ralenti, 3 passages chacun, 9/9 avec une confiance haute |
-| 4 | Débit en boucle locale (512 Mio, TLS) pas plus de 10 % sous J3 | ❌ | §6 : J3 1,44 s, J4a 2,36 s en moyenne (5 passages alternés). L'écart vient de la couche SHA-256 (gate G6) ; entre appareils, pas de baisse |
-| 5 | #33, #48 et #54 fermées ; G6 fermée dans la bible | ✅ à la fusion de #81 | #48 (#70), #54 (#73) ; G6 (#67) ; #33 par #81 |
+| 4 | Débit pas plus de 10 % sous J3 : entre deux appareils, et en boucle locale à la marche R2 (TLS) — critère recalibré le 12 octobre 2026, option A du §6 | ✅ | Entre appareils : 84,2 s contre 90,0 s pour l'ancien moteur (§5). R2 en boucle locale : 683 à 899 Mo/s, sans perte face au TLS de J3. Formulation d'origine (boucle locale de bout en bout) : J3 1,44 s, J4a 2,36 s, écart dû au SHA-256 (G6), consigné au §6 |
+| 5 | #33, #48 et #54 fermées ; G6 fermée dans la bible | ✅ | #48 (#70), #54 (#73), #33 (#81) ; G6 (#67) |
 
 ---
 
@@ -118,11 +118,11 @@ J4a met 64 % de temps de plus, soit environ 39 % de débit en moins. **Pas de r�
 
 La couche TLS ne coûte rien de plus qu'en J3 (914 ms pour 512 Mio en J3, #58). **Toute la perte vient du SHA-256**, que la gate G6 a choisi à la place du CRC32. En boucle locale, chaque chunk est haché deux fois sur le même processeur (émetteur et receveur), et ce PC n'a pas d'accélération SHA. Le profil de #71 l'attribuait déjà à 63 % du CPU. Entre deux appareils, chacun ne hache qu'une fois : le SHA-256 n'y est jamais l'étape limitante (§5 : `net_wait` / `net_write`), et le débit ne baisse pas.
 
-**Le critère, tel qu'il est écrit, ne peut pas être tenu sans revenir sur G6.** Trois voies :
+**Le critère, tel qu'il était écrit, ne pouvait pas être tenu sans revenir sur G6.** Trois voies ont été proposées ; **l'option A a été retenue le 12 octobre 2026** et le plan (§3, critère 4) est mis à jour :
 
 | Option | Effet |
 |---|---|
-| **A. Recalibrer le critère** (proposition) : mesurer la non-régression **entre deux appareils** (gros fichier, passages alternés) et, en boucle locale, **à la marche R2** (TLS, sans la couche choisie par G6) | Les deux sont tenus aujourd'hui (84,2 contre 90,0 s ; R2 sans perte). Le coût du SHA-256 en boucle locale est accepté, consigné, et suivi par `bench ladder` |
+| **A. Recalibrer le critère** (**retenue**) : mesurer la non-régression **entre deux appareils** (gros fichier, passages alternés) et, en boucle locale, **à la marche R2** (TLS, sans la couche choisie par G6) | Les deux sont tenus aujourd'hui (84,2 contre 90,0 s ; R2 sans perte). Le coût du SHA-256 en boucle locale est accepté, consigné, et suivi par `bench ladder` |
 | B. Garder le critère et chercher du débit en boucle locale | Peu de marge : le SHA-256 de Go utilise déjà les instructions disponibles ; ne hacher qu'une fois romprait la vérification de bout en bout (`XFER-03`) |
 | C. Revenir sur G6 (BLAKE3) | Plus rapide sur le PC, mais 60 Mo/s sur le téléphone en Go contre 536 Mo/s pour SHA-256 : pire là où ça compte |
 
@@ -143,7 +143,7 @@ La couche TLS ne coûte rien de plus qu'en J3 (914 ms pour 512 Mio en J3, #58). 
 
 | Sujet | Suite |
 |---|---|
-| Critère 4 en boucle locale (§6) | **Ta décision** (option A proposée) |
+| Coût du SHA-256 en boucle locale (§6) | Accepté (option A) ; suivi par `bench ladder` et, en J4b, `bench matrix` |
 | Reprise sur les fichiers `.medxfer` actuels ; pas de journal ni de commit groupé nouveau ; relecture des chunks repris pour le digest, des deux côtés | J4b : journal, clé de reprise, hash conservés |
 | Un partiel périmé (source changée) reste sur disque, la nouvelle version part vers « nom (1) » | J4b (gestion des partiels) |
 | Variantes de casse (`A.txt` / `a.txt`) sous Windows et macOS ; normalisation Unicode | J4b |
@@ -155,6 +155,6 @@ La couche TLS ne coûte rien de plus qu'en J3 (914 ms pour 512 Mio en J3, #58). 
 
 ## 9. Suite
 
-Après la fusion de #81 et ta décision sur le critère 4, **J4b** : journal et `fsync` groupé (§9 de la bible), clé de reprise, gestion des partiels, R5, R6 et `bench matrix`, chaos.
+**J4b** : journal et `fsync` groupé (§9 de la bible), clé de reprise, gestion des partiels, R5, R6 et `bench matrix`, chaos.
 
 Les décisions qui dépendent d'une personne restent celles du rapport de J3 : **G1** (PAKE) au début de J5, et **G4**, la revue cryptographique externe, à contractualiser ou dater à la sortie de J5.
