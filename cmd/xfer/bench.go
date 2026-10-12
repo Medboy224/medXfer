@@ -14,8 +14,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/bench"
 	"github.com/Medboy224/medXfer/pkg/diag"
 	"github.com/Medboy224/medXfer/pkg/engine"
+	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
 const benchUsage = `Usage:
@@ -26,8 +29,15 @@ const benchUsage = `Usage:
   xfer bench net --peer HOST:PORT --code CODE [--size 32M] [--json]
       Latency (ping-pong) and throughput in both directions, in memory, no disk.
 
-The network benchmark is raw, unencrypted TCP (step R1): the encrypted measurement comes
-with the secure channel (J3).
+  xfer bench ladder --listen [ADDR] [--source random|zero|file --file PATH] [--once]
+                                                    (default ADDR :19991; prints the command)
+  xfer bench ladder --peer HOST:PORT --code CODE --fp KEY [--size 256M] [--streams 4]
+                    [--chunk 4] [--sink null|disk] [--dir DIR] [--json]
+      The ladder (bible §17.4): R1 raw TCP, R2 + TLS with the key pinned, R3 + medXfer
+      frames and SHA-256 (a bench offer, null sink), R4 + disk writes without fsync. The
+      listening side sends, the other measures. R4 writes into a temporary folder in DIR.
+
+The net benchmark is raw, unencrypted TCP (step R1 only).
 `
 
 // handleBench implements `xfer bench` (DEV-07, base version). It exits with status 1 on error.
@@ -51,12 +61,22 @@ func runBench(args []string, stdout io.Writer) error {
 	peer := fs.String("peer", "", "address of a `xfer bench net --listen` (net)")
 	code := fs.String("code", "", "code printed by the listening side (net)")
 	once := fs.Bool("once", false, "with --listen, stop after one session")
+	fp := fs.String("fp", "", "key of the listening side, printed by it (ladder)")
+	streams := fs.Int("streams", 0, "data connections (ladder; default 4)")
+	chunkMB := fs.Int("chunk", 4, "chunk size in MB, 1 to 8 (ladder)")
+	source := fs.String("source", "random", "bytes sent: random, zero or file (ladder --listen)")
+	file := fs.String("file", "", "with --source file, the file to send (ladder --listen)")
+	sink := fs.String("sink", "null", "where R3's chunks go: null or disk (ladder --peer)")
 	// Accept "--listen" without a value: it then uses the default address.
 	sub := normalizeCommand(args[0])
 	rest := args[1:]
 	for i, a := range rest {
 		if (a == "--listen" || a == "-listen") && (i+1 == len(rest) || strings.HasPrefix(rest[i+1], "-")) {
-			rest = append(append(append([]string{}, rest[:i]...), a+"=:19990"), rest[i+1:]...)
+			def := ":19990"
+			if sub == "ladder" {
+				def = ":19991"
+			}
+			rest = append(append(append([]string{}, rest[:i]...), a+"="+def), rest[i+1:]...)
 			break
 		}
 	}
@@ -69,6 +89,41 @@ func runBench(args []string, stdout io.Writer) error {
 	}
 
 	switch sub {
+	case "ladder":
+		sizeSet := false
+		fs.Visit(func(f *flag.Flag) { sizeSet = sizeSet || f.Name == "size" })
+		if !sizeSet {
+			size = 256 << 20
+		}
+		switch {
+		case *listen != "":
+			return benchLadderListen(stdout, *listen, *source, *file, *once)
+		case *peer != "":
+			if *code == "" || *fp == "" {
+				return fmt.Errorf("--peer needs the --code and --fp printed by the listening side")
+			}
+			if *chunkMB < 1 || *chunkMB > 8 {
+				return fmt.Errorf("--chunk must be between 1 and 8 (MB)")
+			}
+			addr, err := peerAddress(*peer)
+			if err != nil {
+				return err
+			}
+			if !strings.Contains(*peer, ":") {
+				addr = net.JoinHostPort(strings.TrimSpace(*peer), benchLadderDefaultPort)
+			}
+			var s transfer.Sink
+			switch *sink {
+			case "null":
+				s = transfer.SinkNull
+			case "disk":
+				s = transfer.SinkDisk
+			default:
+				return fmt.Errorf("--sink must be null or disk")
+			}
+			return benchLadderPeer(stdout, addr, *code, *fp, size, *streams, uint32(*chunkMB)<<20, s, *dir, *asJSON)
+		}
+		return fmt.Errorf("ladder needs --listen or --peer\n%s", benchUsage)
 	case "disk":
 		return benchDisk(stdout, *dir, size, *asJSON)
 	case "net":
@@ -189,7 +244,88 @@ func parseSize(s string) (int64, error) {
 	return v * mult, nil
 }
 
-const benchNetDefaultPort = "19990"
+const (
+	benchNetDefaultPort    = "19990"
+	benchLadderDefaultPort = "19991"
+)
+
+func benchLadderListen(stdout io.Writer, addr, source, file string, once bool) error {
+	id, _, err := loadIdentity(configDir())
+	if err != nil {
+		return err
+	}
+	srv, err := bench.NewLadderServer(id)
+	if err != nil {
+		return err
+	}
+	switch source {
+	case "random":
+	case "zero":
+		srv.SetSource(transfer.ZeroSource())
+	case "file":
+		if file == "" {
+			return fmt.Errorf("--source file needs --file PATH")
+		}
+		src, _, err := transfer.FileSource(file)
+		if err != nil {
+			return err
+		}
+		srv.SetSource(src)
+	default:
+		return fmt.Errorf("--source must be random, zero or file")
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	port := portOf(ln.Addr())
+	args := fmt.Sprintf("--code %s --fp %s", srv.Code, id.Fingerprint)
+	fmt.Fprintf(stdout, "Bench ladder server on %s (source: %s)\n", ln.Addr(), source)
+	if addrs := lanAddresses(); len(addrs) > 0 {
+		fmt.Fprintln(stdout, "On the other device, use the address of the network it shares with this one:")
+		for _, a := range addrs {
+			fmt.Fprintf(stdout, "  %-24s xfer bench ladder --peer %s %s\n", a.iface+":", net.JoinHostPort(a.ip, port), args)
+		}
+	} else {
+		fmt.Fprintf(stdout, "On the other device: xfer bench ladder --peer <this-ip>:%s %s\n", port, args)
+	}
+	fmt.Fprintln(stdout, "Ctrl+C to stop.")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	srv.OnError = func(err error) { fmt.Fprintf(os.Stderr, "[-] ladder connection: %v\n", err) }
+	return srv.Serve(ctx, ln, once)
+}
+
+func benchLadderPeer(stdout io.Writer, addr, code, fp string, size int64, streams int, chunk uint32,
+	sink transfer.Sink, dir string, asJSON bool) error {
+	key, err := identity.ParseFingerprint(fp)
+	if err != nil {
+		return fmt.Errorf("--fp: %w", err)
+	}
+	id, _, err := loadIdentity(configDir())
+	if err != nil {
+		return err
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	res, err := bench.RunLadder(ctx, bench.LadderOptions{Addr: addr, Code: code, Fingerprint: key, Identity: id,
+		Streams: streams, Size: size, ChunkSize: chunk, Dir: abs, Sink: sink})
+	if err != nil {
+		if res != nil && len(res.Steps) > 0 && !asJSON {
+			fmt.Fprint(stdout, bench.FormatLadder(res))
+		}
+		return err
+	}
+	if asJSON {
+		return writeJSON(stdout, res)
+	}
+	fmt.Fprint(stdout, bench.FormatLadder(res))
+	return nil
+}
 
 // peerAddress accepts HOST:PORT, or HOST alone (default port). "10.0.0.5.19990", a common
 // typo, gets an explicit correction instead of Go's "missing port in address".

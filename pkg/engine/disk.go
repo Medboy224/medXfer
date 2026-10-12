@@ -45,6 +45,7 @@ type DiskManager struct {
 
 	commitMu   sync.Mutex          // serializes flushes: state writes stay in order
 	onSync     func(time.Duration) // observes each group commit (diag, DEV-03)
+	noSync     bool                // never fsync: a benchmark step (bench ladder R4)
 	committing bool                // a background commit is running (guarded by mu)
 	closing    bool                // Close/Finalize started: no new background commit (guarded by mu)
 	commitErr  error               // first background commit failure (guarded by mu)
@@ -281,8 +282,10 @@ func (dm *DiskManager) flush(batch []uint32) error {
 	if dm.onSync != nil {
 		defer func(start time.Time) { dm.onSync(time.Since(start)) }(time.Now())
 	}
-	if err := dm.file.Sync(); err != nil {
-		return err
+	if !dm.noSync {
+		if err := dm.file.Sync(); err != nil {
+			return err
+		}
 	}
 	dm.mu.Lock()
 	for _, idx := range batch {
@@ -297,6 +300,9 @@ func (dm *DiskManager) flush(batch []uint32) error {
 	dm.mu.Unlock()
 	if _, err := dm.stateFile.WriteAt(buf, 32); err != nil {
 		return err
+	}
+	if dm.noSync {
+		return nil
 	}
 	return dm.stateFile.Sync()
 }
@@ -340,6 +346,10 @@ func (dm *DiskManager) Close() error {
 // write and sync). Set it before the first write.
 func (dm *DiskManager) SetSyncObserver(f func(time.Duration)) { dm.onSync = f }
 
+// SetNoSync makes the manager never fsync: the data is not durable, which only a benchmark
+// may accept (bench ladder R4: disk writes without fsync). Set it before the first write.
+func (dm *DiskManager) SetNoSync(on bool) { dm.noSync = on }
+
 // Discard closes the file and removes it with its state: the receiver starts it over from
 // zero (a digest that did not match, bible §8.3).
 func (dm *DiskManager) Discard() error {
@@ -361,7 +371,7 @@ func (dm *DiskManager) Finalize() error {
 	batch, _ := dm.drain()
 	dm.mu.Lock()
 	f := dm.file
-	if f != nil {
+	if f != nil && !dm.noSync {
 		if err := f.Sync(); err != nil {
 			dm.pending = append(batch, dm.pending...) // let Close retry the commit
 			dm.mu.Unlock()
