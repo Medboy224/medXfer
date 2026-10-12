@@ -40,25 +40,6 @@ func touch(t *testing.T, path string) {
 	}
 }
 
-// waitBytes waits until the receiver's progress reaches n bytes.
-func waitBytes(t *testing.T, rec *recorder, n int64) {
-	t.Helper()
-	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		rec.mu.Lock()
-		var got int64
-		if k := len(rec.progress); k > 0 {
-			got = rec.progress[k-1].Bytes
-		}
-		rec.mu.Unlock()
-		if got >= n {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the receiver got %d bytes, waited for %d", got, n)
-		}
-	}
-}
-
 func sourceChanged(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "SOURCE_CHANGED")
 }
@@ -92,9 +73,8 @@ func TestSourceChangedDuringSending(t *testing.T) {
 	out := t.TempDir()
 	offer.TransferID = p.id.String()
 	r := p.receiver(out)
-	r.dial = slowDial
-	rec := &recorder{}
-	r.Events = rec
+	v := newValve(3 * testChunk) // the sender has the file open, most chunks are still to come
+	r.dial = v.dial
 	done := make(chan []ItemResult, 1)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -102,8 +82,9 @@ func TestSourceChangedDuringSending(t *testing.T) {
 		res, _ := r.Run(ctx, p.addr, offer)
 		done <- res
 	}()
-	waitBytes(t, rec, 2*testChunk) // the sender has the file open
+	v.wait(t)
 	touch(t, paths[0])
+	v.open()
 	res := <-done
 	if res[0].State != ItemFailed || !sourceChanged(res[0].Err) {
 		t.Fatalf("result %+v, want failed with SOURCE_CHANGED", res[0])
@@ -121,11 +102,11 @@ func TestTamperedPartialFileStartsOver(t *testing.T) {
 	offer.TransferID = p.id.String()
 
 	first := p.receiver(out)
-	first.dial = slowDial
-	rec := &recorder{}
-	first.Events = rec
+	first.Workers = 1 // chunks 0, 1, 2 in order: chunk 0 is surely on disk
+	v := newValve(3 * testChunk)
+	first.dial = v.dial
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { waitBytes(t, rec, 4*testChunk); cancel() }()
+	go func() { <-v.reached; cancel() }()
 	if _, err := first.Run(ctx, p.addr, offer); !errors.Is(err, context.Canceled) {
 		t.Fatalf("first run: %v, want context.Canceled", err)
 	}

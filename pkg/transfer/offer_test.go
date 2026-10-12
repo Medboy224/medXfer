@@ -198,27 +198,6 @@ func TestSenderCountsEachChunkOnce(t *testing.T) {
 	}
 }
 
-// slowDial makes every read of the data connections slow, so a transfer can be stopped half
-// way.
-func slowDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	var d net.Dialer
-	c, err := d.DialContext(ctx, network, addr)
-	if err != nil {
-		return nil, err
-	}
-	return &slowConn{Conn: c}, nil
-}
-
-type slowConn struct{ net.Conn }
-
-func (c *slowConn) Read(p []byte) (int, error) {
-	time.Sleep(5 * time.Millisecond)
-	if len(p) > 16<<10 {
-		p = p[:16<<10]
-	}
-	return c.Conn.Read(p)
-}
-
 // A transfer stopped half way resumes: the second run asks only for what is missing.
 func TestOfferResumes(t *testing.T) {
 	offer, paths, contents := tree(t, []int{24 * testChunk})
@@ -227,25 +206,10 @@ func TestOfferResumes(t *testing.T) {
 	out := t.TempDir()
 
 	first := p.receiver(out)
-	first.dial = slowDial
+	v := newValve(4 * testChunk)
+	first.dial = v.dial
 	ctx, cancel := context.WithCancel(context.Background())
-	first.Events = &recorder{onItem: func(ItemEvent) {}}
-	rec := first.Events.(*recorder)
-	go func() {
-		for ctx.Err() == nil {
-			rec.mu.Lock()
-			var got int64
-			if n := len(rec.progress); n > 0 {
-				got = rec.progress[n-1].Bytes
-			}
-			rec.mu.Unlock()
-			if got >= 4*testChunk {
-				cancel()
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-	}()
+	go func() { <-v.reached; cancel() }()
 	if _, err := first.Run(ctx, p.addr, offer); !errors.Is(err, context.Canceled) {
 		t.Fatalf("first run: %v, want context.Canceled", err)
 	}
