@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"sync"
@@ -27,6 +28,7 @@ type Sender struct {
 	paths  []string
 	events Events
 	stages StageEvents // nil: the stages are not measured (DEV-03)
+	src    io.ReaderAt // a bench offer's source, instead of the item's file (DEV-09)
 
 	mu     sync.Mutex
 	files  map[int]*openFile
@@ -196,8 +198,24 @@ func (s *Sender) serveConn(c net.Conn) {
 // errSourceChanged: the file no longer has the size or date of the offer (XFER-07).
 var errSourceChanged = errors.New("transfer: the source file changed")
 
-// unchanged reports whether item's open file still has the size and date of the offer.
+// reader returns what item reads from: its file, to release once read, or the bench source
+// (f is then nil).
+func (s *Sender) reader(item int) (r io.ReaderAt, f *os.File, err error) {
+	if s.src != nil {
+		return s.src, nil, nil
+	}
+	if f, err = s.acquire(item); err != nil {
+		return nil, nil, err
+	}
+	return f, f, nil
+}
+
+// unchanged reports whether item's open file still has the size and date of the offer. A
+// bench source (f nil) does not change.
 func (s *Sender) unchanged(item int, f *os.File) bool {
+	if f == nil {
+		return true
+	}
 	it := s.offer.Items[item]
 	fi, err := f.Stat()
 	return err == nil && fi.Size() == it.Size && (it.MTime == 0 || fi.ModTime().UnixNano() == it.MTime)
@@ -227,19 +245,19 @@ func (s *Sender) chunk(out, data []byte, item, index uint32) []byte {
 		return protocol.AppendChunkError(out, item, index, protocol.ChunkErrNoSuchChunk)
 	}
 	off, n := s.span(it.Size, index)
-	f, err := s.acquire(int(item))
+	r, f, err := s.reader(int(item))
 	if err != nil {
 		return protocol.AppendChunkError(out, item, index, s.readErr(int(item), nil, err))
 	}
 	start := time.Now()
-	_, err = f.ReadAt(data[:n], off) // an error means fewer bytes than asked (a shorter file too)
+	_, err = r.ReadAt(data[:n], off) // an error means fewer bytes than asked (a shorter file too)
 	s.stage(StageDiskRead, start, n)
-	if err != nil {
-		code := s.readErr(int(item), f, err)
-		s.release(int(item))
-		return protocol.AppendChunkError(out, item, index, code)
+	if f != nil {
+		defer s.release(int(item))
 	}
-	s.release(int(item))
+	if err != nil {
+		return protocol.AppendChunkError(out, item, index, s.readErr(int(item), f, err))
+	}
 	start = time.Now()
 	sum := sha256.Sum256(data[:n])
 	s.stage(StageHash, start, n)
@@ -259,11 +277,13 @@ func (s *Sender) digest(out, data []byte, item uint32) []byte {
 		return fail(protocol.ChunkErrNoSuchChunk)
 	}
 	i := int(item)
-	f, err := s.acquire(i)
+	r, f, err := s.reader(i)
 	if err != nil {
 		return fail(s.readErr(i, nil, err))
 	}
-	defer s.release(i)
+	if f != nil {
+		defer s.release(i)
+	}
 	if !s.unchanged(i, f) {
 		return fail(protocol.ChunkErrSourceChanged)
 	}
@@ -275,7 +295,7 @@ func (s *Sender) digest(out, data []byte, item uint32) []byte {
 			continue
 		}
 		off, n := s.span(it.Size, uint32(index))
-		if _, err := f.ReadAt(data[:n], off); err != nil {
+		if _, err := r.ReadAt(data[:n], off); err != nil {
 			return fail(s.readErr(i, f, err))
 		}
 		hashes[index] = sha256.Sum256(data[:n])

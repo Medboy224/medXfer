@@ -113,6 +113,7 @@ func TestOfferValidate(t *testing.T) {
 		"negative":   func(o *Offer) { o.Items[0].Size = -1; o.TotalBytes = 9 },
 		"empty path": func(o *Offer) { o.Items[0].Path = "" },
 		"chunk low":  func(o *Offer) { o.ChunkSize = MinChunkSize - 1 },
+		"kind":       func(o *Offer) { o.Kind = "mystery" },
 		// #75: two items on one file, or a file that is the folder of another item.
 		"same path":            func(o *Offer) { o.Items[1].Path = o.Items[0].Path },
 		"same path, backslash": func(o *Offer) { o.Items[0].Path = "dir/b.txt"; o.Items[1].Path = `dir\b.txt` },

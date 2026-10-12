@@ -777,6 +777,8 @@ Exemple de rapport (valeurs d'illustration) :
 | R5 | + journal et `fsync` (commit groupé) | `xfer` |
 | R6 | Transfert complet (offre, acceptation, `digest`, renommage) | `xfer` |
 
+En J4a, `xfer bench ladder` mesure R1 à R4 entre deux appareils : le côté `--listen` envoie (source `--source random|zero|file`) et affiche la commande à lancer de l'autre côté avec un code et son empreinte ; l'autre côté reçoit sur N flux et mesure. R2 épingle l'empreinte affichée ; R3 et R4 passent par le moteur de transfert sur une offre `bench` (puits `--sink null|disk` pour R3), et donnent l'étape limitante du côté qui reçoit. R5 et R6 viennent avec le journal (J4b).
+
 `bench matrix` balaie flux ∈ {1, 2, 4, 8} et chunk ∈ {1, 2, 4, 8} Mio, et propose comme valeurs par défaut la combinaison dont le débit est à moins de 5 % du meilleur avec la plus faible mémoire (`N × 2 × chunk`). Les résultats sont enregistrés dans `bench-results/*.json` pour comparer les appareils.
 
 ### 17.5 Injection de fautes

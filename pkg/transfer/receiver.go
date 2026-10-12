@@ -50,6 +50,10 @@ type Receiver struct {
 	Join        func(context.Context, net.Conn) (net.Conn, error)
 	DialTimeout time.Duration // 0: DefaultDialTimeout
 	Events      Events
+	// Sink is where the chunks go; SinkNull checks and drops them (a bench offer, DEV-09).
+	Sink Sink
+	// NoSync writes without fsync: never durable, for the bench ladder's step R4 only.
+	NoSync bool
 
 	dial func(ctx context.Context, network, addr string) (net.Conn, error) // tests
 
@@ -211,8 +215,9 @@ func (ru *run) stage(name string, parallel int, start time.Time, bytes int64) {
 	}
 }
 
-// observeSync has dm report its group commits as the fsync stage.
+// observeSync has dm report its group commits as the fsync stage, and applies NoSync.
 func (ru *run) observeSync(dm *engine.DiskManager) {
+	dm.SetNoSync(ru.r.NoSync)
 	if ru.stages != nil {
 		dm.SetSyncObserver(func(d time.Duration) { ru.stages.OnStage(StageFsync, 1, d, 0) })
 	}
@@ -390,6 +395,11 @@ func (ru *run) prepare(t task) bool {
 // exists already), or a free name for later. Called with st.mu held.
 func (ru *run) open(st *item) error {
 	r := ru.r
+	if r.Sink == SinkNull { // nothing goes to disk: no name to find
+		st.opened = true
+		ru.emitItem(ItemEvent{Item: st.it.Item, Path: st.it.Path, Size: st.it.Size, State: ItemStarted})
+		return nil
+	}
 	safe, err := engine.SafeRelPath(st.it.Path)
 	if err != nil {
 		return err
@@ -458,6 +468,20 @@ func (ru *run) countChunk(st *item) bool {
 // write stores a verified chunk and keeps its hash. Called by the worker that received it.
 func (ru *run) write(t task, data []byte, sum [32]byte) error {
 	st := ru.items[t.item]
+	if ru.r.Sink == SinkNull { // checked, then dropped: only its hash is kept, for the digest
+		st.mu.RLock()
+		first := !st.closed && (st.total == 0 || !st.fresh[t.index]) // an empty item: chunk 0, of 0 bytes
+		if first && st.total > 0 {
+			st.hashes[t.index], st.fresh[t.index] = sum, true
+			ru.bytes.Add(int64(len(data)))
+			st.counted.Add(int64(len(data)))
+		}
+		st.mu.RUnlock()
+		if first && ru.countChunk(st) {
+			ru.complete(t.item)
+		}
+		return nil
+	}
 	st.mu.RLock()
 	if st.dm == nil && !st.closed { // the item's first verified chunk: its file is made now
 		st.mu.RUnlock()
@@ -510,7 +534,7 @@ func (ru *run) complete(i int) {
 		return
 	}
 	st.mu.Lock()
-	if st.closed || st.dm == nil {
+	if st.closed || (st.dm == nil && ru.r.Sink != SinkNull) {
 		st.mu.Unlock()
 		return
 	}

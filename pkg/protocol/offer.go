@@ -45,6 +45,10 @@ const (
 
 var ErrBadOffer = errors.New("protocol: invalid offer")
 
+// KindBench marks an offer made to measure (DEV-08): synthetic bytes, possibly dropped on
+// arrival. An offer of no kind is a transfer of files.
+const KindBench = "bench"
+
 // Chunks is the number of chunks of an item of size bytes.
 func Chunks(size int64, chunkSize uint32) uint32 {
 	if size <= 0 {
@@ -62,6 +66,9 @@ func (o *Offer) Validate() error {
 	}
 	if len(o.Items) > MaxOfferItems {
 		return bad("%d items, at most %d", len(o.Items), MaxOfferItems)
+	}
+	if o.Kind != "" && o.Kind != KindBench {
+		return bad("unknown kind %q", o.Kind)
 	}
 	if o.ChunkSize < MinChunkSize || o.ChunkSize > MaxChunkSize {
 		return bad("chunk size %d outside [%d, %d]", o.ChunkSize, MinChunkSize, MaxChunkSize)
