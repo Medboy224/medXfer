@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -30,14 +31,18 @@ func runOffer(t *testing.T, r *Receiver, addr string, offer protocol.Offer) []It
 	return results
 }
 
-// A hostile offer cannot write outside the receive folder: every unsafe path fails its item,
-// and nothing appears next to the folder (SafeRelPath).
+// A hostile offer cannot write outside the receive folder: every path unsafe on this system
+// fails its item, and nothing appears next to the folder (SafeRelPath).
 func TestOfferPathsCannotEscape(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "payload.bin")
 	if err := os.WriteFile(src, []byte("payload"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	unsafe := []string{"../evil.bin", "a/../../evil.bin", "/abs/evil.bin", `C:\evil.bin`, `..\evil.bin`}
+	unsafe := []string{"../evil.bin", "a/../../evil.bin", "/abs/evil.bin", `\abs\evil.bin`, `..\evil.bin`}
+	if runtime.GOOS == "windows" {
+		// A drive prefix is a plain name on Linux and Android (TestSafeRelPath), a way out on Windows.
+		unsafe = append(unsafe, `C:\evil.bin`, "c:evil.bin")
+	}
 	offer := protocol.Offer{Root: "x", ChunkSize: testChunk}
 	var paths []string
 	for i, path := range unsafe {
