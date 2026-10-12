@@ -165,3 +165,28 @@ func TestSecureTransfersLeaveNoGoroutine(t *testing.T) {
 		t.Fatalf("%d goroutines after 20 transfers, %d before", n, before)
 	}
 }
+
+// #48: a sender that does not answer (a firewall dropping packets) is given up after 8
+// attempts, each bounded by the dial timeout, instead of the system's delay for each.
+func TestPullGivesUpOnUnreachableSender(t *testing.T) {
+	r := NewReceiver(t.TempDir(), 1)
+	r.SetDialTimeout(100 * time.Millisecond)
+	attempts := 0
+	r.dial = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		attempts++
+		<-ctx.Done() // a black hole: nothing ever answers
+		return nil, ctx.Err()
+	}
+	start := time.Now()
+	err := r.Pull(context.Background(), "192.0.2.1:18888", nil, "")
+	if err == nil {
+		t.Fatal("Pull reached a sender that does not exist")
+	}
+	if attempts != 8 {
+		t.Fatalf("%d attempts, want 8 (XFER-05)", attempts)
+	}
+	// 8 × 100 ms of attempts + 3.55 s of waits between them.
+	if d := time.Since(start); d > 6*time.Second {
+		t.Fatalf("giving up took %v", d)
+	}
+}

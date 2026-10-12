@@ -63,6 +63,16 @@ func ReadFrame(r io.Reader, limits Limits, buf []byte) (Header, []byte, error) {
 	return h, buf, nil
 }
 
+// EncodeHeader is the wire form of h: the bytes ReadFrameHeader read to obtain it.
+func EncodeHeader(h Header) []byte {
+	var hdr [FrameHeaderSize]byte
+	binary.BigEndian.PutUint16(hdr[0:2], MagicBytes)
+	hdr[2] = Version1
+	hdr[3] = h.Type
+	binary.BigEndian.PutUint32(hdr[4:8], h.PayloadLen)
+	return hdr[:]
+}
+
 // AppendFrame appends a frame, header then payload, to dst.
 func AppendFrame(dst []byte, typ byte, payload []byte) []byte {
 	var hdr [FrameHeaderSize]byte

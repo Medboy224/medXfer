@@ -14,7 +14,11 @@ const (
 // Protocol v1 (bible §8.2). TypeControl carries the JSON messages of a session; the data
 // frame types of v1 come with the lots that use them (WP-4.2, WP-4.3).
 const (
-	TypeControl byte = 0x10
+	TypeControl  byte = 0x10
+	TypeDataJoin byte = 0x20 // first frame of a data connection: the transfer it joins (CHAN-06)
+
+	// DataJoinLen is the payload of DATA_JOIN: a 128-bit transfer id.
+	DataJoinLen = 16
 
 	// MaxControl is the default bound of a CONTROL payload (LIM-04). Like every limit it is
 	// a parameter (rule R4): session.Channel.SetMaxControl.
