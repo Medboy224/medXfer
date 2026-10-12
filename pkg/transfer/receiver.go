@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -152,6 +153,19 @@ func (r *Receiver) Run(ctx context.Context, addr string, offer protocol.Offer) (
 		}
 		defer root.Close()
 		run.root = root
+		run.planRoot(offer)
+		if run.inRoot {
+			place, err := store.ResolveRoot(root, run.rootBase, run.rootKey, r.Policy)
+			if err != nil {
+				return nil, err
+			}
+			run.rootDir = place.Name
+			if place.Skip { // "skip": the folder is there, the whole offer is refused (D5)
+				for i := range run.items {
+					run.endItem(i, ItemSkipped, fmt.Errorf("the folder %q is already there", place.Name))
+				}
+			}
+		}
 	}
 	r.mu.Lock()
 	r.run = run
@@ -192,6 +206,9 @@ func (r *Receiver) Run(ctx context.Context, addr string, offer protocol.Offer) (
 	<-progressDone
 	run.closeAll()
 	run.emitProgress(0)
+	if run.inRoot && run.allEnded() && !run.partial() {
+		_ = store.UnmarkRoot(run.root, run.rootDir, run.rootKey) // every file is there
+	}
 
 	results := run.results()
 	if run.allEnded() {
@@ -223,6 +240,69 @@ type run struct {
 	stages  StageEvents // nil: the stages are not measured
 	workers int
 	root    *os.Root // the destination; nil with the null sink
+
+	// The transfer's root folder (STO-10): inRoot unless it is a single file. Its items go to
+	// rootDir/<path without strip>; the folder and its marker are made with the first file.
+	inRoot   bool
+	rootBase string
+	strip    string
+	rootDir  string
+	rootKey  store.Key
+	markOnce sync.Once
+	markErr  error
+}
+
+// rootName is a name the offer proposes for its root folder, if it is one safe component;
+// "medXfer" otherwise.
+func rootName(proposed string) string {
+	if safe, err := engine.SafeRelPath(proposed); err == nil && !strings.Contains(safe, "/") {
+		return safe
+	}
+	return "medXfer"
+}
+
+// planRoot decides where the items of the offer go (STO-10, decision D5). A single file
+// without a folder goes to the destination itself. Otherwise the items go to a root folder:
+// the folder they all are in (a folder sent), or the root the offer proposes (several paths).
+func (ru *run) planRoot(offer protocol.Offer) {
+	items := offer.Items
+	if len(items) == 1 && !strings.ContainsAny(items[0].Path, `/\`) {
+		return
+	}
+	top := ""
+	for i, it := range items {
+		p := strings.ReplaceAll(it.Path, `\`, "/")
+		j := strings.IndexByte(p, '/')
+		if j <= 0 || (i > 0 && p[:j] != top) {
+			top = ""
+			break
+		}
+		top = p[:j]
+	}
+	ru.inRoot = true
+	if top != "" && rootName(top) == top {
+		ru.rootBase, ru.strip = top, top+"/"
+	} else {
+		ru.rootBase = rootName(offer.Root)
+	}
+	ru.rootKey = store.RootKey(ru.r.SenderKey, ru.rootBase, len(items), offer.TotalBytes)
+}
+
+// itemName is where item path (checked by SafeRelPath) goes in the destination.
+func (ru *run) itemName(safe string) string {
+	if !ru.inRoot {
+		return safe
+	}
+	return ru.rootDir + "/" + strings.TrimPrefix(safe, ru.strip)
+}
+
+// markRoot makes the root folder and its marker, once, before the first file is written.
+func (ru *run) markRoot() error {
+	if !ru.inRoot {
+		return nil
+	}
+	ru.markOnce.Do(func() { ru.markErr = store.MarkRoot(ru.root, ru.rootDir, ru.rootKey) })
+	return ru.markErr
 }
 
 // hashDelay slows every hash down; tests use it to make the hash the limiting stage (DEV-04).
@@ -432,7 +512,13 @@ func (ru *run) open(st *item) error {
 	if err != nil {
 		return err
 	}
-	place, err := store.Resolve(ru.root, safe, ru.params(st, false), r.Policy)
+	policy := r.Policy
+	if ru.inRoot {
+		// In the transfer's own folder, a final file is one of this transfer, received in an
+		// earlier session: done. Nothing of the user is there to rename or overwrite.
+		policy = store.PolicySkip
+	}
+	place, err := store.Resolve(ru.root, ru.itemName(safe), ru.params(st, false), policy)
 	if err != nil {
 		return err
 	}
@@ -466,6 +552,9 @@ func (ru *run) open(st *item) error {
 // that took the name meanwhile unless the policy is to overwrite (STO-01). Called with st.mu
 // held.
 func (ru *run) create(st *item) error {
+	if err := ru.markRoot(); err != nil {
+		return err
+	}
 	f, err := store.Open(ru.root, st.place.Name, ru.params(st, st.place.Overwrite))
 	if err != nil {
 		return err

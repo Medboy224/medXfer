@@ -685,6 +685,9 @@ func (e *daemonEvents) OnItem(ev transfer.ItemEvent) {
 	data := map[string]interface{}{"item_index": ev.Item, "items": items}
 	if ev.Err != nil {
 		data["error"] = ev.Err.Error()
+		if errors.Is(ev.Err, store.ErrPathConflict) {
+			data["code"] = "PATH_CONFLICT" // STO-11: nothing was deleted
+		}
 		s.Broadcast(NewEvent("transfer_error", map[string]string{"file": ev.Path, "error": ev.Err.Error()}))
 	}
 	s.Broadcast(NewEvent(event, data))

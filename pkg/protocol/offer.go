@@ -88,9 +88,11 @@ func (o *Offer) Validate() error {
 		if Chunks(it.Size, o.ChunkSize) > 1<<24 {
 			return bad("item %d has too many chunks", i)
 		}
-		key := strings.ReplaceAll(it.Path, `\`, "/") // the receiver reads both as separators
+		// The receiver reads both separators alike, and Windows, macOS and Android's shared
+		// storage do not tell "A.txt" from "a.txt": such paths would land on one file (STO-14).
+		key := strings.ToLower(strings.ReplaceAll(it.Path, `\`, "/"))
 		if files[key] {
-			return bad("item %d repeats the path of another item", i)
+			return bad("item %d repeats the path of another item (letter case aside)", i)
 		}
 		files[key] = true
 		for j := strings.LastIndexByte(key, '/'); j > 0; j = strings.LastIndexByte(key[:j], '/') {

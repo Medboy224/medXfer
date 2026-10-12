@@ -1,6 +1,8 @@
 package transfer
 
 import (
+	"time"
+
 	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 )
@@ -19,7 +21,12 @@ func BuildOffer(paths []string, chunkSize uint32) (protocol.Offer, []string, err
 		offer.Items = append(offer.Items, protocol.OfferItem{Item: i, Path: it.RelPath, Size: it.Size, MTime: it.MTime})
 		files[i] = it.FullPath
 	}
-	if offer.Root == "" && len(offer.Items) == 1 {
+	switch {
+	case len(paths) > 1:
+		// Several paths have no name in common: the receiver puts them in a folder named
+		// after the moment of the send (decision D5 of the J4b plan).
+		offer.Root = time.Now().Format("medXfer 2006-01-02 15h04")
+	case offer.Root == "" && len(offer.Items) == 1:
 		offer.Root = offer.Items[0].Path
 	}
 	return offer, files, offer.Validate()

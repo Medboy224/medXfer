@@ -79,9 +79,14 @@ func TestBatchQueueDynamicAdvanceOnPause(t *testing.T) {
 			if !slices.Equal(done, []int{1, 2, 3, 4, 0}) {
 				t.Fatalf("items done in order %v; want 1, 2, 3, 4, then 0", done)
 			}
+			// Several files chosen one by one go to one root folder (STO-10, D5 of J4b).
+			entries, _ := os.ReadDir(recvDir)
+			if len(entries) != 1 || !entries[0].IsDir() {
+				t.Fatalf("want the files in one root folder, got %v", entries)
+			}
 			for _, fp := range filePaths {
 				want, _ := os.Stat(fp)
-				got, err := os.Stat(filepath.Join(recvDir, filepath.Base(fp)))
+				got, err := os.Stat(filepath.Join(recvDir, entries[0].Name(), filepath.Base(fp)))
 				if err != nil || got.Size() != want.Size() {
 					t.Fatalf("%s not received whole (%v)", filepath.Base(fp), err)
 				}
