@@ -1,5 +1,7 @@
 package transfer
 
+import "time"
+
 // Progress is a snapshot of a transfer, for the interface. Bytes counts each chunk once,
 // whatever was sent again: it never goes past Total (#33).
 type Progress struct {
@@ -41,6 +43,26 @@ type ItemEvent struct {
 type Events interface {
 	OnProgress(Progress)
 	OnItem(ItemEvent)
+}
+
+// Stages of a chunk, measured for diag (DEV-03).
+const (
+	// Receiver.
+	StageNetWait   = "net_wait"   // waiting for a CHUNK, from the moment the worker can take it
+	StageHash      = "hash"       // SHA-256 of a chunk (both sides)
+	StageDiskWrite = "disk_write" // writing a verified chunk
+	StageFsync     = "fsync"      // a group commit: data synced, then the state
+	// Sender.
+	StageDiskRead = "disk_read" // reading a chunk from the source
+	StageNetWrite = "net_write" // writing a CHUNK to the connection
+)
+
+// StageEvents is implemented by Events that also want the time of each stage of each chunk
+// (DEV-03); pkg/diag aggregates them and never decides anything (DEV-01). parallel is how
+// many of these stages may run at once. Unlike the other events, OnStage is called from
+// several goroutines at the same time.
+type StageEvents interface {
+	OnStage(stage string, parallel int, d time.Duration, bytes int64)
 }
 
 // ItemResult is how an item ended.

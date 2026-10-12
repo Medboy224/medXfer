@@ -1289,6 +1289,7 @@ func receiveOffer(ctx context.Context, targetAddr, outDir string, workers int, o
 	if len(results) > 1 {
 		fmt.Printf("[+] All %d files saved.\n", len(results))
 	}
+	events.printLimiting()
 	return nil
 }
 

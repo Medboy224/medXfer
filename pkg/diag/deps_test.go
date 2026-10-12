@@ -13,6 +13,7 @@ func TestCoreDoesNotImportDiag(t *testing.T) {
 		"github.com/Medboy224/medXfer/pkg/protocol",
 		"github.com/Medboy224/medXfer/pkg/session",
 		"github.com/Medboy224/medXfer/pkg/manifest",
+		"github.com/Medboy224/medXfer/pkg/transfer",
 	}
 	args := append([]string{"list", "-deps"}, core...)
 	out, err := exec.Command("go", args...).CombinedOutput()

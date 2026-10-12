@@ -731,8 +731,8 @@ Le code actuel mesure réseau et disque par chunk. La v8 ajoute le hash et le `f
 |---|---|---|
 | `DEV-01` | `pkg/diag` est indépendant : le cœur compile et passe ses tests avec un `diag` remplacé par un composant vide. Il s'abonne aux événements du cœur (interface `TransferListener` existante), il n'est jamais appelé par le cœur pour décider quoi que ce soit. | ✅ |
 | `DEV-02` | Aucune donnée n'est émise hors de l'appareil par ce module. | ✅ |
-| `DEV-03` | Pour chaque chunk, le receveur mesure : attente réseau (de `CHUNK_REQ` à la réception), hash, écriture, et `fsync` (par commit). L'émetteur mesure : lecture disque, hash, écriture réseau. On conserve par étape le temps cumulé, le nombre d'octets, les percentiles p50 et p95. | ✅ |
-| `DEV-04` | **Étape limitante :** celle dont le temps cumulé par octet, ramené au parallélisme de l'étape, est le plus élevé. Cette heuristique est à valider par des scénarios synthétiques : disque factice lent, réseau bridé par `faultconn`, hash artificiellement ralenti. Le classement DOIT retrouver l'étape imposée dans 100 % des scénarios, sinon l'heuristique est corrigée. | 📏 |
+| `DEV-03` | Pour chaque chunk, le receveur mesure : attente réseau (à partir du moment où le worker peut prendre le chunk, c'est-à-dire a un tampon libre, jusqu'à sa réception : un disque ou un hash lent retient les tampons et ne doit pas compter comme du temps réseau), hash, écriture, et `fsync` (par commit). L'émetteur mesure : lecture disque, hash, écriture réseau. On conserve par étape le temps cumulé, le nombre d'octets, les percentiles p50 et p95. | ✅ |
+| `DEV-04` | **Étape limitante :** celle dont le temps cumulé par octet, ramené au parallélisme de l'étape, est le plus élevé. Cette heuristique est à valider par des scénarios synthétiques : disque factice lent, réseau bridé par `faultconn`, hash artificiellement ralenti. Le classement DOIT retrouver l'étape imposée dans 100 % des scénarios, sinon l'heuristique est corrigée. Validé en J4a (WP-4.5a) : disque lent (`faultfs`, délai d'écriture), réseau bridé (`faultconn`), hash ralenti ; l'étape est retrouvée à chaque passage, avec une confiance haute (×1,5 au moins sur la suivante). | ✅ |
 | `DEV-05` | À la fin d'un transfert, `diag` produit un **rapport JSON versionné** (`schema_version`). Par défaut : ni noms de fichiers, ni adresses IP, ni nom d'hôte, ni empreintes. Un réglage explicite peut les inclure. | ✅ |
 | `DEV-06` | `xfer report show <fichier>` affiche un rapport lisible ; `xfer report compare a.json b.json` affiche les écarts (débit, étape limitante, retries). Le texte « copiable » actuel est conservé comme vue lisible du même rapport. | ✅ |
 
@@ -782,7 +782,7 @@ Exemple de rapport (valeurs d'illustration) :
 ### 17.5 Injection de fautes
 | Id | Exigence | Statut |
 |---|---|---|
-| `DEV-10` | `faultconn` enveloppe une `net.Conn` avec un plan déterministe (graine fixe) : latence, gigue, débit maximal, coupure après N octets, remise à zéro de la connexion. `faultfs` enveloppe le stockage : `ENOSPC` après N octets, écriture déchirée (la moitié écrite puis erreur), `fsync` qui ment. Ces paquets portent l'étiquette `diag`. Un test de CI vérifie qu'ils sont absents du binaire de production. | ✅ |
+| `DEV-10` | `faultconn` enveloppe une `net.Conn` avec un plan déterministe (graine fixe) : latence, gigue, débit maximal, coupure après N octets, remise à zéro de la connexion. `faultfs` enveloppe le stockage : `ENOSPC` après N octets, écriture déchirée (la moitié écrite puis erreur), `fsync` qui ment, écriture lente (délai par écriture). Ces paquets portent l'étiquette `diag`. Un test de CI vérifie qu'ils sont absents du binaire de production. | ✅ |
 
 ```go
 c := faultconn.Wrap(conn, faultconn.Plan{

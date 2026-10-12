@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -73,6 +74,35 @@ func TestSenderSkipReachesTheReceiver(t *testing.T) {
 		_, err := os.Stat(filepath.Join(recvDir, "shared", fmt.Sprintf("file_%d.txt", i)))
 		if (err == nil) != want {
 			t.Fatalf("file_%d.txt received = %v; want %v", i, err == nil, want)
+		}
+	}
+}
+
+// DEV-03, DEV-04: the report sent with transfer_complete carries the stages of the
+// receiver's side and names the limiting one.
+func TestTransferReportHasStages(t *testing.T) {
+	_, folder := folderOf(t, 3)
+	pair := testkit.StartPair(t, NewDaemonServer(0, t.TempDir(), "SenderNode"), NewDaemonServer(0, t.TempDir(), "ReceiverNode"))
+	pair.Send([]string{folder}, testkit.SendOptions{})
+	pair.AcceptOffer(0)
+	done := pair.WaitTransferDone(0)
+	var data struct {
+		Report struct {
+			SchemaVersion int                        `json:"schema_version"`
+			Stages        map[string]json.RawMessage `json:"stages"`
+			Bottleneck    *struct{ Stage string }    `json:"bottleneck"`
+		} `json:"summary_report"`
+	}
+	if err := done.Decode(&data); err != nil {
+		t.Fatal(err)
+	}
+	r := data.Report
+	if r.SchemaVersion < 2 || r.Bottleneck == nil || r.Bottleneck.Stage == "" {
+		t.Fatalf("report without a limiting stage: %+v", r)
+	}
+	for _, stage := range []string{"net_wait", "hash", "disk_write"} {
+		if _, ok := r.Stages[stage]; !ok {
+			t.Errorf("stage %s missing from the report (%v)", stage, r.Stages)
 		}
 	}
 }

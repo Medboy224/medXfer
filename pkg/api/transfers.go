@@ -564,6 +564,7 @@ type daemonEvents struct {
 	offer  protocol.Offer
 	sender bool
 	cancel context.CancelFunc // sender: called once the receiver is done (#44)
+	name   string
 
 	mu         sync.Mutex
 	lastUpdate time.Time
@@ -573,7 +574,12 @@ type daemonEvents struct {
 }
 
 func newDaemonEvents(s *DaemonServer, offer protocol.Offer, sender bool, cancel context.CancelFunc) *daemonEvents {
-	return &daemonEvents{s: s, offer: offer, sender: sender, cancel: cancel}
+	return &daemonEvents{s: s, offer: offer, sender: sender, cancel: cancel, name: offerName(offer)}
+}
+
+// OnStage feeds the transfer report with the time of each stage of each chunk (DEV-03).
+func (e *daemonEvents) OnStage(stage string, parallel int, d time.Duration, bytes int64) {
+	e.s.RecordTransferStage(e.name, len(e.offer.Items), e.offer.TotalBytes, stage, parallel, d, bytes)
 }
 
 func (e *daemonEvents) OnProgress(p transfer.Progress) {

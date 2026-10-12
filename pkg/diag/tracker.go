@@ -34,6 +34,7 @@ type TransferSessionTracker struct {
 	netSampleCount   int
 	bottleneckCounts map[string]int
 	retries          int
+	stages           *Stages // per-chunk measures (DEV-03)
 
 	// 4 Quartile buckets (0: 0-25%, 1: 25-50%, 2: 50-75%, 3: 75-100%)
 	phaseSpeedSum       [4]float64
@@ -57,11 +58,17 @@ func NewTransferSessionTracker(name string, totalFiles int, totalBytes int64) *T
 		StartTime:        time.Now(),
 		minSpeed:         math.MaxFloat64,
 		bottleneckCounts: make(map[string]int),
+		stages:           NewStages(),
 	}
 	for i := 0; i < 4; i++ {
 		t.phaseBottlenecks[i] = make(map[string]int)
 	}
 	return t
+}
+
+// OnStage records the time of one stage of one chunk (transfer.StageEvents).
+func (t *TransferSessionTracker) OnStage(stage string, parallel int, d time.Duration, bytes int64) {
+	t.stages.OnStage(stage, parallel, d, bytes)
 }
 
 // RecordSample records a live progress measurement
@@ -221,11 +228,20 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 		})
 	}
 
+	// The stages, when measured, name the limiting one (DEV-04).
+	var bottleneck *Bottleneck
+	if b := t.stages.Bottleneck(); b.Stage != "" {
+		bottleneck = &b
+		primaryBottleneck = Kind(b.Stage)
+	}
+
 	// Formulate diagnostic diagnosis text
 	var diagnosisText string
 	switch primaryBottleneck {
 	case "STORAGE":
 		diagnosisText = fmt.Sprintf("⚠️ Goulot d'étranglement Stockage : Latence disque élevée (~%.1f ms). Typique d'un disque dur externe (HDD) ou tampon saturé.", avgDiskLatency)
+	case "CPU":
+		diagnosisText = "⚙️ Goulot d'étranglement Processeur : le calcul des SHA-256 limite le débit (appareil lent ou sans accélération matérielle)."
 	case "NETWORK":
 		diagnosisText = fmt.Sprintf("⚡ Goulot d'étranglement Réseau : Vitesse limitée par le lien réseau (latence ~%.1f ms). L'écriture disque est rapide et fluide (%.1f ms).", avgNetLatency, avgDiskLatency)
 	default:
@@ -247,6 +263,10 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 	r.AvgDiskLatencyMs = math.Round(avgDiskLatency*10) / 10
 	r.AvgNetLatencyMs = math.Round(avgNetLatency*10) / 10
 	r.PhaseSamples = phaseSamples
+	if bottleneck != nil {
+		r.Stages = t.stages.Stats()
+		r.Bottleneck = bottleneck
+	}
 	r.DiagnosisText = diagnosisText
 	r.FormattedReport = FormatText(&r)
 	return &r
