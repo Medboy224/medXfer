@@ -267,27 +267,6 @@ func TestPerFilePauseAndResumeWebSocketCommands(t *testing.T) {
 	}
 }
 
-func TestFolderTarStreamingBatch(t *testing.T) {
-	t.Skip("quarantaine : batch_complete annule l'extraction en cours, voir issue #9")
-	sendDir := t.TempDir()
-	folderToShare := filepath.Join(sendDir, "my_shared_repo")
-	for i := 0; i < 30; i++ {
-		subDir := filepath.Join(folderToShare, fmt.Sprintf("sub_%d", i%3))
-		_ = os.MkdirAll(subDir, 0755)
-		data := bytes.Repeat([]byte(fmt.Sprintf("package main\n// file %d content\n", i)), 50)
-		_ = os.WriteFile(filepath.Join(subDir, fmt.Sprintf("code_%d.go", i)), data, 0644)
-	}
-
-	recvDir := t.TempDir()
-	pair := testkit.StartPair(t, NewDaemonServer(0, sendDir, "SenderNode"), NewDaemonServer(0, recvDir, "ReceiverNode"))
-
-	pair.Send([]string{folderToShare}, testkit.SendOptions{UseTarStream: true})
-	pair.AcceptOffer(0)
-	pair.WaitTransferDone(0)
-
-	testkit.AssertTreesEqual(t, sendDir, recvDir)
-}
-
 func TestFolderGranularBatchTransfer(t *testing.T) {
 	sendDir := t.TempDir()
 	folderToShare := filepath.Join(sendDir, "my_granular_folder")
@@ -301,7 +280,7 @@ func TestFolderGranularBatchTransfer(t *testing.T) {
 	recvDir := t.TempDir()
 	pair := testkit.StartPair(t, NewDaemonServer(0, sendDir, "SenderNode"), NewDaemonServer(0, recvDir, "ReceiverNode"))
 
-	// Without use_tar_stream a folder is sent as a granular batch.
+	// A folder is sent as a batch, item by item.
 	pair.Send([]string{folderToShare}, testkit.SendOptions{})
 	pair.AcceptOffer(0)
 	pair.WaitTransferDone(0)

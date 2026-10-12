@@ -30,20 +30,17 @@ type TransferOffer struct {
 	FileID   string             `json:"file_id,omitempty"` // Protects legacy mode integrity
 	IsBatch  bool               `json:"is_batch,omitempty"`
 	Batch    *manifest.Manifest `json:"batch,omitempty"`
-	// PairPort is where the sender waits for its receiver to pair (WP-3.5b): with the QR code's
-	// secret, or asking the sender's user. It is public: reaching it gives nothing without one
-	// or the other.
-	PairPort int `json:"pair_port,omitempty"`
 }
 
 // PrivateTransfer is the file name every offer shows in discovery.
 const PrivateTransfer = "[🔒 Private Transfer]"
 
 // publicOffer is the part of an offer that discovery may carry (DISC-06): no file name, size
-// or list, and no key; only that a transfer is waiting and where to pair for it. Discovery is
-// unauthenticated and in clear (bible §3.1, rule R2), whatever the pairing code.
+// or list, and no key; only that a transfer is waiting. The receiver pairs on the device's
+// single port, Peer.Port. Discovery is unauthenticated and in clear (bible §3.1, rule R2),
+// whatever the pairing code.
 func publicOffer(o *TransferOffer) *TransferOffer {
-	return &TransferOffer{FileName: PrivateTransfer, IsBatch: o.IsBatch, PairPort: o.PairPort}
+	return &TransferOffer{FileName: PrivateTransfer, IsBatch: o.IsBatch}
 }
 
 // DiscoveryQuery represents an authenticated request sent to a peer's discovery port

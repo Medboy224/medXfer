@@ -1,10 +1,11 @@
 package main
 
-// One-shot send and receive with mutual authentication (WP-3.5b). The sender shows a QR code
-// (path P1): the receiver that redeems it, or one without it that the sender's user accepts
-// (decision D3), becomes the only key let in on the data connections. The receiver pins the
-// sender's key, taken from the QR code or confirmed by its user. Nothing is written in
-// trusted.json, unless the user answers "always" (PAIR-08).
+// One-shot send and receive with mutual authentication (WP-3.5b), on the sender's single port
+// (WP-4.2). The sender shows a QR code (path P1): the receiver that redeems it, or one without
+// it that the sender's user accepts (decision D3), becomes the only key that may join the
+// transfer on the data connections (CHAN-06). The receiver pins the sender's key, taken from
+// the QR code or confirmed by its user. Nothing is written in trusted.json, unless the user
+// answers "always" (PAIR-08).
 
 import (
 	"bufio"
@@ -14,6 +15,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -23,64 +25,112 @@ import (
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
+	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
 // sendQRTTL is how long the QR code of `xfer send` stays valid; a new one is shown after it.
 // Longer than pairing.TTL: the sender waits for someone to walk up with the other device.
 const sendQRTTL = 10 * time.Minute
 
-// errNoReceiver refuses data connections that come before any receiver is paired.
-var errNoReceiver = errors.New("no receiver paired yet")
+// oneShotSend is the sender's side of `xfer send` on the device's single port (CHAN-01): the
+// pairing (QR code, or both users' confirmation) and the data connections, which only the
+// paired receiver may join (CHAN-06). A single file is the transfer base; item i of a folder
+// is base.Item(i), as the receiver derives it.
+type oneShotSend struct {
+	hub   *transfer.Hub
+	base  transfer.ID
+	items int // 0 for a single file, the item count of a folder
 
-// oneShotPeer is the receiver of a one-shot send, once paired.
-type oneShotPeer struct {
-	mu sync.Mutex
-	fp identity.Fingerprint
+	once      sync.Once
+	paired    chan struct{} // closed once the receiver is paired and its transfers registered
+	listeners []*transfer.Listener
 }
 
-func (p *oneShotPeer) set(fp identity.Fingerprint) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.fp = fp
+func newOneShotSend(hub *transfer.Hub, base transfer.ID, items int) *oneShotSend {
+	return &oneShotSend{hub: hub, base: base, items: items, paired: make(chan struct{})}
 }
 
-func (p *oneShotPeer) get() (identity.Fingerprint, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.fp, !p.fp.IsZero()
+// count is the number of transfers to register.
+func (o *oneShotSend) count() int {
+	if o.items == 0 {
+		return 1
+	}
+	return o.items
 }
 
-// secure is the SecureFunc of the sender's data listener: everything is refused until a
-// receiver is paired, then only its key gets through.
-func (p *oneShotPeer) secure(id *identity.Identity) engine.SecureFunc {
-	return func(ctx context.Context, c net.Conn) (net.Conn, error) {
-		fp, ok := p.get()
-		if !ok {
-			c.Close()
-			return nil, errNoReceiver
+// id is the transfer id of item i (0 for a single file).
+func (o *oneShotSend) id(i int) transfer.ID {
+	if o.items == 0 {
+		return o.base
+	}
+	return o.base.Item(i)
+}
+
+// register makes the transfers of this send joinable by the paired receiver. The pairing calls
+// it before pair_accept, so the receiver's first DATA_JOIN finds them. Only one receiver is
+// ever registered.
+func (o *oneShotSend) register(r pairing.Result) error {
+	err := errors.New("a receiver is already paired")
+	o.once.Do(func() {
+		ls := make([]*transfer.Listener, 0, o.count())
+		for i := 0; i < o.count(); i++ {
+			l, rerr := o.hub.Register(o.id(i), r.Fingerprint)
+			if rerr != nil {
+				for _, done := range ls {
+					done.Close()
+				}
+				err = rerr
+				return
+			}
+			ls = append(ls, l)
 		}
-		return securechan.ServerFunc(securechan.Config{Identity: id, Expected: fp})(ctx, c)
+		o.listeners, err = ls, nil
+		close(o.paired)
+	})
+	return err
+}
+
+// listener waits for the pairing and returns the data listener of item i, or nil if ctx ends
+// first.
+func (o *oneShotSend) listener(ctx context.Context, i int) *transfer.Listener {
+	select {
+	case <-o.paired:
+		return o.listeners[i]
+	case <-ctx.Done():
+		return nil
 	}
 }
 
-// serveOneShotPairing waits until a receiver redeems the QR code, or one without it is
-// accepted by confirm. shown gets each URI: the first one, then a new one each time the
-// previous expires. The pairing port changes with it.
-func serveOneShotPairing(ctx context.Context, id *identity.Identity, host string, ttl time.Duration,
-	offer session.Message, confirm func(context.Context, pairing.Result) bool, shown func(pairing.URI)) (pairing.Result, error) {
+// startOneShotHub opens the device's single port for a one-shot send, on bind (0.0.0.0 for
+// the network; tests use the loopback).
+func startOneShotHub(bind string, port int, trust *identity.TrustStore) (*transfer.Hub, net.Listener, error) {
+	ln, err := net.Listen("tcp4", net.JoinHostPort(bind, strconv.Itoa(port)))
+	if err != nil {
+		return nil, nil, err
+	}
+	hub := transfer.NewHub(securechan.Config{Identity: localID, Trust: trust, AllowUnknown: true, Gate: securechan.NewGate()})
+	hub.Wrap = engine.WrapAccepted // diag builds inject their faults on the network bytes
+	go func() { _ = hub.Serve(ln) }()
+	return hub, ln, nil
+}
+
+// serveOneShotPairing waits on the hub's control connections until a receiver redeems the QR
+// code, or one without it is accepted by confirm. shown gets each URI: the first one, then a
+// new one each time the previous expires (same port, new secret). before runs once the
+// receiver is accepted, before pair_accept.
+func serveOneShotPairing(ctx context.Context, hub *transfer.Hub, id *identity.Identity, host string, port int,
+	ttl time.Duration, offer session.Message, confirm func(context.Context, pairing.Result) bool,
+	before func(pairing.Result) error, shown func(pairing.URI)) (pairing.Result, error) {
 	name, _ := os.Hostname()
-	o := pairing.Options{Identity: id, Once: true, DeviceName: name, Offer: offer, Confirm: confirm}
+	o := pairing.Options{Identity: id, Once: true, DeviceName: name, Offer: offer, Confirm: confirm, BeforeAccept: before}
 	for {
-		ln, err := net.Listen("tcp4", "0.0.0.0:0")
-		if err != nil {
-			return pairing.Result{}, err
-		}
+		ln := hub.Control()
 		inv, err := pairing.NewInvitation(ttl)
 		if err != nil {
 			ln.Close()
 			return pairing.Result{}, err
 		}
-		shown(inv.URI(id.Fingerprint, host, ln.Addr().(*net.TCPAddr).Port))
+		shown(inv.URI(id.Fingerprint, host, port))
 		r, err := pairing.Serve(ctx, ln, inv, o)
 		ln.Close()
 		if errors.Is(err, pairing.ErrExpired) {
@@ -90,18 +140,13 @@ func serveOneShotPairing(ctx context.Context, id *identity.Identity, host string
 	}
 }
 
-// startOneShotPairing runs serveOneShotPairing for `xfer send` alongside the data listener:
-// it prints the receive command and the QR code, keeps the discovery offer's pairing port up
-// to date, and lets the paired receiver in on the data connections.
-func startOneShotPairing(ctx context.Context, peer *oneShotPeer, disc *discovery.DiscoveryServer,
-	offer discovery.TransferOffer, data session.Message, trust *identity.TrustStore) {
+// startOneShotPairing runs serveOneShotPairing for `xfer send`: it prints the receive command
+// and the QR code, and registers the transfers for the paired receiver.
+func startOneShotPairing(ctx context.Context, send *oneShotSend, port int, data session.Message, trust *identity.TrustStore) {
 	first := true
 	ready := make(chan struct{})
 	var readyOnce sync.Once
 	shown := func(u pairing.URI) {
-		o := offer
-		o.PairPort = u.Port
-		disc.SetOffer(&o)
 		if !first {
 			fmt.Println("\n[*] The QR code has expired: here is a new one.")
 		}
@@ -111,7 +156,7 @@ func startOneShotPairing(ctx context.Context, peer *oneShotPeer, disc *discovery
 	}
 	confirm := receiverConfirm(os.Stdout, askLine, trust)
 	go func() {
-		r, err := serveOneShotPairing(ctx, localID, getLocalIP(), sendQRTTL, data, confirm, shown)
+		r, err := serveOneShotPairing(ctx, send.hub, localID, getLocalIP(), port, sendQRTTL, data, confirm, send.register, shown)
 		readyOnce.Do(func() { close(ready) })
 		if err != nil {
 			if ctx.Err() == nil {
@@ -119,7 +164,6 @@ func startOneShotPairing(ctx context.Context, peer *oneShotPeer, disc *discovery
 			}
 			return
 		}
-		peer.set(r.Fingerprint)
 		name := r.Name
 		if name == "" {
 			name = r.Address
@@ -193,6 +237,7 @@ func askLine(ctx context.Context) string {
 }
 
 // offerMessage is what a one-shot send tells its receiver with pair_accept.
-func offerMessage(o discovery.TransferOffer, dataPort int) session.Message {
-	return session.Message{FileName: o.FileName, FileSize: o.FileSize, FileID: o.FileID, Batch: o.Batch, DataPort: dataPort}
+func offerMessage(o discovery.TransferOffer, port int, base transfer.ID) session.Message {
+	return session.Message{FileName: o.FileName, FileSize: o.FileSize, FileID: o.FileID, Batch: o.Batch,
+		DataPort: port, TransferID: base.String()}
 }

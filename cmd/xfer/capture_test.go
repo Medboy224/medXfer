@@ -23,6 +23,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
+	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
 // capture is a TCP relay to target that records the bytes of every connection, both ways.
@@ -140,56 +141,59 @@ func pull(t *testing.T, addr string, secure engine.SecureFunc) string {
 	return out
 }
 
+// oneShotThroughCapture starts the sender's side of xfer send for path on a loopback hub,
+// behind a recording relay: everything the receiver sends or receives, pairing and data, goes
+// through the device's single port, hence through the relay. It returns the relay and the
+// first URI shown (whose address is the relay's).
+func oneShotThroughCapture(t *testing.T, sender *identity.Identity, path, name string, size int,
+	confirm func(context.Context, pairing.Result) bool) (*capture, pairing.URI, transfer.ID) {
+	t.Helper()
+	hub, addr := startTestHub(t, sender)
+	relay := startCapture(t, addr)
+	port := portNum(t, relay.addr)
+	base, _ := transfer.NewID()
+	send := newOneShotSend(hub, base, 0)
+	offer := session.Message{FileName: name, FileSize: int64(size), DataPort: port, TransferID: base.String()}
+	uris := make(chan pairing.URI, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		_, _ = serveOneShotPairing(ctx, hub, sender, "127.0.0.1", port, time.Minute, offer, confirm, send.register,
+			func(u pairing.URI) { uris <- u })
+	}()
+	go func() {
+		if tl := send.listener(ctx, 0); tl != nil {
+			_ = engine.NewSender(2, 512<<10).ServeOn(ctx, tl, path, "", nil, 0)
+		}
+	}()
+	return relay, <-uris, base
+}
+
 func TestCaptureShowsNothingOfTheTransfer(t *testing.T) {
 	const size = 4 << 20
 	path, name, marker := markedFile(t, size)
 	senderID, _ := testDevice(t)
 	receiverID, _ := testDevice(t)
+	relay, u, _ := oneShotThroughCapture(t, senderID, path, name, size, nil)
 
-	// The sender: data listener closed until a receiver pairs, and the QR code (xfer send).
-	var peer oneShotPeer
-	dataAddr := startDataSender(t, path, peer.secure(senderID))
-	dataCapture := startCapture(t, dataAddr)
-	_, dataPort, _ := net.SplitHostPort(dataCapture.addr)
-	port, _ := strconv.Atoi(dataPort)
-	offer := session.Message{FileName: name, FileSize: size, DataPort: port}
-
-	uris := make(chan pairing.URI, 1)
-	paired := make(chan error, 1)
-	go func() {
-		r, err := serveOneShotPairing(context.Background(), senderID, "127.0.0.1", time.Minute, offer, nil,
-			func(u pairing.URI) { uris <- u })
-		if err == nil {
-			peer.set(r.Fingerprint)
-		}
-		paired <- err
-	}()
-	u := <-uris
-	pairCapture := startCapture(t, u.Addr())
-
-	// The receiver: xfer recv 'medxfer://...', reaching the sender through the relays.
-	via := u
-	via.Host, via.Port = "127.0.0.1", portNum(t, pairCapture.addr)
-	r, err := pairing.Join(context.Background(), via, pairing.Options{Identity: receiverID, Once: true})
+	// The receiver: xfer recv 'medxfer://...', through the relay for pairing and data alike.
+	r, err := pairing.Join(context.Background(), u, pairing.Options{Identity: receiverID, Once: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := <-paired; err != nil {
-		t.Fatal(err)
+	id, err := transfer.ParseID(r.Offer.TransferID)
+	if err != nil || r.Offer.FileName != name {
+		t.Fatalf("offer: %+v (%v)", r.Offer, err)
 	}
-	if r.Offer.FileName != name {
-		t.Fatalf("offer: %+v", r.Offer)
-	}
-	out := pull(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(r.Offer.DataPort)),
-		securechan.ClientFunc(securechan.Config{Identity: receiverID, Expected: u.Fingerprint}))
+	out := pull(t, relay.addr, transfer.JoinFunc(securechan.Config{Identity: receiverID, Expected: u.Fingerprint}, id))
 	got, err := os.ReadFile(filepath.Join(out, name))
 	if err != nil || len(got) != size || !bytes.Equal(got[:64], marker) {
 		t.Fatalf("received file differs (%v)", err)
 	}
 
-	captured := append(pairCapture.bytes(), dataCapture.bytes()...)
+	captured := relay.bytes()
 	if len(captured) < size {
-		t.Fatalf("the relays saw %d bytes, less than the file: the transfer did not go through them", len(captured))
+		t.Fatalf("the relay saw %d bytes, less than the file: the transfer did not go through it", len(captured))
 	}
 	for what, secret := range map[string][]byte{
 		"the marker":            marker,
@@ -238,38 +242,23 @@ func TestCaptureShowsNothingOfTheCodePath(t *testing.T) {
 	path, name, marker := markedFile(t, size)
 	senderID, _ := testDevice(t)
 	receiverID, _ := testDevice(t)
-
-	var peer oneShotPeer
-	dataCapture := startCapture(t, startDataSender(t, path, peer.secure(senderID)))
-	offer := session.Message{FileName: name, FileSize: size, DataPort: portNum(t, dataCapture.addr)}
-	uris := make(chan pairing.URI, 1)
-	paired := make(chan error, 1)
 	confirm := func(_ context.Context, r pairing.Result) bool { return r.Fingerprint == receiverID.Fingerprint }
-	go func() {
-		r, err := serveOneShotPairing(context.Background(), senderID, "127.0.0.1", time.Minute, offer, confirm,
-			func(u pairing.URI) { uris <- u })
-		if err == nil {
-			peer.set(r.Fingerprint)
-		}
-		paired <- err
-	}()
-	u := <-uris
-	pairCapture := startCapture(t, u.Addr())
+	relay, _, _ := oneShotThroughCapture(t, senderID, path, name, size, confirm)
 
 	accept := func(fp identity.Fingerprint) bool { return fp == senderID.Fingerprint }
-	r, err := pairing.Ask(context.Background(), pairCapture.addr, accept, 10*time.Second, pairing.Options{Identity: receiverID, Once: true})
+	r, err := pairing.Ask(context.Background(), relay.addr, accept, 10*time.Second, pairing.Options{Identity: receiverID, Once: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := <-paired; err != nil {
+	id, err := transfer.ParseID(r.Offer.TransferID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	out := pull(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(r.Offer.DataPort)),
-		securechan.ClientFunc(securechan.Config{Identity: receiverID, Expected: r.Fingerprint}))
+	out := pull(t, relay.addr, transfer.JoinFunc(securechan.Config{Identity: receiverID, Expected: r.Fingerprint}, id))
 	if got, err := os.ReadFile(filepath.Join(out, name)); err != nil || len(got) != size {
 		t.Fatalf("received file differs (%v)", err)
 	}
-	captured := append(pairCapture.bytes(), dataCapture.bytes()...)
+	captured := relay.bytes()
 	for what, secret := range map[string][]byte{"the marker": marker, "the file name": []byte(name)} {
 		if bytes.Contains(captured, secret) {
 			t.Errorf("%s appears in the captured bytes", what)

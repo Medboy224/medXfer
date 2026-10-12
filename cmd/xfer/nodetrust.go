@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/session"
@@ -110,9 +109,6 @@ type trustRequest struct {
 
 // localID is this device's identity once a command has loaded it (node, send, recv).
 var localID *identity.Identity
-
-// recvSecure secures the data connections of `xfer recv`, pinned to the sender's key.
-var recvSecure engine.SecureFunc
 
 // sessionPeer is the verified key of the paired device, or the zero value (then refused).
 func sessionPeer(s *session.Channel) identity.Fingerprint {

@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -29,6 +30,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
+	"github.com/Medboy224/medXfer/pkg/transfer"
 	"github.com/gorilla/websocket"
 )
 
@@ -62,7 +64,7 @@ type DaemonServer struct {
 	webShareToken       string
 	webShareAutoAccept  bool
 	pendingWebUploads   map[string]*WebUploadRequest
-	lastOfferedPort     int
+	lastOfferedListener *transfer.Listener // data connections of the file last offered (CHAN-06)
 	transferCancel      context.CancelFunc
 	itemCancel          context.CancelFunc
 	activeReceiver      *engine.Receiver
@@ -73,14 +75,12 @@ type DaemonServer struct {
 	pausedFiles         map[int]bool
 	batchResumeChan     chan struct{}
 	currentBatchItems   []BatchFileInfo
-	activePort          int
 	itemDoneChan        chan bool
 	batchTotalFiles     int
 	batchTotalBytes     int64
 	batchBaseBytes      int64
 	sessionGraceTimer   *time.Timer
 	isReconnecting      bool
-	lastOfferedIsStream bool
 	hotspotCtrl         hotspot.Controller
 	activeHotspot       *hotspot.NetworkInfo
 	hotspotMu           sync.Mutex
@@ -111,6 +111,8 @@ type DaemonServer struct {
 	identity    *identity.Identity
 	trust       *identity.TrustStore
 	gate        *securechan.Gate // limits unauthenticated control connections (LIM-01)
+	hub         *transfer.Hub    // the device's single port: control and data (CHAN-01)
+	hubControl  *transfer.Listener
 	discSrv     *discovery.DiscoveryServer
 	pairingCode string // finds this device on the network; gives no trust (WP-3.6b)
 
@@ -161,7 +163,6 @@ func NewDaemonServer(port int, defaultOutDir, deviceName string) *DaemonServer {
 		controlToken:       controlToken,
 		config:             cfg,
 		clients:            make(map[*websocket.Conn]bool),
-		activePort:         18888,
 		itemDoneChan:       make(chan bool, 1),
 		skippedFiles:       make(map[int]bool),
 		pausedFiles:        make(map[int]bool),
@@ -518,7 +519,7 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 		if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
 			nodePort = tcpAddr.Port
 		}
-		go s.listenForIncomingPairings(ln)
+		s.startHub(ln)
 	}
 
 	// 2. Start Discovery Broadcast Server
@@ -578,8 +579,11 @@ func (s *DaemonServer) Stop() {
 	}
 	sess := s.activeSession
 	s.activeSession = nil
-	nodeLn, httpSrv := s.nodeLn, s.httpSrv
+	nodeLn, httpSrv, control := s.nodeLn, s.httpSrv, s.hubControl
 	s.mu.Unlock()
+	if control != nil {
+		control.Close()
+	}
 
 	if sess != nil {
 		sess.Send(session.Message{Type: "disconnect"})
@@ -981,12 +985,69 @@ func (s *DaemonServer) streamChanConfig() securechan.Config {
 
 // dataServer and dataClient pin the data connections of a transfer to the key of the paired
 // device (WP-3.4): any other key, or a plaintext connection, is refused.
-func (s *DaemonServer) dataServer() engine.SecureFunc {
-	return securechan.ServerFunc(s.streamChanConfig())
+// joinClient secures the data connections of transfer id: TLS pinned to the session's peer,
+// then DATA_JOIN naming the transfer on the peer's single port (CHAN-06).
+func (s *DaemonServer) joinClient(id string) (engine.SecureFunc, error) {
+	tid, err := transfer.ParseID(id)
+	if err != nil {
+		return nil, err
+	}
+	return transfer.JoinFunc(s.streamChanConfig(), tid), nil
 }
 
-func (s *DaemonServer) dataClient() engine.SecureFunc {
-	return securechan.ClientFunc(s.streamChanConfig())
+// devicePort is the port of this device's single listener: control and data (CHAN-01).
+func (s *DaemonServer) devicePort() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.nodeLn != nil {
+		if a, ok := s.nodeLn.Addr().(*net.TCPAddr); ok {
+			return a.Port
+		}
+	}
+	return 18887
+}
+
+// registerTransfer makes a new transfer joinable on the device's port by the session's peer,
+// and returns its id and the listener of its data connections. Closing the listener (or the
+// end of ServeOn) unregisters it.
+func (s *DaemonServer) registerTransfer(sess *session.Channel) (transfer.ID, *transfer.Listener, error) {
+	s.mu.RLock()
+	hub := s.hub
+	s.mu.RUnlock()
+	if hub == nil {
+		return transfer.ID{}, nil, errors.New("the device listener is not started")
+	}
+	peer := sess.PeerFingerprint()
+	if peer.IsZero() {
+		return transfer.ID{}, nil, errors.New("the session has no verified peer key")
+	}
+	id, err := transfer.NewID()
+	if err != nil {
+		return transfer.ID{}, nil, err
+	}
+	l, err := hub.Register(id, peer)
+	return id, l, err
+}
+
+// startHub serves the device's single port (CHAN-01): pairing and session connections go to
+// acceptPairing, data connections to the transfers this daemon has registered.
+func (s *DaemonServer) startHub(ln net.Listener) {
+	hub := transfer.NewHub(s.pairingChanConfig())
+	hub.Wrap = engine.WrapAccepted // diag builds inject their faults on the network bytes
+	control := hub.Control()
+	s.mu.Lock()
+	s.hub, s.hubControl = hub, control
+	s.mu.Unlock()
+	go func() { _ = hub.Serve(ln) }()
+	go func() {
+		for {
+			c, err := control.Accept()
+			if err != nil {
+				return
+			}
+			go s.acceptPairing(c.(*securechan.Conn))
+		}
+	}()
 }
 
 // fingerprint is this device's key fingerprint (full form), or "" before Serve.
@@ -1009,24 +1070,9 @@ func dialSecure(ctx context.Context, addr string, cfg securechan.Config) (*secur
 	return securechan.Client(ctx, raw, cfg)
 }
 
-func (s *DaemonServer) listenForIncomingPairings(ln net.Listener) {
-	for {
-		raw, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		go s.acceptPairing(raw) // the handshake must not hold up the accept loop
-	}
-}
-
 // acceptPairing runs the secure handshake of an incoming control connection, then the pairing
 // check, which moves the connection from UNAUTH to AUTH.
-func (s *DaemonServer) acceptPairing(raw net.Conn) {
-	engine.TuneConn(raw)
-	conn, err := securechan.Server(s.ctx, raw, s.pairingChanConfig())
-	if err != nil {
-		return
-	}
+func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 	{
 		ch := session.NewChannel(conn)
 
@@ -1331,7 +1377,6 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		s.currentBatchItems = batchItems
 		s.batchCanceled = false
 		s.isPaused = false
-		s.lastOfferedIsStream = msg.IsStream
 		devName := msg.DeviceName
 		if devName == "" {
 			devName = s.pairedDeviceName
@@ -1462,12 +1507,17 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		}
 
 	case "reject":
+		s.mu.Lock()
+		if s.lastOfferedListener != nil {
+			s.lastOfferedListener.Close() // the offer is over: nobody may join it any more
+			s.lastOfferedListener = nil
+		}
+		s.mu.Unlock()
 		s.Broadcast(NewEvent("transfer_rejected", map[string]string{"message": "Peer rejected transfer"}))
 
 	case "batch_accept":
 		s.mu.Lock()
 		m := s.lastOfferedManifest
-		isStream := s.lastOfferedIsStream
 		s.batchCanceled = false
 		s.isPaused = false
 		s.pausedFiles = make(map[int]bool)
@@ -1482,59 +1532,6 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			"summary": m.SummaryString(),
 			"items":   items,
 		}))
-
-		if isStream {
-			s.mu.Lock()
-			s.activePort++
-			streamPort := s.activePort
-			s.mu.Unlock()
-
-			ln, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", streamPort))
-			if err == nil {
-				streamCtx, streamCancel := context.WithCancel(s.ctx)
-				s.mu.Lock()
-				s.transferCancel = streamCancel
-				s.mu.Unlock()
-
-				go func(port int, m *manifest.Manifest) {
-					defer ln.Close()
-					conn, err := ln.Accept()
-					if err != nil {
-						return
-					}
-					defer conn.Close()
-					engine.TuneConn(conn)
-
-					sc, err := securechan.Server(streamCtx, conn, s.streamChanConfig())
-					if err != nil {
-						return
-					}
-					conn = sc
-
-					listener := newDaemonListener(s, m.RootName, m.TotalBytes, 0, 1, 0, m.TotalBytes)
-					_ = engine.StreamTar(streamCtx, conn, m, listener)
-
-					if s.activeSession != nil {
-						s.activeSession.Send(session.Message{Type: "batch_complete"})
-					}
-					s.broadcastTransferComplete(map[string]interface{}{
-						"message": "Folder stream transfer complete",
-					})
-				}(streamPort, m)
-
-				if s.activeSession != nil {
-					s.activeSession.Send(session.Message{
-						Type:      "batch_stream",
-						FileName:  m.RootName,
-						FileSize:  m.TotalBytes,
-						ItemIndex: m.TotalFiles,
-						DataPort:  streamPort,
-						IsStream:  true,
-					})
-				}
-				return
-			}
-		}
 
 		go func(m *manifest.Manifest) {
 			for {
@@ -1595,10 +1592,9 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 						s.currentBatchItems[i].Status = "transferring"
 					}
 				}
-				s.activePort++
-				port := s.activePort
 				baseBytes := s.calculateCompletedBatchBytes()
 				items := s.currentBatchItems
+				sess := s.activeSession
 				s.mu.Unlock()
 
 				s.Broadcast(NewEvent("batch_item_transferring", map[string]interface{}{
@@ -1612,25 +1608,23 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 				s.transferCancel = itemCancel
 				s.mu.Unlock()
 
-				readyChan := make(chan error, 1)
-				go func(fPath, rPath string, p int, bBase int64) {
-					sender := engine.NewSender(s.config.Workers, uint32(s.config.ChunkSizeMB*1024*1024))
-					sender.SetSecure(s.dataServer())
-					listener := newDaemonListener(s, rPath, item.Size, idx, m.TotalFiles, bBase, m.TotalBytes)
-					bindAddr := fmt.Sprintf("0.0.0.0:%d", p)
-					_ = sender.ServeAndSendWithRelPathReady(itemCtx, bindAddr, fPath, rPath, listener, 0, readyChan)
-				}(item.FullPath, item.RelPath, port, baseBytes)
-
-				var bindErr error
-				select {
-				case <-itemCtx.Done():
-					return
-				case bindErr = <-readyChan:
-				case <-time.After(5 * time.Second):
-					bindErr = fmt.Errorf("sender port bind timeout after 5s")
+				// The item is registered on the device's single port before the receiver hears
+				// of it, so that its first DATA_JOIN finds it (CHAN-06).
+				var tid transfer.ID
+				var tl *transfer.Listener
+				regErr := errors.New("no active session with peer")
+				if sess != nil {
+					tid, tl, regErr = s.registerTransfer(sess)
+				}
+				if regErr == nil {
+					go func(fPath, rPath string, bBase int64) {
+						sender := engine.NewSender(s.config.Workers, uint32(s.config.ChunkSizeMB*1024*1024))
+						listener := newDaemonListener(s, rPath, item.Size, idx, m.TotalFiles, bBase, m.TotalBytes)
+						_ = sender.ServeOn(itemCtx, tl, fPath, rPath, listener, 0)
+					}(item.FullPath, item.RelPath, baseBytes)
 				}
 
-				if bindErr != nil {
+				if bindErr := regErr; bindErr != nil {
 					itemCancel()
 					s.mu.Lock()
 					for i := range s.currentBatchItems {
@@ -1649,17 +1643,16 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 					continue
 				}
 
-				if s.activeSession != nil {
-					s.activeSession.Send(session.Message{
-						Type:      "batch_item",
-						FileName:  item.RelPath,
-						FileSize:  item.Size,
-						FileID:    item.FileID,
-						DataPort:  port,
-						ItemIndex: idx,
-						ChunkSize: uint32(s.config.ChunkSizeMB * 1024 * 1024),
-					})
-				}
+				sess.Send(session.Message{
+					Type:       "batch_item",
+					FileName:   item.RelPath,
+					FileSize:   item.Size,
+					FileID:     item.FileID,
+					DataPort:   s.devicePort(),
+					TransferID: tid.String(),
+					ItemIndex:  idx,
+					ChunkSize:  uint32(s.config.ChunkSizeMB * 1024 * 1024),
+				})
 
 				select {
 				case <-itemCtx.Done():
@@ -1721,44 +1714,6 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			})
 		}(m)
 
-	case "batch_stream":
-		s.mu.RLock()
-		outDir := s.config.DownloadDir
-		s.mu.RUnlock()
-
-		streamCtx, streamCancel := context.WithCancel(s.ctx)
-		s.mu.Lock()
-		s.transferCancel = streamCancel
-		s.mu.Unlock()
-
-		s.Broadcast(NewEvent("transfer_start", map[string]interface{}{
-			"current_file": msg.FileName,
-			"file_index":   1,
-			"total_files":  1,
-			"total_bytes":  msg.FileSize,
-			"is_stream":    true,
-			"is_folder":    true,
-		}))
-
-		go func(msg session.Message) {
-			defer streamCancel()
-			targetAddr := net.JoinHostPort(s.activeSession.RemoteIP(), strconv.Itoa(int(msg.DataPort)))
-			conn, err := dialSecure(streamCtx, targetAddr, s.streamChanConfig())
-			if err != nil {
-				s.Broadcast(NewEvent("action_error", map[string]string{"error": err.Error()}))
-				return
-			}
-			defer conn.Close()
-
-			listener := newDaemonListener(s, msg.FileName, msg.FileSize, 0, 1, 0, msg.FileSize)
-			err = engine.ExtractTar(streamCtx, conn, outDir, msg.FileSize, msg.ItemIndex, listener)
-			if err == nil {
-				s.broadcastTransferComplete(map[string]interface{}{
-					"message": "Directory stream transfer complete",
-				})
-			}
-		}(msg)
-
 	case "batch_item":
 		s.mu.RLock()
 		outDir := s.config.DownloadDir
@@ -1799,7 +1754,14 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 
 		policy := s.parseCollisionPolicy(policyStr)
 
-		secure := s.dataClient() // takes s.mu: before the Lock below
+		secure, err := s.joinClient(msg.TransferID) // takes s.mu: before the Lock below
+		if err != nil {
+			s.Broadcast(NewEvent("transfer_error", map[string]string{"file": msg.FileName, "error": err.Error()}))
+			if s.activeSession != nil {
+				s.activeSession.Send(session.Message{Type: "item_failed", ItemIndex: msg.ItemIndex, FileName: msg.FileName, Error: err.Error()})
+			}
+			return
+		}
 		var ctx context.Context
 		s.mu.Lock()
 		ctx, s.itemCancel = context.WithCancel(s.ctx)
@@ -1966,31 +1928,30 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 	case "accept":
 		s.mu.Lock()
 		offeredFile := s.lastOfferedFile
-		offeredPort := s.lastOfferedPort
+		offered := s.lastOfferedListener
+		s.lastOfferedListener = nil
 		s.mu.Unlock()
 
 		s.Broadcast(NewEvent("transfer_accepted", map[string]interface{}{
 			"resume_bytes": msg.ResumeBytes,
 		}))
 
-		if offeredFile != "" {
-			go func(filePath string, port int, resume int64) {
+		if offeredFile != "" && offered != nil {
+			go func(filePath string, tl *transfer.Listener, resume int64) {
 				var ctx context.Context
 				s.mu.Lock()
 				ctx, s.transferCancel = context.WithCancel(s.ctx)
 				s.mu.Unlock()
 
 				sender := engine.NewSender(s.config.Workers, uint32(s.config.ChunkSizeMB*1024*1024))
-				sender.SetSecure(s.dataServer())
 				fi, _ := os.Stat(filePath)
 				size := int64(0)
 				if fi != nil {
 					size = fi.Size()
 				}
 				listener := newDaemonListener(s, filepath.Base(filePath), size, 0, 1, 0, size)
-				bindAddr := fmt.Sprintf("0.0.0.0:%d", port)
-				_ = sender.ServeAndSend(ctx, bindAddr, filePath, listener, resume)
-			}(offeredFile, offeredPort, msg.ResumeBytes)
+				_ = sender.ServeOn(ctx, tl, filePath, "", listener, resume)
+			}(offeredFile, offered, msg.ResumeBytes)
 		}
 
 	case "complete":

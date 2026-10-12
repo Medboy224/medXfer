@@ -213,10 +213,8 @@ func StartPair(t testing.TB, sender, receiver Server) *Pair {
 	return p
 }
 
-// SendOptions are the optional fields of a "send" request.
-type SendOptions struct {
-	UseTarStream bool
-}
+// SendOptions are the optional fields of a "send" request (none since StreamTar is gone).
+type SendOptions struct{}
 
 // Send asks the sender to send paths to the receiver, which it trusts, and returns the
 // request id.
@@ -225,9 +223,6 @@ func (p *Pair) Send(paths []string, opts SendOptions) string {
 	payload := map[string]any{
 		"paths":     paths,
 		"target_ip": p.Receiver.PeerAddr(),
-	}
-	if opts.UseTarStream {
-		payload["use_tar_stream"] = true
 	}
 	return p.Sender.Request("send", payload)
 }

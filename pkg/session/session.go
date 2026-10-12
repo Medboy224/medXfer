@@ -64,7 +64,7 @@ type Message struct {
 	ResumeBytes int64              `json:"resume_bytes,omitempty"`  // Sent back by the receiver on accept
 	Batch       *manifest.Manifest `json:"batch,omitempty"`         // Batch/Folder manifest
 	ItemIndex   int                `json:"item_index,omitempty"`    // Current item in batch (0-indexed)
-	IsStream    bool               `json:"is_stream,omitempty"`     // On-The-Fly container stream for folders/small files
+	TransferID  string             `json:"transfer_id,omitempty"`   // the transfer its data connections join (DATA_JOIN, CHAN-06)
 	ChunkSize   uint32             `json:"chunk_size,omitempty"`    // Chunk size used by sender (e.g. 4MB)
 	BenchPingTS int64              `json:"bench_ping_ts,omitempty"` // Timestamp in nanoseconds for RTT calculation
 	BenchSize   int64              `json:"bench_size,omitempty"`    // Requested size for bandwidth burst
