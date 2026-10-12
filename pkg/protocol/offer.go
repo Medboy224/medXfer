@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -111,10 +112,19 @@ const (
 	TypeChunkRequest byte = 0x21 // CHUNK_REQ: item u32, index u32
 	TypeChunkData    byte = 0x22 // CHUNK: item u32, index u32, length u32, sha256, then the data
 	TypeChunkError   byte = 0x23 // CHUNK_ERR: item u32, index u32, code u16
+	// The end of an item (decision D7 of the J4a plan): the receiver asks for the digest of
+	// the sender's chunk hashes and compares it with its own (bible §8.3, step 6).
+	TypeDigestRequest byte = 0x24 // DIGEST_REQ: item u32
+	TypeDigest        byte = 0x25 // DIGEST: item u32, digest (32 bytes)
 
 	ChunkRequestLen    = 8
 	ChunkDataHeaderLen = 44
 	ChunkErrorLen      = 10
+	DigestRequestLen   = 4
+	DigestLen          = 36
+
+	// DigestIndex is the index of a CHUNK_ERR that answers a DIGEST_REQ.
+	DigestIndex uint32 = 0xFFFFFFFF
 )
 
 // Codes of CHUNK_ERR.
@@ -183,6 +193,54 @@ func ParseChunkError(p []byte) (item, index uint32, code uint16, err error) {
 		return 0, 0, 0, fmt.Errorf("protocol: CHUNK_ERR of %d bytes", len(p))
 	}
 	return binary.BigEndian.Uint32(p[0:4]), binary.BigEndian.Uint32(p[4:8]), binary.BigEndian.Uint16(p[8:10]), nil
+}
+
+// AppendDigestRequest appends a DIGEST_REQ frame to dst.
+func AppendDigestRequest(dst []byte, item uint32) []byte {
+	var p [DigestRequestLen]byte
+	binary.BigEndian.PutUint32(p[:], item)
+	return AppendFrame(dst, TypeDigestRequest, p[:])
+}
+
+// ParseDigestRequest reads the payload of a DIGEST_REQ.
+func ParseDigestRequest(p []byte) (item uint32, err error) {
+	if len(p) != DigestRequestLen {
+		return 0, fmt.Errorf("protocol: DIGEST_REQ of %d bytes", len(p))
+	}
+	return binary.BigEndian.Uint32(p), nil
+}
+
+// AppendDigest appends a DIGEST frame to dst.
+func AppendDigest(dst []byte, item uint32, digest [32]byte) []byte {
+	var p [DigestLen]byte
+	binary.BigEndian.PutUint32(p[0:4], item)
+	copy(p[4:], digest[:])
+	return AppendFrame(dst, TypeDigest, p[:])
+}
+
+// ParseDigest reads the payload of a DIGEST.
+func ParseDigest(p []byte) (item uint32, digest [32]byte, err error) {
+	if len(p) != DigestLen {
+		return 0, digest, fmt.Errorf("protocol: DIGEST of %d bytes", len(p))
+	}
+	copy(digest[:], p[4:])
+	return binary.BigEndian.Uint32(p[0:4]), digest, nil
+}
+
+// FileDigest is the digest of an item from the SHA-256 of its n chunks, in order:
+// SHA-256("medxfer-v1-filedigest" ‖ n (u32, big-endian) ‖ hash_0 ‖ … ‖ hash_{n-1}) (bible §8.3).
+func FileDigest(hashes [][32]byte) [32]byte {
+	h := sha256.New()
+	h.Write([]byte("medxfer-v1-filedigest"))
+	var n [4]byte
+	binary.BigEndian.PutUint32(n[:], uint32(len(hashes)))
+	h.Write(n[:])
+	for i := range hashes {
+		h.Write(hashes[i][:])
+	}
+	var d [32]byte
+	copy(d[:], h.Sum(nil))
+	return d
 }
 
 // Split cuts the offer into a head and pages whose items each take at most maxBytes of JSON,

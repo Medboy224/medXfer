@@ -203,6 +203,7 @@ type item struct {
 	retries  []uint32
 	attempts map[uint32]int
 	state    ItemState // under r.mu once ended
+	err      error     // under r.mu: why it failed
 
 	// mu: chunks are written under the read lock, in parallel (DiskManager takes care of
 	// concurrent writes); opening, finalizing and closing take the write lock.
@@ -213,13 +214,25 @@ type item struct {
 	dm        *engine.DiskManager // nil until the first verified chunk, unless resuming (#75)
 	saved     string
 	processed atomic.Uint32 // chunks handled: written, or found on disk
+
+	// The digest (bible §8.3, step 6). hashes[i] is chunk i's SHA-256: from its verified CHUNK
+	// (fresh[i]) or read back from disk for a chunk of an earlier session. Distinct chunks are
+	// written by distinct goroutines; local is set once they are all handled.
+	hashes    [][32]byte
+	fresh     []bool
+	local     [32]byte
+	counted   atomic.Int64 // bytes of this item in the progress, given back if it starts over
+	digest    bool         // under r.mu: the DIGEST_REQ waits to be sent
+	restarted bool         // under r.mu: started over once after a digest mismatch
 }
 
 func newRun(r *Receiver, offer protocol.Offer) *run {
 	ru := &run{r: r, offer: offer, start: time.Now(), speed: newSpeedMeter(), chunks: offer.ChunkSize}
 	ru.items = make([]*item, len(offer.Items))
 	for i, it := range offer.Items {
-		ru.items[i] = &item{it: it, total: protocol.Chunks(it.Size, offer.ChunkSize), attempts: map[uint32]int{}}
+		total := protocol.Chunks(it.Size, offer.ChunkSize)
+		ru.items[i] = &item{it: it, total: total, attempts: map[uint32]int{},
+			hashes: make([][32]byte, total), fresh: make([]bool, total)}
 	}
 	return ru
 }
@@ -261,6 +274,10 @@ func (ru *run) next(ctx context.Context, block bool) (task, schedStatus) {
 				}
 				if r.pausedItems[i] {
 					continue
+				}
+				if st.digest {
+					st.digest = false
+					return task{i, protocol.DigestIndex}, gotTask
 				}
 				if n := len(st.retries); n > 0 {
 					min := 0
@@ -339,7 +356,7 @@ func (ru *run) prepare(t task) bool {
 	st.mu.Unlock()
 	if onDisk {
 		if ru.countChunk(st) {
-			ru.finish(t.item)
+			ru.complete(t.item)
 		}
 		return true
 	}
@@ -376,6 +393,7 @@ func (ru *run) open(st *item) error {
 		}
 		st.dm = dm
 		ru.bytes.Add(dm.GetDownloadedBytes())
+		st.counted.Add(dm.GetDownloadedBytes())
 	}
 	return nil
 }
@@ -413,8 +431,8 @@ func (ru *run) countChunk(st *item) bool {
 	return st.processed.Add(1) == target
 }
 
-// write stores a verified chunk. Called by the worker that received it.
-func (ru *run) write(t task, data []byte) error {
+// write stores a verified chunk and keeps its hash. Called by the worker that received it.
+func (ru *run) write(t task, data []byte, sum [32]byte) error {
 	st := ru.items[t.item]
 	st.mu.RLock()
 	if st.dm == nil && !st.closed { // the item's first verified chunk: its file is made now
@@ -442,12 +460,119 @@ func (ru *run) write(t task, data []byte) error {
 			return nil
 		}
 		ru.bytes.Add(int64(len(data)))
+		st.counted.Add(int64(len(data)))
+	}
+	if t.index < st.total {
+		st.hashes[t.index], st.fresh[t.index] = sum, true
 	}
 	st.mu.RUnlock()
 	if ru.countChunk(st) {
-		ru.finish(t.item)
+		ru.complete(t.item)
 	}
 	return nil
+}
+
+// complete is called once every chunk of item i is handled. A file of at most one chunk, all
+// received now, needs nothing more: its digest follows from that chunk's verified hash. Any
+// other file is checked against the sender's digest (bible §8.3, step 6): the receiver makes
+// its own, reading back the chunks of an earlier session, then asks for the sender's.
+func (ru *run) complete(i int) {
+	st := ru.items[i]
+	if st.total == 0 || (st.total == 1 && st.fresh[0]) {
+		ru.finish(i)
+		return
+	}
+	st.mu.Lock()
+	if st.closed || st.dm == nil {
+		st.mu.Unlock()
+		return
+	}
+	buf := make([]byte, ru.chunks)
+	for index := range st.hashes {
+		if st.fresh[index] {
+			continue
+		}
+		off := int64(index) * int64(ru.chunks)
+		n := min(int64(ru.chunks), st.it.Size-off)
+		if _, err := st.dm.ReadChunkAt(buf[:n], off); err != nil {
+			st.mu.Unlock()
+			ru.endItem(i, ItemFailed, fmt.Errorf("%q: reading back chunk %d: %w", st.it.Path, index, err))
+			return
+		}
+		st.hashes[index] = sha256.Sum256(buf[:n])
+	}
+	st.local = protocol.FileDigest(st.hashes)
+	st.mu.Unlock()
+	r := ru.r
+	r.mu.Lock()
+	if st.state < ItemDone {
+		st.digest = true
+		r.cond.Broadcast()
+	}
+	r.mu.Unlock()
+}
+
+// verified ends item i once the sender's digest is known: the same as ours, the file is
+// finished; another, it starts over.
+func (ru *run) verified(i int, digest [32]byte) {
+	st := ru.items[i]
+	st.mu.RLock()
+	same := digest == st.local
+	st.mu.RUnlock()
+	if same {
+		ru.finish(i)
+		return
+	}
+	ru.startOver(i)
+}
+
+// startOver takes item i from zero after its digest did not match (bible §8.3): the partial
+// file and its state are removed and every chunk is requested again, once. A second mismatch
+// fails the item.
+func (ru *run) startOver(i int) {
+	st := ru.items[i]
+	r := ru.r
+	r.mu.Lock()
+	again, ended := st.restarted, st.state >= ItemDone
+	st.restarted = true
+	r.mu.Unlock()
+	if ended {
+		return
+	}
+	if again {
+		ru.endItem(i, ItemFailed, fmt.Errorf("%q: the received file does not match the sender's, twice (digest)", st.it.Path))
+		return
+	}
+	st.mu.Lock()
+	if st.closed {
+		st.mu.Unlock()
+		return
+	}
+	if st.dm != nil {
+		_ = st.dm.Discard()
+		st.dm = nil
+	}
+	st.processed.Store(0)
+	for k := range st.fresh {
+		st.fresh[k] = false
+	}
+	ru.bytes.Add(-st.counted.Swap(0))
+	st.mu.Unlock()
+	r.mu.Lock()
+	st.next, st.retries, st.attempts = 0, nil, map[uint32]int{}
+	r.cond.Broadcast()
+	r.mu.Unlock()
+}
+
+// chunkErr is the error of an item the sender answered with CHUNK_ERR code.
+func chunkErr(path string, code uint16) error {
+	switch code {
+	case protocol.ChunkErrSourceChanged:
+		return fmt.Errorf("the source of %q changed during the transfer (SOURCE_CHANGED)", path)
+	case protocol.ChunkErrNoSuchChunk:
+		return fmt.Errorf("the sender does not offer that part of %q", path)
+	}
+	return fmt.Errorf("the sender could not read %q", path)
 }
 
 // finish makes a complete item durable and gives it its final name.
@@ -492,7 +617,7 @@ func (ru *run) endItem(i int, state ItemState, err error) {
 		r.mu.Unlock()
 		return
 	}
-	st.state = state
+	st.state, st.err = state, err
 	ru.ended++
 	r.cond.Broadcast()
 	r.mu.Unlock()
@@ -527,7 +652,7 @@ func (ru *run) results() []ItemResult {
 	defer ru.r.mu.Unlock()
 	out := make([]ItemResult, len(ru.items))
 	for i, st := range ru.items {
-		out[i] = ItemResult{Item: i, State: st.state}
+		out[i] = ItemResult{Item: i, State: st.state, Err: st.err}
 		if st.state == ItemDone {
 			out[i].SavedPath = st.saved
 		}
@@ -629,6 +754,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 	limits := protocol.Limits{
 		protocol.TypeChunkData:  uint32(protocol.ChunkDataHeaderLen) + ru.chunks,
 		protocol.TypeChunkError: protocol.ChunkErrorLen,
+		protocol.TypeDigest:     protocol.DigestLen,
 	}
 	free := make(chan []byte, 2)
 	for i := 0; i < 2; i++ {
@@ -642,7 +768,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 			if sha256.Sum256(rc.data) != rc.sum {
 				ru.retry(rc.t, true) // XFER-04: never written
 			} else {
-				_ = ru.write(rc.t, rc.data)
+				_ = ru.write(rc.t, rc.data, rc.sum)
 			}
 			free <- rc.buf
 		}
@@ -700,10 +826,14 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 			case nothingNow:
 				break fill
 			}
-			if ru.prepare(t) {
-				continue
+			if t.index == protocol.DigestIndex {
+				out = protocol.AppendDigestRequest(out[:0], uint32(t.item))
+			} else {
+				if ru.prepare(t) {
+					continue
+				}
+				out = protocol.AppendChunkRequest(out[:0], uint32(t.item), t.index)
 			}
-			out = protocol.AppendChunkRequest(out[:0], uint32(t.item), t.index)
 			inflight = append(inflight, t)
 			_ = conn.SetWriteDeadline(time.Now().Add(chunkReadTimeout))
 			if _, err := conn.Write(out); err != nil {
@@ -730,13 +860,24 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 		t := inflight[0]
 		inflight = inflight[1:]
 		if h.Type == protocol.TypeChunkError {
-			free <- buf
 			_, _, code, _ := protocol.ParseChunkError(p)
-			ru.endItem(t.item, ItemFailed, fmt.Errorf("the sender could not read %q (code %d)", ru.items[t.item].it.Path, code))
+			free <- buf
+			ru.endItem(t.item, ItemFailed, chunkErr(ru.items[t.item].it.Path, code))
+			continue
+		}
+		if t.index == protocol.DigestIndex {
+			item, digest, err := protocol.ParseDigest(p)
+			free <- buf
+			if err != nil || h.Type != protocol.TypeDigest || int(item) != t.item {
+				inflight = append([]task{t}, inflight...)
+				drop()
+				continue
+			}
+			ru.verified(t.item, digest)
 			continue
 		}
 		item, index, sum, data, err := protocol.ParseChunkData(p)
-		if err != nil || int(item) != t.item || index != t.index {
+		if err != nil || h.Type != protocol.TypeChunkData || int(item) != t.item || index != t.index {
 			free <- buf
 			inflight = append([]task{t}, inflight...)
 			drop() // a peer that answers out of order is not trusted further on this connection

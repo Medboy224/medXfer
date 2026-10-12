@@ -341,6 +341,16 @@ func TestOfferPauseWholeTransfer(t *testing.T) {
 
 // lyingSender answers every request of the transfer, but with a wrong SHA-256 for the first
 // bad answers to chunk 0 of item 0.
+// digestOf is the digest of data in chunks of chunkSize (bible §8.3).
+func digestOf(data []byte, chunkSize uint32) [32]byte {
+	hashes := make([][32]byte, protocol.Chunks(int64(len(data)), chunkSize))
+	for i := range hashes {
+		off := i * int(chunkSize)
+		hashes[i] = sha256.Sum256(data[off:min(off+int(chunkSize), len(data))])
+	}
+	return protocol.FileDigest(hashes)
+}
+
 func lyingSender(t *testing.T, tl net.Listener, offer protocol.Offer, contents [][]byte, bad int) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -359,10 +369,21 @@ func lyingSender(t *testing.T, tl net.Listener, offer protocol.Offer, contents [
 			}
 			go func() {
 				defer c.Close()
+				limits := protocol.Limits{
+					protocol.TypeChunkRequest:  protocol.ChunkRequestLen,
+					protocol.TypeDigestRequest: protocol.DigestRequestLen,
+				}
 				for {
-					_, p, err := protocol.ReadFrame(c, protocol.Limits{protocol.TypeChunkRequest: protocol.ChunkRequestLen}, nil)
+					h, p, err := protocol.ReadFrame(c, limits, nil)
 					if err != nil {
 						return
+					}
+					if h.Type == protocol.TypeDigestRequest { // the true digest of the content
+						item, _ := protocol.ParseDigestRequest(p)
+						if _, err := c.Write(protocol.AppendDigest(nil, item, digestOf(contents[item], offer.ChunkSize))); err != nil {
+							return
+						}
+						continue
 					}
 					item, index, _ := protocol.ParseChunkRequest(p)
 					data := contents[item]

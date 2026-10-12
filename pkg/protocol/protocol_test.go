@@ -168,3 +168,33 @@ func TestChunkFrames(t *testing.T) {
 		t.Fatalf("CHUNK_ERR: %d %d %d %v", it, ix, code, err)
 	}
 }
+
+// DIGEST_REQ and DIGEST round trip; the digest depends on every chunk hash, their order and
+// their number (bible §8.3).
+func TestDigestFrames(t *testing.T) {
+	limits := Limits{TypeDigestRequest: DigestRequestLen, TypeDigest: DigestLen}
+	h, p, err := ReadFrame(bytes.NewReader(AppendDigestRequest(nil, 7)), limits, nil)
+	if err != nil || h.Type != TypeDigestRequest {
+		t.Fatal(h, err)
+	}
+	if item, err := ParseDigestRequest(p); err != nil || item != 7 {
+		t.Fatal(item, err)
+	}
+	d := FileDigest([][32]byte{{1}, {2}})
+	h, p, err = ReadFrame(bytes.NewReader(AppendDigest(nil, 9, d)), limits, nil)
+	if err != nil || h.Type != TypeDigest {
+		t.Fatal(h, err)
+	}
+	if item, got, err := ParseDigest(p); err != nil || item != 9 || got != d {
+		t.Fatal(item, err)
+	}
+	for name, other := range map[string][32]byte{
+		"order":  FileDigest([][32]byte{{2}, {1}}),
+		"number": FileDigest([][32]byte{{1}, {2}, {}}),
+		"empty":  FileDigest(nil),
+	} {
+		if other == d {
+			t.Errorf("%s: same digest", name)
+		}
+	}
+}

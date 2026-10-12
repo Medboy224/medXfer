@@ -25,6 +25,7 @@ type Item struct {
 	RelPath  string `json:"rel_path"` // Normalized relative path using forward slashes (e.g., "docs/notes.txt")
 	Size     int64  `json:"size"`     // Size in bytes
 	FileID   string `json:"file_id"`  // Unique content hash
+	MTime    int64  `json:"mtime"`    // modification time, unix nanoseconds: a changed source is detected (XFER-07)
 	FullPath string `json:"-"`        // Local absolute source path (never serialized to network)
 }
 
@@ -92,6 +93,7 @@ func Build(paths []string) (*Manifest, error) {
 					RelPath:  normRelPath,
 					Size:     fileInfo.Size(),
 					FileID:   fileID,
+					MTime:    fileInfo.ModTime().UnixNano(),
 					FullPath: path,
 				})
 				totalBytes += fileInfo.Size()
@@ -108,6 +110,7 @@ func Build(paths []string) (*Manifest, error) {
 				RelPath:  normRelPath,
 				Size:     info.Size(),
 				FileID:   fileID,
+				MTime:    info.ModTime().UnixNano(),
 				FullPath: cleanPath,
 			})
 			totalBytes += info.Size()
