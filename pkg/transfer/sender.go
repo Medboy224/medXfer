@@ -55,6 +55,8 @@ func NewSender(offer protocol.Offer, paths []string) (*Sender, error) {
 	if err := offer.Validate(); err != nil {
 		return nil, err
 	}
+	// The sender keeps its own items: the caller may reuse or change its offer afterwards.
+	offer.Items = append([]protocol.OfferItem(nil), offer.Items...)
 	return &Sender{offer: offer, paths: paths, files: map[int]*openFile{},
 		served: make([][]uint64, len(paths)), hashes: make([][][32]byte, len(paths))}, nil
 }
