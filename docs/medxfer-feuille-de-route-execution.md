@@ -194,6 +194,12 @@ Bible chapitre 9.
 
 **Critère de sortie de J4 :** le test de chaos passe ; un transfert complet est mesuré sur l'échelle de benchmark ; la gate G6 est fermée.
 
+**Résultat (13/10/2026) :** J4 est terminé.
+- **J4a** (PR #67 à #83) : protocole v1, un port, SHA-256 par chunk, digest, mesures par étape.
+- **J4b** (PR #84 à #96) : `.part` et journal, dossier racine par transfert, disque plein, valeurs par défaut mesurées (4 × 2 Mio), petits fichiers rendus durables par lots.
+- Le chaos de 1 000 itérations passe sous Windows et sous Linux, R1 à R6 sont mesurés entre le PC et le téléphone, et G6 est fermée.
+- Réserves et suites dans [j4a-report.md](j4a-report.md) et [j4b-report.md](j4b-report.md).
+
 ---
 
 ### J5 — Appairage par PIN · ≈ 5 à 8 jours (+ revue externe à planifier)

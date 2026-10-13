@@ -241,3 +241,58 @@ func TestSeveralPathsGetARoot(t *testing.T) {
 		}
 	}
 }
+
+// The speed counts what this session receives, not what a resume finds on disk: a resume used
+// to show hundreds of MB/s in its first second (J4b exit tests).
+func TestResumeIsNoSpeed(t *testing.T) {
+	offer, paths, _ := singleFile(t, 8*testChunk)
+	p := newOfferPair(t)
+	p.serve(t, offer, paths)
+	out := t.TempDir()
+	offer.TransferID = p.id.String()
+	first := p.receiver(out)
+	first.Workers = 1
+	v := newValve(4 * testChunk)
+	first.dial = v.dial
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-v.reached; cancel() }()
+	_, _ = first.Run(ctx, p.addr, offer)
+
+	q := p.again(t)
+	q.serve(t, offer, paths)
+	offer.TransferID = q.id.String()
+	second := q.receiver(out)
+	second.Workers = 1
+	stall := newValve(16 << 10) // the handshake goes through, no chunk does
+	second.dial = stall.dial
+	ev := &recorder{}
+	second.Events = ev
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _, _ = second.Run(ctx2, q.addr, offer) }()
+	defer func() { cancel2(); <-done }()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ev.mu.Lock()
+		var resumed []Progress
+		for _, pr := range ev.progress {
+			if pr.Bytes > 0 {
+				resumed = append(resumed, pr)
+			}
+		}
+		ev.mu.Unlock()
+		for _, pr := range resumed {
+			if pr.SpeedMBps != 0 {
+				t.Fatalf("a resume that received nothing yet shows %.1f MB/s (%d bytes found on disk)", pr.SpeedMBps, pr.Bytes)
+			}
+		}
+		if len(resumed) >= 3 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the resumed bytes never showed in the progress: %d reports", len(resumed))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}

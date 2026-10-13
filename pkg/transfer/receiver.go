@@ -253,17 +253,20 @@ func (r *Receiver) Run(ctx context.Context, addr string, offer protocol.Offer) (
 
 // run is the state of one Run.
 type run struct {
-	r      *Receiver
-	offer  protocol.Offer
-	items  []*item
-	low    int // first item that may still need requests (under r.mu)
-	ended  int // items done, skipped or failed (under r.mu)
-	start  time.Time
-	bytes  atomic.Int64
-	conns  atomic.Int32
-	evMu   sync.Mutex
-	speed  *speedMeter
-	chunks uint32 // chunk size
+	r     *Receiver
+	offer protocol.Offer
+	items []*item
+	low   int // first item that may still need requests (under r.mu)
+	ended int // items done, skipped or failed (under r.mu)
+	start time.Time
+	bytes atomic.Int64
+	conns atomic.Int32
+	evMu  sync.Mutex
+	speed *speedMeter
+	// received counts the bytes of this session's chunks: the speed. bytes also counts what a
+	// resume finds on disk and the files already there, which arrive in no time.
+	received atomic.Int64
+	chunks   uint32 // chunk size
 
 	stages  StageEvents // nil: the stages are not measured
 	workers int
@@ -648,6 +651,7 @@ func (ru *run) write(t task, data []byte, sum [32]byte) error {
 		if first && st.total > 0 {
 			st.hashes[t.index], st.fresh[t.index] = sum, true
 			ru.bytes.Add(int64(len(data)))
+			ru.received.Add(int64(len(data)))
 			st.counted.Add(int64(len(data)))
 		}
 		st.mu.RUnlock()
@@ -692,6 +696,7 @@ func (ru *run) write(t task, data []byte, sum [32]byte) error {
 			return nil
 		}
 		ru.bytes.Add(int64(len(data)))
+		ru.received.Add(int64(len(data)))
 		st.counted.Add(int64(len(data)))
 	}
 	if t.index < st.total {
@@ -1071,7 +1076,7 @@ func (ru *run) reportProgress(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			ru.emitProgress(ru.speed.update(ru.bytes.Load()))
+			ru.emitProgress(ru.speed.update(ru.received.Load()))
 		}
 	}
 }
