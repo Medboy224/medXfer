@@ -153,7 +153,7 @@ type ChunkSink interface {
 |---|---|---|---|
 | QUIC + BBR | ⏸ REPORTÉ. TCP + TLS 1.3 multi-flux. | Gain non démontré sur LAN ; coût CPU élevé en espace utilisateur ; BBR n'apporte presque rien sur un LAN. | Le benchmark §14.3 reste sous 80 % d'iperf3 après optimisation de TCP+TLS. |
 | TLS-PSK dérivé de SPAKE2 | ❌ Remplacé par mTLS + épinglage d'empreinte + PAKE lié au canal. | L'API standard de Go ne documente pas de PSK externe (recherche non concluante, Annexe B). Le remplaçant est un schéma classique et n'exige aucune fonction spéciale. | Jamais nécessaire. |
-| SPAKE2 imposé | ❓ PAKE à choisir (gate G1). QR sans PAKE dès la phase 2. | Le choix de bibliothèque est la décision la plus risquée ; elle ne doit pas bloquer le reste. | — |
+| SPAKE2 imposé | ✅ **CPace** (`CPACE-RISTR255-SHA512`), gate G1 fermée le 13 octobre 2026. QR sans PAKE dès la phase 2. | Choix du CFRG ; aucune constante publique ; vecteurs de la suite ; aucune arithmétique de corps à écrire (veille G1). | Une RFC ou une implémentation Go maintenue qui passe les mêmes vecteurs. |
 | SQLite WAL | ⏸ REPORTÉ. Journal append-only de 40 octets/chunk. | Même garantie de crash pour une charge à écrivain unique, sans CGO ni dépendance. | Historique des transferts, recherche, statistiques. |
 | BLAKE3 / SHA-256 adaptatif | ❌ SHA-256 unique (gate G6 pour confirmer). | Bibliothèque standard, accélérée matériellement sur amd64 et arm64 ; moins de code. | Le benchmark G6 montre un hash plus lent que 1,5× le lien sur un téléphone cible. |
 | Compression LZ4/ZSTD | ⏸ REPORTÉ. | Les médias sont déjà compressés ; aucun gain ; complexité. | Mesure sur corpus de fichiers réels. |
@@ -237,8 +237,15 @@ Un PIN court (~20 bits) ne protège que s'il est utilisé *dans un PAKE* : l'att
 Déroulement (le **répondant** affiche le PIN ; l'**initiateur** le saisit) :
 1. L'initiateur ouvre une connexion TLS. L'empreinte du répondant est inconnue : la connexion est en état `UNAUTH` (§7), seules les trames `pair_*` sont permises.
 2. Les deux calculent `ekm = ExportKeyingMaterial("EXPORTER-medxfer-v1-pair", nil, 32)`. Cette valeur dépend de la session TLS réelle.
-3. Ils exécutent le PAKE avec le PIN comme mot de passe, en incluant dans les identités/contexte du PAKE : `fp_initiateur ‖ fp_répondant ‖ ekm`.
-4. **Confirmation de clé :** chacun envoie `HMAC(clé_PAKE, rôle ‖ fp_i ‖ fp_r ‖ ekm)` et vérifie celui du pair.
+3. Ils exécutent le PAKE, CPace `CPACE-RISTR255-SHA512` (gate G1), en mode initiateur-répondant :
+   - le mot de passe est le PIN ;
+   - le CI vaut `lv_cat("medXfer-pair-v1", fp_initiateur, fp_répondant)`, l'initiateur en premier, avec le nom du service (brouillon §10.1) ;
+   - le sid vaut `ekm`.
+4. **Confirmation de clé** (brouillon §10.4) :
+   - `mac_key = SHA-512("CPaceMac" ‖ sid ‖ ISK)` ;
+   - chacun envoie `HMAC-SHA-512(mac_key, lv_cat(Y, AD))` sur son propre message, et vérifie celui du pair.
+
+   L'ISK contient le CI (les deux empreintes) et le sid (`ekm`) : la confirmation lie donc l'échange au canal.
 5. Succès : chacun enregistre l'empreinte de l'autre, la connexion passe en état `AUTH`, et seulement alors l'alias est échangé.
 
 **Pourquoi le MITM échoue :** un attaquant qui relaie ouvre deux sessions TLS distinctes. Les `ekm` et les empreintes diffèrent d'un côté à l'autre ; les confirmations ne correspondent donc pas. Sans le PIN il ne peut pas non plus dériver la clé PAKE.
@@ -254,7 +261,7 @@ Aucun code : le canal (§7) vérifie que l'empreinte du pair est dans `trusted.j
 | `PAIR-03` | L'identité et le contexte du PAKE DOIVENT inclure `fp_i`, `fp_r` et `ekm` (liaison au canal). | ✅ |
 | `PAIR-04` | Après **3** échecs, le PIN est détruit, la session fermée, un nouveau PIN est généré. Après 3 PIN détruits d'affilée, délai exponentiel avant d'en afficher un nouveau. | ✅ |
 | `PAIR-05` | La confirmation de clé est obligatoire dans les deux sens. | ✅ |
-| `PAIR-06` | On NE DOIT PAS écrire soi-même la cryptographie du PAKE. La bibliothèque retenue DOIT vérifier les vecteurs de test de sa spécification et fixer les constantes publiques sans connaissance du logarithme discret (voir l'incident de `croc`, Annexe B). | ❓ gate G1 |
+| `PAIR-06` | On NE DOIT PAS écrire soi-même de primitive (groupe, corps, hachage vers le groupe, encodage). Le protocole PAKE PEUT être assemblé sur une bibliothèque de groupe reconnue, à condition de vérifier tous les vecteurs de test de sa spécification et d'obtenir une revue externe avant la mise en service. Un protocole à constantes publiques DOIT les fixer sans connaissance du logarithme discret (voir l'incident de `schollz/pake`, Annexe B). Reformulée à la gate G1 (13 octobre 2026). | ✅ (`pkg/pake` : vecteurs A et B.3 du brouillon 21 ; revue externe : gate G4) |
 | `PAIR-07` | Un échec d'appairage NE DOIT révéler ni le nombre d'essais restants ni l'alias du répondant. | ✅ |
 | `PAIR-08` | Mode « un seul envoi » (sans mémoriser l'appareil) : la confiance n'est pas écrite dans `trusted.json` et disparaît avec la session, sauf demande explicite. | ✅ |
 
@@ -742,7 +749,7 @@ Chaque phase est livrable seule (règle R5). Le projet n'étant pas encore publi
 
 | Gate | Question | Options | Critères de décision | Bloque |
 |---|---|---|---|---|
-| **G1** | Quelle bibliothèque PAKE ? | (a) SPAKE2 (RFC 9382) avec une implémentation Go à identifier ; (b) CPace via `filippo.io/cpace`, marquée expérimentale ; (c) `schollz/pake` (utilisée par `croc`). | Vecteurs de test de la spécification ; constantes publiques fixées sans logarithme connu ; maintenance ; compilation sans CGO sur mobile ; revue externe possible. | Phase 2b seulement |
+| **G1** | Quelle bibliothèque PAKE ? | ✅ **Fermée le 13 octobre 2026 :** CPace, suite `CPACE-RISTR255-SHA512`, assemblé dans `pkg/pake` sur `github.com/gtank/ristretto255` (v0.2.0, épinglée), avec `PAIR-06` reformulée. Écartés : SPAKE2 (aucune implémentation Go conforme), `filippo.io/cpace` (expérimental, abandonné), `schollz/pake` (pas de vecteurs). Détail : [medxfer-g1-pake.md](medxfer-g1-pake.md). | Vecteurs de test de la spécification ; constantes publiques fixées sans logarithme connu ; maintenance ; compilation sans CGO sur mobile ; revue externe possible. | Phase 2b seulement |
 | **G2a** ✅ fermée (11/10/2026) | Quelle frontière cœur/UI sur Windows, Linux et Android ? | **Retenu :** `c-shared` + `dart:ffi` partout, événements lus par un isolat de fond. `gomobile` non nécessaire. | Résultats et réserves (débit Linux sur machine ancienne, essai Linux sur machine propre) : `g2a-report.md`. | — |
 | **G2b** | Même question sur macOS et iOS. | `c-shared` / `c-archive` ou `gomobile`. | Même prototype ; exige macOS et Xcode (voir G8). Le risque est le plus élevé sur iOS. | Phase 4b |
 | **G8** | Comment obtenir un environnement macOS ? | Mac d'occasion, Mac loué à distance, exécuteurs macOS d'intégration continue (compilation seulement). | Un vrai iPhone branché à un Mac est nécessaire pour valider Bonjour, la permission « réseau local » et le comportement en arrière-plan. | Phase 4b |
@@ -927,8 +934,11 @@ Pour le terminal (Termux, serveur sans écran), `xfer ctl` remplace le tableau d
 **Vérifié :**
 - iOS : le multicast/broadcast exige l'entitlement `com.apple.developer.networking.multicast` ; Bonjour ne l'exige pas mais demande `NSBonjourServices` et `NSLocalNetworkUsageDescription`. Apple Developer Forums (réponses de l'équipe DTS) et [documentation de l'entitlement](https://developer.apple.com/tutorials/data/documentation/bundleresources/entitlements/com.apple.developer.networking.multicast.md).
 - LocalSend : HTTPS à certificat auto-généré, empreinte SHA-256, multicast + repli par balayage de sous-réseau. [Protocole](https://github.com/localsend/protocol).
-- CPace : toujours un brouillon CFRG/IRTF (révision 21, avril 2026), pas encore une RFC ; `filippo.io/cpace` est marqué expérimental et basé sur un brouillon antérieur. [Brouillon](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-cpace), [module Go](https://pkg.go.dev/filippo.io/cpace?tab=doc).
-- `schollz/pake` (croc) : une faille corrigée dans la version 9 de croc — points publics non fixés, donc choisis par un attaquant. [Récit de l'auteur](https://schollz.com/blog/croc9), [module](https://pkg.go.dev/github.com/schollz/pake).
+- **CPace :**
+  - au 13 octobre 2026, c'est encore le brouillon CFRG/IRTF `draft-irtf-cfrg-cpace-21`, transmis à l'éditeur RFC (« *Awaiting First editor* ») et sans numéro de RFC. [Datatracker](https://datatracker.ietf.org/doc/draft-irtf-cfrg-cpace/) ;
+  - `pkg/pake` en vérifie les annexes A et B.3 octet pour octet ;
+  - `filippo.io/cpace` est marqué expérimental et basé sur un brouillon antérieur. [Module Go](https://pkg.go.dev/filippo.io/cpace?tab=doc).
+- **`schollz/pake`** (CVE-2021-31603) : l'initiateur choisissait les points publics, donc pouvait connaître leur logarithme ; l'entropie de la clé tombait à celle du code. La faille a été corrigée depuis. [Analyse](https://redrocket.club/posts/croc/), [message au CFRG](https://mailarchive.ietf.org/arch/msg/cfrg/KtmqZS6CFUwCfkVTlieGw-ZFGfY/), [module](https://pkg.go.dev/github.com/schollz/pake).
 - Go 1.24 : `os.Root` / `os.OpenRoot` pour un accès aux fichiers résistant à la traversée. [Notes de version](https://go.dev/doc/go1.24), [article du blog Go](https://golang.google.cn/blog/osroot).
 
 **Non vérifié (recherche non concluante) :**
