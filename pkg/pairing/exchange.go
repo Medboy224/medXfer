@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/pake"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
 )
@@ -19,7 +21,24 @@ const (
 	TypeHello  = "pair_hello"  // scanner without the QR code -> shower: {device_name}; the shower's user decides
 	TypeAccept = "pair_accept" // shower -> scanner: {device_name}, and the offer of a one-shot send
 	TypeReject = "pair_reject" // shower -> scanner: neutral reason
+
+	// The PIN path (bible §6.2, D3 of the J5 plan): the initiator types the PIN the responder
+	// shows. Names travel only once both confirmations passed (PAIR-07).
+	TypePIN        = "pair_pin"         // initiator -> responder: {suite, share}
+	TypePINReply   = "pair_pin_reply"   // responder -> initiator: {share, confirm}
+	TypePINConfirm = "pair_pin_confirm" // initiator -> responder: {confirm, device_name}
 )
+
+// PINSuite is the PAKE of the PIN path (gate G1). pair_pin names it: another suite is another
+// name, which a responder that does not know it refuses (D9).
+const PINSuite = pake.SuiteCPaceRistretto255
+
+// pinService opens the channel identifier: CI = lv_cat(pinService, fp_i, fp_r) (bible §6.2).
+const pinService = "medXfer-pair-v1"
+
+func pinCI(initiator, responder identity.Fingerprint) []byte {
+	return pake.LVCat([]byte(pinService), initiator[:], responder[:])
+}
 
 // replyTimeout bounds the wait for pair_accept after pair_secret: no user is involved.
 const replyTimeout = 10 * time.Second
@@ -57,6 +76,9 @@ type Options struct {
 	// is sent: a one-shot send registers there the transfer the scanner will join on the data
 	// connections, so that its first DATA_JOIN finds it. An error refuses the pairing.
 	BeforeAccept func(r Result) error
+	// PIN (shower), when set, also accepts the PIN path: a device without a camera types the
+	// PIN shown (D6). Serve closes it when it returns: a PIN serves one pairing (PAIR-02).
+	PIN *PIN
 }
 
 func remember(o Options, r Result) error {
@@ -67,13 +89,36 @@ func remember(o Options, r Result) error {
 }
 
 // Serve is the shower's side: it waits on ln until a scanner presents the invitation's secret,
-// or one without it is accepted by o.Confirm, or the invitation expires. Refusals are neutral
-// and the wait goes on. On success the scanner's key is trusted (unless o.Once) and returned.
-// ln may be the control listener of a pkg/transfer.Hub, whose connections are already secure.
+// or one without it is accepted by o.Confirm, or a device types o.PIN, or all of them expire.
+// inv may be nil when o.PIN is set. Refusals are neutral and the wait goes on. On success the
+// scanner's key is trusted (unless o.Once) and returned. ln may be the control listener of a
+// pkg/transfer.Hub, whose connections are already secure.
 func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Result, error) {
-	ctx, cancel := context.WithDeadline(ctx, inv.Expires())
-	defer cancel()
-	go func() { <-ctx.Done(); ln.Close() }()
+	if inv == nil && o.PIN == nil {
+		return Result{}, errors.New("pairing: nothing to serve")
+	}
+	if o.PIN != nil {
+		defer o.PIN.close()
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	go func() {
+		defer ln.Close()
+		for {
+			t := time.NewTimer(time.Until(serveDeadline(inv, o.PIN)))
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return
+			case <-t.C:
+				// A PIN destroyed and drawn again moves the deadline (PAIR-04).
+				if !time.Now().Before(serveDeadline(inv, o.PIN)) {
+					cancel(ErrExpired)
+					return
+				}
+			}
+		}
+	}()
 
 	gate := securechan.NewGate()
 	var confirmMu sync.Mutex
@@ -86,7 +131,7 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 				return r, nil
 			default:
 			}
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			if errors.Is(context.Cause(ctx), ErrExpired) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return Result{}, ErrExpired
 			}
 			if ctx.Err() != nil {
@@ -99,12 +144,26 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 			if err == nil {
 				select {
 				case results <- r:
-					cancel() // stop accepting: the invitation is used
+					cancel(nil) // stop accepting: the invitation is used
 				default:
 				}
 			}
 		}()
 	}
+}
+
+// serveDeadline is when everything served has expired.
+func serveDeadline(inv *Invitation, pin *PIN) time.Time {
+	var d time.Time
+	if inv != nil {
+		d = inv.Expires()
+	}
+	if pin != nil {
+		if pd := pin.deadline(); pd.After(d) {
+			d = pd
+		}
+	}
+	return d
 }
 
 func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gate *securechan.Gate, confirmMu *sync.Mutex) (Result, error) {
@@ -131,6 +190,9 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 	r := Result{Fingerprint: conn.PeerFingerprint(), Name: msg.DeviceName, Address: ch.RemoteIP()}
 	switch msg.Type {
 	case TypeSecret:
+		if inv == nil {
+			return reject()
+		}
 		if err := inv.Redeem(DecodeSecret(msg.Secret), time.Now()); err != nil {
 			_, _ = reject()
 			return Result{}, err
@@ -145,6 +207,13 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 		if !ok || ctx.Err() != nil {
 			return reject()
 		}
+	case TypePIN:
+		name, err := respondPIN(ch, conn, msg, o)
+		if err != nil {
+			_, _ = reject()
+			return Result{}, err
+		}
+		r.Name = name
 	default:
 		return reject()
 	}
@@ -171,6 +240,99 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 	return r, nil
 }
 
+// respondPIN is the responder's side of the PIN path (bible §6.2). It returns the initiator's
+// name, which comes once the initiator has confirmed the key. The attempt counts from the
+// reply on (PIN.begin). With no attempt left, it answers on a decoy PIN: the initiator sees
+// the same exchange and the same refusal (PAIR-07).
+func respondPIN(ch *session.Channel, conn *securechan.Conn, msg session.Message, o Options) (string, error) {
+	if o.PIN == nil || !slices.Contains(pake.Suites(), msg.Suite) {
+		return "", ErrRefused
+	}
+	code, counted := o.PIN.begin()
+	paired := false
+	if counted {
+		defer func() { o.PIN.end(paired) }()
+	} else {
+		var err error
+		if code, err = drawPIN(o.PIN.cfg.Rand, o.PIN.cfg.Digits); err != nil {
+			return "", err
+		}
+	}
+	ekm, err := conn.ChannelBinding()
+	if err != nil {
+		return "", err
+	}
+	ex, err := pake.New(msg.Suite, pake.Params{Password: code, CI: pinCI(conn.PeerFingerprint(), o.Identity.Fingerprint),
+		SID: ekm, Role: pake.Responder})
+	if err != nil {
+		return "", err
+	}
+	s, err := ex.Finish(msg.Share)
+	if err != nil {
+		return "", ErrRefused
+	}
+	if err := ch.Send(session.Message{Type: TypePINReply, Share: ex.Share(), Confirm: s.Tag()}); err != nil {
+		return "", err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(replyTimeout))
+	m, err := ch.Read()
+	if err != nil {
+		return "", err
+	}
+	if m.Type != TypePINConfirm || !s.Verify(m.Confirm) || !counted {
+		return "", ErrRefused
+	}
+	paired = true
+	return m.DeviceName, nil
+}
+
+// JoinPIN is the initiator's side of the PIN path (bible §6.2): it connects to addr, whose key
+// it does not know yet, and runs the PAKE with the PIN the user typed, bound to this TLS
+// session and to both keys (PAIR-03). Only once the responder's confirmation passes does it
+// confirm in turn and give its name (PAIR-05, PAIR-07); then it trusts the responder (unless
+// o.Once). A wrong PIN, an expired one, or a relay between the two devices gives ErrRefused.
+// A known device that shows another key is the caller's to refuse (ID-05).
+func JoinPIN(ctx context.Context, addr, pin string, o Options) (Result, error) {
+	code, err := NormalizePIN(pin)
+	if err != nil {
+		return Result{}, err
+	}
+	conn, ch, host, err := dial(ctx, addr, securechan.Config{Identity: o.Identity, Trust: o.Trust, AllowUnknown: true})
+	if err != nil {
+		return Result{}, err
+	}
+	defer ch.Close()
+	fp := conn.PeerFingerprint()
+	ekm, err := conn.ChannelBinding()
+	if err != nil {
+		return Result{}, err
+	}
+	ex, err := pake.New(PINSuite, pake.Params{Password: code, CI: pinCI(o.Identity.Fingerprint, fp), SID: ekm, Role: pake.Initiator})
+	if err != nil {
+		return Result{}, err
+	}
+	if err := ch.Send(session.Message{Type: TypePIN, Suite: PINSuite, Share: ex.Share()}); err != nil {
+		return Result{}, err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(replyTimeout))
+	reply, err := ch.Read()
+	if err != nil {
+		return Result{}, err
+	}
+	if reply.Type != TypePINReply {
+		return Result{}, ErrRefused
+	}
+	s, err := ex.Finish(reply.Share)
+	if err != nil || !s.Verify(reply.Confirm) {
+		return Result{}, ErrRefused
+	}
+	conn.Authenticate() // the responder holds the PIN: its offer may pass the Unauth limit
+	if err := ch.Send(session.Message{Type: TypePINConfirm, Confirm: s.Tag(), DeviceName: o.DeviceName}); err != nil {
+		return Result{}, err
+	}
+	return awaitAccept(ch, conn, fp, host, replyTimeout, o)
+}
+
 // Join is the scanner's side: it connects to the URI's address pinning the URI's key, sends
 // the secret, and on acceptance trusts the shower (unless o.Once).
 func Join(ctx context.Context, u URI, o Options) (Result, error) {
@@ -194,24 +356,14 @@ func Ask(ctx context.Context, addr string, decide func(identity.Fingerprint) boo
 // presented, then sends msg and waits up to wait for pair_accept.
 func exchange(ctx context.Context, addr string, fp identity.Fingerprint, decide func(identity.Fingerprint) bool,
 	msg session.Message, wait time.Duration, o Options) (Result, error) {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return Result{}, err
-	}
-	d := net.Dialer{Timeout: 5 * time.Second, KeepAlive: 15 * time.Second}
-	raw, err := d.DialContext(ctx, "tcp4", addr)
-	if err != nil {
-		return Result{}, err
-	}
 	cfg := securechan.Config{Identity: o.Identity, Expected: fp}
 	if fp.IsZero() {
 		cfg.Trust, cfg.AllowUnknown = o.Trust, true
 	}
-	conn, err := securechan.Client(ctx, raw, cfg)
+	conn, ch, host, err := dial(ctx, addr, cfg)
 	if err != nil {
 		return Result{}, err
 	}
-	ch := session.NewChannel(conn)
 	defer ch.Close()
 	if fp.IsZero() {
 		fp = conn.PeerFingerprint()
@@ -224,6 +376,30 @@ func exchange(ctx context.Context, addr string, fp identity.Fingerprint, decide 
 	if err := ch.Send(msg); err != nil {
 		return Result{}, err
 	}
+	return awaitAccept(ch, conn, fp, host, wait, o)
+}
+
+// dial opens the secure channel of a pairing to addr.
+func dial(ctx context.Context, addr string, cfg securechan.Config) (*securechan.Conn, *session.Channel, string, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	d := net.Dialer{Timeout: 5 * time.Second, KeepAlive: 15 * time.Second}
+	raw, err := d.DialContext(ctx, "tcp4", addr)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	conn, err := securechan.Client(ctx, raw, cfg)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return conn, session.NewChannel(conn), host, nil
+}
+
+// awaitAccept waits up to wait for pair_accept and its offer, then trusts the shower (unless
+// o.Once).
+func awaitAccept(ch *session.Channel, conn *securechan.Conn, fp identity.Fingerprint, host string, wait time.Duration, o Options) (Result, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(wait))
 	resp, err := ch.Read()
 	if err != nil {

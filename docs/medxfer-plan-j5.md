@@ -74,20 +74,23 @@ WP-5.1 et WP-5.2 sont indépendants. La revue externe (G4) peut être contractua
 4. répondant → initiateur : `pair_accept` (déjà existant), avec son nom et l'offre d'un envoi ponctuel.
 
 **Liaison au canal et confirmation :**
-- CI = `lv_cat(fp_i, fp_r)` ; sid = `ekm` (`PAIR-03`) ;
-- `conf = HMAC-SHA-512(clé dérivée de l'ISK, rôle ‖ fp_i ‖ fp_r ‖ ekm)`, comparée en temps constant, dans les deux sens (`PAIR-05`).
+- CI = `lv_cat("medXfer-pair-v1", fp_i, fp_r)` ; sid = `ekm` (`PAIR-03`) ;
+- confirmation du brouillon §10.4 (bible §6.2, étape 4), comparée en temps constant, dans les deux sens (`PAIR-05`) ;
+- `pair_pin` nomme la suite (`CPACE-RISTR255-SHA512`) : un répondant qui ne la connaît pas refuse, sans compter d'essai (D9).
 
 **Côté répondant :**
 - le PIN est tiré avec `crypto/rand`, sans biais modulo (`PAIR-01`), et vit 120 s, pour une seule session (`PAIR-02`) ;
-- après 3 confirmations fausses, le PIN est détruit, la connexion fermée et un nouveau PIN tiré. Après 3 PIN détruits d'affilée, il y a un délai avant d'en afficher un nouveau (D5) (`PAIR-04`) ;
-- en cas d'échec, une réponse neutre et identique (`pair_reject`), sans nombre d'essais restants ni alias (`PAIR-07`). Les noms ne circulent qu'après la confirmation.
+- un essai compte **dès que le répondant envoie `pair_pin_reply`** : l'initiateur a alors testé son PIN, qu'il confirme ou non. Les essais sont réservés, donc des connexions simultanées n'en obtiennent pas plus de 3 par PIN ;
+- après 3 essais ratés, le PIN est détruit, la connexion fermée et un nouveau PIN tiré. Après 3 PIN détruits d'affilée, il y a un délai avant d'en afficher un nouveau (D5) (`PAIR-04`) ;
+- en cas d'échec, une réponse neutre et identique (`pair_reject`), sans nombre d'essais restants ni alias (`PAIR-07`). Les noms ne circulent qu'après la confirmation ;
+- sans essai disponible (PIN épuisé, délai en cours, PIN déjà utilisé), le répondant joue l'échange sur un PIN factice : l'initiateur voit `pair_pin_reply` puis `pair_reject`, comme pour un mauvais PIN (`PAIR-07`).
 
 **En cas de succès :**
 - la connexion passe en état `AUTH` (`Authenticate`) ;
 - l'empreinte est enregistrée, sauf en mode « un seul envoi » (`PAIR-08`) ;
 - la suite est celle du QR : `pair_accept`, l'offre, `DATA_JOIN`.
 
-**Interface :** `pairing.ServePIN` et `pairing.JoinPIN`, au plus près du `Pairer.ByPIN` de la bible §3.2.
+**Interface :** `pairing.NewPIN` (le PIN, ses essais, son écran), passé à `pairing.Serve` par `Options.PIN`, et `pairing.JoinPIN`, au plus près du `Pairer.ByPIN` de la bible §3.2. Le même `Serve` accepte le QR et le PIN (D6) ; `inv` peut être nul quand seul le PIN est offert.
 
 ### WP-5.4 — Ligne de commande et daemon · S à M
 

@@ -47,6 +47,10 @@ func lvCat(parts ...[]byte) []byte {
 	return out
 }
 
+// LVCat is lv_cat for the callers' channel identifier (draft §10.1): CI =
+// LVCat(service, initiator's identity, responder's identity).
+func LVCat(parts ...[]byte) []byte { return lvCat(parts...) }
+
 // lexLarger reports whether a > b in lexicographical order (draft A.3.1).
 func lexLarger(a, b []byte) bool {
 	for i := 0; i < min(len(a), len(b)); i++ {
