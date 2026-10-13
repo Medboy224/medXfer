@@ -177,7 +177,7 @@ func TestServeOneShotPairingRenewsTheQRCode(t *testing.T) {
 	msg, follow := session.OfferMessages(session.Message{DataPort: port}, offer)
 	go func() {
 		r, err := serveOneShotPairing(context.Background(), hub, sender, "127.0.0.1", port, 300*time.Millisecond,
-			msg, follow, nil, before, shown)
+			msg, follow, nil, before, shown, nil)
 		done <- result{r, err}
 	}()
 	var u pairing.URI
@@ -204,6 +204,47 @@ func TestServeOneShotPairingRenewsTheQRCode(t *testing.T) {
 			break
 		}
 	}
+	if err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	if r.Offer.Offer == nil || r.Offer.Offer.Root != "a.bin" || r.Offer.DataPort != port {
+		t.Fatalf("offer: %+v", r.Offer)
+	}
+	if s := <-done; s.err != nil || s.r.Fingerprint != receiver.Fingerprint || registered != receiver.Fingerprint {
+		t.Fatalf("sender: %+v, %v (registered %s)", s.r, s.err, registered.Short())
+	}
+}
+
+// xfer send --pin: a PIN instead of the QR code, on the device's single port. The receiver that
+// types it pairs, is registered before pair_accept, and gets the offer; nothing else is shown.
+func TestServeOneShotPairingByPIN(t *testing.T) {
+	sender, _ := testDevice(t)
+	receiver, _ := testDevice(t)
+	hub, addr := startTestHub(t, sender)
+	port := portNum(t, addr)
+	pins := make(chan string, 8)
+	var registered identity.Fingerprint
+	before := func(r pairing.Result) error { registered = r.Fingerprint; return nil }
+	noQR := func(pairing.URI) { t.Error("a QR code was shown for xfer send --pin") }
+	type result struct {
+		r   pairing.Result
+		err error
+	}
+	done := make(chan result, 1)
+	offer := protocol.Offer{Root: "a.bin", Items: []protocol.OfferItem{{Path: "a.bin", Size: 1}}, TotalBytes: 1, ChunkSize: protocol.DefaultChunkSize}
+	msg, follow := session.OfferMessages(session.Message{DataPort: port}, offer)
+	go func() {
+		r, err := serveOneShotPairing(context.Background(), hub, sender, "127.0.0.1", port, time.Minute,
+			msg, follow, nil, before, noQR, func(code string, _ time.Time) { pins <- code })
+		done <- result{r, err}
+	}()
+	var code string
+	select {
+	case code = <-pins:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no PIN shown")
+	}
+	r, err := pairing.JoinPIN(context.Background(), addr, code, pairing.Options{Identity: receiver, Once: true})
 	if err != nil {
 		t.Fatalf("join: %v", err)
 	}

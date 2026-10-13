@@ -274,7 +274,7 @@ func TestServePINExpires(t *testing.T) {
 func TestPINDelayDoublesAndResets(t *testing.T) {
 	const delay = 150 * time.Millisecond
 	p, screen := newPIN(t, PINConfig{Attempts: 1, Delay: delay, MaxDelay: 2 * delay})
-	defer p.close()
+	defer p.Close()
 	next(t, screen)
 	fail := func() {
 		t.Helper()
@@ -327,7 +327,7 @@ func TestPINDelayDoublesAndResets(t *testing.T) {
 // PAIR-04 with concurrent connections: no more attempts than allowed are begun on one PIN.
 func TestPINAttemptsAreReserved(t *testing.T) {
 	p, _ := newPIN(t, PINConfig{})
-	defer p.close()
+	defer p.Close()
 	for i := 0; i < PINAttempts; i++ {
 		if _, ok := p.begin(); !ok {
 			t.Fatalf("attempt %d refused", i+1)

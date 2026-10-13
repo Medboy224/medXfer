@@ -39,6 +39,12 @@ func (s *DaemonServer) dispatch(conn *websocket.Conn, req RequestMessage) {
 	case "pair_uri":
 		s.handlePairURI(conn, req)
 
+	case "pair_pin_show":
+		s.handlePairPINShow(conn, req)
+
+	case "pair_pin":
+		s.handlePairPIN(conn, req)
+
 	case "trust_respond":
 		s.handleTrustRespond(conn, req)
 

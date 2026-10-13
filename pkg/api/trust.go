@@ -327,6 +327,13 @@ func (s *DaemonServer) pairWith(target string, u *pairing.URI, once bool, reqID 
 		ch.Close()
 		return nil, err
 	}
+	return s.finishOutgoing(ch, connPeer, fp, host, decision, reqID)
+}
+
+// finishOutgoing waits for the peer's pair_accept, trusts it as decided, and makes the session
+// the active one.
+func (s *DaemonServer) finishOutgoing(ch *session.Channel, connPeer *securechan.Conn, fp identity.Fingerprint, host string,
+	decision trustDecision, reqID string) (*session.Channel, error) {
 	_ = connPeer.SetReadDeadline(time.Now().Add(pairReplyTimeout))
 	resp, err := ch.Read()
 	_ = connPeer.SetDeadline(time.Time{})

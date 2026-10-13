@@ -110,6 +110,8 @@ type DaemonServer struct {
 	// keys waiting for the user's trust_respond.
 	invite       *pairing.Invitation
 	inviteOnce   bool
+	pin          *pairing.PIN // shown by pair_pin_show (pin.go)
+	pinOnce      bool
 	pendingTrust map[string]chan trustDecision
 	trustTimeout time.Duration // 0: defaultTrustTimeout
 
@@ -1053,7 +1055,14 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 		devName := s.config.DeviceName
 		s.mu.RUnlock()
 
-		if msg.Type == "pair_request" {
+		if msg.Type == pairing.TypePIN {
+			name, ok := s.acceptPIN(conn, ch, msg, devName)
+			if !ok {
+				ch.Close()
+				return
+			}
+			msg.DeviceName = name // sent only after the confirmations (PAIR-07)
+		} else if msg.Type == "pair_request" {
 			// The pairing code, if any, is ignored: trust comes from the key (WP-3.6b).
 			decision, err := s.admitIncoming(conn, msg, ch.RemoteIP())
 			if err != nil {

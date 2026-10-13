@@ -157,6 +157,12 @@ const IndexHTML = `<!DOCTYPE html>
               <button id="pairBtn" class="btn btn-primary" style="width: auto; padding: 0 16px;" onclick="pairNode()">Pair</button>
             </div>
             <div style="font-size: 11px; color: var(--muted);">Enter the target device's IP or its 6-digit code (it only finds the device: both screens then compare fingerprints).</div>
+            <div style="display: flex; gap: 8px; margin-top: 10px;">
+              <button id="pinShowBtn" class="btn btn-primary" style="width: auto; padding: 0 16px;" onclick="showPIN()">Show a PIN</button>
+              <button id="pinTypeBtn" class="btn btn-primary" style="width: auto; padding: 0 16px;" onclick="typePIN()">Type a PIN</button>
+            </div>
+            <div id="pinShown" style="display: none; margin-top: 8px; font-size: 24px; font-family: monospace; font-weight: 700; letter-spacing: 2px;"></div>
+            <div id="pinHint" style="font-size: 11px; color: var(--muted);">PIN pairing: show a PIN here and type it on the other device, with the address shown (IP:port) in the IP box there.</div>
           </div>
         </div>
 
@@ -688,9 +694,16 @@ const IndexHTML = `<!DOCTYPE html>
         log(msg.data.level, msg.data.message);
         return;
       }
+      if (msg.event === "pair_pin_shown") { // the PIN stays on screen, out of the page log
+        onPINShown(msg.data);
+        return;
+      }
       log("RECV:" + msg.event, msg.data);
 
       switch (msg.event) {
+        case "pair_failed":
+          document.getElementById("pinHint").innerText = "Pairing failed: check the PIN (it changes after 3 wrong ones) and the address.";
+          break;
         case "trust_request":
           onTrustRequest(msg.data);
           break;
@@ -717,6 +730,7 @@ const IndexHTML = `<!DOCTYPE html>
           });
           document.getElementById("pairedBox").style.display = "block";
           document.getElementById("unpairedBox").style.display = "none";
+          document.getElementById("pinShown").style.display = "none";
           const pLabel = (msg.data.device_name && msg.data.device_name !== "Connecting...")
             ? (msg.data.device_name + " (" + msg.data.ip + ")")
             : msg.data.ip;
@@ -1785,6 +1799,32 @@ const IndexHTML = `<!DOCTYPE html>
 
       // 3. Fall back to manual path input
       return parsePaths();
+    }
+
+    // PIN pairing (bible §6.2): this device shows a PIN, or types the one another shows.
+    function showPIN() { sendCmd("pair_pin_show", {}); }
+
+    function typePIN() {
+      const target = document.getElementById("pairIPInput").value.trim();
+      if (!target) { alert("Enter the address shown with the PIN (IP:port) in the IP box."); return; }
+      const pin = prompt("PIN shown on the other device:");
+      if (!pin) return;
+      document.getElementById("pinHint").innerText = "Pairing with " + target + "...";
+      sendCmd("pair_pin", { target: target, pin: pin });
+    }
+
+    function onPINShown(d) {
+      const box = document.getElementById("pinShown");
+      const until = new Date(d.expires * 1000).toLocaleTimeString();
+      if (!d.pin) {
+        box.style.display = "none";
+        document.getElementById("pinHint").innerText = "Too many wrong PINs: a new PIN at " + until + ".";
+        return;
+      }
+      box.innerText = d.pin;
+      box.style.display = "block";
+      document.getElementById("pinHint").innerText = "Type it on the other device, with this address: " + d.address +
+        " (valid until " + until + "; this device: " + d.fingerprint + ").";
     }
 
     function pairNode() {

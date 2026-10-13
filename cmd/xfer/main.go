@@ -142,31 +142,40 @@ func main() {
 	}
 }
 
-func reorderArgs(args []string) []string {
-	valFlags := map[string]bool{
-		"-port": true, "--port": true,
-		"-workers": true, "--workers": true,
-		"-chunk": true, "--chunk": true,
-		"-out": true, "--out": true,
-		"-ip": true, "--ip": true,
-		"-code": true, "--code": true,
-		"-pin": true, "--pin": true,
-		"-name": true, "--name": true,
-	}
-	var flags, positionals []string
+// reorderArgs puts the flags before the positional arguments, so that `xfer recv FILE --out D`
+// parses like `xfer recv --out D FILE`. A flag takes the next argument as its value unless fs
+// declares it boolean (or it is written -flag=value).
+func reorderArgs(fs *flag.FlagSet, args []string) []string {
+	var flags, positionals, rest []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if valFlags[arg] {
-			flags = append(flags, arg)
-			if i+1 < len(args) {
-				i++
-				flags = append(flags, args[i])
-			}
-		} else if strings.HasPrefix(arg, "-") {
-			flags = append(flags, arg)
-		} else {
-			positionals = append(positionals, arg)
+		if arg == "--" { // what follows is positional, even if it starts with "-"
+			rest = append([]string{"--"}, args[i+1:]...)
+			break
 		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positionals = append(positionals, arg)
+			continue
+		}
+		flags = append(flags, arg)
+		name := strings.TrimLeft(arg, "-")
+		if strings.Contains(name, "=") {
+			continue
+		}
+		f := fs.Lookup(name)
+		if f == nil {
+			continue
+		}
+		if b, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && b.IsBoolFlag() {
+			continue
+		}
+		if i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+	if rest != nil {
+		return append(append(flags, "--"), append(positionals, rest[1:]...)...)
 	}
 	return append(flags, positionals...)
 }
@@ -928,16 +937,16 @@ func runNodeServe(parentCtx context.Context, o *nodeOffer) error {
 // ONE-SHOT MODE (FILES & FOLDERS)
 // =====================================================================
 func handleSend(args []string) {
-	normalizedArgs := reorderArgs(args)
 	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
 	portFlag := sendCmd.Int("port", defaultPort, "TCP port of this device (pairing and data)")
 	chunkSizeMB := sendCmd.Int("chunk", protocol.DefaultChunkSize>>20, "Chunk size in MB (1 to 8)")
 	createNetwork := sendCmd.Bool("create-network", false, "Create a dedicated Wi-Fi Direct network")
+	pinFlag := sendCmd.Bool("pin", false, "show a PIN instead of a QR code (receiver without a camera)")
 	var interactive bool
 	sendCmd.BoolVar(&interactive, "i", false, "Require confirmation before sending")
 	sendCmd.BoolVar(&interactive, "interactive", false, "Require confirmation before sending")
 
-	_ = sendCmd.Parse(normalizedArgs)
+	_ = sendCmd.Parse(reorderArgs(sendCmd, args))
 	if sendCmd.NArg() < 1 {
 		fmt.Println("Error: Missing file or folder path. Usage: xfer send [-i] <path> [additional_paths...]")
 		os.Exit(1)
@@ -960,12 +969,12 @@ func handleSend(args []string) {
 		fmt.Printf("[-] Cannot send: %v\n", err)
 		return
 	}
-	runOneShotSend(offer, files, *portFlag, *createNetwork, interactive, trust)
+	runOneShotSend(offer, files, *portFlag, *createNetwork, interactive, *pinFlag, trust)
 }
 
 // runOneShotSend offers files on the device's single port: the receiver pairs on it (QR code,
 // or both users' confirmation), then pulls the whole offer on its data connections.
-func runOneShotSend(offer protocol.Offer, files []string, port int, createHotspot bool, interactive bool, trust *identity.TrustStore) {
+func runOneShotSend(offer protocol.Offer, files []string, port int, createHotspot bool, interactive bool, usePIN bool, trust *identity.TrustStore) {
 	var hs hotspot.Controller
 	if createHotspot {
 		hs = hotspot.New()
@@ -1038,7 +1047,7 @@ func runOneShotSend(offer protocol.Offer, files []string, port int, createHotspo
 	fmt.Printf(" Pairing Code : %s   (xfer recv %s: both screens then confirm)\n", pCode, pCode)
 	fmt.Println("--------------------------------------------------")
 	msg, follow := session.OfferMessages(session.Message{DataPort: port, TransferID: base.String()}, offer)
-	startOneShotPairing(ctx, send, port, msg, follow, trust)
+	startOneShotPairing(ctx, send, port, msg, follow, trust, usePIN)
 	fmt.Println("[*] Waiting for receiver to connect...")
 
 	tl := send.listener(ctx) // registered for the paired receiver only (CHAN-06)
@@ -1057,14 +1066,28 @@ func runOneShotSend(offer protocol.Offer, files []string, port int, createHotspo
 }
 
 func handleRecv(args []string) {
-	normalizedArgs := reorderArgs(args)
 	recvCmd := flag.NewFlagSet("recv", flag.ExitOnError)
 	ipFlag := recvCmd.String("ip", "", "Direct sender address")
 	codeFlag := recvCmd.String("code", "", "6-digit pairing code (e.g. 229-481)")
 	outDirFlag := recvCmd.String("out", ".", "Directory to save files")
 	workersFlag := recvCmd.Int("workers", 0, "data connections, 1 to 8; 0 chooses: 4, or 8 for many small files")
+	pinFlag := recvCmd.Bool("pin", false, "type the PIN shown by the sender at HOST[:PORT] (or --ip)")
 
-	_ = recvCmd.Parse(normalizedArgs)
+	_ = recvCmd.Parse(reorderArgs(recvCmd, args))
+
+	// The sender's PIN (xfer send --pin), for a device without a camera.
+	if *pinFlag {
+		addr := *ipFlag
+		if addr == "" && recvCmd.NArg() > 0 {
+			addr = recvCmd.Arg(0)
+		}
+		if addr == "" {
+			fmt.Println("[-] Give the address the sender shows: xfer recv --pin HOST[:PORT]")
+			return
+		}
+		recvFromPIN(addr, *outDirFlag, *workersFlag)
+		return
+	}
 
 	// The sender's QR code: its key comes from it, with the secret that lets this device in.
 	if recvCmd.NArg() > 0 && strings.HasPrefix(recvCmd.Arg(0), "medxfer://") {
@@ -1198,6 +1221,36 @@ func recvFromURI(raw, outDir string, workers int) {
 		return
 	}
 	receiveAccepted(r, u.Host, "from the QR code", bufio.NewReader(os.Stdin), outDir, workers)
+}
+
+// recvFromPIN receives a one-shot send by the PIN its sender shows (bible §6.2): the PIN
+// proves the sender, so there is no trust question, and nothing is saved (PAIR-08).
+func recvFromPIN(addr, outDir string, workers int) {
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, strconv.Itoa(defaultPort))
+	}
+	id, _, err := loadIdentity(configDir())
+	if err != nil {
+		fmt.Printf("[-] %v\n", err)
+		return
+	}
+	localID = id
+	in := bufio.NewReader(os.Stdin)
+	fmt.Print("PIN shown by the sender: ")
+	line, _ := in.ReadString('\n')
+	name, _ := os.Hostname()
+	fmt.Printf("[*] Connecting to %s...\n", addr)
+	r, err := pairing.JoinPIN(context.Background(), addr, strings.TrimSpace(line), pairing.Options{Identity: id, Once: true, DeviceName: name})
+	if errors.Is(err, pairing.ErrRefused) {
+		fmt.Println("[-] Refused: check the PIN (it changes after 3 wrong ones) and the address.")
+		return
+	}
+	if err != nil {
+		fmt.Printf("[-] %v\n", err)
+		return
+	}
+	host, _, _ := net.SplitHostPort(addr)
+	receiveAccepted(r, host, "proved by the PIN", in, outDir, workers)
 }
 
 // receiveAccepted shows the offer that came with pair_accept, inside the secure channel, and
@@ -1399,14 +1452,13 @@ func selectOneShotSender() *discovery.Peer {
 }
 
 func handleDaemon(args []string) {
-	normalizedArgs := reorderArgs(args)
 	daemonCmd := flag.NewFlagSet("daemon", flag.ExitOnError)
 	portFlag := daemonCmd.Int("port", 19999, "Port for Headless API (HTTP & WebSocket)")
 	outDirFlag := daemonCmd.String("out", "", "Default directory to save incoming files")
 	nameFlag := daemonCmd.String("name", "", "Custom device name for discovery")
 	webShareFlag := daemonCmd.Bool("web-share", false, "Open the Web Share guest portal to the LAN at startup")
 
-	_ = daemonCmd.Parse(normalizedArgs)
+	_ = daemonCmd.Parse(reorderArgs(daemonCmd, args))
 	defer startJournal()()
 
 	srv := api.NewDaemonServer(*portFlag, *outDirFlag, *nameFlag)
@@ -1497,7 +1549,6 @@ func writeControlToken(token string) (string, error) {
 }
 
 func handleShare(args []string) {
-	normalizedArgs := reorderArgs(args)
 	shareCmd := flag.NewFlagSet("share", flag.ExitOnError)
 	portFlag := shareCmd.Int("port", 19999, "Port for Web Share HTTP portal")
 	pinFlag := shareCmd.String("pin", "", "Custom 4-digit security PIN (default: random)")
@@ -1505,7 +1556,7 @@ func handleShare(args []string) {
 	outDirFlag := shareCmd.String("out", "", "Directory to save incoming uploaded files")
 	nameFlag := shareCmd.String("name", "", "Custom device name")
 
-	_ = shareCmd.Parse(normalizedArgs)
+	_ = shareCmd.Parse(reorderArgs(shareCmd, args))
 	defer startJournal()()
 	rawPaths := shareCmd.Args()
 
@@ -1586,6 +1637,7 @@ func printUsage() {
 		"  xfer recv 'medxfer://...'                      (Receive from the sender's QR code)\n" +
 		"  xfer recv [pairing_code]                       (Via 6-digit code or discovery; both confirm)\n" +
 		"  xfer recv --ip <addr>                          (Direct connect by IP)\n" +
+		"  xfer send --pin <path> | xfer recv --pin HOST  (A PIN instead of the QR code)\n" +
 		"  xfer report show|compare|list [--json]         (Transfer diagnostic reports)\n" +
 		"  xfer ctl [--script scenario.jsonl]             (Drive an embedded daemon with JSON lines)\n" +
 		"  xfer bench disk|net [...]                      (Disk and network benchmarks)\n" +
@@ -1593,6 +1645,7 @@ func printUsage() {
 		"  xfer id                                        (This device's fingerprint)\n" +
 		"  xfer trust list|forget <fingerprint>           (Trusted devices)\n" +
 		"  xfer pair --show | xfer pair <medxfer://...>   (Pair two devices by QR code)\n" +
+		"  xfer pair --pin | xfer pair --pin HOST[:PORT]  (Pair two devices by PIN)\n" +
 		"\n" +
 		"Examples on Android / Termux:\n" +
 		"  ./xfer-android-arm64 daemon                    -> Starts Web UI on http://localhost:19999\n" +
