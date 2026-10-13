@@ -402,6 +402,12 @@ func handleNode() {
 			continue
 		case text := <-inputChan:
 			text = strings.TrimSpace(text)
+			if resume := takeDiskResume(); resume != nil && pendingTrust == nil && pendingOffer == nil {
+				fmt.Println("[*] Resuming...")
+				resume()
+				printPrompt()
+				continue
+			}
 			if pendingTrust != nil {
 				req := pendingTrust
 				pendingTrust = nil
@@ -439,6 +445,12 @@ func handleNode() {
 				if err != nil {
 					fmt.Printf("[-] Invalid offer: %v\n", err)
 					activeSession.Send(session.Message{Type: "reject", TransferID: offer.TransferID})
+					printPrompt()
+					continue
+				}
+				if err := checkSpace(".", offer, sessionPeer(activeSession)); err != nil {
+					fmt.Printf("[-] Cannot receive here: %v.\n", err)
+					activeSession.Send(session.Message{Type: "reject", TransferID: offer.TransferID, Code: "no_space", Error: err.Error()})
 					printPrompt()
 					continue
 				}
@@ -1209,6 +1221,10 @@ func receiveAccepted(r pairing.Result, host, keyNote string, in *bufio.Reader, o
 	printIncoming(offer, r.Name, targetAddr)
 	fmt.Printf(" Key    : %s (%s)\n", r.Fingerprint.Short(), keyNote)
 	fmt.Println("--------------------------------------------------")
+	if err := checkSpace(outDir, offer, r.Fingerprint); err != nil {
+		fmt.Printf("[-] Cannot receive into %s: %v.\n", outDir, err)
+		return
+	}
 	fmt.Print("[?] Confirm download? [Y/n]: ")
 	ans, _ := in.ReadString('\n')
 	ans = strings.TrimSpace(strings.ToLower(ans))
@@ -1216,7 +1232,7 @@ func receiveAccepted(r pairing.Result, host, keyNote string, in *bufio.Reader, o
 		fmt.Println("[-] Download cancelled by user.")
 		return
 	}
-	pullOffer(targetAddr, outDir, workers, offer, cfg, base)
+	pullOffer(targetAddr, outDir, workers, offer, cfg, base, in)
 }
 
 // printIncoming shows what the sender offers.
@@ -1236,7 +1252,8 @@ func printIncoming(o protocol.Offer, from, addr string) {
 
 // pullOffer downloads the whole offer from targetAddr, the sender's single port: one transfer,
 // every data connection pinned to the sender's key (cfg) and joining it (bible §8.3).
-func pullOffer(targetAddr, outDir string, workers int, offer protocol.Offer, cfg securechan.Config, base transfer.ID) {
+// in is the terminal: Enter resumes a transfer paused on a full disk.
+func pullOffer(targetAddr, outDir string, workers int, offer protocol.Offer, cfg securechan.Config, base transfer.ID, in *bufio.Reader) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1254,6 +1271,18 @@ func pullOffer(targetAddr, outDir string, workers int, offer protocol.Offer, cfg
 		}
 	}()
 
+	go func() {
+		for {
+			if _, err := in.ReadString('\n'); err != nil {
+				return
+			}
+			if resume := takeDiskResume(); resume != nil {
+				fmt.Println("[*] Resuming...")
+				resume()
+			}
+		}
+	}()
+
 	fmt.Printf("\n[*] Connecting to sender at %s...\n", targetAddr)
 	_ = receiveOffer(ctx, targetAddr, outDir, workers, offer, cfg, base)
 }
@@ -1266,6 +1295,7 @@ func receiveOffer(ctx context.Context, targetAddr, outDir string, workers int, o
 	rx.SenderKey = cfg.Expected // part of each file's resume key (D2)
 	rx.Workers = workers
 	events := newCLIEvents(false, nil)
+	events.resume = rx.Resume
 	rx.Events = events
 	start := time.Now()
 	results, err := rx.Run(ctx, targetAddr, offer)

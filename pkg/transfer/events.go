@@ -50,6 +50,13 @@ type Events interface {
 	OnItem(ItemEvent)
 }
 
+// DiskFullEvents is implemented by Events that want to know the disk filled up (STO-07,
+// bible §9.7): the receiver paused itself and kept its partial files. Receiver.Resume goes on,
+// once there is room again.
+type DiskFullEvents interface {
+	OnDiskFull(err error)
+}
+
 // Stages of a chunk, measured for diag (DEV-03).
 const (
 	// Receiver.

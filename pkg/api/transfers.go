@@ -258,12 +258,14 @@ func (s *DaemonServer) takeOffer(msg session.Message) {
 		devName = "Peer"
 	}
 	sess := s.activeSession
+	saveDir, policy := s.config.DownloadDir, s.parseCollisionPolicy(s.config.CollisionPolicy)
 	s.mu.Unlock()
 
 	senderIP := ""
 	if sess != nil {
 		senderIP = sess.RemoteIP()
 	}
+	space := s.spaceFor(offer, saveDir, policy)
 	s.Broadcast(NewEvent("incoming_offer", IncomingOfferData{
 		SenderIP:   senderIP,
 		DeviceName: devName,
@@ -273,7 +275,23 @@ func (s *DaemonServer) takeOffer(msg session.Message) {
 		TotalFiles: len(offer.Items),
 		BatchID:    offer.TransferID,
 		Items:      items,
+
+		FreeBytes:   space.Free,
+		NeededBytes: space.Need,
+		EnoughSpace: space.Enough(),
 	}))
+}
+
+// spaceFor says whether offer fits in saveDir, before it is accepted (STO-07, D9).
+func (s *DaemonServer) spaceFor(offer protocol.Offer, saveDir string, policy store.Policy) transfer.Space {
+	rx := transfer.NewReceiver(saveDir, nil)
+	rx.SenderKey = s.streamChanConfig().Expected // what a resume finds is not needed again
+	rx.Policy = policy
+	space, err := rx.CheckSpace(offer)
+	if err != nil {
+		return transfer.Space{Free: -1}
+	}
+	return space
 }
 
 // refuseOffer answers an offer this daemon cannot take with reject, and tells the dashboard.
@@ -694,6 +712,25 @@ func (e *daemonEvents) OnItem(ev transfer.ItemEvent) {
 	if waiting {
 		s.broadcastPausedWaiting(items)
 	}
+}
+
+// OnDiskFull: the disk filled up and the receiver paused itself, keeping its partial files
+// (STO-07). The dashboard and the peer see the transfer paused; resume goes on once there is
+// room again.
+func (e *daemonEvents) OnDiskFull(err error) {
+	s := e.s
+	s.mu.Lock()
+	s.isPaused = true
+	sess, id, saveDir := s.activeSession, s.activeTransferID, s.config.DownloadDir
+	s.mu.Unlock()
+	if sess != nil {
+		_ = sess.Send(session.Message{Type: "pause", TransferID: id})
+	}
+	message := "The disk is full: transfer paused, the files received so far are kept. Free some space, then resume."
+	s.Broadcast(NewEvent("disk_full", map[string]string{
+		"code": "DISK_FULL", "message": message, "error": err.Error(), "save_dir": saveDir,
+	}))
+	s.Broadcast(NewEvent("transfer_paused", map[string]string{"message": message}))
 }
 
 // done is called once the transfer is over.

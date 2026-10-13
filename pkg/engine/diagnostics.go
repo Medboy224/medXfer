@@ -170,15 +170,6 @@ func BenchmarkDisk(dir string, sizeBytes int64) (*DiskBenchResult, error) {
 	}, nil
 }
 
-// QuickDiskProbe conducts an ultra-fast (~50ms) write check to detect slow storage before transfer start
-func QuickDiskProbe(dir string) (writeSpeedMBps float64, isSlow bool, err error) {
-	bench, err := BenchmarkDisk(dir, 8*1024*1024) // 8 MB burst
-	if err != nil {
-		return 0, false, err
-	}
-	return bench.WriteSpeedMBps, bench.WriteSpeedMBps < 25.0, nil
-}
-
 // RunNetworkBurstServer starts an in-memory TCP drain listener on the specified port (or 0 for dynamic port).
 // It accepts one connection, reads sizeBytes (or until EOF/timeout), closes the connection, and reports speed.
 func RunNetworkBurstServer(port int, sizeBytes int64, timeout time.Duration) (int, func() (float64, error), error) {

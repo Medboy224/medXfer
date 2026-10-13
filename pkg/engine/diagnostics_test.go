@@ -38,24 +38,6 @@ func TestBenchmarkDisk(t *testing.T) {
 		result.WriteSpeedMBps, result.ReadSpeedMBps, result.Rating)
 }
 
-func TestQuickDiskProbe(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "medxfer_probe_test_*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	speed, _, err := QuickDiskProbe(tempDir)
-	if err != nil {
-		t.Fatalf("QuickDiskProbe failed: %v", err)
-	}
-
-	if speed <= 0 {
-		t.Errorf("Expected positive speed, got %f", speed)
-	}
-	t.Logf("QuickDiskProbe Speed: %.2f MB/s", speed)
-}
-
 func TestNetworkBurst(t *testing.T) {
 	testSize := int64(8 * 1024 * 1024) // 8 MB
 

@@ -433,7 +433,11 @@ func (r *Receiver) commit() error {
 Tous chunks présents → `digest` correspond → `part.Sync()` → fermeture → **renommage** `.part` vers le nom final (sur Windows, nouvelle tentative 3×100 ms en cas de verrou antivirus) → `fsync` du dossier parent (Unix) → suppression du journal → événement « terminé ».
 
 ### 9.7 Espace disque
-Avant l'`accept` : espace libre ≥ taille totale + max(1 %, 64 Mio). Si le disque se remplit (`ENOSPC` / `ERROR_DISK_FULL`) : transfert **en pause**, fichiers `.part` conservés, événement `DISK_FULL`. Ne pas utiliser `Truncate` pour pré-allouer sur NTFS (le fichier grossit à l'écriture, comme dans le code actuel).
+Avant l'`accept` : espace libre ≥ ce qui reste à recevoir + max(1 % de la taille totale, 64 Mio). Ce qu'une reprise trouve dans ses `.part`, et une racine que la politique « ignorer » refuse, ne sont pas comptés (`Receiver.CheckSpace`). Une offre qui ne tient pas est refusée avant le premier octet : la ligne de commande l'annonce, le daemon l'indique dans `incoming_offer` (`free_bytes`, `needed_bytes`, `enough_space`) et refuse `respond_offer` (`NO_SPACE`) ; l'offre reste en attente, pour libérer de la place ou choisir un autre dossier.
+
+Si le disque se remplit (`ENOSPC`, `EDQUOT`, `ERROR_DISK_FULL`, `ERROR_HANDLE_DISK_FULL`) : transfert **en pause**, fichiers `.part` conservés, événement `DISK_FULL` (`OnDiskFull` ; `disk_full` dans le daemon). L'élément touché est mis de côté : son fichier est fermé avec son journal, puis rouvert à la reprise, si bien que seul ce qui est durable compte et le reste est redemandé. Un `.part` qui n'a même pas pu recevoir son journal est supprimé (il ne serait pas reconnu comme celui de ce transfert). La reprise est demandée par l'utilisateur (bouton Reprendre, ou Entrée dans le terminal).
+
+Aucune sonde n'écrit dans le dossier de réception (D10 du plan J4b, #36) : les étapes `disk_write` et `fsync` disent déjà si le disque limite. Ne pas utiliser `Truncate` pour pré-allouer sur NTFS (le fichier grossit à l'écriture, comme dans le code actuel).
 
 ### 9.8 Chemins sûrs et jamais de suppression (réponse à la faille n°7)
 **Le problème actuel** (`engine/disk.go`, `ensureDirectory`) : si l'émetteur envoie le chemin `a/b.txt` alors que `a` est un *fichier* existant chez le receveur, le code supprime ce fichier. Un pair malveillant peut effacer des fichiers du dossier de réception.

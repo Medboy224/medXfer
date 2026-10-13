@@ -11,11 +11,13 @@ import (
 type (
 	ConnWrapper    func(role ConnRole, c net.Conn) net.Conn
 	StorageWrapper func(f StorageFile, path string) StorageFile
+	FreeSpaceFunc  func(dir string) (int64, error)
 )
 
 var (
 	connWrapper    atomic.Pointer[ConnWrapper]
 	storageWrapper atomic.Pointer[StorageWrapper]
+	freeSpaceFunc  atomic.Pointer[FreeSpaceFunc]
 )
 
 // SetConnWrapper installs w for every connection opened from now on, process-wide, and
@@ -33,6 +35,13 @@ func SetStorageWrapper(w StorageWrapper) (restore func()) {
 	return func() { storageWrapper.Store(prev) }
 }
 
+// SetFreeSpace makes FreeSpace answer with f, process-wide: a disk nearly full without
+// filling one. It returns a function that restores the real answer.
+func SetFreeSpace(f FreeSpaceFunc) (restore func()) {
+	prev := freeSpaceFunc.Swap(&f)
+	return func() { freeSpaceFunc.Store(prev) }
+}
+
 func wrapConn(role ConnRole, c net.Conn) net.Conn {
 	if w := connWrapper.Load(); w != nil && *w != nil {
 		return (*w)(role, c)
@@ -45,4 +54,11 @@ func wrapStorage(f StorageFile, path string) StorageFile {
 		return (*w)(f, path)
 	}
 	return f
+}
+
+func wrapFreeSpace(dir string, free int64, err error) (int64, error) {
+	if f := freeSpaceFunc.Load(); f != nil && *f != nil {
+		return (*f)(dir)
+	}
+	return free, err
 }

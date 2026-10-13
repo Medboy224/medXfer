@@ -316,43 +316,26 @@ func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessa
 		s.config.CollisionPolicy = payload.CollisionPolicy
 	}
 	saveDir := s.config.DownloadDir
-	policyStr := s.config.CollisionPolicy
+	policy := s.parseCollisionPolicy(s.config.CollisionPolicy)
 	s.mu.Unlock()
 
-	// Trigger non-blocking Pre-Flight disk probe
-	go func(targetDir string) {
-		probeSpeed, isSlow, err := engine.QuickDiskProbe(targetDir)
-		if err == nil {
-			rating := "High-Speed SSD (Optimal)"
-			if isSlow {
-				rating = "Slow Storage / Potential Bottleneck"
-			}
-			s.Broadcast(NewEvent("log", map[string]string{
-				"level":   "DIAG",
-				"message": fmt.Sprintf("Pre-Flight Storage Probe on \"%s\" -> %.1f MB/s [%s]", targetDir, probeSpeed, rating),
-			}))
-			if isSlow {
-				s.Broadcast(NewEvent("log", map[string]string{
-					"level":   "WARNING",
-					"message": fmt.Sprintf("Physical write speed to \"%s\" is %.1f MB/s. Transfer rate will be limited by drive write speed.", targetDir, probeSpeed),
-				}))
-			}
-			s.Broadcast(NewEvent("transfer_preflight", TransferPreflightData{
-				TargetDir:        targetDir,
-				DiskWriteSpeed:   probeSpeed,
-				DiskRating:       rating,
-				IsDiskBottleneck: isSlow,
-				Warning: func() string {
-					if isSlow {
-						return fmt.Sprintf("Target drive writes at %.1f MB/s and may bottleneck transfer.", probeSpeed)
-					}
-					return ""
-				}(),
-			}))
+	// An offer that does not fit is refused before its first byte (STO-07, D9). It stays
+	// pending: the user may free some space, or choose another folder.
+	if err := s.spaceFor(*offer.Offer, saveDir, policy).Err(); err != nil {
+		s.mu.Lock()
+		if s.pendingOffer == nil {
+			s.pendingOffer = offer
 		}
-	}(saveDir)
+		s.mu.Unlock()
+		s.sendTo(conn, NewEvent("action_error", map[string]string{
+			"code": "NO_SPACE", "error": fmt.Sprintf("cannot receive into %s: %v", saveDir, err),
+		}, req.ID))
+		return
+	}
 
-	s.receive(sess, offer, saveDir, s.parseCollisionPolicy(policyStr), req.ID)
+	// No disk probe: the stages of each chunk (disk_write, fsync) tell whether the disk
+	// limits the transfer, without writing anything more (D10, #36).
+	s.receive(sess, offer, saveDir, policy, req.ID)
 }
 
 func (s *DaemonServer) handlePause(conn *websocket.Conn, req RequestMessage) {

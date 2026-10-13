@@ -229,7 +229,10 @@ func (f *File) ensureJournal() error {
 		return err
 	}
 	if _, err := j.WriteAt(f.header(), 0); err != nil {
+		// A journal without its header would not read as this transfer's: it goes, as this
+		// transfer just made it (a full disk, STO-07).
 		j.Close()
+		_ = f.root.Remove(f.osName(JournalSuffix))
 		return err
 	}
 	f.journal, f.journalEnd = j, headerLen
@@ -466,6 +469,19 @@ func (f *File) Close() error {
 	}
 	if cerr := f.closeFiles(); err == nil {
 		err = cerr
+	}
+	return err
+}
+
+// Suspend closes the file when the disk is full (STO-07): what is durable stays, to resume
+// once there is room. A file that could not get its journal is removed: its .part alone would
+// not read as this transfer's, and this transfer made it in this session (STO-09).
+func (f *File) Suspend() error {
+	err := f.Close()
+	if f.journal == nil {
+		if rerr := f.root.Remove(f.osName(PartSuffix)); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+			err = errors.Join(err, rerr)
+		}
 	}
 	return err
 }

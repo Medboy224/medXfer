@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/Medboy224/medXfer/pkg/diag"
+	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/transfer"
 	"github.com/Medboy224/medXfer/pkg/ui"
@@ -22,6 +23,34 @@ func offerSummary(o protocol.Offer) string {
 	return fmt.Sprintf("'%s' (%d files, %.2f MB)", o.Root, len(o.Items), float64(o.TotalBytes)/(1<<20))
 }
 
+// checkSpace refuses an offer that does not fit in outDir, before its first byte (STO-07,
+// decision D9 of the J4b plan). What a resume finds there is not needed again.
+func checkSpace(outDir string, offer protocol.Offer, sender identity.Fingerprint) error {
+	rx := transfer.NewReceiver(outDir, nil)
+	rx.SenderKey = sender
+	space, err := rx.CheckSpace(offer)
+	if err != nil {
+		return err
+	}
+	return space.Err()
+}
+
+// diskResume holds the resume of a transfer paused on a full disk, until the user presses
+// Enter (STO-07).
+var diskResume struct {
+	mu sync.Mutex
+	f  func()
+}
+
+// takeDiskResume returns the resume waiting for the user, once; nil if none.
+func takeDiskResume() func() {
+	diskResume.mu.Lock()
+	defer diskResume.mu.Unlock()
+	f := diskResume.f
+	diskResume.f = nil
+	return f
+}
+
 // cliEvents shows a transfer in the terminal: one progress bar for the whole offer, and the
 // items that fail or are skipped.
 type cliEvents struct {
@@ -31,6 +60,7 @@ type cliEvents struct {
 	bar      *ui.ProgressBar
 	sender   bool
 	cancel   context.CancelFunc // sender: called once the receiver is done
+	resume   func()             // receiver: goes on after a full disk
 	finished bool
 }
 
@@ -70,6 +100,18 @@ func (e *cliEvents) OnItem(ev transfer.ItemEvent) {
 		fmt.Printf("\n[-] '%s' failed: %v\n", ev.Path, ev.Err)
 	case transfer.ItemSkipped:
 		fmt.Printf("\n[*] '%s' skipped.\n", ev.Path)
+	}
+}
+
+// OnDiskFull: the receiver paused itself on a full disk, keeping its partial files (STO-07).
+// The user frees some space and presses Enter.
+func (e *cliEvents) OnDiskFull(err error) {
+	fmt.Printf("\n[!] The disk is full (%v): transfer paused, what was received is kept.\n", err)
+	fmt.Println("[!] Free some space, then press Enter to resume. Ctrl+C stops; the transfer resumes later where it stopped.")
+	if e.resume != nil {
+		diskResume.mu.Lock()
+		diskResume.f = e.resume
+		diskResume.mu.Unlock()
 	}
 }
 
