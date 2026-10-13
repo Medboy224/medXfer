@@ -27,7 +27,7 @@ func (p *ProgressBar) Render(current, total int64, speedMBps float64) {
 	var timeStr string
 	if current >= total {
 		timeStr = fmt.Sprintf("%.1fs", elapsed)
-	} else if speedMBps > 0 {
+	} else if speedMBps >= 0.05 { // below, the speed shows as 0.0 (a pause): no time to tell
 		remMB := float64(total-current) / (1024 * 1024)
 		etaSec := remMB / speedMBps
 		timeStr = fmt.Sprintf("%.0fs", etaSec)
