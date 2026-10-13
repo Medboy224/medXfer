@@ -356,7 +356,7 @@ Messages `CONTROL` (champ `type`) : `hello`, `pair_secret`, `pair_pake`, `pair_c
 7. **Clôture.** Quand tous les éléments sont terminés, le receveur envoie `DONE{status}` sur ses connexions de données, puis les ferme. L'émetteur s'arrête sur ce signal et non sur le compte des octets servis : après une reprise, un saut ou un fichier déjà présent chez le receveur, il sert moins que le total (#33). Une annulation n'envoie pas `DONE`.
 
 **Pourquoi un hash par chunk alors que TLS authentifie déjà ?**
-(a) Il permet de vérifier la reprise sur ce qui est *déjà sur disque*. (b) Il détecte un fichier source modifié pendant l'envoi ou une erreur de lecture locale, que TLS ne voit pas. (c) Il reste valable si le transport est remplacé un jour (règle R2). Coût : 32 octets par chunk de 4 Mio.
+(a) Il permet de vérifier la reprise sur ce qui est *déjà sur disque*. (b) Il détecte un fichier source modifié pendant l'envoi ou une erreur de lecture locale, que TLS ne voit pas. (c) Il reste valable si le transport est remplacé un jour (règle R2). Coût : 32 octets par chunk (2 Mio par défaut).
 
 **Fichier source modifié pendant l'envoi :** l'émetteur note taille et date de modification dans l'offre, les revérifie à l'ouverture du fichier, avant et après le calcul du `DIGEST` et après une erreur de lecture, et sinon répond `CHUNK_ERR SOURCE_CHANGED`. Le transfert de cet élément échoue proprement.
 
@@ -370,7 +370,7 @@ Messages `CONTROL` (champ `type`) : `hello`, `pair_secret`, `pair_pake`, `pair_c
 | Id | Exigence | Statut |
 |---|---|---|
 | `XFER-01` | Toute lecture réseau est bornée par la longueur annoncée dans l'en-tête et par les limites du chapitre 12. | ✅ |
-| `XFER-02` | La taille de chunk est fixée dans `accept` et ne change plus pendant le transfert. Défaut 4 Mio ; bornes 256 Kio à 16 Mio. | 📏 |
+| `XFER-02` | La taille de chunk est fixée dans `accept` et ne change plus pendant le transfert. Défaut 2 Mio, mesuré par `bench matrix` entre le PC et le téléphone (D8 du plan J4b, `bench-results/`) ; bornes 256 Kio à 8 Mio. | 📏 |
 | `XFER-03` | Le hash de chunk est SHA-256. | ✅ (gate G6 fermée) |
 | `XFER-04` | Le receveur NE DOIT PAS écrire un chunk dont le hash ne correspond pas ; il le redemande (3 essais maximum, sur une autre connexion si possible). | ✅ |
 | `XFER-05` | Une connexion de données coupée est rétablie avec un délai croissant (50 ms jusqu'à 1 s, 8 tentatives). | ✅ (déjà dans le code) |
@@ -692,7 +692,7 @@ Valeurs par défaut ; toutes sont des paramètres (règle R4).
 ### 14.3 Procédure de benchmark (vitesse, 📏)
 1. Mesurer le lien : `iperf3 -P 4 -t 30` entre les deux appareils.
 2. Générer un fichier de 10 Gio de données aléatoires incompressibles sur un stockage non limitant (ou noter que le stockage plafonne).
-3. Transférer avec TLS actif, 4 flux, chunk de 4 Mio.
+3. Transférer avec TLS actif et les valeurs par défaut (4 flux, chunk de 2 Mio).
 4. Résultat = débit utile / débit iperf3. Cible ≥ 80 %. Consigner CPU et température.
 5. Répéter sur la matrice : PC↔PC Ethernet, PC↔Android Wi-Fi 5 GHz, Android↔Android, et un téléphone ancien sans accélération AES (valide `CHAN-08`).
 6. Mesurer aussi 100 000 fichiers de 4 Kio (valide la décision sur `StreamTar`).
@@ -815,7 +815,7 @@ En J4a, `xfer bench ladder` mesure R1 à R4 entre deux appareils : le côté `--
 
 `bench matrix` balaie flux ∈ {1, 2, 4, 8} et chunk ∈ {1, 2, 4, 8} Mio, et propose comme valeurs par défaut la combinaison dont le débit est à moins de 5 % du meilleur avec la plus faible mémoire (`N × 2 × chunk`). Les résultats sont enregistrés dans `bench-results/*.json` pour comparer les appareils.
 
-`xfer bench matrix --peer` mesure une marche par combinaison (`--step`, R6 par défaut) face au même serveur que `bench ladder --listen`. Avec `--repeat N`, chaque case retient la médiane de N passages. Le résultat indique la meilleure case et la case recommandée, et dit si les valeurs actuelles (4 × 4 Mio) sont à garder (D8 du plan J4b).
+`xfer bench matrix --peer` mesure une marche par combinaison (`--step`, R6 par défaut) face au même serveur que `bench ladder --listen`. Avec `--repeat N`, chaque case retient la médiane de N passages, et les passages alternent entre les cases, un tour sur deux en ordre inverse : une baisse passagère du lien touche ainsi toutes les cases, au lieu de tous les passages d'une seule. Le résultat indique la meilleure case et la case recommandée, et dit si les valeurs actuelles (4 × 2 Mio depuis D8 du plan J4b) sont à garder.
 
 ### 17.5 Injection de fautes
 | Id | Exigence | Statut |

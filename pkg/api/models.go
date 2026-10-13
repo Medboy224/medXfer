@@ -8,6 +8,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Medboy224/medXfer/pkg/protocol"
+	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
 // RequestMessage represents an incoming command from Flutter to the Daemon
@@ -84,8 +87,8 @@ func GetConfigFilePath() string {
 func LoadConfig(explicitOutDir, explicitDeviceName string) Config {
 	cfg := Config{
 		CollisionPolicy: "auto_rename",
-		Workers:         4,
-		ChunkSizeMB:     4,
+		Workers:         transfer.DefaultWorkers,
+		ChunkSizeMB:     int(protocol.DefaultChunkSize >> 20),
 	}
 
 	// 1. Read saved config from disk if available

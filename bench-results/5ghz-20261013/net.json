@@ -1,0 +1,12 @@
+{
+  "schema_version": 2,
+  "size_bytes": 67108864,
+  "rtt_min_ms": 0.904,
+  "rtt_avg_ms": 2.732,
+  "rtt_p95_ms": 4.316,
+  "upload_mbps": 29.16,
+  "download_mbps": 43.66,
+  "link_type": "Wi-Fi 5 GHz (High Quality)",
+  "rating": "Very Good (Fast Wi-Fi)",
+  "encrypted": false
+}

@@ -1,0 +1,319 @@
+{
+  "schema_version": 2,
+  "step": "R6",
+  "layer": "whole transfer: offer, digest, rename",
+  "bytes": 268435456,
+  "repeat": 3,
+  "tolerance": 0.05,
+  "cells": [
+    {
+      "streams": 1,
+      "chunk_size": 1048576,
+      "memory_bytes": 2097152,
+      "mbps": 38,
+      "runs_mbps": [
+        36.53,
+        38,
+        39.49
+      ],
+      "spread": 0.08,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 1048576,
+      "memory_bytes": 4194304,
+      "mbps": 39.36,
+      "runs_mbps": [
+        40.53,
+        39.36,
+        38.42
+      ],
+      "spread": 0.05,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 1048576,
+      "memory_bytes": 8388608,
+      "mbps": 40.3,
+      "runs_mbps": [
+        41.17,
+        40.14,
+        40.3
+      ],
+      "spread": 0.03,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 1048576,
+      "memory_bytes": 16777216,
+      "mbps": 39.69,
+      "runs_mbps": [
+        39.69,
+        40.22,
+        39.44
+      ],
+      "spread": 0.02,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 1,
+      "chunk_size": 2097152,
+      "memory_bytes": 4194304,
+      "mbps": 41.01,
+      "runs_mbps": [
+        41.56,
+        40.8,
+        41.01
+      ],
+      "spread": 0.02,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 2097152,
+      "memory_bytes": 8388608,
+      "mbps": 39.55,
+      "runs_mbps": [
+        39.48,
+        40.14,
+        39.55
+      ],
+      "spread": 0.02,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 2097152,
+      "memory_bytes": 16777216,
+      "mbps": 40.65,
+      "runs_mbps": [
+        40.65,
+        40.01,
+        41.18
+      ],
+      "spread": 0.03,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 2097152,
+      "memory_bytes": 33554432,
+      "mbps": 38.92,
+      "runs_mbps": [
+        38.29,
+        38.92,
+        39.43
+      ],
+      "spread": 0.03,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 1,
+      "chunk_size": 4194304,
+      "memory_bytes": 8388608,
+      "mbps": 43.42,
+      "runs_mbps": [
+        43.42,
+        43.42,
+        38.51
+      ],
+      "spread": 0.11,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 4194304,
+      "memory_bytes": 16777216,
+      "mbps": 39,
+      "runs_mbps": [
+        25.56,
+        40.89,
+        39
+      ],
+      "spread": 0.39,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 4194304,
+      "memory_bytes": 33554432,
+      "mbps": 40.29,
+      "runs_mbps": [
+        40.29,
+        40.94,
+        40.18
+      ],
+      "spread": 0.02,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 4194304,
+      "memory_bytes": 67108864,
+      "mbps": 37.42,
+      "runs_mbps": [
+        40.27,
+        37.42,
+        36.83
+      ],
+      "spread": 0.09,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 1,
+      "chunk_size": 8388608,
+      "memory_bytes": 16777216,
+      "mbps": 40.67,
+      "runs_mbps": [
+        40.67,
+        41.87,
+        40.02
+      ],
+      "spread": 0.05,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 8388608,
+      "memory_bytes": 33554432,
+      "mbps": 38.93,
+      "runs_mbps": [
+        38.93,
+        38.22,
+        40.35
+      ],
+      "spread": 0.05,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 8388608,
+      "memory_bytes": 67108864,
+      "mbps": 39.88,
+      "runs_mbps": [
+        37.55,
+        39.88,
+        40.76
+      ],
+      "spread": 0.08,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 8388608,
+      "memory_bytes": 134217728,
+      "mbps": 40.45,
+      "runs_mbps": [
+        40.69,
+        40.37,
+        40.45
+      ],
+      "spread": 0.01,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    }
+  ],
+  "best": {
+    "streams": 1,
+    "chunk_size": 4194304,
+    "memory_bytes": 8388608,
+    "mbps": 43.42,
+    "runs_mbps": [
+      43.42,
+      43.42,
+      38.51
+    ],
+    "spread": 0.11,
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "recommended": {
+    "streams": 1,
+    "chunk_size": 4194304,
+    "memory_bytes": 8388608,
+    "mbps": 43.42,
+    "runs_mbps": [
+      43.42,
+      43.42,
+      38.51
+    ],
+    "spread": 0.11,
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "current": {
+    "streams": 4,
+    "chunk_size": 4194304,
+    "memory_bytes": 33554432,
+    "mbps": 40.29,
+    "runs_mbps": [
+      40.29,
+      40.94,
+      40.18
+    ],
+    "spread": 0.02,
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "keep_defaults": false,
+  "max_spread": 0.39,
+  "reliable": false,
+  "host": "Naruto",
+  "os": "windows/amd64"
+}

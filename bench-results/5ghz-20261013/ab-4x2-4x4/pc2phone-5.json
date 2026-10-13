@@ -1,0 +1,85 @@
+{
+  "schema_version": 2,
+  "step": "R6",
+  "layer": "whole transfer: offer, digest, rename",
+  "bytes": 268435456,
+  "repeat": 1,
+  "tolerance": 0.05,
+  "cells": [
+    {
+      "streams": 4,
+      "chunk_size": 2097152,
+      "memory_bytes": 16777216,
+      "mbps": 52.64,
+      "runs_mbps": [
+        52.64
+      ],
+      "spread": 0,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 4194304,
+      "memory_bytes": 33554432,
+      "mbps": 45.5,
+      "runs_mbps": [
+        45.5
+      ],
+      "spread": 0,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    }
+  ],
+  "best": {
+    "streams": 4,
+    "chunk_size": 2097152,
+    "memory_bytes": 16777216,
+    "mbps": 52.64,
+    "runs_mbps": [
+      52.64
+    ],
+    "spread": 0,
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "recommended": {
+    "streams": 4,
+    "chunk_size": 2097152,
+    "memory_bytes": 16777216,
+    "mbps": 52.64,
+    "runs_mbps": [
+      52.64
+    ],
+    "spread": 0,
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "current": {
+    "streams": 4,
+    "chunk_size": 4194304,
+    "memory_bytes": 33554432,
+    "mbps": 45.5,
+    "runs_mbps": [
+      45.5
+    ],
+    "spread": 0,
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "keep_defaults": false,
+  "max_spread": 0,
+  "reliable": false,
+  "host": "localhost",
+  "os": "android/arm64"
+}
