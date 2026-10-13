@@ -557,15 +557,18 @@ func (ru *run) open(st *item) error {
 		ru.endItem(st.it.Item, ItemDone, nil) // ItemDone does not take st.mu
 		return nil
 	}
+	// An item set aside on a full disk still counts what it received, until now: it counts
+	// again only what is durable.
+	var durable int64
 	if place.Resume { // its own partial file, which exists already
 		f, err := store.Open(ru.root, place.Name, ru.params(st, place.Overwrite))
 		if err != nil {
 			return err
 		}
 		st.f = f
-		ru.bytes.Add(f.Resumed())
-		st.counted.Add(f.Resumed())
+		durable = f.Resumed()
 	}
+	ru.bytes.Add(durable - st.counted.Swap(durable))
 	return nil
 }
 
@@ -675,7 +678,8 @@ func (ru *run) writeFailed(t task, err error) {
 // diskFull pauses the transfer when the disk is full (STO-07, bible §9.7) instead of failing
 // it. Item i is set aside: its file is closed with its journal, and opened again once the
 // user resumes, so that only what is durable counts; every other chunk is asked again. The
-// other items keep their files: a write of theirs that fails sets them aside too.
+// progress keeps what it received until then (open sets it right). The other items keep
+// their files: a write of theirs that fails sets them aside too.
 func (ru *run) diskFull(i int, gen uint32, err error) {
 	st := ru.items[i]
 	r := ru.r
@@ -702,7 +706,6 @@ func (ru *run) diskFull(i int, gen uint32, err error) {
 		for k := range st.fresh {
 			st.fresh[k] = false
 		}
-		ru.bytes.Add(-st.counted.Swap(0))
 	}
 	st.mu.Unlock()
 	if first {

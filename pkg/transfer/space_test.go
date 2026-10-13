@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Medboy224/medXfer/pkg/store"
 )
@@ -52,6 +53,15 @@ func TestCheckSpaceSkippedFolderNeedsNothing(t *testing.T) {
 	r.Policy = store.PolicySkip
 	if s, err := r.CheckSpace(offer); err != nil || s.Need != 0 || !s.Enough() {
 		t.Fatalf("skipped folder: %+v, %v; want nothing needed", s, err)
+	}
+}
+
+// Bytes counted again from less (a file started over, a full disk) never make a negative speed.
+func TestSpeedIsNeverNegative(t *testing.T) {
+	m := newSpeedMeter()
+	m.last, m.at = 100<<20, m.at.Add(-time.Second) // 100 MiB counted, no speed yet
+	if s := m.update(10 << 20); s < 0 {
+		t.Fatalf("speed %.1f MB/s after the count went back", s)
 	}
 }
 
