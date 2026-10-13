@@ -164,3 +164,41 @@ func TestFinalizeSyncFailureKeepsState(t *testing.T) {
 		t.Fatal("a failed sync gave the final name or lost the journal")
 	}
 }
+
+// STO-10, D5, D11: the root of a transfer is base if free; a folder of the user is stepped
+// over ("overwrite" too); "skip" refuses; a folder whose marker holds the key is resumed.
+func TestResolveRoot(t *testing.T) {
+	root, dir := openRoot(t)
+	key := RootKey([32]byte{1}, "Photos", 3, 100)
+	if got, _ := ResolveRoot(root, "Photos", key, PolicyAutoRename); got != (RootPlace{Name: "Photos"}) {
+		t.Fatalf("free: %+v", got)
+	}
+	write(t, dir, "Photos/mine.jpg", "user's")
+	for _, policy := range []Policy{PolicyAutoRename, PolicyOverwrite} {
+		if got, _ := ResolveRoot(root, "Photos", key, policy); got != (RootPlace{Name: "Photos (1)"}) {
+			t.Fatalf("policy %d, taken: %+v", policy, got)
+		}
+	}
+	if got, _ := ResolveRoot(root, "Photos", key, PolicySkip); got != (RootPlace{Name: "Photos", Skip: true}) {
+		t.Fatalf("skip: %+v", got)
+	}
+	if err := MarkRoot(root, "Photos (1)", key); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ResolveRoot(root, "Photos", key, PolicyAutoRename); got != (RootPlace{Name: "Photos (1)", Resume: true}) {
+		t.Fatalf("own root: %+v", got)
+	}
+	other := RootKey([32]byte{2}, "Photos", 3, 100)
+	if got, _ := ResolveRoot(root, "Photos", other, PolicyAutoRename); got.Name != "Photos (2)" || got.Resume {
+		t.Fatalf("another transfer's root: %+v", got)
+	}
+	if err := UnmarkRoot(root, "Photos (1)", other); err != nil || !exists(dir, "Photos (1)/"+MarkerName) {
+		t.Fatal("the marker of another transfer was removed")
+	}
+	if err := UnmarkRoot(root, "Photos (1)", key); err != nil || exists(dir, "Photos (1)/"+MarkerName) {
+		t.Fatalf("own marker not removed: %v", err)
+	}
+	if got := RootKey([32]byte{1}, "Photos", 4, 100); got == key {
+		t.Fatal("another number of items gives the same root key")
+	}
+}

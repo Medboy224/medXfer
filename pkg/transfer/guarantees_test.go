@@ -220,64 +220,6 @@ func TestChangedSourceStartsOver(t *testing.T) {
 	}
 }
 
-// With the skip policy, a file already received whole is not fetched again: the sender
-// serves nothing and no copy is made.
-func TestCompleteFileIsNotFetchedAgain(t *testing.T) {
-	offer, paths, contents := tree(t, []int{3*testChunk + 7})
-	p := newOfferPair(t)
-	p.serve(t, offer, paths)
-	out := t.TempDir()
-	offer.TransferID = p.id.String()
-	runOffer(t, p.receiver(out), p.addr, offer)
-
-	q := newOfferPair(t)
-	again := q.serve(t, offer, paths)
-	offer.TransferID = q.id.String()
-	r := NewReceiver(out, JoinFunc(securechan.Config{Identity: q.peer, Expected: q.device.Fingerprint}, q.id))
-	r.Policy = store.PolicySkip
-	if res := runOffer(t, r, q.addr, offer); res[0].State != ItemDone {
-		t.Fatalf("second run: %+v", res)
-	}
-	if served := again.Progress().Bytes; served != 0 {
-		t.Fatalf("the sender served %d bytes for a file already received", served)
-	}
-	checkFiles(t, out, offer, contents, nil)
-	if entries, _ := os.ReadDir(filepath.Dir(filepath.Join(out, filepath.FromSlash(offer.Items[0].Path)))); len(entries) != 1 {
-		t.Fatalf("a copy was made: %v", entries)
-	}
-}
-
-// A file of the user under the offered name is never touched: the default policy saves the
-// received file as "name (1).ext".
-func TestNameTakenIsRenamed(t *testing.T) {
-	offer, paths, contents := tree(t, []int{testChunk + 3})
-	out := t.TempDir()
-	mine := filepath.Join(out, filepath.FromSlash(offer.Items[0].Path))
-	if err := os.MkdirAll(filepath.Dir(mine), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(mine, []byte("the user's own file"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	p := newOfferPair(t)
-	p.serve(t, offer, paths)
-	offer.TransferID = p.id.String()
-	r := p.receiver(out)
-	r.Policy = store.PolicyAutoRename
-	if res := runOffer(t, r, p.addr, offer); res[0].State != ItemDone {
-		t.Fatalf("run: %+v", res)
-	}
-	if got, _ := os.ReadFile(mine); string(got) != "the user's own file" {
-		t.Fatalf("the user's file was changed: %q", got)
-	}
-	ext := filepath.Ext(mine)
-	renamed := mine[:len(mine)-len(ext)] + " (1)" + ext
-	got, err := os.ReadFile(renamed)
-	if err != nil || !bytes.Equal(got, contents[0]) {
-		t.Fatalf("received file not saved as %s (%v)", filepath.Base(renamed), err)
-	}
-}
-
 // #75: nothing is written for an item before its first verified chunk. A sender that never
 // answers (then a cancel), or one whose only chunk never matches its SHA-256, leaves the
 // receive folder empty: no folder, no file, no state.
@@ -315,42 +257,6 @@ func TestNothingIsWrittenWithoutVerifiedData(t *testing.T) {
 			t.Fatalf("the receive folder is not empty: %v", entries)
 		}
 	})
-}
-
-// #75: with the overwrite policy, the user's file under the offered name stays whole until a
-// verified chunk replaces it; a transfer that brings nothing leaves it as it was.
-func TestOverwriteKeepsTheFileUntilDataArrives(t *testing.T) {
-	offer, paths, contents := tree(t, []int{2*testChunk + 5})
-	out := t.TempDir()
-	mine := filepath.Join(out, filepath.FromSlash(offer.Items[0].Path))
-	if err := os.MkdirAll(filepath.Dir(mine), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	original := []byte("the user's own file, to be replaced only by real data")
-	if err := os.WriteFile(mine, original, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	silent := newOfferPair(t)
-	offer.TransferID = silent.id.String()
-	r := silent.receiver(out)
-	r.Policy = store.PolicyOverwrite
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	_, _ = r.Run(ctx, silent.addr, offer)
-	cancel()
-	if got, _ := os.ReadFile(mine); !bytes.Equal(got, original) {
-		t.Fatalf("the user's file was changed by a transfer that brought nothing: %q", got)
-	}
-
-	p := newOfferPair(t)
-	p.serve(t, offer, paths)
-	offer.TransferID = p.id.String()
-	r = p.receiver(out)
-	r.Policy = store.PolicyOverwrite
-	if res := runOffer(t, r, p.addr, offer); res[0].State != ItemDone || res[0].SavedPath != mine {
-		t.Fatalf("run: %+v", res)
-	}
-	checkFiles(t, out, offer, contents, nil)
 }
 
 // An offer of empty files only: each one is confirmed by the sender (chunk 0, of 0 bytes)

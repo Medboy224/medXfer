@@ -118,6 +118,7 @@ func TestOfferValidate(t *testing.T) {
 		"same path":            func(o *Offer) { o.Items[1].Path = o.Items[0].Path },
 		"same path, backslash": func(o *Offer) { o.Items[0].Path = "dir/b.txt"; o.Items[1].Path = `dir\b.txt` },
 		"file is a folder":     func(o *Offer) { o.Items[0].Path = "dir" },
+		"same path, case":      func(o *Offer) { o.Items[0].Path = "DIR/B.TXT" }, // STO-14
 		"chunk high":           func(o *Offer) { o.ChunkSize = MaxChunkSize + 1 },
 		"items": func(o *Offer) { // LIM-05: 100 001 items
 			o.Items = make([]OfferItem, MaxOfferItems+1)

@@ -394,7 +394,7 @@ Messages `CONTROL` (champ `type`) : `hello`, `pair_secret`, `pair_pake`, `pair_c
 <dossier>/<racine>/fichier.ext.part         données (octets écrits à leur offset)
 <dossier>/<racine>/fichier.ext.part.state   journal de progression
 ```
-Le fichier ne porte son nom final qu'une fois **complet et vérifié** (renommage). Aujourd'hui, un fichier partiel apparaît déjà sous son vrai nom.
+Le fichier ne porte son nom final qu'une fois **complet et vérifié** (renommage). Depuis J4b, le journal n'est créé qu'au premier commit : un fichier reçu d'une traite n'en a jamais. Un transfert de plusieurs fichiers est reçu dans sa propre racine (`STO-10`), qui porte un marqueur `.medxfer-transfer` (la clé du transfert) tant qu'il n'est pas complet : une reprise y retrouve son dossier (plan J4b, D11).
 
 ### 9.3 Format du journal
 - **En-tête :** magic `MXST`, version (1 octet), clé de reprise (32 octets), taille du fichier (u64), taille de chunk (u32), nombre de chunks (u32), CRC32 de l'en-tête.
