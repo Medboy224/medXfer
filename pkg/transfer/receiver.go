@@ -34,6 +34,38 @@ const (
 
 var ErrTransferFailed = errors.New("transfer: no data connection could be kept to the sender")
 
+// Small files (WP-4.11, bench-results/README.md). The files received in one go in the
+// transfer's own folder are made durable together (store.Batch): the batch is flushed at 256
+// files or 64 MiB, 2 s after its first file, or once nothing else is left to receive
+// (parameters, rule R4). An offer of small files (16 items or more, 1 MiB at most on average)
+// uses SmallFileWorkers data connections, unless Receiver.Workers is set: more files in
+// flight hide the cost of each.
+const (
+	batchFiles       = 256
+	batchBytes       = store.DefaultCommitBytes
+	batchWait        = store.DefaultCommitInterval
+	SmallFileWorkers = MaxWorkers
+)
+
+// smallFiles reports whether offer is mostly small files.
+func smallFiles(o protocol.Offer) bool {
+	return len(o.Items) >= 16 && o.TotalBytes <= int64(len(o.Items))<<20
+}
+
+// chooseWorkers is the number of data connections for offer: n, within 1 to MaxWorkers, or
+// for n = 0, DefaultWorkers, or SmallFileWorkers for an offer of small files.
+func chooseWorkers(n int, offer protocol.Offer) int {
+	switch {
+	case n < 1 && smallFiles(offer):
+		return SmallFileWorkers
+	case n < 1:
+		return DefaultWorkers
+	case n > MaxWorkers:
+		return MaxWorkers
+	}
+	return n
+}
+
 // dialDelays are the waits between attempts to reach the sender: 50 ms up to 1 s, 8 attempts
 // in all (XFER-05).
 var dialDelays = []time.Duration{
@@ -47,7 +79,9 @@ var dialDelays = []time.Duration{
 // once and memory stays bounded by Workers × 2 chunks. A chunk is written only once its
 // SHA-256 matches the one the sender computed.
 type Receiver struct {
-	OutDir  string
+	OutDir string
+	// Workers is the number of data connections, 1 to MaxWorkers; 0 chooses: DefaultWorkers,
+	// or SmallFileWorkers for an offer of small files.
 	Workers int
 	Policy  store.Policy
 	// SenderKey is the sender's key, part of the resume key of every file (D2): a partial file
@@ -76,7 +110,7 @@ type Receiver struct {
 
 // NewReceiver returns a receiver that saves into outDir and secures its connections with join.
 func NewReceiver(outDir string, join func(context.Context, net.Conn) (net.Conn, error)) *Receiver {
-	r := &Receiver{OutDir: outDir, Workers: DefaultWorkers, Join: join, pausedItems: map[int]bool{}}
+	r := &Receiver{OutDir: outDir, Join: join, pausedItems: map[int]bool{}}
 	r.cond = sync.NewCond(&r.mu)
 	return r
 }
@@ -131,13 +165,7 @@ func (r *Receiver) Run(ctx context.Context, addr string, offer protocol.Offer) (
 	if err := offer.Validate(); err != nil {
 		return nil, err
 	}
-	workers := r.Workers
-	if workers < 1 {
-		workers = DefaultWorkers
-	}
-	if workers > MaxWorkers {
-		workers = MaxWorkers
-	}
+	workers := chooseWorkers(r.Workers, offer)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	run := newRun(r, offer)
@@ -161,6 +189,9 @@ func (r *Receiver) Run(ctx context.Context, addr string, offer protocol.Offer) (
 			for i := range run.items {
 				run.endItem(i, ItemSkipped, fmt.Errorf("the folder %q is already there", place.Name))
 			}
+		}
+		if run.inRoot {
+			run.batch = store.NewBatch(root) // nil where the system has no syncfs
 		}
 	}
 	r.mu.Lock()
@@ -200,6 +231,7 @@ func (r *Receiver) Run(ctx context.Context, addr string, offer protocol.Offer) (
 	}
 	cancel()
 	<-progressDone
+	run.flushBatch(true) // the complete files get their names, even on a cancel
 	run.closeAll()
 	run.emitProgress(0)
 	if run.inRoot && run.allEnded() && !run.partial() {
@@ -246,6 +278,12 @@ type run struct {
 	rootKey  store.Key
 	markOnce sync.Once
 	markErr  error
+
+	// The batch of files received in one go (WP-4.11). Lock order: st.mu, batchMu, r.mu.
+	batchMu    sync.Mutex
+	batch      *store.Batch // nil: each file is finalized alone
+	batched    []int        // the items in batch
+	batchTimer *time.Timer
 }
 
 // rootName is a name the offer proposes for its root folder, if it is one safe component;
@@ -852,6 +890,12 @@ func (ru *run) finish(i int) {
 		st.mu.Unlock()
 		return
 	}
+	if st.f != nil && st.f.Batchable() && ru.addToBatch(i, st.f) {
+		st.closed = true // sealed: the batch gives it its name
+		st.mu.Unlock()
+		ru.flushBatch(false)
+		return
+	}
 	var err error
 	if st.f != nil {
 		err = st.f.Finalize()
@@ -871,6 +915,58 @@ func (ru *run) finish(i int) {
 	ru.endItem(i, ItemDone, nil)
 }
 
+// addToBatch seals f, complete, into the batch, if there is one. Called with st.mu held.
+func (ru *run) addToBatch(i int, f *store.File) bool {
+	ru.batchMu.Lock()
+	defer ru.batchMu.Unlock()
+	if ru.batch == nil || ru.batch.Add(f) != nil {
+		return false
+	}
+	ru.batched = append(ru.batched, i)
+	if len(ru.batched) == 1 {
+		ru.batchTimer = time.AfterFunc(batchWait, func() { ru.flushBatch(true) })
+	}
+	return true
+}
+
+// flushBatch makes the files of the batch durable and gives them their names, if it is due:
+// force, 256 files, 64 MiB, or nothing else left to receive. Their items then end.
+func (ru *run) flushBatch(force bool) {
+	ru.batchMu.Lock()
+	if ru.batch == nil || ru.batch.Len() == 0 {
+		ru.batchMu.Unlock()
+		return
+	}
+	if !force && ru.batch.Len() < batchFiles && ru.batch.Bytes() < batchBytes && !ru.onlyBatchedLeft() {
+		ru.batchMu.Unlock()
+		return
+	}
+	b, items := ru.batch, ru.batched
+	ru.batch, ru.batched = store.NewBatch(ru.root), nil
+	if ru.batchTimer != nil {
+		ru.batchTimer.Stop()
+		ru.batchTimer = nil
+	}
+	ru.batchMu.Unlock()
+	for k, err := range b.Flush() {
+		i := items[k] // sealed and closed by the flush: no item lock to take (markEnded)
+		if err != nil {
+			ru.markEnded(i, ItemFailed, fmt.Errorf("%q: %w", ru.items[i].it.Path, err))
+		} else {
+			ru.markEnded(i, ItemDone, nil)
+		}
+	}
+}
+
+// onlyBatchedLeft reports whether every item not ended is in the batch. Called with batchMu
+// held.
+func (ru *run) onlyBatchedLeft() bool {
+	ru.r.mu.Lock()
+	left := len(ru.items) - ru.ended
+	ru.r.mu.Unlock()
+	return left <= len(ru.batched)
+}
+
 // endItem records how an item ended (once) and wakes the scheduler. A skipped or failed
 // item's file is closed with its state: it can be resumed later.
 func (ru *run) endItem(i int, state ItemState, err error) {
@@ -886,6 +982,14 @@ func (ru *run) endItem(i int, state ItemState, err error) {
 		st.closed = true
 		st.mu.Unlock()
 	}
+	ru.markEnded(i, state, err)
+}
+
+// markEnded records how item i ended (once), wakes the scheduler and tells the events; then the
+// batch is flushed if only its files are left. It takes no item lock: a flush ends its items
+// with it, while open may hold the lock of another item.
+func (ru *run) markEnded(i int, state ItemState, err error) {
+	st := ru.items[i]
 	r := ru.r
 	r.mu.Lock()
 	if st.state >= ItemDone {
@@ -901,6 +1005,7 @@ func (ru *run) endItem(i int, state ItemState, err error) {
 		ev.SavedPath = st.saved
 	}
 	ru.emitItem(ev)
+	ru.flushBatch(false) // the files left may all be in the batch
 }
 
 func (ru *run) allEnded() bool {

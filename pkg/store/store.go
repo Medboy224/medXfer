@@ -577,6 +577,19 @@ func (f *File) Finalize() error {
 		f.closeJournal()
 		return err
 	}
+	if err := f.publish(); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" && !f.p.NoSync {
+		syncDir(f.root, path.Dir(f.name))
+	}
+	return f.dropJournal()
+}
+
+// publish renames the closed, durable .part to the final name. If the name is taken (and
+// not to be overwritten) or the rename fails, the journal notes what is there: the file stays
+// resumable, its data being durable (invariant J holds).
+func (f *File) publish() error {
 	final := filepath.FromSlash(f.name)
 	var err error
 	if _, lerr := f.root.Lstat(final); lerr == nil && !f.p.Overwrite {
@@ -594,11 +607,12 @@ func (f *File) Finalize() error {
 			err = errors.Join(err, nerr)
 		}
 		f.closeJournal()
-		return err
 	}
-	if runtime.GOOS != "windows" && !f.p.NoSync {
-		f.syncDir()
-	}
+	return err
+}
+
+// dropJournal removes the journal of a file that has its final name.
+func (f *File) dropJournal() error {
 	if f.journal == nil { // finished in one go: it never had one
 		return nil
 	}
@@ -612,10 +626,9 @@ func (f *File) closeJournal() {
 	}
 }
 
-// syncDir makes the rename durable on Unix: fsync of the folder that holds the file.
-func (f *File) syncDir() {
-	dir := path.Dir(f.name)
-	d, err := f.root.Open(filepath.FromSlash(dir))
+// syncDir makes a rename durable on Unix: fsync of the folder dir of root.
+func syncDir(root *os.Root, dir string) {
+	d, err := root.Open(filepath.FromSlash(dir))
 	if err != nil {
 		return
 	}

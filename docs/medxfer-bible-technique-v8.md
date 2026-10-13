@@ -364,7 +364,13 @@ Messages `CONTROL` (champ `type`) : `hello`, `pair_secret`, `pair_pake`, `pair_c
 
 **Reprise :** le receveur reconnaît un transfert partiel par une *clé de reprise* `SHA-256(fp_émetteur ‖ chemin ‖ taille ‖ mtime)` stockée dans l'en-tête du journal. En cas de désaccord final (digest différent), l'élément est repris à zéro : cas rare, simple et sûr.
 
-**Petits fichiers :** comme un seul `offer` couvre tout le lot et que les requêtes mélangent les éléments, l'attente par fichier disparaît. Le flux TAR (`StreamTar`) n'est donc plus nécessaire dans la v1 (⏸ ; réintégration si le benchmark §14.3 sur 100 000 petits fichiers montre un écart significatif).
+**Petits fichiers :** comme un seul `offer` couvre tout le lot et que les requêtes mélangent les éléments, l'attente par fichier disparaît.
+
+**Décision de WP-4.11 (13 octobre 2026) : le flux TAR (`StreamTar`) est retiré pour de bon.**
+- **Le protocole ne limite pas.** Dans un puits nul, il traite 5 400 à 10 800 petits fichiers par seconde, 40 fois ce que le disque suit.
+- **Ce qui coûte, c'est de rendre chaque fichier durable.** Sur un téléphone, le `fsync` du fichier et celui de son dossier font plus de 80 % du temps d'un petit fichier.
+- **Un flux tar ne réglerait rien :** il écrirait les mêmes fichiers.
+- **Le remède retenu :** une offre de petits fichiers ouvre 8 connexions au lieu de 4, et leurs fichiers sont rendus durables par lots (§9.6). Les chiffres sont dans `bench-results/README.md`.
 
 ### 8.4 Exigences
 | Id | Exigence | Statut |
@@ -444,6 +450,18 @@ func (r *Receiver) commit() error {
 
 ### 9.6 Finalisation
 Tous chunks présents → `digest` correspond → `part.Sync()` → fermeture → **renommage** `.part` vers le nom final (sur Windows, nouvelle tentative 3×100 ms en cas de verrou antivirus) → `fsync` du dossier parent (Unix) → suppression du journal → événement « terminé ».
+
+**Petits fichiers, durabilité par lots (WP-4.11).**
+- *Quels fichiers :* sous Linux et Android, ceux reçus d'une traite dans le dossier racine du transfert, donc sans journal, sont finalisés ensemble (`store.Batch`).
+- *Déroulement :*
+  1. chaque fichier est scellé sans `fsync` ;
+  2. un seul `syncfs` rend tout le lot durable ;
+  3. viennent ensuite les renommages ;
+  4. puis un `fsync` par dossier.
+- *Déclenchement :* le lot est vidé à 256 fichiers, à 64 Mio, 2 s après son premier fichier, dès qu'il ne reste rien d'autre à recevoir, et à la fin de la session, même annulée.
+- *Garantie inchangée :* aucun nom final avant des données durables (`STO-01`). Un arrêt brutal perd au plus le lot, dont les `.part` sans journal sont repris de zéro (§9.2, journal).
+- *Gain :* sur un téléphone, environ 5 fois moins de temps par petit fichier. Un `syncfs` écrit aussi les données en attente des autres programmes sur ce disque : le premier lot d'un transfert peut donc coûter plus cher que les suivants.
+- *Ailleurs :* Windows et macOS n'ont pas de `syncfs`, et chaque fichier y est finalisé seul. Sous Windows, le coût d'un petit fichier est sa création (NTFS, antivirus), pas son `fsync`.
 
 ### 9.7 Espace disque
 Avant l'`accept` : espace libre ≥ ce qui reste à recevoir + max(1 % de la taille totale, 64 Mio). Ce qu'une reprise trouve dans ses `.part`, et une racine que la politique « ignorer » refuse, ne sont pas comptés (`Receiver.CheckSpace`). Une offre qui ne tient pas est refusée avant le premier octet : la ligne de commande l'annonce, le daemon l'indique dans `incoming_offer` (`free_bytes`, `needed_bytes`, `enough_space`) et refuse `respond_offer` (`NO_SPACE`) ; l'offre reste en attente, pour libérer de la place ou choisir un autre dossier.
@@ -695,7 +713,7 @@ Valeurs par défaut ; toutes sont des paramètres (règle R4).
 3. Transférer avec TLS actif et les valeurs par défaut (4 flux, chunk de 2 Mio).
 4. Résultat = débit utile / débit iperf3. Cible ≥ 80 %. Consigner CPU et température.
 5. Répéter sur la matrice : PC↔PC Ethernet, PC↔Android Wi-Fi 5 GHz, Android↔Android, et un téléphone ancien sans accélération AES (valide `CHAN-08`).
-6. Mesurer aussi 100 000 fichiers de 4 Kio (valide la décision sur `StreamTar`).
+6. Mesurer aussi 100 000 petits fichiers (1 à 16 Kio) : c'est ce qui a tranché la décision sur `StreamTar` (§8.3).
 7. Obtenir ces mesures marche par marche avec `xfer bench ladder`, et choisir flux et taille de chunk par défaut avec `xfer bench matrix` (`DEV-07`, chapitre 17).
 
 ---

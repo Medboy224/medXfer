@@ -136,6 +136,16 @@ WP-4.9 peut commencer dès WP-4.6 (R5 a besoin du journal) ; WP-4.10 a besoin de
 - On mesure 100 000 petits fichiers (1 à 16 Kio) dans une offre, entre le PC et le téléphone, débit et durée.
 - On garde l'offre seule si le débit en petits fichiers reste dans un rapport raisonnable à celui des gros fichiers ; sinon, on rouvre la question (bible §8.3, ⏸). Le chiffre et la décision sont consignés dans la bible.
 
+**Résultat (13 octobre 2026) :**
+- **Le constat :** 100 000 fichiers de 1 à 16 Kio (872 Mo), du PC vers le téléphone, mettaient 338 s en 5 GHz, soit 2,6 MB/s : 15 fois moins qu'un gros fichier. Le rapport n'était pas raisonnable.
+- **La cause n'est pas le protocole :** dans un puits nul, il traite 5 400 à 10 800 petits fichiers par seconde. Ce qui coûte, c'est la durabilité de chaque fichier : sur le téléphone, le `fsync` du fichier et celui de son dossier font plus de 80 % du temps.
+- **StreamTar est retiré pour de bon :** il écrirait les mêmes fichiers.
+- **Les remèdes, validés le même jour :**
+  - les fichiers reçus d'une traite dans le dossier racine sont rendus durables par lots, avec un `syncfs` par lot sous Linux et Android (bible §9.6) ;
+  - une offre de petits fichiers ouvre 8 connexions au lieu de 4.
+- **En 2,4 GHz, sur les mêmes 100 000 fichiers :** 9 min 58 s avant, 3 min 26 s avec le lot seul, **2 min 34 s** avec le lot et 8 connexions, soit 3,9 fois plus vite.
+- Détails : `bench-results/README.md`.
+
 ## 3. Critère de sortie de J4b (et de J4)
 
 1. **Chaos :** 1 000 itérations sans corruption, sans fichier hors de la destination, sans fichier préexistant modifié ; 50 itérations vertes en CI.
