@@ -46,6 +46,11 @@ func Resolve(root *os.Root, name string, p Params, policy Policy) (Place, error)
 		if err != nil {
 			return Place{}, err
 		}
+		if state == partialForeign && p.Owned {
+			// In this transfer's own folder, a partial file is this transfer's: Open resumes
+			// it, or starts it over if a stop left it without a readable journal.
+			state = partialOurs
+		}
 		switch state {
 		case partialOurs:
 			return Place{Name: c, Resume: true, Overwrite: policy == PolicyOverwrite}, nil

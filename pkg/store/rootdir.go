@@ -3,11 +3,14 @@ package store
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	"time"
 
 	"github.com/Medboy224/medXfer/pkg/engine"
 )
@@ -86,22 +89,44 @@ func hasMarker(root *os.Root, dir string, key Key) bool {
 	return string(b[:8]) == string(markerMagic[:]) && string(b[8:]) == string(key[:])
 }
 
-// MarkRoot creates the folder dir and its marker, if not there yet: called before the first
-// file of the transfer is written (#75: nothing before a verified chunk).
+// MarkRoot creates the folder dir with its marker, if not there yet: called before the first
+// file of the transfer is written (#75: nothing before a verified chunk). The folder appears
+// under its name with its marker, at once: it is made under a temporary name, the marker
+// written in it, then renamed. A stop at any point (a kill, chaos of WP-4.10) leaves nothing,
+// the temporary folder, or the folder with its marker; never a folder of the transfer that
+// reads as the user's, which a resume would leave aside for "dir (2)".
 func MarkRoot(root *os.Root, dir string, key Key) error {
 	if hasMarker(root, dir, key) {
 		return nil
 	}
-	if err := root.MkdirAll(filepath.FromSlash(dir), 0o755); err != nil {
-		return fmt.Errorf("%w: %s: %v", ErrPathConflict, dir, err)
+	parent := path.Dir(dir)
+	if parent != "." {
+		if err := root.MkdirAll(filepath.FromSlash(parent), 0o755); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrPathConflict, parent, err)
+		}
 	}
-	f, err := root.OpenFile(filepath.FromSlash(dir+"/"+MarkerName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
+	// The temporary name holds the key: only this transfer makes it, so one left by a stop is
+	// this transfer's to remove (STO-09).
+	tmp := filepath.FromSlash(path.Join(parent, ".medxfer-"+hex.EncodeToString(key[:8])))
+	if err := root.RemoveAll(tmp); err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = f.Write(append(markerMagic[:], key[:]...))
-	return err
+	if err := root.Mkdir(tmp, 0o755); err != nil {
+		return err
+	}
+	if err := root.WriteFile(filepath.Join(tmp, MarkerName), append(markerMagic[:], key[:]...), 0o644); err != nil {
+		_ = root.RemoveAll(tmp)
+		return err
+	}
+	var err error
+	for _, wait := range renameTries { // an antivirus may hold the new folder a moment
+		time.Sleep(wait)
+		if err = root.Rename(tmp, filepath.FromSlash(dir)); err == nil {
+			return nil
+		}
+	}
+	_ = root.RemoveAll(tmp)
+	return fmt.Errorf("%w: %s: %v", ErrPathConflict, dir, err)
 }
 
 // UnmarkRoot removes the marker once every file of the transfer was received: the folder is

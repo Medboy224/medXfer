@@ -344,6 +344,7 @@ func (ru *run) params(st *item, overwrite bool) store.Params {
 		Key:  store.ResumeKey(r.SenderKey, st.it.Path, st.it.Size, st.it.MTime),
 		Size: st.it.Size, ChunkSize: ru.chunks,
 		VerifyFull: r.VerifyFull, NoSync: r.NoSync, Overwrite: overwrite,
+		Owned: ru.inRoot, // the root folder is this transfer's only (STO-10)
 	}
 	if ru.stages != nil {
 		p.OnSync = func(d time.Duration) { ru.stages.OnStage(StageFsync, 1, d, 0) }

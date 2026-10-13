@@ -394,7 +394,20 @@ Messages `CONTROL` (champ `type`) : `hello`, `pair_secret`, `pair_pake`, `pair_c
 <dossier>/<racine>/fichier.ext.part         données (octets écrits à leur offset)
 <dossier>/<racine>/fichier.ext.part.state   journal de progression
 ```
-Le fichier ne porte son nom final qu'une fois **complet et vérifié** (renommage). Depuis J4b, le journal n'est créé qu'au premier commit : un fichier reçu d'une traite n'en a jamais. Un transfert de plusieurs fichiers est reçu dans sa propre racine (`STO-10`), qui porte un marqueur `.medxfer-transfer` (la clé du transfert) tant qu'il n'est pas complet : une reprise y retrouve son dossier (plan J4b, D11).
+Le fichier ne porte son nom final qu'une fois **complet et vérifié** (renommage).
+
+**Dossier racine (`STO-10`, D11).** Un transfert de plusieurs fichiers est reçu dans sa propre racine. Celle-ci porte un marqueur `.medxfer-transfer`, qui contient la clé du transfert, tant que le transfert n'est pas complet : une reprise y retrouve son dossier (plan J4b). Ce dossier apparaît sous son nom avec son marqueur d'un seul coup :
+- il est créé sous un nom temporaire `.medxfer-<clé>` ;
+- le marqueur y est écrit ;
+- le dossier est renommé.
+
+Un arrêt brutal ne laisse donc jamais un dossier du transfert qui passerait pour celui de l'utilisateur. Un dossier temporaire laissé par un arrêt est supprimé par la reprise du même transfert.
+
+**Journal.**
+- *Dans le dossier racine*, le journal d'un fichier n'est créé qu'à son premier commit : un fichier reçu d'une traite n'en a jamais. Un `.part` sans journal lisible y est forcément celui du transfert, laissé par un arrêt avant ce commit : il est repris de zéro sous son nom (`Params.Owned`).
+- *Pour un fichier seul*, l'en-tête du journal est écrit avec le fichier, sans `fsync`. Un arrêt brutal le laisse reconnaissable, et le fichier est repris sous son nom.
+
+Ces deux points viennent des tests de chaos (WP-4.10) : sans eux, un arrêt brutal laissait des `.part` orphelins et faisait repartir la reprise sous « nom (1) ».
 
 ### 9.3 Format du journal
 - **En-tête :** magic `MXST`, version (1 octet), clé de reprise (32 octets), taille du fichier (u64), taille de chunk (u32), nombre de chunks (u32), CRC32 de l'en-tête.
@@ -662,6 +675,18 @@ Valeurs par défaut ; toutes sont des paramètres (règle R4).
 - **Journal déchiré :** tronquer le journal à chaque offset possible ; la reprise DOIT réussir.
 - **Fichier source modifié** en cours d'envoi : échec propre `SOURCE_CHANGED`.
 - **Fuzzing Go natif** de l'analyseur de trames, du manifeste JSON, de `SafeRelPath` et du lecteur de journal.
+
+**Depuis J4b (WP-4.10) :**
+- **Chaos** (`TestChaos`, tag `diag`) : chaque itération reçoit un petit dossier dans une destination qui contient déjà des fichiers de l'utilisateur. Elle y injecte une faute tirée de sa graine, puis reprend jusqu'au bout. Les cinq fautes possibles :
+  - processus receveur arrêté net en pleine lecture ;
+  - coupure réseau ;
+  - disque plein ;
+  - écriture déchirée ;
+  - `fsync` menteur suivi d'une coupure de courant.
+- **Vérifications du chaos** : chaque fichier final est identique à sa source, rien n'est hors de la destination, les fichiers de l'utilisateur sont intacts, et il ne reste à la fin ni `.part`, ni journal, ni marqueur. Le chaos fait 50 itérations par défaut (CI) ; `MEDXFER_CHAOS_ITER=1000` en local, et `MEDXFER_CHAOS_SEED` rejoue une graine en échec.
+- **Journal déchiré** : `TestJournalCutAtEveryOffset` tronque le journal à chaque offset.
+- **Fuzzing** : `FuzzJournal`, `FuzzSafeRelPath`, `FuzzOfferValidate`, en plus de `FuzzReadFrame`.
+- **Limite connue** : un fichier déjà renommé dont le disque a menti sur son `fsync` peut être perdu par une coupure de courant, sans qu'aucun receveur puisse le voir.
 - Détecteur de courses (`-race`) dans la CI.
 
 ### 14.3 Procédure de benchmark (vitesse, 📏)
