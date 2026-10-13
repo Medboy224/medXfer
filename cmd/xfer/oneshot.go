@@ -99,17 +99,22 @@ func startOneShotHub(bind string, port int, trust *identity.TrustStore) (*transf
 // receiver is accepted, before pair_accept.
 func serveOneShotPairing(ctx context.Context, hub *transfer.Hub, id *identity.Identity, host string, port int,
 	ttl time.Duration, offer session.Message, follow []session.Message, confirm func(context.Context, pairing.Result) bool,
-	before func(pairing.Result) error, shown func(pairing.URI)) (pairing.Result, error) {
+	before func(pairing.Result) error, shown func(pairing.URI), pin func(code string, expires time.Time)) (pairing.Result, error) {
 	name, _ := os.Hostname()
 	o := pairing.Options{Identity: id, Once: true, DeviceName: name, Offer: offer, Follow: follow, Confirm: confirm, BeforeAccept: before}
 	for {
 		ln := hub.Control()
-		inv, err := pairing.NewInvitation(ttl)
+		var inv *pairing.Invitation
+		var err error
+		if pin != nil { // a PIN instead of the QR code, for a receiver without a camera (WP-5.4)
+			o.PIN, err = pairing.NewPIN(pairing.PINConfig{TTL: min(ttl, pairing.TTL), Show: pin}) // PAIR-02: 120 s at most
+		} else if inv, err = pairing.NewInvitation(ttl); err == nil {
+			shown(inv.URI(id.Fingerprint, host, port))
+		}
 		if err != nil {
 			ln.Close()
 			return pairing.Result{}, err
 		}
-		shown(inv.URI(id.Fingerprint, host, port))
 		r, err := pairing.Serve(ctx, ln, inv, o)
 		ln.Close()
 		if errors.Is(err, pairing.ErrExpired) {
@@ -120,8 +125,9 @@ func serveOneShotPairing(ctx context.Context, hub *transfer.Hub, id *identity.Id
 }
 
 // startOneShotPairing runs serveOneShotPairing for `xfer send`: it prints the receive command
-// and the QR code, and registers the transfers for the paired receiver.
-func startOneShotPairing(ctx context.Context, send *oneShotSend, port int, data session.Message, follow []session.Message, trust *identity.TrustStore) {
+// and the QR code, or the PIN (usePIN), and registers the transfers for the paired receiver.
+func startOneShotPairing(ctx context.Context, send *oneShotSend, port int, data session.Message, follow []session.Message,
+	trust *identity.TrustStore, usePIN bool) {
 	first := true
 	ready := make(chan struct{})
 	var readyOnce sync.Once
@@ -133,9 +139,17 @@ func startOneShotPairing(ctx context.Context, send *oneShotSend, port int, data 
 		printReceiveCommand(os.Stdout, u)
 		readyOnce.Do(func() { close(ready) })
 	}
+	var pin func(string, time.Time)
+	if usePIN {
+		screen := pinScreen(os.Stdout, fmt.Sprintf("xfer recv --pin %s", net.JoinHostPort(getLocalIP(), strconv.Itoa(port))))
+		pin = func(code string, expires time.Time) {
+			screen(code, expires)
+			readyOnce.Do(func() { close(ready) })
+		}
+	}
 	confirm := receiverConfirm(os.Stdout, askLine, trust)
 	go func() {
-		r, err := serveOneShotPairing(ctx, send.hub, localID, getLocalIP(), port, sendQRTTL, data, follow, confirm, send.register, shown)
+		r, err := serveOneShotPairing(ctx, send.hub, localID, getLocalIP(), port, sendQRTTL, data, follow, confirm, send.register, shown, pin)
 		readyOnce.Do(func() { close(ready) })
 		if err != nil {
 			if ctx.Err() == nil {

@@ -171,7 +171,7 @@ func oneShotThroughCapture(t *testing.T, sender *identity.Identity, path, name s
 	t.Cleanup(cancel)
 	go func() {
 		_, _ = serveOneShotPairing(ctx, hub, sender, "127.0.0.1", port, time.Minute, msg, follow, confirm, send.register,
-			func(u pairing.URI) { uris <- u })
+			func(u pairing.URI) { uris <- u }, nil)
 	}()
 	go func() {
 		if tl := send.listener(ctx); tl != nil {

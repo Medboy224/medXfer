@@ -94,11 +94,13 @@ WP-5.1 et WP-5.2 sont indépendants. La revue externe (G4) peut être contractua
 
 ### WP-5.4 — Ligne de commande et daemon · S à M
 
-- **`xfer pair --pin`** (répondant) affiche le PIN groupé par 3 (`123 456`) et son expiration. **`xfer pair <adresse> --pin`** (initiateur) le demande.
-- **`xfer send --pin`** : un envoi ponctuel qui affiche un PIN au lieu d'un QR, pour un appareil sans caméra.
+- **`xfer pair --pin`** (répondant) affiche le PIN groupé par 3 (`123 456`), son expiration et la commande à taper en face ; avec `--show`, le QR aussi (D6) ; `--digits 8` en option. **`xfer pair --pin <adresse>`** (initiateur) demande le PIN au clavier : jamais en argument, il resterait dans l'historique et la liste des processus.
+- **`xfer send --pin`** : un envoi ponctuel qui affiche un PIN au lieu d'un QR, pour un appareil sans caméra ; un nouveau PIN à l'expiration (120 s au plus, `PAIR-02`). En face : **`xfer recv --pin <adresse>`**.
+- **Arguments :** `reorderArgs` interroge le jeu de drapeaux de chaque commande pour savoir si un drapeau prend une valeur ; `--pin` est booléen pour `pair`, `send` et `recv`, mais prend une valeur pour `share`.
 - **Daemon :**
   - actions `pair_pin_show` (répondant) et `pair_pin` (initiateur) ;
-  - événements `pair_pin_shown` (le PIN, pour l'écran local seulement) et `pair_failed` (sans détail) ;
+  - événements `pair_pin_shown` (le PIN, pour l'écran local seulement : envoyé au seul client qui l'a demandé, jamais diffusé ; enregistré auprès du masqueur `diag.Secrets`) et `pair_failed` (sans détail, des deux côtés) ;
+  - le daemon réutilise `pairing.RespondPIN` et `pairing.InitiatePIN` sur sa propre session de contrôle : la cryptographie reste dans `pkg/pairing` et `pkg/pake` ;
   - le tableau de bord de développement (`devui`) gagne les deux boutons.
 
 ### WP-5.5 — Tests de sécurité, journaux, essai réel · S à M

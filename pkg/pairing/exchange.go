@@ -98,7 +98,7 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 		return Result{}, errors.New("pairing: nothing to serve")
 	}
 	if o.PIN != nil {
-		defer o.PIN.close()
+		defer o.PIN.Close()
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -208,7 +208,7 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 			return reject()
 		}
 	case TypePIN:
-		name, err := respondPIN(ch, conn, msg, o)
+		name, err := RespondPIN(ch, conn, msg, o.PIN, o.Identity.Fingerprint)
 		if err != nil {
 			_, _ = reject()
 			return Result{}, err
@@ -240,21 +240,23 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 	return r, nil
 }
 
-// respondPIN is the responder's side of the PIN path (bible §6.2). It returns the initiator's
-// name, which comes once the initiator has confirmed the key. The attempt counts from the
-// reply on (PIN.begin). With no attempt left, it answers on a decoy PIN: the initiator sees
-// the same exchange and the same refusal (PAIR-07).
-func respondPIN(ch *session.Channel, conn *securechan.Conn, msg session.Message, o Options) (string, error) {
-	if o.PIN == nil || !slices.Contains(pake.Suites(), msg.Suite) {
+// RespondPIN is the responder's side of the PIN path (bible §6.2), on a connection whose first
+// message, msg, is pair_pin; self is this device's key. It returns the initiator's name, which
+// comes once the initiator has confirmed the key. The caller then moves the connection to AUTH
+// and sends pair_accept, or pair_reject on an error. The attempt counts from the reply on
+// (PIN.begin). With no attempt left, it answers on a decoy PIN: the initiator sees the same
+// exchange and the same refusal (PAIR-07).
+func RespondPIN(ch *session.Channel, conn *securechan.Conn, msg session.Message, pin *PIN, self identity.Fingerprint) (string, error) {
+	if pin == nil || !slices.Contains(pake.Suites(), msg.Suite) {
 		return "", ErrRefused
 	}
-	code, counted := o.PIN.begin()
+	code, counted := pin.begin()
 	paired := false
 	if counted {
-		defer func() { o.PIN.end(paired) }()
+		defer func() { pin.end(paired) }()
 	} else {
 		var err error
-		if code, err = drawPIN(o.PIN.cfg.Rand, o.PIN.cfg.Digits); err != nil {
+		if code, err = drawPIN(pin.cfg.Rand, pin.cfg.Digits); err != nil {
 			return "", err
 		}
 	}
@@ -262,7 +264,7 @@ func respondPIN(ch *session.Channel, conn *securechan.Conn, msg session.Message,
 	if err != nil {
 		return "", err
 	}
-	ex, err := pake.New(msg.Suite, pake.Params{Password: code, CI: pinCI(conn.PeerFingerprint(), o.Identity.Fingerprint),
+	ex, err := pake.New(msg.Suite, pake.Params{Password: code, CI: pinCI(conn.PeerFingerprint(), self),
 		SID: ekm, Role: pake.Responder})
 	if err != nil {
 		return "", err
@@ -293,44 +295,54 @@ func respondPIN(ch *session.Channel, conn *securechan.Conn, msg session.Message,
 // o.Once). A wrong PIN, an expired one, or a relay between the two devices gives ErrRefused.
 // A known device that shows another key is the caller's to refuse (ID-05).
 func JoinPIN(ctx context.Context, addr, pin string, o Options) (Result, error) {
-	code, err := NormalizePIN(pin)
-	if err != nil {
-		return Result{}, err
+	if _, err := NormalizePIN(pin); err != nil {
+		return Result{}, err // nothing is sent for a PIN mistyped
 	}
 	conn, ch, host, err := dial(ctx, addr, securechan.Config{Identity: o.Identity, Trust: o.Trust, AllowUnknown: true})
 	if err != nil {
 		return Result{}, err
 	}
 	defer ch.Close()
-	fp := conn.PeerFingerprint()
+	if err := InitiatePIN(ch, conn, pin, o.Identity.Fingerprint, o.DeviceName); err != nil {
+		return Result{}, err
+	}
+	return awaitAccept(ch, conn, conn.PeerFingerprint(), host, replyTimeout, o)
+}
+
+// InitiatePIN is the initiator's side of the PIN path on an open connection, up to its own
+// confirmation; self is this device's key, name the one sent once the responder has proved it
+// holds the PIN. On success the connection is in AUTH and the caller reads pair_accept. A
+// wrong PIN, or a relay, gives ErrRefused.
+func InitiatePIN(ch *session.Channel, conn *securechan.Conn, pin string, self identity.Fingerprint, name string) error {
+	code, err := NormalizePIN(pin)
+	if err != nil {
+		return err
+	}
 	ekm, err := conn.ChannelBinding()
 	if err != nil {
-		return Result{}, err
+		return err
 	}
-	ex, err := pake.New(PINSuite, pake.Params{Password: code, CI: pinCI(o.Identity.Fingerprint, fp), SID: ekm, Role: pake.Initiator})
+	ex, err := pake.New(PINSuite, pake.Params{Password: code, CI: pinCI(self, conn.PeerFingerprint()), SID: ekm, Role: pake.Initiator})
 	if err != nil {
-		return Result{}, err
+		return err
 	}
 	if err := ch.Send(session.Message{Type: TypePIN, Suite: PINSuite, Share: ex.Share()}); err != nil {
-		return Result{}, err
+		return err
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(replyTimeout))
 	reply, err := ch.Read()
 	if err != nil {
-		return Result{}, err
+		return err
 	}
 	if reply.Type != TypePINReply {
-		return Result{}, ErrRefused
+		return ErrRefused
 	}
 	s, err := ex.Finish(reply.Share)
 	if err != nil || !s.Verify(reply.Confirm) {
-		return Result{}, ErrRefused
+		return ErrRefused
 	}
 	conn.Authenticate() // the responder holds the PIN: its offer may pass the Unauth limit
-	if err := ch.Send(session.Message{Type: TypePINConfirm, Confirm: s.Tag(), DeviceName: o.DeviceName}); err != nil {
-		return Result{}, err
-	}
-	return awaitAccept(ch, conn, fp, host, replyTimeout, o)
+	return ch.Send(session.Message{Type: TypePINConfirm, Confirm: s.Tag(), DeviceName: name})
 }
 
 // Join is the scanner's side: it connects to the URI's address pinning the URI's key, sends

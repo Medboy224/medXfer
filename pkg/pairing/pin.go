@@ -195,8 +195,9 @@ func (p *PIN) redrawAfterDelay() {
 	}
 }
 
-// close ends the PIN: no attempt is accepted any more and no PIN is drawn.
-func (p *PIN) close() {
+// Close ends the PIN: no attempt is accepted any more and no PIN is drawn. Serve closes the
+// PIN it was given when it returns.
+func (p *PIN) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closed, p.code = true, nil

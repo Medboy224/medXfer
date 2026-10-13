@@ -31,7 +31,7 @@ func runReport(args []string) error {
 	}
 	fs := flag.NewFlagSet("report", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "print JSON instead of text")
-	if err := fs.Parse(reorderArgs(args[1:])); err != nil {
+	if err := fs.Parse(reorderArgs(fs, args[1:])); err != nil {
 		return err
 	}
 	files := fs.Args()
