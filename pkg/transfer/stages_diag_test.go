@@ -42,12 +42,15 @@ func limitingStage(t *testing.T, noSync bool) diag.Bottleneck {
 		t.Fatal(err)
 	}
 	checkFiles(t, out, offer, contents, nil)
+	t.Logf("stages:\n%s", diag.FormatStages(ev.Stats()))
 	return ev.Bottleneck()
 }
 
 // DEV-04: in synthetic scenarios where one stage is made slow, the heuristic must name that
 // stage every time (bible: "dans 100 % des scénarios").
 func TestLimitingStageIsFound(t *testing.T) {
+	// The slowed stage takes 100 ms per chunk, not 25: on Windows the network wait of these
+	// scenarios costs a few hundred ms of its own, which 25 ms did not always beat (#99).
 	for _, c := range []struct {
 		name, want string
 		noSync     bool // the disk is not a factor of this scenario (#87)
@@ -58,7 +61,7 @@ func TestLimitingStageIsFound(t *testing.T) {
 				if strings.HasSuffix(path, ".part.state") {
 					return f
 				}
-				return faultfs.Wrap(f, faultfs.Plan{WriteDelay: 25 * time.Millisecond})
+				return faultfs.Wrap(f, faultfs.Plan{WriteDelay: 100 * time.Millisecond})
 			}))
 		}},
 		{"throttled network", StageNetWait, true, func(t *testing.T) {
@@ -68,7 +71,7 @@ func TestLimitingStageIsFound(t *testing.T) {
 			}))
 		}},
 		{"slow hash", StageHash, true, func(t *testing.T) {
-			hashDelay = 25 * time.Millisecond
+			hashDelay = 100 * time.Millisecond
 			t.Cleanup(func() { hashDelay = 0 })
 		}},
 	} {
