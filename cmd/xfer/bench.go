@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -34,8 +35,18 @@ const benchUsage = `Usage:
   xfer bench ladder --peer HOST:PORT --code CODE --fp KEY [--size 256M] [--streams 4]
                     [--chunk 4] [--sink null|disk] [--dir DIR] [--json]
       The ladder (bible §17.4): R1 raw TCP, R2 + TLS with the key pinned, R3 + medXfer
-      frames and SHA-256 (a bench offer, null sink), R4 + disk writes without fsync. The
-      listening side sends, the other measures. R4 writes into a temporary folder in DIR.
+      frames and SHA-256 (a bench offer, null sink), R4 + disk writes without fsync, R5 +
+      the journal and its fsync, R6 the whole transfer (offer, acceptance, digest, rename).
+      The listening side sends, the other measures. R4 to R6 write into a temporary folder
+      in DIR.
+
+  xfer bench matrix --listen [ADDR] ...             (the same server as ladder --listen)
+  xfer bench matrix --peer HOST:PORT --code CODE --fp KEY [--size 256M] [--step R6]
+                    [--repeat 1] [--streams-list 1,2,4,8] [--chunks 1,2,4,8] [--dir DIR]
+                    [--results bench-results] [--json]
+      One step for each number of streams and chunk size (MB). Proposes as defaults the
+      combination within 5 % of the best throughput that needs the least memory
+      (streams × 2 × chunk), and saves the results in RESULTS/matrix-*.json.
 
 The net benchmark is raw, unencrypted TCP (step R1 only).
 `
@@ -67,13 +78,18 @@ func runBench(args []string, stdout io.Writer) error {
 	source := fs.String("source", "random", "bytes sent: random, zero or file (ladder --listen)")
 	file := fs.String("file", "", "with --source file, the file to send (ladder --listen)")
 	sink := fs.String("sink", "null", "where R3's chunks go: null or disk (ladder --peer)")
+	step := fs.String("step", "R6", "the ladder step each cell measures (matrix)")
+	repeat := fs.Int("repeat", 1, "runs per cell, whose median counts (matrix)")
+	streamsList := fs.String("streams-list", "1,2,4,8", "numbers of streams (matrix)")
+	chunks := fs.String("chunks", "1,2,4,8", "chunk sizes in MB (matrix)")
+	results := fs.String("results", "bench-results", "folder of the saved results (matrix)")
 	// Accept "--listen" without a value: it then uses the default address.
 	sub := normalizeCommand(args[0])
 	rest := args[1:]
 	for i, a := range rest {
 		if (a == "--listen" || a == "-listen") && (i+1 == len(rest) || strings.HasPrefix(rest[i+1], "-")) {
 			def := ":19990"
-			if sub == "ladder" {
+			if sub == "ladder" || sub == "matrix" {
 				def = ":19991"
 			}
 			rest = append(append(append([]string{}, rest[:i]...), a+"="+def), rest[i+1:]...)
@@ -89,6 +105,42 @@ func runBench(args []string, stdout io.Writer) error {
 	}
 
 	switch sub {
+	case "matrix":
+		sizeSet := false
+		fs.Visit(func(f *flag.Flag) { sizeSet = sizeSet || f.Name == "size" })
+		if !sizeSet {
+			size = 256 << 20
+		}
+		switch {
+		case *listen != "":
+			return benchLadderListen(stdout, *listen, *source, *file, *once)
+		case *peer != "":
+			if *code == "" || *fp == "" {
+				return fmt.Errorf("--peer needs the --code and --fp printed by the listening side")
+			}
+			addr, err := peerAddress(*peer)
+			if err != nil {
+				return err
+			}
+			if !strings.Contains(*peer, ":") {
+				addr = net.JoinHostPort(strings.TrimSpace(*peer), benchLadderDefaultPort)
+			}
+			ns, err := parseInts(*streamsList)
+			if err != nil {
+				return fmt.Errorf("--streams-list: %w", err)
+			}
+			cs, err := parseInts(*chunks)
+			if err != nil {
+				return fmt.Errorf("--chunks: %w", err)
+			}
+			var chunkSizes []uint32
+			for _, c := range cs {
+				chunkSizes = append(chunkSizes, uint32(c)<<20)
+			}
+			m := bench.MatrixOptions{Step: strings.ToUpper(*step), Streams: ns, Chunks: chunkSizes, Repeat: *repeat}
+			return benchMatrixPeer(stdout, addr, *code, *fp, size, *dir, *results, m, *asJSON)
+		}
+		return fmt.Errorf("matrix needs --listen or --peer\n%s", benchUsage)
 	case "ladder":
 		sizeSet := false
 		fs.Visit(func(f *flag.Flag) { sizeSet = sizeSet || f.Name == "size" })
@@ -325,6 +377,80 @@ func benchLadderPeer(stdout io.Writer, addr, code, fp string, size int64, stream
 	}
 	fmt.Fprint(stdout, bench.FormatLadder(res))
 	return nil
+}
+
+// benchMatrixPeer runs the matrix against a ladder server, shows each cell as it is measured,
+// and saves the result in resultsDir (bible §17.4).
+func benchMatrixPeer(stdout io.Writer, addr, code, fp string, size int64, dir, resultsDir string,
+	m bench.MatrixOptions, asJSON bool) error {
+	key, err := identity.ParseFingerprint(fp)
+	if err != nil {
+		return fmt.Errorf("--fp: %w", err)
+	}
+	id, _, err := loadIdentity(configDir())
+	if err != nil {
+		return err
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	m.LadderOptions = bench.LadderOptions{Addr: addr, Code: code, Fingerprint: key, Identity: id, Size: size, Dir: abs}
+	if !asJSON {
+		m.OnCell = func(c bench.MatrixCell) {
+			fmt.Fprintf(stdout, "  %d streams × %s: %.1f MB/s\n", c.Streams, diag.FormatBytes(int64(c.ChunkSize)), c.MBps)
+		}
+		fmt.Fprintf(stdout, "Bench matrix against %s: step %s, %s per run\n", addr, m.Step, diag.FormatBytes(size))
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	res, err := bench.RunMatrix(ctx, m)
+	if err != nil {
+		return err
+	}
+	res.Host, _ = os.Hostname()
+	res.OS = runtime.GOOS + "/" + runtime.GOARCH
+	path, err := saveMatrix(resultsDir, res)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return writeJSON(stdout, res)
+	}
+	fmt.Fprint(stdout, bench.FormatMatrix(res))
+	fmt.Fprintf(stdout, "Saved: %s\n", path)
+	return nil
+}
+
+// saveMatrix writes res to dir/matrix-<host>-<time>.json.
+func saveMatrix(dir string, res *bench.MatrixResult) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	host := res.Host
+	if host == "" {
+		host = "device"
+	}
+	// Android names every phone "localhost": the system tells them apart from a PC.
+	path := filepath.Join(dir, fmt.Sprintf("matrix-%s-%s-%s.json", host, runtime.GOOS, time.Now().Format("20060102-150405")))
+	data, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return path, os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+// parseInts reads a comma-separated list of positive integers.
+func parseInts(s string) ([]int, error) {
+	var out []int
+	for _, f := range strings.Split(s, ",") {
+		v, err := strconv.Atoi(strings.TrimSpace(f))
+		if err != nil || v <= 0 {
+			return nil, fmt.Errorf("invalid list %q (example: 1,2,4,8)", s)
+		}
+		out = append(out, v)
+	}
+	return out, nil
 }
 
 // peerAddress accepts HOST:PORT, or HOST alone (default port). "10.0.0.5.19990", a common
