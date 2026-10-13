@@ -554,12 +554,19 @@ func TestNoSync(t *testing.T) {
 	}
 }
 
-// A file received in one go never has a journal (one less file made and removed per small
-// file); a file paused before its end has one, and is resumed.
+// owned are the parameters of a file in its transfer's own folder.
+func owned(size int) Params {
+	p := params(size)
+	p.Owned = true
+	return p
+}
+
+// In its transfer's own folder, a file received in one go never has a journal (one less file
+// made and removed per small file); a file paused before its end has one, and is resumed.
 func TestJournalOnlyWhenNeeded(t *testing.T) {
 	root, dir := openRoot(t)
 	data, sums := content(t, 10)
-	f, _ := Open(root, "small.bin", params(len(data)))
+	f, _ := Open(root, "small.bin", owned(len(data)))
 	_ = writeChunk(f, 0, data, sums[0])
 	if exists(dir, "small.bin"+JournalSuffix) {
 		t.Fatal("a journal before any commit")
@@ -569,21 +576,97 @@ func TestJournalOnlyWhenNeeded(t *testing.T) {
 	}
 
 	big, bsums := content(t, 3*testChunk)
-	g, _ := Open(root, "big.bin", params(len(big)))
+	g, _ := Open(root, "big.bin", owned(len(big)))
 	_ = writeChunk(g, 0, chunkOf(big, 0), bsums[0])
 	_ = g.Close()
 	if !exists(dir, "big.bin"+JournalSuffix) {
 		t.Fatal("closed half way without a journal: not resumable")
 	}
-	h, err := Open(root, "big.bin", params(len(big)))
+	h, err := Open(root, "big.bin", owned(len(big)))
 	if err != nil || !h.Has(0) {
 		t.Fatalf("resume after a pause: %v", err)
 	}
 	h.Close()
 
-	e, _ := Open(root, "empty.bin", params(0))
+	e, _ := Open(root, "empty.bin", owned(0))
 	_ = e.Close()
-	if r, err := Resolve(root, "empty.bin", params(0), PolicyAutoRename); err != nil || !r.Resume {
+	if r, err := Resolve(root, "empty.bin", owned(0), PolicyAutoRename); err != nil || !r.Resume {
 		t.Fatalf("an empty file closed before its end is not resumable: %+v, %v", r, err)
+	}
+}
+
+// A stop (a kill) before the first commit leaves a .part without journal (chaos, WP-4.10). In
+// its transfer's own folder it is this transfer's: it starts over under its name, the stale
+// files gone; nothing named "f (1)" appears.
+func TestStopBeforeFirstCommitInOwnFolder(t *testing.T) {
+	root, dir := openRoot(t)
+	data, sums := content(t, 2*testChunk)
+	f, _ := Open(root, "f.bin", owned(len(data)))
+	_ = writeChunk(f, 0, chunkOf(data, 0), sums[0])
+	f.part.Close() // the process stops: nothing committed, nothing closed properly
+	if !exists(dir, "f.bin"+PartSuffix) || exists(dir, "f.bin"+JournalSuffix) {
+		t.Fatal("setup: want a .part without journal")
+	}
+	pl, err := Resolve(root, "f.bin", owned(len(data)), PolicySkip)
+	if err != nil || pl.Name != "f.bin" || !pl.Resume {
+		t.Fatalf("Resolve = %+v, %v; want f.bin, resumed", pl, err)
+	}
+	g, err := Open(root, "f.bin", owned(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Has(0) || g.Resumed() != 0 {
+		t.Fatal("a chunk of a stale .part was trusted")
+	}
+	for i := 0; i < 2; i++ {
+		_ = writeChunk(g, uint32(i), chunkOf(data, i), sums[i])
+	}
+	if err := g.Finalize(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "f.bin")); !bytes.Equal(got, data) {
+		t.Fatal("the file started over differs")
+	}
+
+	// A journal torn before its header was whole: the same.
+	writeRaw(t, dir, "g.bin"+PartSuffix, "stale data")
+	writeRaw(t, dir, "g.bin"+JournalSuffix, "MXS")
+	if g, err := Open(root, "g.bin", owned(len(data))); err != nil || g.Has(0) {
+		t.Fatalf("a torn journal in the own folder: %v", err)
+	} else {
+		g.Close()
+	}
+}
+
+// Outside a transfer's own folder, the journal's header is written with the file: a stop
+// before the first commit leaves a partial file that is resumed under its name.
+func TestStopBeforeFirstCommitSingleFile(t *testing.T) {
+	root, dir := openRoot(t)
+	data, sums := content(t, 2*testChunk)
+	f, _ := Open(root, "f.bin", params(len(data)))
+	_ = writeChunk(f, 0, chunkOf(data, 0), sums[0])
+	f.part.Close() // stopped dead
+	f.journal.Close()
+	if !exists(dir, "f.bin"+JournalSuffix) {
+		t.Fatal("no journal header with the file")
+	}
+	pl, err := Resolve(root, "f.bin", params(len(data)), PolicyAutoRename)
+	if err != nil || pl.Name != "f.bin" || !pl.Resume {
+		t.Fatalf("Resolve = %+v, %v; want f.bin, resumed", pl, err)
+	}
+	// A .part without journal is still another transfer's there, never touched (STO-09).
+	writeRaw(t, dir, "h.bin"+PartSuffix, "someone else's")
+	if _, err := Open(root, "h.bin", params(len(data))); !errors.Is(err, ErrForeign) {
+		t.Fatalf("Open over a foreign .part = %v; want ErrForeign", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "h.bin"+PartSuffix)); string(got) != "someone else's" || exists(dir, "h.bin"+JournalSuffix) {
+		t.Fatal("a foreign .part was touched")
+	}
+}
+
+func writeRaw(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

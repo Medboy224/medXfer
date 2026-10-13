@@ -79,7 +79,13 @@ type Params struct {
 	VerifyFull     bool          // on resume, check every chunk, not only the last 8 (verify=full)
 	NoSync         bool          // never fsync: not durable, for the bench ladder only
 	Overwrite      bool          // Finalize may replace a file that has the final name
-	OnSync         func(time.Duration)
+	// Owned: the file is in a folder of this transfer only, its root folder, found by its
+	// marker (STO-10, D11). A partial file there without a readable journal of this transfer
+	// is this transfer's, left by a stop before its first commit: it starts over under its
+	// name. Elsewhere, the journal's header is written with the file, so that such a stop
+	// leaves a partial file that reads as this transfer's.
+	Owned  bool
+	OnSync func(time.Duration)
 }
 
 func (p Params) chunks() uint32 {
@@ -172,7 +178,16 @@ func Open(root *os.Root, name string, p Params) (*File, error) {
 	case err == nil:
 		if err := f.load(journal); err != nil {
 			journal.Close()
-			return nil, err
+			if !p.Owned || !errors.Is(err, ErrForeign) {
+				return nil, err
+			}
+			// In this transfer's own folder: a journal it cannot read is its own, torn by a
+			// stop; it goes with its data (STO-09), and the file starts over.
+			if err := f.removeStale(); err != nil {
+				return nil, err
+			}
+			f.have, f.hashes, f.order = make([]bool, f.n), make([][32]byte, f.n), nil
+			break
 		}
 		part, err := openFile(root, partName, os.O_RDWR)
 		if err == nil {
@@ -199,20 +214,49 @@ func Open(root *os.Root, name string, p Params) (*File, error) {
 		return nil, err
 	}
 
-	// No journal: a new file. A .part without a journal is not ours either.
-	part, err := openFile(root, partName, os.O_RDWR|os.O_CREATE|os.O_EXCL)
-	if errors.Is(err, os.ErrExist) {
-		return nil, fmt.Errorf("%w: %s has data but no journal", ErrForeign, name)
+	// No journal: a new file. A .part without a journal is not ours, unless it is in this
+	// transfer's own folder: a stop before its first commit left it there.
+	if _, err := root.Lstat(partName); err == nil {
+		if !p.Owned {
+			return nil, fmt.Errorf("%w: %s has data but no journal", ErrForeign, name)
+		}
+		if err := f.removeStale(); err != nil {
+			return nil, err
+		}
 	}
+	// In its own folder, the journal of a file is made by its first commit (or Close): a
+	// file finished in one go never has one (Finalize), which saves a file per small file.
+	// Elsewhere, its header comes first, written but not synced: a stop (a kill) leaves it
+	// with the data, and the file is resumed under its name, not "name (1)".
+	if !p.Owned {
+		if err := f.ensureJournal(); err != nil {
+			return nil, err
+		}
+	}
+	part, err := openFile(root, partName, os.O_RDWR|os.O_CREATE|os.O_EXCL)
 	if err != nil {
+		if f.journal != nil {
+			f.closeJournal()
+			_ = root.Remove(journalName)
+		}
+		if errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("%w: %s has data but no journal", ErrForeign, name)
+		}
 		return nil, err
 	}
-	// The journal is made by the first commit (or Close): a file finished in one go never has
-	// one (Finalize). A power loss before the first commit leaves a .part without journal,
-	// which does not read as this transfer's: never deleted (STO-09), the next attempt takes
-	// "name (1)".
 	f.part = part
 	return f, nil
+}
+
+// removeStale removes the partial file of name and its journal, in this transfer's own
+// folder only (Params.Owned): they are this transfer's (STO-09).
+func (f *File) removeStale() error {
+	for _, n := range []string{f.osName(PartSuffix), f.osName(JournalSuffix)} {
+		if err := f.root.Remove(n); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureJournal creates the journal with its header, if this file has none yet. Called with

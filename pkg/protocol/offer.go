@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -97,6 +98,10 @@ func (o *Offer) Validate() error {
 		files[key] = true
 		for j := strings.LastIndexByte(key, '/'); j > 0; j = strings.LastIndexByte(key[:j], '/') {
 			dirs[key[:j]] = true
+		}
+		if it.Size > math.MaxInt64-total {
+			// 65,537 items of 2^47 bytes would wrap the total around (WP-4.10).
+			return bad("item %d: the sizes add up to more than %d bytes", i, int64(math.MaxInt64))
 		}
 		total += it.Size
 		manifest += int64(len(it.Path) + 64)

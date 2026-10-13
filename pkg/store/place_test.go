@@ -202,3 +202,37 @@ func TestResolveRoot(t *testing.T) {
 		t.Fatal("another number of items gives the same root key")
 	}
 }
+
+// The root folder appears with its marker at once (chaos, WP-4.10): a stop while it is made
+// leaves only a temporary folder named after the key, which the transfer removes when it makes
+// its root again.
+func TestMarkRootIsAtomic(t *testing.T) {
+	root, dir := openRoot(t)
+	key := Key{7}
+	stale := filepath.Join(dir, ".medxfer-0700000000000000")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, MarkerName), []byte("MXR"), 0o644); err != nil { // torn
+		t.Fatal(err)
+	}
+	if err := MarkRoot(root, "Photos", key); err != nil {
+		t.Fatal(err)
+	}
+	if !hasMarker(root, "Photos", key) {
+		t.Fatal("the root folder has no marker")
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Fatal("the temporary folder of a stop was left")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("destination holds %v; want the root folder only", entries)
+	}
+	if err := MarkRoot(root, "Photos", key); err != nil { // already there: nothing to do
+		t.Fatal(err)
+	}
+	pl, err := ResolveRoot(root, "Photos", key, PolicyAutoRename)
+	if err != nil || pl.Name != "Photos" || !pl.Resume {
+		t.Fatalf("ResolveRoot = %+v, %v; want Photos, resumed", pl, err)
+	}
+}

@@ -3,10 +3,13 @@ package protocol
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -214,4 +217,56 @@ func TestDoneFrame(t *testing.T) {
 	if _, err := ParseDone(nil); err == nil {
 		t.Fatal("an empty DONE was accepted")
 	}
+}
+
+// The sizes of an offer never wrap around: 65,537 items of 2^47 bytes, each allowed, add up to
+// more than an int64 (WP-4.10).
+func TestOfferTotalDoesNotWrap(t *testing.T) {
+	const size = int64(1<<24) * MaxChunkSize // the largest item: 2^24 chunks of 8 MiB
+	o := Offer{TransferID: "t", ChunkSize: MaxChunkSize}
+	var wrapped int64
+	for i := 0; i < 65_537; i++ {
+		o.Items = append(o.Items, OfferItem{Item: i, Path: fmt.Sprintf("f%d", i), Size: size})
+		wrapped += size // what an unchecked sum gives
+	}
+	o.TotalBytes = wrapped
+	if err := o.Validate(); !errors.Is(err, ErrBadOffer) {
+		t.Fatalf("an offer whose sizes wrap around: %v; want ErrBadOffer", err)
+	}
+}
+
+// Native fuzzing of Offer.Validate (bible §14.2): whatever the JSON, it never panics, and an
+// offer it accepts keeps its invariants.
+func FuzzOfferValidate(f *testing.F) {
+	valid, _ := json.Marshal(validOffer())
+	f.Add(valid)
+	f.Add([]byte(`{"chunk_size":262144,"total_bytes":0,"items":[{"item":0,"path":"a","size":0}]}`))
+	f.Add([]byte(`{"chunk_size":262144,"total_bytes":2,"items":[{"item":0,"path":"A","size":1},{"item":1,"path":"a","size":1}]}`))
+	f.Add([]byte(`{"chunk_size":262144,"total_bytes":1,"items":[{"item":0,"path":"d","size":0},{"item":1,"path":"d/x","size":1}]}`))
+	f.Add([]byte(`{"chunk_size":1,"items":[{"item":0,"path":"a","size":-1}]}`))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		var o Offer
+		if json.Unmarshal(data, &o) != nil || o.Validate() != nil {
+			return
+		}
+		if o.ChunkSize < MinChunkSize || o.ChunkSize > MaxChunkSize || len(o.Items) > MaxOfferItems {
+			t.Fatalf("accepted chunk size %d, %d items", o.ChunkSize, len(o.Items))
+		}
+		var total int64
+		paths := map[string]bool{}
+		for i, it := range o.Items {
+			if it.Item != i || it.Size < 0 || it.Path == "" || it.Size > math.MaxInt64-total {
+				t.Fatalf("accepted item %d: %+v", i, it)
+			}
+			key := strings.ToLower(strings.ReplaceAll(it.Path, `\`, "/"))
+			if paths[key] {
+				t.Fatalf("accepted the path %q twice", it.Path)
+			}
+			paths[key] = true
+			total += it.Size
+		}
+		if total != o.TotalBytes {
+			t.Fatalf("accepted a total of %d for items of %d", o.TotalBytes, total)
+		}
+	})
 }

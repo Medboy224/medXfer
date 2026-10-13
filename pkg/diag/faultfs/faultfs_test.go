@@ -80,6 +80,26 @@ func TestNoSpaceIsSharedByConcurrentWrites(t *testing.T) {
 	}
 }
 
+// A real Sync makes what was written durable; a lying one does not: a power loss may take it
+// back.
+func TestUnsynced(t *testing.T) {
+	f := Wrap(tempFile(t), Plan{})
+	_, _ = f.WriteAt(make([]byte, 10), 0)
+	_, _ = f.WriteAt(make([]byte, 5), 20)
+	if got := f.Unsynced(); len(got) != 2 || got[0] != [2]int64{0, 10} || got[1] != [2]int64{20, 25} {
+		t.Fatalf("unsynced %v", got)
+	}
+	if err := f.Sync(); err != nil || len(f.Unsynced()) != 0 {
+		t.Fatalf("after a real sync: %v, %v", f.Unsynced(), err)
+	}
+	liar := Wrap(tempFile(t), Plan{LyingSync: true})
+	_, _ = liar.WriteAt(make([]byte, 10), 0)
+	_ = liar.Sync()
+	if got := liar.Unsynced(); len(got) != 1 {
+		t.Fatalf("a lying sync made %v durable", got)
+	}
+}
+
 func TestLyingSync(t *testing.T) {
 	f := Wrap(tempFile(t), Plan{LyingSync: true})
 	for i := 0; i < 3; i++ {

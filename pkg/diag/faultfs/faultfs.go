@@ -46,6 +46,7 @@ type File struct {
 	torn      bool
 	syncCalls int
 	realSyncs int
+	unsynced  [][2]int64 // [offset, end) of the writes since the last real Sync
 }
 
 // Wrap returns f with the faults of plan applied.
@@ -103,11 +104,12 @@ func (f *File) WriteAt(p []byte, off int64) (int, error) {
 // not written.
 func (f *File) reserved(p []byte, off int64, reserved int64) (int, error) {
 	n, err := f.StorageFile.WriteAt(p, off)
+	f.mu.Lock()
 	if short := reserved - int64(n); short > 0 {
-		f.mu.Lock()
 		f.written -= short
-		f.mu.Unlock()
 	}
+	f.noteUnsynced(off, n)
+	f.mu.Unlock()
 	return n, err
 }
 
@@ -115,8 +117,25 @@ func (f *File) write(p []byte, off int64) (int, error) {
 	n, err := f.StorageFile.WriteAt(p, off)
 	f.mu.Lock()
 	f.written += int64(n)
+	f.noteUnsynced(off, n)
 	f.mu.Unlock()
 	return n, err
+}
+
+// noteUnsynced records n bytes written at off, not durable until a real Sync. Called with
+// f.mu held.
+func (f *File) noteUnsynced(off int64, n int) {
+	if n > 0 {
+		f.unsynced = append(f.unsynced, [2]int64{off, off + int64(n)})
+	}
+}
+
+// Unsynced returns the ranges [offset, end) written since the last real Sync: what a power
+// loss may take back, a lying Sync included.
+func (f *File) Unsynced() [][2]int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][2]int64(nil), f.unsynced...)
 }
 
 func (f *File) Sync() error {
@@ -130,7 +149,16 @@ func (f *File) Sync() error {
 	if lie {
 		return nil
 	}
-	return f.StorageFile.Sync()
+	f.mu.Lock()
+	pending := len(f.unsynced) // writes that end after this point stay unsynced
+	f.mu.Unlock()
+	if err := f.StorageFile.Sync(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	f.unsynced = f.unsynced[pending:]
+	f.mu.Unlock()
+	return nil
 }
 
 // Stats returns the bytes written, the Sync calls, and how many of them really synced.

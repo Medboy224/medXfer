@@ -2,6 +2,8 @@ package engine
 
 import (
 	"errors"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -70,4 +72,36 @@ func TestPathRules(t *testing.T) {
 	if _, err := safeRelPath("dir/CON.txt", true); !errors.Is(err, ErrBadPath) {
 		t.Fatalf("reserved name accepted under Windows rules: %v", err)
 	}
+}
+
+// Native fuzzing of SafeRelPath (bible §14.2): whatever the path, one it accepts, with either
+// rule set, is relative, has no empty, "." or ".." component, stays inside the destination
+// on this system, and is its own normal form.
+func FuzzSafeRelPath(f *testing.F) {
+	for _, s := range []string{"a.txt", "dir/sub/f.bin", `dir\sub\f.bin`, "../x", "a/./b", "a//b", "C:x",
+		`C:\x`, "CON", "x.", "é/ü.txt", "a\x00b", "", "/abs", `\\server\share`, "a..b"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, p string) {
+		for _, windows := range []bool{false, true} {
+			got, err := safeRelPath(p, windows)
+			if err != nil {
+				continue
+			}
+			if got == "" || strings.ContainsAny(got, "\\\x00") || strings.HasPrefix(got, "/") {
+				t.Fatalf("safeRelPath(%q, %v) = %q", p, windows, got)
+			}
+			for _, c := range strings.Split(got, "/") {
+				if c == "" || c == "." || c == ".." {
+					t.Fatalf("safeRelPath(%q, %v) = %q: component %q", p, windows, got, c)
+				}
+			}
+			if windows == (runtime.GOOS == "windows") && !filepath.IsLocal(filepath.FromSlash(got)) {
+				t.Fatalf("safeRelPath(%q) = %q leaves the destination on %s", p, got, runtime.GOOS)
+			}
+			if again, err := safeRelPath(got, windows); err != nil || again != got {
+				t.Fatalf("safeRelPath(%q, %v) = %q, but %q gives %q, %v", p, windows, got, got, again, err)
+			}
+		}
+	})
 }
