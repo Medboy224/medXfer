@@ -131,7 +131,7 @@ type SecureDialer interface {
 type SecureConn interface {
     net.Conn
     PeerFingerprint() Fingerprint
-    ChannelBinding() []byte               // ExportKeyingMaterial, 32 octets
+    ChannelBinding() ([]byte, error)      // ExportKeyingMaterial, 32 octets ; une erreur arrête l'appairage
 }
 
 // C — Appairage (la bibliothèque PAKE est cachée derrière cette interface)

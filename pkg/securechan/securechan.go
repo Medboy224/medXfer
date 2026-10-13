@@ -93,6 +93,27 @@ func (c *Conn) Unread(p []byte) {
 // PeerFingerprint is the fingerprint of the peer's key, verified during the handshake.
 func (c *Conn) PeerFingerprint() identity.Fingerprint { return c.peer }
 
+// The TLS exporter of the pairing (bible §6.2, PAIR-03). The version is in the label: another
+// binding gets another label, never a reinterpretation of this one (D9 of the J5 plan).
+const (
+	ChannelBindingLabel = "EXPORTER-medxfer-v1-pair"
+	ChannelBindingLen   = 32
+)
+
+// ChannelBinding is the exporter value of this TLS session (RFC 8446 §7.5): both ends of one
+// connection get the same bytes, while a relay between two TLS sessions gets two different
+// values, so a pairing bound to it fails through a relay. It is a secret of the session: it
+// is never logged (bible chapter 13). The error is never to be ignored: an empty binding
+// would bind nothing.
+func (c *Conn) ChannelBinding() ([]byte, error) {
+	cs := c.Conn.ConnectionState()
+	b, err := cs.ExportKeyingMaterial(ChannelBindingLabel, nil, ChannelBindingLen)
+	if err != nil {
+		return nil, fmt.Errorf("securechan: channel binding: %w", err)
+	}
+	return b, nil
+}
+
 // State returns Unauth or Auth.
 func (c *Conn) State() State {
 	c.mu.Lock()
