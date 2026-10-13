@@ -31,7 +31,7 @@ Depuis ces mesures, `bench matrix` indique la dispersion de chaque case et décl
 
 ## 13 octobre 2026, après-midi — 5 GHz en Wi-Fi Direct, valeurs par défaut 4 × 2 Mio
 
-Le téléphone crée un groupe Wi-Fi Direct en 5 GHz avec Xender, et le PC s'y connecte. Le lien est en 802.11ac, canal 161 à 866,7 Mbit/s, puis canal 149 à 650 Mbit/s, avec 2,7 ms d'aller-retour. Le PC reçoit sur C: (NTFS, SSD). Un script mesure seul, pendant que le PC n'a pas Internet. Fichiers : `5ghz-20261013/`.
+Le téléphone crée un groupe Wi-Fi Direct en 5 GHz, et le PC s'y connecte. Le lien est en 802.11ac, canal 161 à 866,7 Mbit/s, puis canal 149 à 650 Mbit/s, avec 2,7 ms d'aller-retour. Le PC reçoit sur C: (NTFS, SSD). Un script mesure seul, pendant que le PC n'a pas Internet. Fichiers : `5ghz-20261013/`.
 
 **Échelle, 4 flux × 4 Mio, 256 Mio** (`ladder-*.json`) :
 
@@ -71,3 +71,37 @@ Le téléphone crée un groupe Wi-Fi Direct en 5 GHz avec Xender, et le PC s'y c
 - 100 000 fichiers de 1 à 16 Kio (872 Mo) mettent 338 s, soit 296 fichiers/s et 2,6 MB/s.
 - Le lien n'y change rien. Le coût est dans le stockage du receveur, environ 13 ms par fichier et par flux : création, `fsync` des données, renommage, `fsync` du dossier (bible §9.6).
 - Côté PC, 2 000 fichiers reçus mettent 7 s en 5 GHz.
+
+## 13 octobre 2026, soir — petits fichiers (WP-4.11) : durabilité par lots, 8 connexions
+
+**Où passe le temps d'un petit fichier** (`TestSmallFilesProfile`, 2 000 fichiers de 1 à 16 Kio, boucle locale, en millisecondes par fichier) :
+
+| Variante | Téléphone (Android) | PC (Windows, C:) |
+|---|---|---|
+| Normal, 4 connexions | 4,12 | 3,62 |
+| Normal, 8 connexions | 3,36 | 2,22 |
+| Sans `fsync`, 4 connexions | 0,72 | 2,00 |
+| Puits nul (protocole seul) | 0,19 | 0,09 |
+
+- **Sur le téléphone, les `fsync`** (du fichier et de son dossier) font plus de 80 % du temps.
+- **Sous Windows**, la création de chaque fichier coûte environ 2 ms même sans `fsync` (NTFS, antivirus). Seul le parallélisme y aide.
+
+**Durabilité par lots, mesurée sur le stockage seul** (2 000 fichiers, 4 en parallèle, en millisecondes par fichier) :
+
+| Méthode | Téléphone | PC (Windows) |
+|---|---|---|
+| Un `fsync` par fichier et par dossier | 3,2 à 3,4 | 1,9 à 2,4 |
+| Un `syncfs` par lot de 256, puis renommages | 0,37 à 0,73 | 2,3 à 2,4 (fichiers synchronisés en parallèle, sans `syncfs`) |
+| Aucune synchronisation (non durable) | 0,17 à 0,36 | 2,2 |
+
+**Après le changement**, la même mesure de profil sur le téléphone donne 0,84 ms par fichier, contre 4,12 avant.
+
+**100 000 fichiers de 1 à 16 Kio (872 Mo), du PC vers le téléphone, hotspot 2,4 GHz :**
+
+| Version | Durée | Fichiers/s |
+|---|---|---|
+| Avant (`fsync` par fichier, 4 connexions) | 9 min 58 s | 167 |
+| Lot seul, 4 connexions | 3 min 26 s | 486 |
+| **Lot et 8 connexions (automatique)** | **2 min 34 s** | **649** |
+
+En 2,4 GHz, la nouvelle version va déjà plus vite que l'ancienne en 5 GHz (338 s).

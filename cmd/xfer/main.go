@@ -464,7 +464,7 @@ func handleNode() {
 				cfg := securechan.Config{Identity: localID, Expected: sessionPeer(activeSession)}
 				go func(ctx context.Context, s *session.Channel) {
 					defer printPrompt()
-					if receiveOffer(ctx, addr, ".", transfer.DefaultWorkers, offer, cfg, tid) == nil {
+					if receiveOffer(ctx, addr, ".", 0, offer, cfg, tid) == nil { // 0: the receiver chooses
 						s.Send(session.Message{Type: "complete", TransferID: offer.TransferID})
 					}
 				}(ctx, activeSession)
@@ -1062,7 +1062,7 @@ func handleRecv(args []string) {
 	ipFlag := recvCmd.String("ip", "", "Direct sender address")
 	codeFlag := recvCmd.String("code", "", "6-digit pairing code (e.g. 229-481)")
 	outDirFlag := recvCmd.String("out", ".", "Directory to save files")
-	workersFlag := recvCmd.Int("workers", 4, "Number of parallel TCP streams")
+	workersFlag := recvCmd.Int("workers", 0, "data connections, 1 to 8; 0 chooses: 4, or 8 for many small files")
 
 	_ = recvCmd.Parse(normalizedArgs)
 
