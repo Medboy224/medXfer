@@ -248,6 +248,14 @@ Déroulement (le **répondant** affiche le PIN ; l'**initiateur** le saisit) :
    L'ISK contient le CI (les deux empreintes) et le sid (`ekm`) : la confirmation lie donc l'échange au canal.
 5. Succès : chacun enregistre l'empreinte de l'autre, la connexion passe en état `AUTH`, et seulement alors l'alias est échangé.
 
+Messages (`pkg/pairing`) :
+1. initiateur → répondant : `pair_pin {suite, share: Ya}` ;
+2. répondant → initiateur : `pair_pin_reply {share: Yb, confirm: Tb}` ;
+3. initiateur → répondant, seulement si `Tb` est bon : `pair_pin_confirm {confirm: Ta, device_name}` ;
+4. répondant → initiateur : `pair_accept`, comme pour le QR ; sinon `pair_reject`, neutre.
+
+Un essai compte dès l'envoi de `pair_pin_reply`. Sans essai disponible, le répondant répond sur un PIN factice : l'initiateur ne peut pas distinguer ce cas d'un mauvais PIN (`PAIR-07`).
+
 **Pourquoi le MITM échoue :** un attaquant qui relaie ouvre deux sessions TLS distinctes. Les `ekm` et les empreintes diffèrent d'un côté à l'autre ; les confirmations ne correspondent donc pas. Sans le PIN il ne peut pas non plus dériver la clé PAKE.
 
 ### 6.3 Chemin P3 — Appareil de confiance

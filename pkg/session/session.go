@@ -56,7 +56,10 @@ type Message struct {
 	Type        string               `json:"type"`
 	DeviceName  string               `json:"device_name,omitempty"`
 	PairingCode string               `json:"pairing_code,omitempty"`
-	Secret      string               `json:"secret,omitempty"` // QR pairing secret, base64url (pkg/pairing)
+	Secret      string               `json:"secret,omitempty"`  // QR pairing secret, base64url (pkg/pairing)
+	Suite       string               `json:"suite,omitempty"`   // PIN pairing: the PAKE suite (pkg/pake), named in every pair_pin
+	Share       []byte               `json:"share,omitempty"`   // PIN pairing: this side's PAKE share
+	Confirm     []byte               `json:"confirm,omitempty"` // PIN pairing: this side's key confirmation
 	FileName    string               `json:"file_name,omitempty"`
 	FileSize    int64                `json:"file_size,omitempty"`
 	FileID      string               `json:"file_id,omitempty"` // Unique Cryptographic Hash
