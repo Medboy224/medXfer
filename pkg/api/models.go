@@ -276,6 +276,11 @@ type IncomingOfferData struct {
 	TotalFiles int             `json:"total_files"`
 	BatchID    string          `json:"batch_id,omitempty"`
 	Items      []BatchFileInfo `json:"items,omitempty"`
+	// The room on the download folder's disk (STO-07, D9): an offer that does not fit is
+	// refused when accepted. FreeBytes is -1 when the system does not say.
+	FreeBytes   int64 `json:"free_bytes"`
+	NeededBytes int64 `json:"needed_bytes"`
+	EnoughSpace bool  `json:"enough_space"`
 }
 
 // BatchFileInfo summarizes each file in a batch for the queue UI
@@ -295,13 +300,4 @@ type TestDiskPayload struct {
 // TestNetworkPayload parameters for "test_network" action
 type TestNetworkPayload struct {
 	SizeBytes int64 `json:"size_bytes,omitempty"`
-}
-
-// TransferPreflightData emitted before starting a transfer
-type TransferPreflightData struct {
-	TargetDir        string  `json:"target_dir"`
-	DiskWriteSpeed   float64 `json:"disk_write_speed"`
-	DiskRating       string  `json:"disk_rating"`
-	IsDiskBottleneck bool    `json:"is_disk_bottleneck"`
-	Warning          string  `json:"warning,omitempty"`
 }

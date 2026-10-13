@@ -92,7 +92,21 @@ func TestLyingSync(t *testing.T) {
 	}
 }
 
-// A full disk on the receiver ends the transfer with an error: no hang, no false success.
+// diskFull is a receiver's events that cancel the transfer once the disk is full.
+type diskFull struct {
+	cancel   context.CancelFunc
+	reported chan error
+}
+
+func (d *diskFull) OnProgress(transfer.Progress) {}
+func (d *diskFull) OnItem(transfer.ItemEvent)    {}
+func (d *diskFull) OnDiskFull(err error) {
+	d.reported <- err
+	d.cancel()
+}
+
+// A full disk on the receiver pauses the transfer and says so (STO-07): no hang, no false
+// success. The pkg/transfer tests resume it.
 func TestEngineReportsFullDisk(t *testing.T) {
 	restore := engine.SetStorageWrapper(func(f engine.StorageFile, path string) engine.StorageFile {
 		if strings.HasSuffix(path, ".part.state") {
@@ -124,11 +138,24 @@ func TestEngineReportsFullDisk(t *testing.T) {
 	go func() { _ = sender.Serve(ctx, ln) }()
 
 	plain := func(_ context.Context, c net.Conn) (net.Conn, error) { return c, nil }
-	results, err := transfer.NewReceiver(t.TempDir(), plain).Run(ctx, ln.Addr().String(), offer)
+	rctx, rcancel := context.WithCancel(ctx)
+	defer rcancel()
+	r := transfer.NewReceiver(t.TempDir(), plain)
+	ev := &diskFull{cancel: rcancel, reported: make(chan error, 1)}
+	r.Events = ev
+	results, err := r.Run(rctx, ln.Addr().String(), offer)
 	if err == nil && results[0].State == transfer.ItemDone {
 		t.Fatal("the transfer succeeded on a full disk")
 	}
 	if ctx.Err() != nil {
 		t.Fatalf("the transfer only stopped at the test timeout: %v", err)
+	}
+	select {
+	case err := <-ev.reported:
+		if !errors.Is(err, syscall.ENOSPC) {
+			t.Fatalf("OnDiskFull(%v); want ENOSPC", err)
+		}
+	default:
+		t.Fatal("the full disk was not reported")
 	}
 }

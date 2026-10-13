@@ -700,9 +700,6 @@ const IndexHTML = `<!DOCTYPE html>
         case "benchmark_network_result":
           onBenchmarkNetworkResult(msg.data);
           break;
-        case "transfer_preflight":
-          onTransferPreflight(msg.data);
-          break;
         case "status":
           updateStatusUI(msg.data);
           break;
@@ -916,6 +913,10 @@ const IndexHTML = `<!DOCTYPE html>
         case "transfer_paused":
           setPausedUI(true);
           break;
+        case "disk_full":
+          log("ERROR", "💾 " + msg.data.message);
+          setPausedUI(true);
+          break;
         case "transfer_resumed":
           setPausedUI(false);
           break;
@@ -969,6 +970,11 @@ const IndexHTML = `<!DOCTYPE html>
           clearAllSelected(true);
           break;
         case "action_error":
+          if (msg.data && msg.data.code === "NO_SPACE" && lastOfferData) {
+            log("ERROR", "💾 " + msg.data.error);
+            showOfferModal(Object.assign({}, lastOfferData, { enough_space: false }));
+            break;
+          }
           const errPairBtn = document.getElementById("pairBtn");
           if (errPairBtn) { errPairBtn.innerText = "Pair"; errPairBtn.disabled = false; }
           document.querySelectorAll(".peer-actions button").forEach(b => {
@@ -2121,12 +2127,19 @@ const IndexHTML = `<!DOCTYPE html>
       }
     }
 
+    let lastOfferData = null;
+
     function showOfferModal(data) {
       const senderLabel = (data.device_name && data.device_name !== "Peer")
         ? (data.device_name + " (" + data.sender_ip + ")")
         : data.sender_ip;
       document.getElementById("modalTitle").innerText = data.is_batch ? "📁 Incoming Folder / Batch Transfer" : "📄 Incoming File Transfer";
-      document.getElementById("modalDesc").innerText = senderLabel + " is offering: " + data.file_name + " (" + formatMB(data.file_size) + ")";
+      lastOfferData = data;
+      let desc = senderLabel + " is offering: " + data.file_name + " (" + formatMB(data.file_size) + ")";
+      if (data.enough_space === false) {
+        desc += "\n⚠️ Not enough free space: " + formatMB(data.free_bytes) + " free, " + formatMB(data.needed_bytes) + " needed. Free some space or choose another folder.";
+      }
+      document.getElementById("modalDesc").innerText = desc;
       document.getElementById("modalSaveDirInput").value = document.getElementById("downloadDirInput").value || ".";
       document.getElementById("offerModal").style.display = "flex";
     }
@@ -2291,14 +2304,6 @@ const IndexHTML = `<!DOCTYPE html>
           banner.style.color = "#a7f3d0";
           banner.innerHTML = "✅ <strong>Optimal Pipeline:</strong> Storage write speed (" + diskSpeed.toFixed(1) + " MB/s) easily exceeds network link speed (" + netSpeed.toFixed(1) + " MB/s). Expected transfer will sustain full wire speed (~" + netSpeed.toFixed(1) + " MB/s)!";
         }
-      }
-    }
-
-    function onTransferPreflight(data) {
-      if (!data) return;
-      log("DIAG", "Pre-flight storage probe: " + data.target_dir + " writes at " + data.disk_write_speed.toFixed(1) + " MB/s [" + data.disk_rating + "]");
-      if (data.is_disk_bottleneck) {
-        log("WARNING", "⚠️ Storage Bottleneck: " + data.warning);
       }
     }
 

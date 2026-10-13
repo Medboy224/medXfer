@@ -153,17 +153,13 @@ func (r *Receiver) Run(ctx context.Context, addr string, offer protocol.Offer) (
 		}
 		defer root.Close()
 		run.root = root
-		run.planRoot(offer)
-		if run.inRoot {
-			place, err := store.ResolveRoot(root, run.rootBase, run.rootKey, r.Policy)
-			if err != nil {
-				return nil, err
-			}
-			run.rootDir = place.Name
-			if place.Skip { // "skip": the folder is there, the whole offer is refused (D5)
-				for i := range run.items {
-					run.endItem(i, ItemSkipped, fmt.Errorf("the folder %q is already there", place.Name))
-				}
+		place, err := run.findRoot()
+		if err != nil {
+			return nil, err
+		}
+		if place.Skip { // "skip": the folder is there, the whole offer is refused (D5)
+			for i := range run.items {
+				run.endItem(i, ItemSkipped, fmt.Errorf("the folder %q is already there", place.Name))
 			}
 		}
 	}
@@ -288,6 +284,31 @@ func (ru *run) planRoot(offer protocol.Offer) {
 	ru.rootKey = store.RootKey(ru.r.SenderKey, ru.rootBase, len(items), offer.TotalBytes)
 }
 
+// findRoot plans and resolves the transfer's root folder, without writing anything. A single
+// file has none: the zero RootPlace.
+func (ru *run) findRoot() (store.RootPlace, error) {
+	ru.planRoot(ru.offer)
+	if !ru.inRoot {
+		return store.RootPlace{}, nil
+	}
+	place, err := store.ResolveRoot(ru.root, ru.rootBase, ru.rootKey, ru.r.Policy)
+	if err != nil {
+		return place, err
+	}
+	ru.rootDir = place.Name
+	return place, nil
+}
+
+// policy is the collision policy of an item. In the transfer's own folder, a final file is
+// one of this transfer, received in an earlier session: done. Nothing of the user is there to
+// rename or overwrite.
+func (ru *run) policy() store.Policy {
+	if ru.inRoot {
+		return store.PolicySkip
+	}
+	return ru.r.Policy
+}
+
 // itemName is where item path (checked by SafeRelPath) goes in the destination.
 func (ru *run) itemName(safe string) string {
 	if !ru.inRoot {
@@ -343,6 +364,7 @@ type item struct {
 	// concurrent writes); opening, finalizing and closing take the write lock.
 	mu        sync.RWMutex
 	opened    bool
+	started   bool // ItemStarted was emitted
 	closed    bool
 	safe      string      // the item's path, checked (SafeRelPath)
 	place     store.Place // where it goes, found by open
@@ -359,6 +381,9 @@ type item struct {
 	counted   atomic.Int64 // bytes of this item in the progress, given back if it starts over
 	digest    bool         // under r.mu: the DIGEST_REQ waits to be sent
 	restarted bool         // under r.mu: started over once after a digest mismatch
+	// gen changes when the item is set aside on a full disk (under st.mu and r.mu): the
+	// answers to the tasks of an earlier generation are dropped, every chunk is asked again.
+	gen atomic.Uint32
 }
 
 func newRun(r *Receiver, offer protocol.Offer) *run {
@@ -375,6 +400,7 @@ func newRun(r *Receiver, offer protocol.Offer) *run {
 type task struct {
 	item  int
 	index uint32
+	gen   uint32 // the item's generation when the task was scheduled
 }
 
 type schedStatus int
@@ -410,9 +436,10 @@ func (ru *run) next(ctx context.Context, block bool) (task, schedStatus) {
 				if r.pausedItems[i] {
 					continue
 				}
+				gen := st.gen.Load()
 				if st.digest {
 					st.digest = false
-					return task{i, protocol.DigestIndex}, gotTask
+					return task{i, protocol.DigestIndex, gen}, gotTask
 				}
 				if n := len(st.retries); n > 0 {
 					min := 0
@@ -423,7 +450,7 @@ func (ru *run) next(ctx context.Context, block bool) (task, schedStatus) {
 					}
 					idx := st.retries[min]
 					st.retries = append(st.retries[:min], st.retries[min+1:]...)
-					return task{i, idx}, gotTask
+					return task{i, idx, gen}, gotTask
 				}
 				sched := st.total
 				if sched == 0 {
@@ -431,7 +458,7 @@ func (ru *run) next(ctx context.Context, block bool) (task, schedStatus) {
 				}
 				if st.next < sched {
 					st.next++
-					return task{i, st.next - 1}, gotTask
+					return task{i, st.next - 1, gen}, gotTask
 				}
 			}
 		}
@@ -448,7 +475,7 @@ func (ru *run) retry(t task, badHash bool) {
 	st := ru.items[t.item]
 	r := ru.r
 	r.mu.Lock()
-	if st.state >= ItemDone {
+	if st.state >= ItemDone || t.gen != st.gen.Load() {
 		r.mu.Unlock()
 		return
 	}
@@ -471,7 +498,7 @@ func (ru *run) retry(t task, badHash bool) {
 func (ru *run) prepare(t task) bool {
 	st := ru.items[t.item]
 	st.mu.Lock()
-	if st.closed {
+	if st.closed || t.gen != st.gen.Load() {
 		st.mu.Unlock()
 		return true
 	}
@@ -512,13 +539,7 @@ func (ru *run) open(st *item) error {
 	if err != nil {
 		return err
 	}
-	policy := r.Policy
-	if ru.inRoot {
-		// In the transfer's own folder, a final file is one of this transfer, received in an
-		// earlier session: done. Nothing of the user is there to rename or overwrite.
-		policy = store.PolicySkip
-	}
-	place, err := store.Resolve(ru.root, ru.itemName(safe), ru.params(st, false), policy)
+	place, err := store.Resolve(ru.root, ru.itemName(safe), ru.params(st, false), ru.policy())
 	if err != nil {
 		return err
 	}
@@ -526,7 +547,10 @@ func (ru *run) open(st *item) error {
 	st.safe = safe
 	st.place = place
 	st.saved = filepath.Join(r.OutDir, filepath.FromSlash(place.Name))
-	ru.emitItem(ItemEvent{Item: st.it.Item, Path: st.it.Path, Size: st.it.Size, State: ItemStarted})
+	if !st.started { // once: an item set aside on a full disk is opened again
+		st.started = true
+		ru.emitItem(ItemEvent{Item: st.it.Item, Path: st.it.Path, Size: st.it.Size, State: ItemStarted})
+	}
 	if place.Done { // PolicySkip: a file of that name is already there
 		ru.bytes.Add(st.it.Size)
 		st.closed = true
@@ -591,23 +615,27 @@ func (ru *run) write(t task, data []byte, sum [32]byte) error {
 		return nil
 	}
 	st.mu.RLock()
+	if t.gen != st.gen.Load() {
+		st.mu.RUnlock()
+		return nil // set aside on a full disk meanwhile: asked again
+	}
 	if st.f == nil && !st.closed { // the item's first verified chunk: its file is made now
 		st.mu.RUnlock()
 		st.mu.Lock()
 		var err error
-		if st.f == nil && !st.closed {
+		if st.f == nil && !st.closed && t.gen == st.gen.Load() {
 			err = ru.create(st)
 		}
 		st.mu.Unlock()
 		if err != nil {
-			ru.endItem(t.item, ItemFailed, err)
+			ru.writeFailed(t, err)
 			return nil
 		}
 		st.mu.RLock()
 	}
-	if st.closed || st.f == nil {
+	if st.closed || st.f == nil || t.gen != st.gen.Load() {
 		st.mu.RUnlock()
-		return nil // skipped or failed meanwhile
+		return nil // skipped, failed or set aside meanwhile
 	}
 	if st.total > 0 && !st.f.Has(t.index) {
 		start := time.Now()
@@ -618,7 +646,7 @@ func (ru *run) write(t task, data []byte, sum [32]byte) error {
 		}
 		if err != nil {
 			st.mu.RUnlock()
-			ru.endItem(t.item, ItemFailed, err)
+			ru.writeFailed(t, err)
 			return nil
 		}
 		ru.bytes.Add(int64(len(data)))
@@ -632,6 +660,58 @@ func (ru *run) write(t task, data []byte, sum [32]byte) error {
 		ru.complete(t.item)
 	}
 	return nil
+}
+
+// writeFailed ends the item whose chunk t could not be written, unless the disk is full: then
+// the transfer pauses (STO-07).
+func (ru *run) writeFailed(t task, err error) {
+	if engine.IsDiskFull(err) {
+		ru.diskFull(t.item, t.gen, err)
+		return
+	}
+	ru.endItem(t.item, ItemFailed, err)
+}
+
+// diskFull pauses the transfer when the disk is full (STO-07, bible §9.7) instead of failing
+// it. Item i is set aside: its file is closed with its journal, and opened again once the
+// user resumes, so that only what is durable counts; every other chunk is asked again. The
+// other items keep their files: a write of theirs that fails sets them aside too.
+func (ru *run) diskFull(i int, gen uint32, err error) {
+	st := ru.items[i]
+	r := ru.r
+	st.mu.Lock()
+	r.mu.Lock()
+	// A write of an earlier generation, which failed late, says nothing new: the user may
+	// have resumed since.
+	aside := st.state < ItemDone && !st.closed && gen == st.gen.Load()
+	first := false
+	if aside {
+		st.gen.Add(1)
+		st.next, st.retries, st.digest = 0, nil, false
+		first = !r.paused
+		r.paused = true
+	}
+	r.mu.Unlock()
+	if aside {
+		if st.f != nil {
+			_ = st.f.Suspend()
+			st.f = nil
+		}
+		st.opened = false
+		st.processed.Store(0)
+		for k := range st.fresh {
+			st.fresh[k] = false
+		}
+		ru.bytes.Add(-st.counted.Swap(0))
+	}
+	st.mu.Unlock()
+	if first {
+		if ev, ok := r.Events.(DiskFullEvents); ok {
+			ru.evMu.Lock()
+			ev.OnDiskFull(err)
+			ru.evMu.Unlock()
+		}
+	}
 }
 
 // complete is called once every chunk of item i is handled. A file of at most one chunk, all
@@ -771,6 +851,12 @@ func (ru *run) finish(i int) {
 	var err error
 	if st.f != nil {
 		err = st.f.Finalize()
+	}
+	if engine.IsDiskFull(err) {
+		gen := st.gen.Load()
+		st.mu.Unlock()
+		ru.diskFull(i, gen, err)
+		return
 	}
 	st.closed = true
 	st.mu.Unlock()
@@ -1068,7 +1154,9 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 				drop()
 				continue
 			}
-			ru.verified(t.item, digest)
+			if t.gen == ru.items[t.item].gen.Load() {
+				ru.verified(t.item, digest)
+			}
 			continue
 		}
 		item, index, sum, data, err := protocol.ParseChunkData(p)
