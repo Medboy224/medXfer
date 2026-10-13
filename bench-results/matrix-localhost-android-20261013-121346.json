@@ -1,0 +1,296 @@
+{
+  "schema_version": 2,
+  "step": "R6",
+  "layer": "whole transfer: offer, digest, rename",
+  "bytes": 268435456,
+  "repeat": 3,
+  "tolerance": 0.05,
+  "cells": [
+    {
+      "streams": 1,
+      "chunk_size": 1048576,
+      "memory_bytes": 2097152,
+      "mbps": 7.72,
+      "runs_mbps": [
+        7,
+        8.1,
+        7.72
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 1048576,
+      "memory_bytes": 4194304,
+      "mbps": 9.4,
+      "runs_mbps": [
+        8.4,
+        12.13,
+        9.4
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 1048576,
+      "memory_bytes": 8388608,
+      "mbps": 11.71,
+      "runs_mbps": [
+        11.71,
+        12.29,
+        11.35
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 1048576,
+      "memory_bytes": 16777216,
+      "mbps": 10.29,
+      "runs_mbps": [
+        10.29,
+        10.59,
+        8.24
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 1,
+      "chunk_size": 2097152,
+      "memory_bytes": 4194304,
+      "mbps": 9.59,
+      "runs_mbps": [
+        9.59,
+        8.56,
+        12.47
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 2097152,
+      "memory_bytes": 8388608,
+      "mbps": 11.85,
+      "runs_mbps": [
+        12.46,
+        9.97,
+        11.85
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 2097152,
+      "memory_bytes": 16777216,
+      "mbps": 12.3,
+      "runs_mbps": [
+        12.3,
+        12.22,
+        12.5
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 2097152,
+      "memory_bytes": 33554432,
+      "mbps": 10.32,
+      "runs_mbps": [
+        8.09,
+        10.32,
+        11.65
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 1,
+      "chunk_size": 4194304,
+      "memory_bytes": 8388608,
+      "mbps": 10.54,
+      "runs_mbps": [
+        10.54,
+        11.91,
+        10.29
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 4194304,
+      "memory_bytes": 16777216,
+      "mbps": 6.79,
+      "runs_mbps": [
+        7.84,
+        6.79,
+        5.61
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 4194304,
+      "memory_bytes": 33554432,
+      "mbps": 10.91,
+      "runs_mbps": [
+        10.91,
+        11.82,
+        10.1
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 4194304,
+      "memory_bytes": 67108864,
+      "mbps": 12.08,
+      "runs_mbps": [
+        12.1,
+        12.08,
+        3.85
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 1,
+      "chunk_size": 8388608,
+      "memory_bytes": 16777216,
+      "mbps": 8.95,
+      "runs_mbps": [
+        8.95,
+        10.7,
+        3.99
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 8388608,
+      "memory_bytes": 33554432,
+      "mbps": 12.13,
+      "runs_mbps": [
+        12.3,
+        12.09,
+        12.13
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 8388608,
+      "memory_bytes": 67108864,
+      "mbps": 8.49,
+      "runs_mbps": [
+        11.86,
+        8.49,
+        7
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 8388608,
+      "memory_bytes": 134217728,
+      "mbps": 7.92,
+      "runs_mbps": [
+        7.7,
+        7.92,
+        9.07
+      ],
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    }
+  ],
+  "best": {
+    "streams": 4,
+    "chunk_size": 2097152,
+    "memory_bytes": 16777216,
+    "mbps": 12.3,
+    "runs_mbps": [
+      12.3,
+      12.22,
+      12.5
+    ],
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "recommended": {
+    "streams": 2,
+    "chunk_size": 2097152,
+    "memory_bytes": 8388608,
+    "mbps": 11.85,
+    "runs_mbps": [
+      12.46,
+      9.97,
+      11.85
+    ],
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "current": {
+    "streams": 4,
+    "chunk_size": 4194304,
+    "memory_bytes": 33554432,
+    "mbps": 10.91,
+    "runs_mbps": [
+      10.91,
+      11.82,
+      10.1
+    ],
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "keep_defaults": false
+}

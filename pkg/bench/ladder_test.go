@@ -35,7 +35,7 @@ func ladderPair(t *testing.T) (*LadderServer, LadderOptions) {
 		Identity: clientID, Streams: 2, Size: 8 << 20, ChunkSize: 1 << 20, Dir: t.TempDir()}
 }
 
-// DEV-07: the ladder measures R1 to R4 against a server, with the transfer engine from R3 on.
+// DEV-07: the ladder measures R1 to R6 against a server, with the transfer engine from R3 on.
 func TestLadderRunsEveryStep(t *testing.T) {
 	_, o := ladderPair(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -44,7 +44,7 @@ func TestLadderRunsEveryStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Steps) != 4 || res.Steps[0].RatioToR1 != 1 {
+	if len(res.Steps) != len(Steps) || res.Steps[0].RatioToR1 != 1 {
 		t.Fatalf("steps %+v", res.Steps)
 	}
 	for _, s := range res.Steps {

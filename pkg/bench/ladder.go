@@ -9,9 +9,12 @@ package bench
 //	R2  + TLS 1.3, the server's key pinned
 //	R3  + medXfer frames and SHA-256: the transfer engine on a bench offer, null sink (DEV-08)
 //	R4  + disk writes, without fsync
+//	R5  + the journal and its group commit, with fsync (pkg/store)
+//	R6  the whole transfer: a real offer on a control connection, checked and accepted, data
+//	    connections that join it through the hub (DATA_JOIN), digest and rename
 //
-// R5 (journal and fsync) and R6 (the whole transfer) come with J4b. The listening side sends,
-// the other side receives and measures, as `xfer send` and `xfer recv`.
+// The listening side sends, the other side receives and measures, as `xfer send` and
+// `xfer recv`.
 
 import (
 	"context"
@@ -31,6 +34,7 @@ import (
 	ident "github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/securechan"
+	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
@@ -41,10 +45,14 @@ const (
 	ladderQuit = 'Q' // the client is done: a server started with once stops
 )
 
+// tlsRecord is the first byte of a TLS handshake: a data connection of R6, for the hub.
+const tlsRecord = 0x16
+
 // Kind of a TLS connection, in its hello.
 const (
-	ladderStream byte = 2 // R2: bytes on the connection
-	ladderOffer  byte = 3 // R3, R4: a data connection of the bench offer
+	ladderStream   byte = 2 // R2: bytes on the connection
+	ladderOffer    byte = 3 // R3 to R5: a data connection of the bench offer
+	ladderTransfer byte = 4 // R6: the control connection of a real transfer
 )
 
 const (
@@ -63,6 +71,11 @@ type LadderServer struct {
 	src    io.ReaderAt
 	mu     sync.Mutex
 	offers map[[2]int64]*connListener // bench senders, by size and chunk size
+
+	// R6: the data connections join their transfer through a hub, as on a device's port
+	// (CHAN-06). It shares the ladder's port: a TLS handshake goes to it.
+	hub      *transfer.Hub
+	hubConns *connListener
 }
 
 // NewLadderServer returns a server with a new code and a random source in memory.
@@ -71,7 +84,8 @@ func NewLadderServer(id *ident.Identity) (*LadderServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &LadderServer{Identity: id, Code: diag.NewNetBenchCode(), src: src, offers: map[[2]int64]*connListener{}}, nil
+	return &LadderServer{Identity: id, Code: diag.NewNetBenchCode(), src: src, offers: map[[2]int64]*connListener{},
+		hub: transfer.NewHub(securechan.Config{Identity: id}), hubConns: newConnListener()}, nil
 }
 
 // SetSource replaces the random source (DEV-09: --source zero|file). Steps larger than a
@@ -83,9 +97,11 @@ func (s *LadderServer) SetSource(src io.ReaderAt) { s.src = src }
 func (s *LadderServer) Serve(ctx context.Context, ln net.Listener, once bool) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	go func() { _ = s.hub.Serve(s.hubConns) }()
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()
+		_ = s.hubConns.Close()
 	}()
 	quit := func() {
 		if once {
@@ -121,6 +137,10 @@ func (s *LadderServer) handle(ctx context.Context, c net.Conn, quit func()) erro
 		return err
 	}
 	switch sel[0] {
+	case tlsRecord: // R6: a data connection, for the hub, its first byte given back
+		_ = c.SetDeadline(time.Time{})
+		keep = true
+		return s.hubConns.push(&prefixConn{Conn: c, prefix: sel[:]})
 	case ladderQuit:
 		if err := s.readCode(c); err != nil {
 			return err
@@ -162,6 +182,8 @@ func (s *LadderServer) handle(ctx context.Context, c net.Conn, quit func()) erro
 			}
 			keep = true // the bench sender owns it now
 			return l.push(c)
+		case ladderTransfer:
+			return s.transfer(ctx, tc, size, chunk)
 		}
 		return fmt.Errorf("bench ladder: unknown kind %d", hdr[0])
 	}
@@ -211,6 +233,65 @@ func (s *LadderServer) offer(ctx context.Context, size int64, chunk uint32) (*co
 	return l, nil
 }
 
+// transfer serves R6 as `xfer send` does: a real offer of one file goes on the control
+// connection c; once accepted, it is served to c's peer only, its data connections joining it
+// through the hub (DATA_JOIN, CHAN-06). It ends when the receiver says it is complete.
+func (s *LadderServer) transfer(ctx context.Context, c *securechan.Conn, size int64, chunk uint32) error {
+	id, err := transfer.NewID()
+	if err != nil {
+		return err
+	}
+	l, err := s.hub.Register(id, c.PeerFingerprint())
+	if err != nil {
+		return err
+	}
+	defer l.Close()
+	offer := protocol.Offer{TransferID: id.String(), Root: ladderFile, ChunkSize: chunk, TotalBytes: size,
+		Items: []protocol.OfferItem{{Item: 0, Path: ladderFile, Size: size, MTime: time.Now().UnixNano()}}}
+	ch := session.NewChannel(c)
+	if err := ch.Send(session.Message{Type: "offer", TransferID: offer.TransferID, Offer: &offer}); err != nil {
+		return err
+	}
+	_ = c.SetReadDeadline(time.Now().Add(ladderIO))
+	m, err := ch.Read()
+	if err != nil {
+		return err
+	}
+	if m.Type != "accept" || m.TransferID != offer.TransferID {
+		return fmt.Errorf("bench ladder: R6 offer answered %q", m.Type)
+	}
+	_ = c.SetReadDeadline(time.Time{})
+	sender, err := transfer.NewSourceSender(offer, s.src)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stop()
+	go func() { _ = sender.Serve(ctx, l) }()
+	_, _ = ch.Read() // "complete", or the connection closed
+	return nil
+}
+
+// ladderFile is the name of R6's file.
+const ladderFile = "ladder.bin"
+
+// prefixConn gives back the bytes read from a connection before it is handed on.
+type prefixConn struct {
+	net.Conn
+	prefix []byte
+}
+
+func (c *prefixConn) Read(p []byte) (int, error) {
+	if len(c.prefix) > 0 {
+		n := copy(p, c.prefix)
+		c.prefix = c.prefix[n:]
+		return n, nil
+	}
+	return c.Conn.Read(p)
+}
+
 // connListener hands connections accepted elsewhere to a transfer.Sender.
 type connListener struct {
 	conns chan net.Conn
@@ -253,7 +334,7 @@ type LadderOptions struct {
 	Streams     int               // data connections (default 4)
 	Size        int64             // bytes per step
 	ChunkSize   uint32            // R3, R4 (default 4 MiB)
-	Dir         string            // R4 writes into a temporary folder here (default: the OS's)
+	Dir         string            // R4 to R6 write into a temporary folder here (default: the OS's)
 	Sink        transfer.Sink     // R3's sink (DEV-09): null by default
 }
 
@@ -265,7 +346,7 @@ type LadderStep struct {
 	DurationS  float64          `json:"duration_s"`
 	MBps       float64          `json:"mbps"`
 	RatioToR1  float64          `json:"ratio_to_r1"`
-	Bottleneck *diag.Bottleneck `json:"bottleneck,omitempty"` // R3, R4: limiting stage on this side
+	Bottleneck *diag.Bottleneck `json:"bottleneck,omitempty"` // R3 to R6: limiting stage on this side
 }
 
 // LadderResult is the whole ladder, printed by `xfer bench ladder --json`.
@@ -276,8 +357,17 @@ type LadderResult struct {
 	Steps         []LadderStep `json:"steps"`
 }
 
-// RunLadder measures R1 to R4 against a LadderServer.
-func RunLadder(ctx context.Context, o LadderOptions) (*LadderResult, error) {
+// Steps are the steps of the ladder, in order.
+var Steps = []struct{ Name, Layer string }{
+	{"R1", "raw TCP"},
+	{"R2", "+ TLS 1.3, pinned key"},
+	{"R3", "+ frames and SHA-256, null sink"},
+	{"R4", "+ disk writes, no fsync"},
+	{"R5", "+ journal and fsync"},
+	{"R6", "whole transfer: offer, digest, rename"},
+}
+
+func (o LadderOptions) withDefaults() (LadderOptions, error) {
 	if o.Streams <= 0 {
 		o.Streams = transfer.DefaultWorkers
 	}
@@ -285,28 +375,58 @@ func RunLadder(ctx context.Context, o LadderOptions) (*LadderResult, error) {
 		o.ChunkSize = protocol.DefaultChunkSize
 	}
 	if o.Size < int64(o.Streams) {
-		return nil, fmt.Errorf("bench ladder: %d bytes for %d streams", o.Size, o.Streams)
+		return o, fmt.Errorf("bench ladder: %d bytes for %d streams", o.Size, o.Streams)
+	}
+	return o, nil
+}
+
+// runStep measures one step: its result, without its ratio to R1.
+func (o LadderOptions) runStep(ctx context.Context, name string) (LadderStep, error) {
+	layer := ""
+	for _, s := range Steps {
+		if s.Name == name {
+			layer = s.Layer
+		}
+	}
+	var run func() (*diag.Bottleneck, error)
+	switch name {
+	case "R1":
+		run = func() (*diag.Bottleneck, error) { return nil, o.streams(ctx, false) }
+	case "R2":
+		run = func() (*diag.Bottleneck, error) { return nil, o.streams(ctx, true) }
+	case "R3":
+		run = func() (*diag.Bottleneck, error) { return o.offer(ctx, o.Sink, false) }
+	case "R4":
+		run = func() (*diag.Bottleneck, error) { return o.offer(ctx, transfer.SinkDisk, true) }
+	case "R5":
+		run = func() (*diag.Bottleneck, error) { return o.offer(ctx, transfer.SinkDisk, false) }
+	case "R6":
+		run = func() (*diag.Bottleneck, error) { return o.transfer(ctx) }
+	default:
+		return LadderStep{}, fmt.Errorf("bench ladder: unknown step %q", name)
+	}
+	start := time.Now()
+	b, err := run()
+	if err != nil {
+		return LadderStep{}, fmt.Errorf("%s (%s): %w", name, layer, err)
+	}
+	d := time.Since(start)
+	return LadderStep{Step: name, Layer: layer, Bytes: o.Size, DurationS: round3(d.Seconds()),
+		MBps: round2(float64(o.Size) / (1 << 20) / d.Seconds()), Bottleneck: b}, nil
+}
+
+// RunLadder measures R1 to R6 against a LadderServer.
+func RunLadder(ctx context.Context, o LadderOptions) (*LadderResult, error) {
+	o, err := o.withDefaults()
+	if err != nil {
+		return nil, err
 	}
 	res := &LadderResult{SchemaVersion: diag.SchemaVersion, Streams: o.Streams, ChunkSize: o.ChunkSize}
-	type step struct {
-		name, layer string
-		run         func() (*diag.Bottleneck, error)
-	}
-	steps := []step{
-		{"R1", "raw TCP", func() (*diag.Bottleneck, error) { return nil, o.streams(ctx, false) }},
-		{"R2", "+ TLS 1.3, pinned key", func() (*diag.Bottleneck, error) { return nil, o.streams(ctx, true) }},
-		{"R3", "+ frames and SHA-256, null sink", func() (*diag.Bottleneck, error) { return o.offer(ctx, o.Sink, false) }},
-		{"R4", "+ disk writes, no fsync", func() (*diag.Bottleneck, error) { return o.offer(ctx, transfer.SinkDisk, true) }},
-	}
-	for _, st := range steps {
-		start := time.Now()
-		b, err := st.run()
+	for _, st := range Steps {
+		r, err := o.runStep(ctx, st.Name)
 		if err != nil {
-			return res, fmt.Errorf("%s (%s): %w", st.name, st.layer, err)
+			return res, err
 		}
-		d := time.Since(start)
-		r := LadderStep{Step: st.name, Layer: st.layer, Bytes: o.Size, DurationS: round3(d.Seconds()),
-			MBps: round2(float64(o.Size) / (1 << 20) / d.Seconds()), Bottleneck: b}
 		if len(res.Steps) > 0 && res.Steps[0].MBps > 0 {
 			r.RatioToR1 = round2(r.MBps / res.Steps[0].MBps)
 		} else {
@@ -410,7 +530,7 @@ func (ladderEvents) OnProgress(transfer.Progress) {}
 func (ladderEvents) OnItem(transfer.ItemEvent)    {}
 
 // offer receives the bench offer with the transfer engine: R3 into sink, R4 to disk without
-// fsync. It returns the limiting stage on this side.
+// fsync, R5 with the journal and its fsync. It returns the limiting stage on this side.
 func (o LadderOptions) offer(ctx context.Context, sink transfer.Sink, noSync bool) (*diag.Bottleneck, error) {
 	out, err := os.MkdirTemp(o.Dir, "medxfer-ladder-*")
 	if err != nil {
@@ -436,6 +556,70 @@ func (o LadderOptions) offer(ctx context.Context, sink transfer.Sink, noSync boo
 	if results[0].State != transfer.ItemDone {
 		return nil, fmt.Errorf("bench offer %v: %v", results[0].State, results[0].Err)
 	}
+	b := ev.Bottleneck()
+	return &b, nil
+}
+
+// transfer runs R6 as `xfer recv` does: the offer comes on a control connection, is checked
+// (Validate, free space) and accepted; the data connections join it through the server's hub
+// (DATA_JOIN); the file is journaled, synced, checked against the sender's digest and renamed.
+func (o LadderOptions) transfer(ctx context.Context) (*diag.Bottleneck, error) {
+	out, err := os.MkdirTemp(o.Dir, "medxfer-ladder-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(out)
+	c, err := o.dial(ctx, ladderTLS)
+	if err != nil {
+		return nil, err
+	}
+	tc, err := o.tls(ctx, c, ladderTransfer, o.Size)
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	ch := session.NewChannel(tc)
+	defer ch.Close()
+	_ = tc.SetReadDeadline(time.Now().Add(ladderIO))
+	m, err := ch.Read()
+	if err != nil {
+		return nil, err
+	}
+	_ = tc.SetReadDeadline(time.Time{})
+	if m.Type != "offer" || m.Offer == nil {
+		return nil, fmt.Errorf("bench ladder: R6 got %q instead of an offer", m.Type)
+	}
+	offer := *m.Offer
+	id, err := transfer.ParseID(offer.TransferID)
+	if err != nil {
+		return nil, err
+	}
+	r := transfer.NewReceiver(out, transfer.JoinFunc(securechan.Config{Identity: o.Identity, Expected: o.Fingerprint}, id))
+	r.SenderKey = o.Fingerprint
+	r.Workers = o.Streams
+	space, err := r.CheckSpace(offer)
+	if err != nil {
+		return nil, err
+	}
+	if err := space.Err(); err != nil {
+		return nil, err
+	}
+	if err := ch.Send(session.Message{Type: "accept", TransferID: offer.TransferID, ChunkSize: offer.ChunkSize}); err != nil {
+		return nil, err
+	}
+	ev := ladderEvents{diag.NewStages()}
+	r.Events = ev
+	results, err := r.Run(ctx, o.Addr, offer)
+	if err != nil {
+		return nil, err
+	}
+	if results[0].State != transfer.ItemDone {
+		return nil, fmt.Errorf("R6 transfer %v: %v", results[0].State, results[0].Err)
+	}
+	if fi, err := os.Stat(results[0].SavedPath); err != nil || fi.Size() != o.Size {
+		return nil, fmt.Errorf("R6: the received file is not under its name: %v", err)
+	}
+	_ = ch.Send(session.Message{Type: "complete", TransferID: offer.TransferID})
 	b := ev.Bottleneck()
 	return &b, nil
 }
@@ -470,7 +654,7 @@ func FormatLadder(r *LadderResult) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Bench ladder: %d streams, chunk %s\n", r.Streams, diag.FormatBytes(int64(r.ChunkSize))))
 	for _, s := range r.Steps {
-		line := fmt.Sprintf("  %s %-34s %8.1f MB/s  %4.0f %% of R1", s.Step, s.Layer, s.MBps, s.RatioToR1*100)
+		line := fmt.Sprintf("  %s %-38s %8.1f MB/s  %4.0f %% of R1", s.Step, s.Layer, s.MBps, s.RatioToR1*100)
 		if s.Bottleneck != nil && s.Bottleneck.Stage != "" {
 			line += fmt.Sprintf("  (limiting: %s)", s.Bottleneck.Stage)
 		}
