@@ -34,8 +34,8 @@ type MatrixOptions struct {
 	Streams []int    // default MatrixStreams
 	Chunks  []uint32 // default MatrixChunks
 	Repeat  int      // runs per cell, whose median counts (default 1)
-	// OnCell, when set, is called after each cell: a long matrix shows its progress.
-	OnCell func(MatrixCell)
+	// OnRun, when set, is called after each run: a long matrix shows its progress.
+	OnRun func(round, streams int, chunk uint32, mbps float64)
 }
 
 // MatrixCell is the measure of one combination.
@@ -77,7 +77,15 @@ type MatrixResult struct {
 // Memory is what a receiver holds for streams connections of chunk-sized buffers, two each.
 func Memory(streams int, chunk uint32) int64 { return int64(streams) * 2 * int64(chunk) }
 
-// RunMatrix measures o.Step for each combination of o.Streams × o.Chunks.
+// runMatrixStep measures one run of a cell; tests replace it to check the order of the runs.
+var runMatrixStep = func(ctx context.Context, o LadderOptions, step string) (LadderStep, error) {
+	return o.runStep(ctx, step)
+}
+
+// RunMatrix measures o.Step for each combination of o.Streams × o.Chunks. The runs alternate:
+// each round measures every cell once, in reverse order every other round. A moment of
+// interference on a Wi-Fi link then hits every cell alike, instead of all the runs of one
+// (the measures of D8, bench-results/README.md).
 func RunMatrix(ctx context.Context, o MatrixOptions) (*MatrixResult, error) {
 	if o.Step == "" {
 		o.Step = "R6"
@@ -101,6 +109,11 @@ func RunMatrix(ctx context.Context, o MatrixOptions) (*MatrixResult, error) {
 	if res.Layer == "" {
 		return nil, fmt.Errorf("bench matrix: unknown step %q", o.Step)
 	}
+	type plan struct {
+		lo   LadderOptions
+		cell MatrixCell
+	}
+	var plans []plan
 	for _, chunk := range o.Chunks {
 		if chunk < protocol.MinChunkSize || chunk > protocol.MaxChunkSize {
 			return nil, fmt.Errorf("bench matrix: chunk size %d outside [%d, %d]", chunk, protocol.MinChunkSize, protocol.MaxChunkSize)
@@ -115,25 +128,34 @@ func RunMatrix(ctx context.Context, o MatrixOptions) (*MatrixResult, error) {
 			if err != nil {
 				return nil, err
 			}
-			cell := MatrixCell{Streams: streams, ChunkSize: chunk, MemoryBytes: Memory(streams, chunk)}
-			for i := 0; i < o.Repeat; i++ {
-				step, err := lo.runStep(ctx, o.Step)
-				if err != nil {
-					return res, fmt.Errorf("%d streams × %s: %w", streams, diag.FormatBytes(int64(chunk)), err)
-				}
-				cell.Runs = append(cell.Runs, step.MBps)
-				cell.Bottleneck = step.Bottleneck
+			plans = append(plans, plan{lo, MatrixCell{Streams: streams, ChunkSize: chunk, MemoryBytes: Memory(streams, chunk)}})
+		}
+	}
+	for round := 0; round < o.Repeat; round++ {
+		for k := range plans {
+			p := &plans[k]
+			if round%2 == 1 {
+				p = &plans[len(plans)-1-k]
 			}
-			cell.MBps = median(cell.Runs)
-			if cell.MBps > 0 {
-				cell.Spread = round2((slices.Max(cell.Runs) - slices.Min(cell.Runs)) / cell.MBps)
+			step, err := runMatrixStep(ctx, p.lo, o.Step)
+			if err != nil {
+				return res, fmt.Errorf("%d streams × %s: %w", p.cell.Streams, diag.FormatBytes(int64(p.cell.ChunkSize)), err)
 			}
-			res.MaxSpread = max(res.MaxSpread, cell.Spread)
-			res.Cells = append(res.Cells, cell)
-			if o.OnCell != nil {
-				o.OnCell(cell)
+			p.cell.Runs = append(p.cell.Runs, step.MBps)
+			p.cell.Bottleneck = step.Bottleneck
+			if o.OnRun != nil {
+				o.OnRun(round+1, p.cell.Streams, p.cell.ChunkSize, step.MBps)
 			}
 		}
+	}
+	for _, p := range plans {
+		cell := p.cell
+		cell.MBps = median(cell.Runs)
+		if cell.MBps > 0 {
+			cell.Spread = round2((slices.Max(cell.Runs) - slices.Min(cell.Runs)) / cell.MBps)
+		}
+		res.MaxSpread = max(res.MaxSpread, cell.Spread)
+		res.Cells = append(res.Cells, cell)
 	}
 	o.quit(ctx)
 	res.Best, res.Recommended = Recommend(res.Cells, MatrixTolerance)

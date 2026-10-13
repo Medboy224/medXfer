@@ -1,0 +1,71 @@
+{
+  "schema_version": 2,
+  "streams": 4,
+  "chunk_size": 4194304,
+  "steps": [
+    {
+      "step": "R1",
+      "layer": "raw TCP",
+      "bytes": 268435456,
+      "duration_s": 5.963,
+      "mbps": 42.93,
+      "ratio_to_r1": 1
+    },
+    {
+      "step": "R2",
+      "layer": "+ TLS 1.3, pinned key",
+      "bytes": 268435456,
+      "duration_s": 6.077,
+      "mbps": 42.13,
+      "ratio_to_r1": 0.98
+    },
+    {
+      "step": "R3",
+      "layer": "+ frames and SHA-256, null sink",
+      "bytes": 268435456,
+      "duration_s": 6.05,
+      "mbps": 42.31,
+      "ratio_to_r1": 0.99,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "step": "R4",
+      "layer": "+ disk writes, no fsync",
+      "bytes": 268435456,
+      "duration_s": 5.96,
+      "mbps": 42.95,
+      "ratio_to_r1": 1,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "step": "R5",
+      "layer": "+ journal and fsync",
+      "bytes": 268435456,
+      "duration_s": 6.036,
+      "mbps": 42.41,
+      "ratio_to_r1": 0.99,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "step": "R6",
+      "layer": "whole transfer: offer, digest, rename",
+      "bytes": 268435456,
+      "duration_s": 7.102,
+      "mbps": 36.04,
+      "ratio_to_r1": 0.84,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    }
+  ]
+}

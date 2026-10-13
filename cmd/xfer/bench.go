@@ -19,6 +19,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/diag"
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
@@ -33,7 +34,7 @@ const benchUsage = `Usage:
   xfer bench ladder --listen [ADDR] [--source random|zero|file --file PATH] [--once]
                                                     (default ADDR :19991; prints the command)
   xfer bench ladder --peer HOST:PORT --code CODE --fp KEY [--size 256M] [--streams 4]
-                    [--chunk 4] [--sink null|disk] [--dir DIR] [--json]
+                    [--chunk 2] [--sink null|disk] [--dir DIR] [--json]
       The ladder (bible §17.4): R1 raw TCP, R2 + TLS with the key pinned, R3 + medXfer
       frames and SHA-256 (a bench offer, null sink), R4 + disk writes without fsync, R5 +
       the journal and its fsync, R6 the whole transfer (offer, acceptance, digest, rename).
@@ -44,9 +45,10 @@ const benchUsage = `Usage:
   xfer bench matrix --peer HOST:PORT --code CODE --fp KEY [--size 256M] [--step R6]
                     [--repeat 1] [--streams-list 1,2,4,8] [--chunks 1,2,4,8] [--dir DIR]
                     [--results bench-results] [--json]
-      One step for each number of streams and chunk size (MB). Proposes as defaults the
-      combination within 5 % of the best throughput that needs the least memory
-      (streams × 2 × chunk), and saves the results in RESULTS/matrix-*.json.
+      One step for each number of streams and chunk size (MB). The runs alternate between
+      the combinations, round after round: a moment of interference hits them all alike.
+      Proposes as defaults the combination within 5 % of the best throughput that needs
+      the least memory (streams × 2 × chunk), and saves the results in RESULTS/matrix-*.json.
 
 The net benchmark is raw, unencrypted TCP (step R1 only).
 `
@@ -74,7 +76,7 @@ func runBench(args []string, stdout io.Writer) error {
 	once := fs.Bool("once", false, "with --listen, stop after one session")
 	fp := fs.String("fp", "", "key of the listening side, printed by it (ladder)")
 	streams := fs.Int("streams", 0, "data connections (ladder; default 4)")
-	chunkMB := fs.Int("chunk", 4, "chunk size in MB, 1 to 8 (ladder)")
+	chunkMB := fs.Int("chunk", int(protocol.DefaultChunkSize>>20), "chunk size in MB, 1 to 8 (ladder)")
 	source := fs.String("source", "random", "bytes sent: random, zero or file (ladder --listen)")
 	file := fs.String("file", "", "with --source file, the file to send (ladder --listen)")
 	sink := fs.String("sink", "null", "where R3's chunks go: null or disk (ladder --peer)")
@@ -397,8 +399,8 @@ func benchMatrixPeer(stdout io.Writer, addr, code, fp string, size int64, dir, r
 	}
 	m.LadderOptions = bench.LadderOptions{Addr: addr, Code: code, Fingerprint: key, Identity: id, Size: size, Dir: abs}
 	if !asJSON {
-		m.OnCell = func(c bench.MatrixCell) {
-			fmt.Fprintf(stdout, "  %d streams × %s: %.1f MB/s\n", c.Streams, diag.FormatBytes(int64(c.ChunkSize)), c.MBps)
+		m.OnRun = func(round, streams int, chunk uint32, mbps float64) {
+			fmt.Fprintf(stdout, "  round %d/%d: %d streams × %s: %.1f MB/s\n", round, m.Repeat, streams, diag.FormatBytes(int64(chunk)), mbps)
 		}
 		fmt.Fprintf(stdout, "Bench matrix against %s: step %s, %s per run\n", addr, m.Step, diag.FormatBytes(size))
 	}

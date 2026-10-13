@@ -1,0 +1,319 @@
+{
+  "schema_version": 2,
+  "step": "R6",
+  "layer": "whole transfer: offer, digest, rename",
+  "bytes": 268435456,
+  "repeat": 3,
+  "tolerance": 0.05,
+  "cells": [
+    {
+      "streams": 1,
+      "chunk_size": 1048576,
+      "memory_bytes": 2097152,
+      "mbps": 34.43,
+      "runs_mbps": [
+        33.64,
+        34.43,
+        34.76
+      ],
+      "spread": 0.03,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 1048576,
+      "memory_bytes": 4194304,
+      "mbps": 35.11,
+      "runs_mbps": [
+        35.11,
+        37.49,
+        32.2
+      ],
+      "spread": 0.15,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 1048576,
+      "memory_bytes": 8388608,
+      "mbps": 43.47,
+      "runs_mbps": [
+        43.47,
+        47.07,
+        36.32
+      ],
+      "spread": 0.25,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 1048576,
+      "memory_bytes": 16777216,
+      "mbps": 33.96,
+      "runs_mbps": [
+        28.17,
+        33.96,
+        34.38
+      ],
+      "spread": 0.18,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 1,
+      "chunk_size": 2097152,
+      "memory_bytes": 4194304,
+      "mbps": 47.06,
+      "runs_mbps": [
+        39.33,
+        51.45,
+        47.06
+      ],
+      "spread": 0.26,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 2097152,
+      "memory_bytes": 8388608,
+      "mbps": 47.91,
+      "runs_mbps": [
+        42.31,
+        51.19,
+        47.91
+      ],
+      "spread": 0.19,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 2097152,
+      "memory_bytes": 16777216,
+      "mbps": 44.25,
+      "runs_mbps": [
+        41.93,
+        44.25,
+        51.73
+      ],
+      "spread": 0.22,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 2097152,
+      "memory_bytes": 33554432,
+      "mbps": 40.39,
+      "runs_mbps": [
+        49.64,
+        40.39,
+        38.66
+      ],
+      "spread": 0.27,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 1,
+      "chunk_size": 4194304,
+      "memory_bytes": 8388608,
+      "mbps": 49.19,
+      "runs_mbps": [
+        47.6,
+        51.07,
+        49.19
+      ],
+      "spread": 0.07,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 4194304,
+      "memory_bytes": 16777216,
+      "mbps": 36.81,
+      "runs_mbps": [
+        40.19,
+        31.24,
+        36.81
+      ],
+      "spread": 0.24,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 4194304,
+      "memory_bytes": 33554432,
+      "mbps": 31,
+      "runs_mbps": [
+        24.63,
+        43.66,
+        31
+      ],
+      "spread": 0.61,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 4194304,
+      "memory_bytes": 67108864,
+      "mbps": 39.1,
+      "runs_mbps": [
+        39.1,
+        50.51,
+        27.4
+      ],
+      "spread": 0.59,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 1,
+      "chunk_size": 8388608,
+      "memory_bytes": 16777216,
+      "mbps": 28.47,
+      "runs_mbps": [
+        28.47,
+        25,
+        32.45
+      ],
+      "spread": 0.26,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 2,
+      "chunk_size": 8388608,
+      "memory_bytes": 33554432,
+      "mbps": 26.08,
+      "runs_mbps": [
+        27.48,
+        23.16,
+        26.08
+      ],
+      "spread": 0.17,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 4,
+      "chunk_size": 8388608,
+      "memory_bytes": 67108864,
+      "mbps": 27.12,
+      "runs_mbps": [
+        26.78,
+        27.12,
+        29.98
+      ],
+      "spread": 0.12,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    },
+    {
+      "streams": 8,
+      "chunk_size": 8388608,
+      "memory_bytes": 134217728,
+      "mbps": 25.7,
+      "runs_mbps": [
+        25.16,
+        25.73,
+        25.7
+      ],
+      "spread": 0.02,
+      "bottleneck": {
+        "stage": "net_wait",
+        "confidence": "high"
+      }
+    }
+  ],
+  "best": {
+    "streams": 1,
+    "chunk_size": 4194304,
+    "memory_bytes": 8388608,
+    "mbps": 49.19,
+    "runs_mbps": [
+      47.6,
+      51.07,
+      49.19
+    ],
+    "spread": 0.07,
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "recommended": {
+    "streams": 1,
+    "chunk_size": 2097152,
+    "memory_bytes": 4194304,
+    "mbps": 47.06,
+    "runs_mbps": [
+      39.33,
+      51.45,
+      47.06
+    ],
+    "spread": 0.26,
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "current": {
+    "streams": 4,
+    "chunk_size": 4194304,
+    "memory_bytes": 33554432,
+    "mbps": 31,
+    "runs_mbps": [
+      24.63,
+      43.66,
+      31
+    ],
+    "spread": 0.61,
+    "bottleneck": {
+      "stage": "net_wait",
+      "confidence": "high"
+    }
+  },
+  "keep_defaults": false,
+  "max_spread": 0.61,
+  "reliable": false,
+  "host": "localhost",
+  "os": "android/arm64"
+}

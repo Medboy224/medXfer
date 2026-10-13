@@ -2,6 +2,8 @@ package bench
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 )
@@ -14,7 +16,7 @@ func TestMatrixRunsEachCell(t *testing.T) {
 	defer cancel()
 	var seen int
 	res, err := RunMatrix(ctx, MatrixOptions{LadderOptions: o, Streams: []int{1, 2}, Chunks: []uint32{1 << 20, 2 << 20},
-		OnCell: func(MatrixCell) { seen++ }})
+		OnRun: func(int, int, uint32, float64) { seen++ }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,6 +95,35 @@ func TestMatrixSpread(t *testing.T) {
 	c := res.Cells[0]
 	if len(c.Runs) != 3 || c.Spread < 0 || res.MaxSpread != c.Spread || res.Reliable != (c.Spread <= MatrixTolerance) {
 		t.Fatalf("cell %+v, max spread %v, reliable %v", c, res.MaxSpread, res.Reliable)
+	}
+}
+
+// The runs alternate between the cells, in reverse order every other round: interference at
+// one moment hits every cell, not all the runs of one (D8 measures).
+func TestMatrixRunsAlternate(t *testing.T) {
+	var order []string
+	speed := map[string]float64{"1x1": 10, "2x1": 20}
+	saved := runMatrixStep
+	runMatrixStep = func(_ context.Context, o LadderOptions, step string) (LadderStep, error) {
+		key := fmt.Sprintf("%dx%d", o.Streams, o.ChunkSize>>20)
+		order = append(order, key)
+		return LadderStep{Step: step, MBps: speed[key] + float64(len(order))}, nil
+	}
+	t.Cleanup(func() { runMatrixStep = saved })
+	_, o := ladderPair(t)
+	res, err := RunMatrix(context.Background(), MatrixOptions{LadderOptions: o, Streams: []int{1, 2}, Chunks: []uint32{1 << 20}, Repeat: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"1x1", "2x1", "2x1", "1x1", "1x1", "2x1"}; !slices.Equal(order, want) {
+		t.Fatalf("runs in order %v; want %v", order, want)
+	}
+	// 1x1 ran 1st, 4th and 5th (10+1, 10+4, 10+5): its median is 14; 2x1: 22, 23, 26: 23.
+	if c := res.Cells[0]; c.Streams != 1 || c.MBps != 14 || len(c.Runs) != 3 {
+		t.Fatalf("cell %+v", c)
+	}
+	if c := res.Cells[1]; c.Streams != 2 || c.MBps != 23 {
+		t.Fatalf("cell %+v", c)
 	}
 }
 

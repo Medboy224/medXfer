@@ -39,7 +39,10 @@ const (
 	MaxManifestBytes = 16 << 20
 	MinChunkSize     = 256 << 10
 	MaxChunkSize     = 8 << 20
-	DefaultChunkSize = 4 << 20
+	// DefaultChunkSize: 2 MiB, measured (D8 of the J4b plan, bench-results/README.md): between
+	// the PC and the phone, 4 × 2 MiB gives the throughput of 4 × 4 MiB, on 2.4 and 5 GHz and
+	// both ways, with half the memory.
+	DefaultChunkSize = 2 << 20
 	maxPathBytes     = 1024 // LIM-06
 )
 
