@@ -63,6 +63,9 @@ func TestPINPairingLeavesNoSecret(t *testing.T) {
 			t.Errorf("%s holds the PIN", where)
 		}
 		for _, m := range blob.FindAllString(text, -1) {
+			if _, err := os.Stat(m); err == nil {
+				continue // a folder of the test (status's receive folder: "/tmp/Test.../003" matches base64)
+			}
 			if !public[strings.TrimRight(m, "=")] && !strings.HasPrefix(m, "iVBORw0KGgo") { // a PNG: status's QR code images
 				t.Errorf("%s holds a key-sized blob %q", where, m)
 			}
