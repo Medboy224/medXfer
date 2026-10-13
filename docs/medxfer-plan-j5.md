@@ -50,7 +50,7 @@ WP-5.1 et WP-5.2 sont indépendants. La revue externe (G4) peut être contractua
   - générateur `g = SetUniformBytes(SHA-512(gen_str))` ;
   - scalaire secret tiré avec `crypto/rand`, partage `Y = y·g` ;
   - `K = y·Y_pair`, puis `ISK` et `sid_output` selon le brouillon 21.
-- **API :** `Start(pin, ci, sid, role) → (state, share)`, puis `Finish(state, peerShare) → (isk, err)`. Le paquet ne connaît ni le réseau ni les messages.
+- **API :** `Start(pin, ci, sid, role) → (state, share)`, puis `Finish(state, peerShare) → (isk, err)`. Le paquet ne connaît ni le réseau ni les messages. La bibliothèque de groupe est derrière un seul fichier adaptateur (D9).
 - **Contrôles d'acceptation** (veille §5) :
   1. tous les vecteurs de l'annexe A et de l'annexe B.3 du brouillon passent **octet pour octet** : générateur, Ya, Yb, K, ISK, `sid_output`. Le test cite la révision du brouillon ;
   2. un partage invalide ou non canonique est refusé ; un `K` égal à l'élément neutre est refusé ; le décodage est fuzzé ;
@@ -135,3 +135,11 @@ WP-5.1 et WP-5.2 sont indépendants. La revue externe (G4) peut être contractua
 | D6 | **Les trois chemins coexistent** : QR (P1), PIN (P2) et comparaison d'empreintes (`pair_hello`, WP-3.3). Le côté qui affiche le QR est aussi celui qui affiche le PIN. | Le PIN sert aux appareils sans caméra ; la comparaison d'empreintes reste pour un appareil sans écran de saisie. |
 | D7 | **Pas de dépendance à `the-sarge/cpace`**, seulement une comparaison ponctuelle de sorties pendant WP-5.1. | Il se déclare lui-même « *not production-ready* », sans revue. |
 | D8 | La **revue externe (G4)** porte sur `pkg/pake`, le chemin P2 et les chapitres 6 et 7 de la bible. Elle conditionne la **publication**, pas la fusion des lots. | Bible, phase 2b ; feuille de route J5. |
+| D9 | **Modularité.** Changer de PAKE, de suite ou de bibliothèque ne doit toucher qu'un endroit :
+- le reste du code passe par l'interface d'appairage (`Pairer`, bible §3.2), et `pkg/pairing` ignore quel PAKE tourne dessous ;
+- dans `pkg/pake`, la bibliothèque de groupe est derrière **un seul fichier adaptateur** ;
+- les messages `pair_pin` portent l'identifiant de la suite (`CPACE-RISTR255-SHA512`) : une version future en propose une autre sans casser l'ancienne, et une suite inconnue est refusée proprement. | Demande du 13 octobre 2026 : toute implémentation doit pouvoir changer plus tard sans réécrire le reste. Bible règle R1 (on ne connaît que l'interface de la couche du dessous). |
+| D10 | **On ne réécrit pas la bibliothèque de groupe** (ristretto255, RFC 9496). Ce qui est propre à medXfer est déjà à nous : le protocole dans `pkg/pake`, et tout l'appairage autour. La bibliothèque reste sous contrôle autrement :
+- version épinglée, mise à jour seulement volontairement ;
+- vecteurs officiels dans la CI, qui refusent tout changement de comportement ;
+- adaptateur (D9), qui permet de la remplacer, par exemple si Go l'intègre un jour. | L'arithmétique de courbe à temps constant est le code où une erreur reste invisible : l'appairage marche en apparence, mais une fuite par le temps de calcul ou un point mal validé suffit à casser la sécurité. C'est ce qu'interdit `PAIR-06`, même reformulé. |
