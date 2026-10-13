@@ -182,8 +182,10 @@ func TestLastChunksAreVerified(t *testing.T) {
 		}
 		_ = f.Close()
 		part, _ := os.OpenFile(filepath.Join(dir, "f.bin"+PartSuffix), os.O_WRONLY, 0)
-		_, _ = part.WriteAt([]byte("x"), 1*testChunk+5)  // chunk 1: not among the last 8
-		_, _ = part.WriteAt([]byte("x"), 10*testChunk+5) // chunk 10: among the last 8
+		// Each byte is flipped: a fixed byte would change nothing when the random data
+		// already holds it, once in 256 (#91).
+		_, _ = part.WriteAt([]byte{data[1*testChunk+5] ^ 0xFF}, 1*testChunk+5)   // chunk 1: not among the last 8
+		_, _ = part.WriteAt([]byte{data[10*testChunk+5] ^ 0xFF}, 10*testChunk+5) // chunk 10: among the last 8
 		part.Close()
 
 		p := params(len(data))
