@@ -1,7 +1,9 @@
 # Gate G1 — choix du PAKE pour l'appairage par PIN
 
 > Veille WP-3.8 (plan J3), sans code de production. Sources vérifiées le 11/10/2026.
-> Elle prépare J5 (chemin P2, bible §6.2). **La décision reste à prendre.** Ce document se termine par une recommandation.
+> Elle prépare J5 (chemin P2, bible §6.2). Ce document se termine par une recommandation.
+>
+> **Décision (13 octobre 2026) :** la recommandation est retenue. CPace `CPACE-RISTR255-SHA512` sur `gtank/ristretto255`, avec `PAIR-06` reformulée (plan J5, D1 et D2). La revérification du début de J5 n'a rien changé : brouillon 21 en attente de l'éditeur RFC, aucune implémentation importable et maintenue. Les vecteurs A et B.3 passent, ce qui lève aussi le premier point du §6.
 
 ## 1. Résumé
 
@@ -29,7 +31,7 @@ Rappel de la bible (§6.2 et §6.4) :
 - **Canal :** le PAKE tourne dans le TLS déjà établi, en état `UNAUTH`. Il est lié au canal par `fp_i`, `fp_r` et `ekm = ExportKeyingMaterial("EXPORTER-medxfer-v1-pair", nil, 32)` (`PAIR-03`).
 - **Confirmation de clé :** obligatoire dans les deux sens (`PAIR-05`).
 - **Échecs :** au bout de 3, le PIN est détruit (`PAIR-04`). Un échec ne révèle rien (`PAIR-07`).
-- **Bibliothèque :** pas de cryptographie du PAKE écrite par nous, des vecteurs de test vérifiés, et des constantes publiques sans logarithme discret connu (`PAIR-06`, voir l'incident de `croc` au §4.5).
+- **Bibliothèque :** pas de cryptographie du PAKE écrite par nous, des vecteurs de test vérifiés, et des constantes publiques sans logarithme discret connu (`PAIR-06`, voir l'incident de `schollz/pake` au §4.5).
 
 Le besoin est un **PAKE équilibré** : les deux appareils connaissent le même PIN. Un PAKE augmenté (OPAQUE) n'a pas d'intérêt ici.
 
@@ -42,7 +44,7 @@ Le besoin est un **PAKE équilibré** : les deux appareils connaissent le même 
 - **Vecteurs de test :**
   - l'annexe A couvre les fonctions utilitaires : `prepend_len`, `lv_cat`, `o_cat`, transcriptions ;
   - l'annexe B couvre sept suites, dont X25519/SHA-512 (B.1), ristretto255/SHA-512 (B.3) et P-256/SHA-256 (B.5).
-- **Constantes publiques : aucune.** Le générateur est dérivé du mot de passe, du CI et du sid par hachage vers le groupe. Il n'existe donc pas de points M/N dont quelqu'un pourrait connaître le logarithme : la faille de `croc` ne peut pas se produire par construction.
+- **Constantes publiques : aucune.** Le générateur est dérivé du mot de passe, du CI et du sid par hachage vers le groupe. Il n'existe donc pas de points M/N dont quelqu'un pourrait connaître le logarithme : la faille de `schollz/pake` ne peut pas se produire par construction.
 - **Suites :**
   - « *We RECOMMEND* » : `CPACE-X25519-SHA512` et `CPACE-P256_XMD:SHA-256_SSWU_NU_-SHA256` (§5 du brouillon) ;
   - ristretto255 est une suite décrite, avec ses vecteurs (B.3). Le brouillon écrit que CPace « *can also securely be implemented* » avec elle et recommande ristretto255 avec SHA-512 (§8.3).
@@ -107,15 +109,15 @@ Critères de la gate G1 (bible chapitre 16) :
   - aucun audit n'est mentionné ;
   - la revue externe porterait aussi sur son arithmétique de corps.
 
-### 4.5 `schollz/pake/v3` (utilisé par `croc`)
+### 4.5 `schollz/pake/v3`
 - **Version :** v3.2.0 du 31 juillet 2026, maintenue. [pkg.go.dev](https://pkg.go.dev/github.com/schollz/pake/v3)
 - **Protocole :** dérivé du « *PAKE2* » du livre de Boneh et Shoup. Le paquet ne revendique pas « *full RFC 9382 conformance* » et ne fournit aucun vecteur de spécification.
-- **Points publics :** depuis la correction, ils sont « *hard-coded to prevent an application from allowing users to supply their own points* ». Ils sont obtenus par SHA-1 des graines `croc1` et `croc2`, puis incrément jusqu'à une abscisse valide, avec un script Sage pour vérifier. C'est acceptable sur le fond, mais propre à ce projet.
+- **Points publics :** depuis la correction, ils sont « *hard-coded to prevent an application from allowing users to supply their own points* ». Ils sont obtenus par SHA-1 de deux graines fixes, puis incrément jusqu'à une abscisse valide, avec un script Sage pour vérifier. C'est acceptable sur le fond, mais propre à ce projet.
 - **Historique (CVE-2021-31603) :**
   - l'initiateur, c'est-à-dire le destinataire, choisissait les points U et V, donc pouvait connaître leurs logarithmes ;
   - cela ramenait l'entropie de la clé à celle du code et permettait une force brute hors ligne ;
   - sources : [analyse de RedRocket](https://redrocket.club/posts/croc/) et [message au CFRG du 7 mai 2021](https://mailarchive.ietf.org/arch/msg/cfrg/KtmqZS6CFUwCfkVTlieGw-ZFGfY/) ;
-  - le lien de la bible vers le récit de l'auteur (`schollz.com/blog/croc9`) a répondu **404** lors de cette vérification.
+  - le lien de la bible vers le récit de l'auteur a répondu **404** lors de cette vérification ; il est remplacé par les deux sources ci-dessus.
 - **API utilisées :** `crypto/elliptic` et `math/big`, via la courbe `siec` ([imports](https://pkg.go.dev/github.com/schollz/pake/v3?tab=imports)). Go les signale toutes deux comme inadaptées :
   - les méthodes de `Curve` sont « *Deprecated: this is a low-level unsafe API* », et les courbes personnalisées « *not guaranteed to provide any security property* » ([crypto/elliptic](https://pkg.go.dev/crypto/elliptic)) ;
   - `big.Int` « *may leak the Int's value through timing side-channels* » et « *is not well-suited to implement cryptographic operations* » ([math/big](https://pkg.go.dev/math/big)).
@@ -140,7 +142,7 @@ Critères de la gate G1 (bible chapitre 16) :
 
 **Pourquoi CPace plutôt que SPAKE2 :**
 - c'est le choix du CFRG ;
-- il n'a aucune constante publique, donc aucune classe de faille « à la `croc` » ;
+- il n'a aucune constante publique, donc aucune faille du type de `schollz/pake` ;
 - il a des vecteurs pour la suite choisie ;
 - sa normalisation est presque achevée.
 
@@ -175,7 +177,7 @@ Soit environ 150 lignes (estimation), déterministes, vérifiables octet pour oc
 
 > On NE DOIT PAS écrire soi-même de primitive (groupe, corps, hachage vers le groupe, encodage). Le protocole PAKE PEUT être assemblé sur une bibliothèque de groupe reconnue, à condition de vérifier tous les vecteurs de test de sa spécification et d'obtenir une revue externe avant la mise en service. Un protocole à constantes publiques DOIT les fixer sans connaissance du logarithme discret.
 
-Il faudrait aussi mettre à jour l'Annexe B : statut de CPace, nouveau lien pour la faille de `croc`.
+Il faudrait aussi mettre à jour l'Annexe B : statut de CPace, nouveau lien pour la faille de `schollz/pake`.
 
 **À revérifier au début de J5 :**
 - si une implémentation CPace importable et maintenue est apparue (par exemple dans `golang.org/x/crypto`), elle remplace l'assemblage maison, à condition de passer les mêmes contrôles ;

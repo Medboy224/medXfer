@@ -40,7 +40,7 @@ WP-5.1 et WP-5.2 sont indépendants. La revue externe (G4) peut être contractua
 - **Bible :**
   - `PAIR-06` reformulé (veille §5) ;
   - gate G1 fermée : choix et raisons ;
-  - Annexe B : statut de CPace (brouillon 21, en attente de l'éditeur RFC) et nouveau lien pour la faille de `croc`, l'ancien répondant 404.
+  - Annexe B : statut de CPace (brouillon 21, en attente de l'éditeur RFC) et nouveau lien pour la faille de `schollz/pake`, l'ancien répondant 404.
 - **Dépendances :** `github.com/gtank/ristretto255` et `filippo.io/edwards25519`, en pur Go. Je vérifie l'absence de CGO pour android/arm64, windows, linux et darwin.
 
 ### WP-5.1 — `pkg/pake` : CPace `CPACE-RISTR255-SHA512` · M
