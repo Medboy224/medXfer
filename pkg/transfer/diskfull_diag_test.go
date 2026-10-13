@@ -130,13 +130,50 @@ func resumeWithRoom(t *testing.T, r *Receiver, d *fullDisk, done chan []ItemResu
 func TestDiskFullPausesThenResumes(t *testing.T) {
 	d := &fullDisk{room: 3 * testChunk}
 	out := t.TempDir()
-	r, _, done, data := pausedOnFullDisk(t, d, out)
+	r, ev, done, data := pausedOnFullDisk(t, d, out)
 	for _, suffix := range []string{store.PartSuffix, store.JournalSuffix} {
 		if _, err := os.Stat(filepath.Join(out, "f.bin"+suffix)); err != nil {
 			t.Fatalf("the partial file was not kept: %v", err)
 		}
 	}
+	// While paused, the progress keeps what was received: it neither falls to 0 nor shows a
+	// negative speed (seen on a real full disk).
+	paused := pausedProgress(t, ev)
+	if paused.Bytes == 0 || paused.SpeedMBps < 0 {
+		t.Fatalf("progress while paused on a full disk: %+v", paused)
+	}
 	resumeWithRoom(t, r, d, done, out, data)
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	for _, p := range ev.progress {
+		if p.SpeedMBps < 0 || p.Bytes > p.Total {
+			t.Fatalf("progress %+v", p)
+		}
+	}
+}
+
+// pausedProgress waits for two progress reports after the pause and returns the last one.
+func pausedProgress(t *testing.T, ev *diskFullRecorder) Progress {
+	t.Helper()
+	ev.mu.Lock()
+	from := len(ev.progress)
+	ev.mu.Unlock()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		ev.mu.Lock()
+		n := len(ev.progress)
+		var last Progress
+		if n > 0 {
+			last = ev.progress[n-1]
+		}
+		ev.mu.Unlock()
+		if n >= from+2 {
+			return last
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("no progress reported while paused")
+	return Progress{}
 }
 
 // A disk too full for even the journal: the .part that could not get one goes (it would read

@@ -443,7 +443,8 @@ func newSpeedMeter() *speedMeter { return &speedMeter{at: time.Now()} }
 func (m *speedMeter) update(bytes int64) float64 {
 	now := time.Now()
 	if dt := now.Sub(m.at).Seconds(); dt > 0 {
-		inst := float64(bytes-m.last) / (1 << 20) / dt
+		// Bytes counted again from less (a file started over, a full disk) are no speed.
+		inst := max(float64(bytes-m.last), 0) / (1 << 20) / dt
 		if m.speed == 0 {
 			m.speed = inst
 		} else {
