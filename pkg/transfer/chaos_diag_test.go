@@ -27,11 +27,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -123,11 +125,12 @@ func makeBatch(t *testing.T, rng *rand.Rand) chaosBatch {
 		return b
 	}
 	sizes := map[string]int{"empty.bin": 0, filepath.Join("sub", "big.bin"): (3+rng.IntN(4))*testChunk + rng.IntN(testChunk)}
-	for k := 0; k < 1+rng.IntN(6); k++ {
+	small := 1 + rng.IntN(6)
+	for k := 0; k < small; k++ {
 		sizes[fmt.Sprintf("s%02d.bin", k)] = 1 + rng.IntN(4000)
 	}
-	for name, size := range sizes {
-		writeUserFile(t, filepath.Join(folder, name), string(fill(size)))
+	for _, name := range slices.Sorted(maps.Keys(sizes)) { // in order: a seed replays the same files
+		writeUserFile(t, filepath.Join(folder, name), string(fill(sizes[name])))
 	}
 	offer, files, err := BuildOffer([]string{folder}, testChunk)
 	if err != nil {
@@ -381,14 +384,17 @@ func (c *budgetConn) Read(p []byte) (int, error) {
 // netcut cuts the first one to three data connections after a few bytes each, in the middle of
 // a chunk; the receiver reconnects.
 func (e *chaosEnv) netcut(t *testing.T, b chaosBatch, out string, rng *rand.Rand) {
+	// Every draw is made here: the wrapper runs on several connections at once, and a seed
+	// replays the same plan.
 	cuts := int32(1 + rng.IntN(3))
 	after := 1 + rng.Int64N(b.offer.TotalBytes/2+1)
+	reset := rng.IntN(2) == 0
 	var n atomic.Int32
 	restore := engine.SetConnWrapper(func(role engine.ConnRole, c net.Conn) net.Conn {
 		if role != engine.ConnDialed || n.Add(1) > cuts {
 			return c
 		}
-		return faultconn.Wrap(c, faultconn.Plan{CutAfter: after, Reset: rng.IntN(2) == 0})
+		return faultconn.Wrap(c, faultconn.Plan{CutAfter: after, Reset: reset})
 	})
 	defer restore()
 	offer := e.serve(t, b)
