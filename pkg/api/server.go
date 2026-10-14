@@ -679,7 +679,7 @@ func (s *DaemonServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if err := conn.ReadJSON(&req); err != nil {
 			break
 		}
-		s.dispatch(conn, req)
+		s.dispatch(wsResponder{s, conn}, req)
 	}
 }
 

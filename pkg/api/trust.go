@@ -21,7 +21,6 @@ import (
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
-	"github.com/gorilla/websocket"
 )
 
 // defaultTrustTimeout is how long a trust_request waits for trust_respond; no answer is a no.
@@ -171,17 +170,17 @@ func (s *DaemonServer) askTrust(ctx context.Context, fp identity.Fingerprint, na
 	return trustNo
 }
 
-func (s *DaemonServer) handleTrustRespond(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleTrustRespond(rs Responder, req RequestMessage) {
 	var p TrustRespondPayload
 	if err := json.Unmarshal(req.Payload, &p); err != nil || p.Fingerprint == "" {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid trust_respond payload"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid trust_respond payload"}, req.ID))
 		return
 	}
 	s.mu.Lock()
 	reply, ok := s.pendingTrust[p.Fingerprint]
 	s.mu.Unlock()
 	if !ok {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "no pending trust request for this device"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "no pending trust request for this device"}, req.ID))
 		return
 	}
 	select {
@@ -226,7 +225,7 @@ func (s *DaemonServer) admitIncoming(conn *securechan.Conn, msg session.Message,
 
 // handlePairShow creates a QR code invitation for this daemon's control listener (path P1)
 // and returns its URI in a pair_show event. A new invitation replaces the previous one.
-func (s *DaemonServer) handlePairShow(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handlePairShow(rs Responder, req RequestMessage) {
 	var p PairShowPayload
 	if len(req.Payload) > 0 {
 		_ = json.Unmarshal(req.Payload, &p)
@@ -235,19 +234,19 @@ func (s *DaemonServer) handlePairShow(conn *websocket.Conn, req RequestMessage) 
 	id, ln := s.identity, s.nodeLn
 	s.mu.RUnlock()
 	if id == nil || ln == nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "pairing listener not started"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "pairing listener not started"}, req.ID))
 		return
 	}
 	inv, err := pairing.NewInvitation(pairing.TTL)
 	if err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 		return
 	}
 	u := inv.URI(id.Fingerprint, discovery.GetPrimaryLocalIP(), ln.Addr().(*net.TCPAddr).Port)
 	s.mu.Lock()
 	s.invite, s.inviteOnce = inv, p.Once
 	s.mu.Unlock()
-	s.sendTo(conn, NewEvent("pair_show", map[string]any{
+	rs.Reply(NewEvent("pair_show", map[string]any{
 		"uri":         u.String(),
 		"expires":     u.Expires.Unix(),
 		"fingerprint": id.Fingerprint.Short(),
@@ -256,15 +255,15 @@ func (s *DaemonServer) handlePairShow(conn *websocket.Conn, req RequestMessage) 
 
 // handlePairURI pairs with the device that shows a QR code: its key is pinned, the secret
 // proves we saw the code, and both sides trust each other (unless once).
-func (s *DaemonServer) handlePairURI(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handlePairURI(rs Responder, req RequestMessage) {
 	var p PairURIPayload
 	if err := json.Unmarshal(req.Payload, &p); err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid pair_uri payload"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid pair_uri payload"}, req.ID))
 		return
 	}
 	u, err := pairing.Parse(strings.TrimSpace(p.URI), time.Now())
 	if err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 		return
 	}
 	go func() {
