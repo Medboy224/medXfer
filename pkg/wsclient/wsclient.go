@@ -44,9 +44,17 @@ type request struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
-// Client is a connection to a daemon's /ws endpoint.
+// transport carries requests to the daemon: its /ws endpoint, or the daemon itself in the
+// same process (Local, WP-6.3 of the J6a plan).
+type transport interface {
+	send(request []byte) error
+	close() error
+}
+
+// Client speaks the control vocabulary (requests in, events out) to a daemon, whatever the
+// transport: it keeps every event received, for WaitFor, Watch and Events.
 type Client struct {
-	ws      *websocket.Conn
+	tr      transport
 	writeMu sync.Mutex
 	nextID  atomic.Int64
 
@@ -69,31 +77,58 @@ func Dial(ctx context.Context, httpAddr, token string) (*Client, error) {
 		}
 		return nil, fmt.Errorf("dial %s: %w", httpAddr, err)
 	}
-	c := &Client{ws: ws, changed: make(chan struct{})}
-	go c.readLoop()
+	c := &Client{changed: make(chan struct{})}
+	t := &wsTransport{ws: ws}
+	c.tr = t
+	go t.readLoop(c)
 	return c, nil
 }
 
-func (c *Client) readLoop() {
+// wsTransport is the dashboard's control WebSocket.
+type wsTransport struct{ ws *websocket.Conn }
+
+func (t *wsTransport) send(request []byte) error {
+	return t.ws.WriteMessage(websocket.TextMessage, request)
+}
+
+func (t *wsTransport) close() error {
+	_ = t.ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	err := t.ws.Close()
+	if errors.Is(err, websocket.ErrCloseSent) {
+		err = nil
+	}
+	return err
+}
+
+func (t *wsTransport) readLoop(c *Client) {
 	for {
 		var e Event
-		err := c.ws.ReadJSON(&e)
-		c.mu.Lock()
-		if err != nil {
-			c.err = err
-		} else {
-			c.events = append(c.events, e)
-		}
-		close(c.changed)
-		c.changed = make(chan struct{})
-		watch := c.watch
-		c.mu.Unlock()
+		err := t.ws.ReadJSON(&e)
+		c.deliver(e, err)
 		if err != nil {
 			return
 		}
-		if watch != nil {
-			watch(e)
-		}
+	}
+}
+
+// deliver records an event, or the error that ended the transport, and wakes the waiters.
+func (c *Client) deliver(e Event, err error) {
+	c.mu.Lock()
+	if c.err != nil { // already ended: nothing more is kept
+		c.mu.Unlock()
+		return
+	}
+	if err != nil {
+		c.err = err
+	} else {
+		c.events = append(c.events, e)
+	}
+	close(c.changed)
+	c.changed = make(chan struct{})
+	watch := c.watch
+	c.mu.Unlock()
+	if err == nil && watch != nil {
+		watch(e)
 	}
 }
 
@@ -117,9 +152,13 @@ func (c *Client) Send(id, action string, payload any) (string, error) {
 		}
 		req.Payload = b
 	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return id, err
+	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return id, c.ws.WriteJSON(req)
+	return id, c.tr.send(data)
 }
 
 // WaitFor returns the first unconsumed event that matches, consuming it and every event
@@ -165,6 +204,13 @@ func (c *Client) Watch(fn func(Event)) {
 	c.mu.Unlock()
 }
 
+// Rewind makes every event received so far unconsumed again: WaitFor and Next see them anew.
+func (c *Client) Rewind() {
+	c.mu.Lock()
+	c.cursor = 0
+	c.mu.Unlock()
+}
+
 // Events returns a copy of every event received so far, consumed or not.
 func (c *Client) Events() []Event {
 	c.mu.Lock()
@@ -175,11 +221,6 @@ func (c *Client) Events() []Event {
 // Close closes the connection.
 func (c *Client) Close() error {
 	c.writeMu.Lock()
-	_ = c.ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-	c.writeMu.Unlock()
-	err := c.ws.Close()
-	if errors.Is(err, websocket.ErrCloseSent) {
-		err = nil
-	}
-	return err
+	defer c.writeMu.Unlock()
+	return c.tr.close()
 }

@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"strings"
 	"sync"
@@ -21,7 +20,7 @@ import (
 const ctlUsage = `Usage:
   xfer ctl [--script scenario.jsonl] [--out DIR] [--config DIR] [--name NAME] [--linger 1s] [--quiet]
 
-Starts a daemon of its own (random port, random control token, temporary folders unless
+Starts a daemon of its own in this process (no control socket; temporary folders unless
 --out / --config are given), reads one JSON object per line and prints every daemon event as
 one JSON line on stdout (NDJSON). Input lines:
   {"id": "r1", "action": "get_status", "payload": {...}}      send a request
@@ -97,21 +96,23 @@ func runCtl(args []string, stdin io.Reader, stdout io.Writer) error {
 	api.SetCustomConfigDir(*configDir)
 
 	srv := api.NewDaemonServer(0, *outDir, *name)
-	ln, err := srv.Listen(0)
+	ln, err := srv.Listen(0) // the HTTP server, for the Web Share portal
 	if err != nil {
+		return err
+	}
+	defer srv.Stop()
+	if err := srv.StartNode(); err != nil {
 		return err
 	}
 	go func() { _ = srv.Serve(ln) }()
-	defer srv.Stop()
-	_, port, _ := net.SplitHostPort(ln.Addr().String())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	client, err := wsclient.Dial(ctx, "127.0.0.1:"+port, srv.ControlToken())
-	cancel()
-	if err != nil {
+	// The daemon is driven in this process, without the control WebSocket (WP-6.3): the same
+	// requests and events, starting with the status a WebSocket client gets first.
+	client := wsclient.Local(srv.HandleJSON, srv.SubscribeJSON)
+	defer client.Close()
+	if _, err := client.Send("", "get_status", nil); err != nil {
 		return err
 	}
-	defer client.Close()
 
 	var outMu sync.Mutex
 	stopped := false
