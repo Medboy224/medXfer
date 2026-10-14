@@ -16,7 +16,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/session"
 )
 
-func device(t *testing.T, name string) Options {
+func device(t testing.TB, name string) Options {
 	t.Helper()
 	dir := t.TempDir()
 	id, err := identity.LoadOrCreate(dir)
