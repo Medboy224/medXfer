@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/websocket"
-
 	"github.com/Medboy224/medXfer/pkg/diag"
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/pairing"
@@ -40,7 +38,7 @@ type PairPINPayload struct {
 // pair_pin_shown events: the first one, a new one after 3 wrong ones, and "" while the delay
 // after PINs destroyed runs (expires is then when the next one comes). A new PIN replaces the
 // previous one.
-func (s *DaemonServer) handlePairPINShow(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handlePairPINShow(rs Responder, req RequestMessage) {
 	var p PairPINShowPayload
 	if len(req.Payload) > 0 {
 		_ = json.Unmarshal(req.Payload, &p)
@@ -49,13 +47,13 @@ func (s *DaemonServer) handlePairPINShow(conn *websocket.Conn, req RequestMessag
 	id, ln := s.identity, s.nodeLn
 	s.mu.RUnlock()
 	if id == nil || ln == nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "pairing listener not started"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "pairing listener not started"}, req.ID))
 		return
 	}
 	addr := net.JoinHostPort(discovery.GetPrimaryLocalIP(), strconv.Itoa(ln.Addr().(*net.TCPAddr).Port))
 	pin, err := pairing.NewPIN(pairing.PINConfig{Digits: p.Digits, Show: func(code string, expires time.Time) {
 		if code == "" && expires.IsZero() { // too many wrong PINs: stopped (#105)
-			s.sendTo(conn, NewEvent("pair_pin_shown", map[string]any{"pin": "", "stopped": true, "address": addr,
+			rs.Reply(NewEvent("pair_pin_shown", map[string]any{"pin": "", "stopped": true, "address": addr,
 				"fingerprint": id.Fingerprint.Short()}, req.ID))
 			return
 		}
@@ -64,7 +62,7 @@ func (s *DaemonServer) handlePairPINShow(conn *websocket.Conn, req RequestMessag
 			shown = pairing.FormatPIN(code)
 			diag.Secrets.Add("PIN", code, shown) // no journal line or bundle may reveal it
 		}
-		s.sendTo(conn, NewEvent("pair_pin_shown", map[string]any{
+		rs.Reply(NewEvent("pair_pin_shown", map[string]any{
 			"pin":         shown,
 			"expires":     expires.Unix(),
 			"address":     addr,
@@ -72,7 +70,7 @@ func (s *DaemonServer) handlePairPINShow(conn *websocket.Conn, req RequestMessag
 		}, req.ID))
 	}})
 	if err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 		return
 	}
 	s.mu.Lock()
@@ -86,14 +84,14 @@ func (s *DaemonServer) handlePairPINShow(conn *websocket.Conn, req RequestMessag
 
 // handlePairPIN pairs with the device that shows a PIN. A refusal (wrong PIN, PIN destroyed,
 // relay) is a pair_failed event without detail (PAIR-07).
-func (s *DaemonServer) handlePairPIN(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handlePairPIN(rs Responder, req RequestMessage) {
 	var p PairPINPayload
 	if err := json.Unmarshal(req.Payload, &p); err != nil || strings.TrimSpace(p.Target) == "" {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid pair_pin payload"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid pair_pin payload"}, req.ID))
 		return
 	}
 	if _, err := pairing.NormalizePIN(p.PIN); err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 		return
 	}
 	go func() {

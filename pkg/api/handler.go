@@ -16,94 +16,93 @@ import (
 	"github.com/Medboy224/medXfer/pkg/hotspot"
 	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/session"
-	"github.com/gorilla/websocket"
 )
 
-func (s *DaemonServer) dispatch(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) dispatch(rs Responder, req RequestMessage) {
 	switch req.Action {
 	case "get_status":
-		s.sendTo(conn, NewEvent("status", s.getStatus(), req.ID))
+		rs.Reply(NewEvent("status", s.getStatus(), req.ID))
 
 	case "set_config":
-		s.handleSetConfig(conn, req)
+		s.handleSetConfig(rs, req)
 
 	case "scan":
-		s.handleScan(conn, req)
+		s.handleScan(rs, req)
 
 	case "pair":
-		s.handlePair(conn, req)
+		s.handlePair(rs, req)
 
 	case "pair_show":
-		s.handlePairShow(conn, req)
+		s.handlePairShow(rs, req)
 
 	case "pair_uri":
-		s.handlePairURI(conn, req)
+		s.handlePairURI(rs, req)
 
 	case "pair_pin_show":
-		s.handlePairPINShow(conn, req)
+		s.handlePairPINShow(rs, req)
 
 	case "pair_pin":
-		s.handlePairPIN(conn, req)
+		s.handlePairPIN(rs, req)
 
 	case "trust_respond":
-		s.handleTrustRespond(conn, req)
+		s.handleTrustRespond(rs, req)
 
 	case "disconnect":
-		s.handleDisconnect(conn, req)
+		s.handleDisconnect(rs, req)
 
 	case "send":
-		s.handleSend(conn, req)
+		s.handleSend(rs, req)
 
 	case "respond_offer":
-		s.handleRespondOffer(conn, req)
+		s.handleRespondOffer(rs, req)
 
 	case "cancel":
-		s.handleCancel(conn, req)
+		s.handleCancel(rs, req)
 
 	case "pause":
-		s.handlePause(conn, req)
+		s.handlePause(rs, req)
 
 	case "resume":
-		s.handleResume(conn, req)
+		s.handleResume(rs, req)
 
 	case "skip_file":
-		s.handleSkipFile(conn, req)
+		s.handleSkipFile(rs, req)
 
 	case "pause_file":
-		s.handlePauseFile(conn, req)
+		s.handlePauseFile(rs, req)
 
 	case "resume_file":
-		s.handleResumeFile(conn, req)
+		s.handleResumeFile(rs, req)
 
 	case "hotspot_start":
-		s.handleHotspotStart(conn, req)
+		s.handleHotspotStart(rs, req)
 
 	case "hotspot_stop":
-		s.handleHotspotStop(conn, req)
+		s.handleHotspotStop(rs, req)
 
 	case "hotspot_status":
-		s.handleHotspotStatus(conn, req)
+		s.handleHotspotStatus(rs, req)
 
 	case "share_web_files":
-		s.handleShareWebFiles(conn, req)
+		s.handleShareWebFiles(rs, req)
 
 	case "clear_web_files":
-		s.handleClearWebFiles(conn, req)
+		s.handleClearWebFiles(rs, req)
 
 	case "toggle_web_share":
-		s.handleToggleWebShare(conn, req)
+		s.handleToggleWebShare(rs, req)
 
 	case "regenerate_share_pin":
-		s.handleRegenerateSharePIN(conn, req)
+		s.handleRegenerateSharePIN(rs, req)
 
 	case "set_web_share_auto_accept":
-		s.handleSetWebShareAutoAccept(conn, req)
+		s.handleSetWebShareAutoAccept(rs, req)
 
 	case "accept_web_upload":
-		s.handleAcceptWebUpload(conn, req)
+		s.handleAcceptWebUpload(rs, req)
 
 	case "reject_web_upload":
-		s.handleRejectWebUpload(conn, req)
+		s.handleRejectWebUpload(rs, req)
 
 	case "web_share_pause":
 		s.PauseWebShareTransfer()
@@ -120,25 +119,25 @@ func (s *DaemonServer) dispatch(conn *websocket.Conn, req RequestMessage) {
 		}()
 
 	case "test_disk":
-		s.handleTestDisk(conn, req)
+		s.handleTestDisk(rs, req)
 
 	case "test_network":
-		s.handleTestNetwork(conn, req)
+		s.handleTestNetwork(rs, req)
 
 	case "get_transfer_summary":
-		s.handleGetTransferSummary(conn, req)
+		s.handleGetTransferSummary(rs, req)
 
 	default:
-		s.sendTo(conn, NewEvent("action_error", map[string]string{
+		rs.Reply(NewEvent("action_error", map[string]string{
 			"error": fmt.Sprintf("unknown action '%s'", req.Action),
 		}, req.ID))
 	}
 }
 
-func (s *DaemonServer) handleSetConfig(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleSetConfig(rs Responder, req RequestMessage) {
 	var cfg Config
 	if err := json.Unmarshal(req.Payload, &cfg); err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 		return
 	}
 
@@ -162,17 +161,17 @@ func (s *DaemonServer) handleSetConfig(conn *websocket.Conn, req RequestMessage)
 	s.mu.Unlock()
 
 	if err := SaveConfig(currentCfg); err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed saving settings: %v", err)}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed saving settings: %v", err)}, req.ID))
 		return
 	}
 	s.Broadcast(NewEvent("status", s.getStatus(), req.ID))
 }
 
-func (s *DaemonServer) handleScan(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleScan(rs Responder, req RequestMessage) {
 	go func() {
 		peers, err := discovery.DiscoverPeers(2 * time.Second)
 		if err != nil {
-			s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+			rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 			return
 		}
 
@@ -185,14 +184,14 @@ func (s *DaemonServer) handleScan(conn *websocket.Conn, req RequestMessage) {
 			}
 		}
 
-		s.sendTo(conn, NewEvent("peers_list", filtered, req.ID))
+		rs.Reply(NewEvent("peers_list", filtered, req.ID))
 	}()
 }
 
-func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handlePair(rs Responder, req RequestMessage) {
 	var payload PairPayload
 	if err := json.Unmarshal(req.Payload, &payload); err != nil || (payload.IP == "" && payload.Code == "") {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid pair payload (IP or Code required)"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid pair payload (IP or Code required)"}, req.ID))
 		return
 	}
 
@@ -200,7 +199,7 @@ func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
 	if payload.Code != "" && payload.IP == "" {
 		peer, err := discovery.ResolvePairingCode(s.ctx, payload.Code, 3*time.Second)
 		if err != nil {
-			s.sendTo(conn, NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to resolve pairing code '%s': %v", payload.Code, err)}, req.ID))
+			rs.Reply(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to resolve pairing code '%s': %v", payload.Code, err)}, req.ID))
 			return
 		}
 		payload.IP = peer.HostIP
@@ -216,12 +215,12 @@ func (s *DaemonServer) handlePair(conn *websocket.Conn, req RequestMessage) {
 	target := net.JoinHostPort(payload.IP, strconv.Itoa(int(port)))
 	go func() {
 		if _, err := s.pairWith(target, nil, false, req.ID); err != nil {
-			s.sendTo(conn, NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", target, err)}, req.ID))
+			rs.Reply(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", target, err)}, req.ID))
 		}
 	}()
 }
 
-func (s *DaemonServer) handleDisconnect(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleDisconnect(rs Responder, req RequestMessage) {
 	s.mu.Lock()
 	if s.sessionGraceTimer != nil {
 		s.sessionGraceTimer.Stop()
@@ -240,10 +239,10 @@ func (s *DaemonServer) handleDisconnect(conn *websocket.Conn, req RequestMessage
 	s.Broadcast(NewEvent("disconnected", map[string]string{"reason": "user requested disconnect"}, req.ID))
 }
 
-func (s *DaemonServer) handleSend(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleSend(rs Responder, req RequestMessage) {
 	var payload SendPayload
 	if err := json.Unmarshal(req.Payload, &payload); err != nil || len(payload.Paths) == 0 {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "missing or invalid paths"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "missing or invalid paths"}, req.ID))
 		return
 	}
 
@@ -270,13 +269,13 @@ func (s *DaemonServer) handleSend(conn *websocket.Conn, req RequestMessage) {
 				// Old session failed (stale/broken connection), immediately reconnect and retry!
 				s.connectAndSend(payload.TargetIP, payload.Paths, req.ID)
 			} else if err != nil {
-				s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+				rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 			}
 		}()
 		return
 	}
 
-	s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "not paired with any device and no target_ip specified"}, req.ID))
+	rs.Reply(NewEvent("action_error", map[string]string{"error": "not paired with any device and no target_ip specified"}, req.ID))
 }
 
 func (s *DaemonServer) connectAndSend(targetIP string, paths []string, id string) {
@@ -287,10 +286,10 @@ func (s *DaemonServer) connectAndSend(targetIP string, paths []string, id string
 	_ = s.sendOverSession(paths, id)
 }
 
-func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleRespondOffer(rs Responder, req RequestMessage) {
 	var payload RespondOfferPayload
 	if err := json.Unmarshal(req.Payload, &payload); err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid respond_offer payload"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid respond_offer payload"}, req.ID))
 		return
 	}
 
@@ -301,7 +300,7 @@ func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessa
 	s.mu.Unlock()
 
 	if sess == nil || offer == nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "no pending transfer offer to respond to"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "no pending transfer offer to respond to"}, req.ID))
 		return
 	}
 
@@ -330,7 +329,7 @@ func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessa
 			s.pendingOffer = offer
 		}
 		s.mu.Unlock()
-		s.sendTo(conn, NewEvent("action_error", map[string]string{
+		rs.Reply(NewEvent("action_error", map[string]string{
 			"code": "NO_SPACE", "error": fmt.Sprintf("cannot receive into %s: %v", saveDir, err),
 		}, req.ID))
 		return
@@ -341,40 +340,40 @@ func (s *DaemonServer) handleRespondOffer(conn *websocket.Conn, req RequestMessa
 	s.receive(sess, offer, saveDir, policy, req.ID)
 }
 
-func (s *DaemonServer) handlePause(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handlePause(rs Responder, req RequestMessage) {
 	s.pauseAll(true, false, req.ID)
 }
 
-func (s *DaemonServer) handleResume(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleResume(rs Responder, req RequestMessage) {
 	s.pauseAll(false, false, req.ID)
 }
 
-func (s *DaemonServer) handleCancel(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleCancel(rs Responder, req RequestMessage) {
 	s.cancelTransfer(false, req.ID)
 }
 
-func (s *DaemonServer) handleSkipFile(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleSkipFile(rs Responder, req RequestMessage) {
 	var payload SkipFilePayload
 	if err := json.Unmarshal(req.Payload, &payload); err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid skip_file payload"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid skip_file payload"}, req.ID))
 		return
 	}
 	s.itemAction(itemSkip, payload.ItemIndex, false, req.ID)
 }
 
-func (s *DaemonServer) handlePauseFile(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handlePauseFile(rs Responder, req RequestMessage) {
 	var payload PauseFilePayload
 	if err := json.Unmarshal(req.Payload, &payload); err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid pause_file payload"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid pause_file payload"}, req.ID))
 		return
 	}
 	s.itemAction(itemPause, payload.ItemIndex, false, req.ID)
 }
 
-func (s *DaemonServer) handleResumeFile(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleResumeFile(rs Responder, req RequestMessage) {
 	var payload ResumeFilePayload
 	if err := json.Unmarshal(req.Payload, &payload); err != nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid resume_file payload"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid resume_file payload"}, req.ID))
 		return
 	}
 	s.itemAction(itemResume, payload.ItemIndex, false, req.ID)
@@ -386,7 +385,7 @@ type HotspotStartPayload struct {
 	Password string `json:"password"` // optional custom password
 }
 
-func (s *DaemonServer) handleHotspotStart(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleHotspotStart(rs Responder, req RequestMessage) {
 	var payload HotspotStartPayload
 	if len(req.Payload) > 0 {
 		_ = json.Unmarshal(req.Payload, &payload)
@@ -417,7 +416,7 @@ func (s *DaemonServer) handleHotspotStart(conn *websocket.Conn, req RequestMessa
 		portalURL := fmt.Sprintf("http://%s:%d/share", localIP, port)
 		qrPortal, _ := GenerateURLQRDataURI(portalURL, 256)
 
-		s.sendTo(conn, NewEvent("hotspot_started", map[string]interface{}{
+		rs.Reply(NewEvent("hotspot_started", map[string]interface{}{
 			"active":     true,
 			"ssid":       netInfo.SSID,
 			"password":   netInfo.Password,
@@ -433,7 +432,7 @@ func (s *DaemonServer) handleHotspotStart(conn *websocket.Conn, req RequestMessa
 
 	if s.hotspotCtrl != nil {
 		s.hotspotMu.Unlock()
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "Hotspot is already starting or running"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "Hotspot is already starting or running"}, req.ID))
 		return
 	}
 
@@ -501,7 +500,7 @@ func (s *DaemonServer) handleHotspotStart(conn *websocket.Conn, req RequestMessa
 	}()
 }
 
-func (s *DaemonServer) handleHotspotStop(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleHotspotStop(rs Responder, req RequestMessage) {
 	s.hotspotMu.Lock()
 	ctrl := s.hotspotCtrl
 	s.hotspotCtrl = nil
@@ -515,13 +514,13 @@ func (s *DaemonServer) handleHotspotStop(conn *websocket.Conn, req RequestMessag
 	s.Broadcast(NewEvent("hotspot_stopped", map[string]string{"message": "Hotspot stopped"}, req.ID))
 }
 
-func (s *DaemonServer) handleHotspotStatus(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleHotspotStatus(rs Responder, req RequestMessage) {
 	s.hotspotMu.Lock()
 	netInfo := s.activeHotspot
 	s.hotspotMu.Unlock()
 
 	if netInfo == nil {
-		s.sendTo(conn, NewEvent("hotspot_status", map[string]interface{}{
+		rs.Reply(NewEvent("hotspot_status", map[string]interface{}{
 			"active": false,
 		}, req.ID))
 		return
@@ -539,7 +538,7 @@ func (s *DaemonServer) handleHotspotStatus(conn *websocket.Conn, req RequestMess
 	portalURL := fmt.Sprintf("http://%s:%d/share", localIP, port)
 	qrPortal, _ := GenerateURLQRDataURI(portalURL, 256)
 
-	s.sendTo(conn, NewEvent("hotspot_status", map[string]interface{}{
+	rs.Reply(NewEvent("hotspot_status", map[string]interface{}{
 		"active":     true,
 		"ssid":       netInfo.SSID,
 		"password":   netInfo.Password,
@@ -553,12 +552,12 @@ func (s *DaemonServer) handleHotspotStatus(conn *websocket.Conn, req RequestMess
 	}, req.ID))
 }
 
-func (s *DaemonServer) handleShareWebFiles(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleShareWebFiles(rs Responder, req RequestMessage) {
 	var payload struct {
 		Paths []string `json:"paths"`
 	}
 	if err := json.Unmarshal(req.Payload, &payload); err != nil || len(payload.Paths) == 0 {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "no paths specified to share"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "no paths specified to share"}, req.ID))
 		return
 	}
 
@@ -584,7 +583,7 @@ func (s *DaemonServer) handleShareWebFiles(conn *websocket.Conn, req RequestMess
 	m, err := manifest.Build(payload.Paths)
 	if err != nil {
 		s.mu.Unlock()
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 		return
 	}
 	s.webSharedManifest = m
@@ -599,7 +598,7 @@ func (s *DaemonServer) handleShareWebFiles(conn *websocket.Conn, req RequestMess
 	s.Broadcast(NewEvent("status", s.getStatus(), req.ID))
 }
 
-func (s *DaemonServer) handleClearWebFiles(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleClearWebFiles(rs Responder, req RequestMessage) {
 	s.mu.Lock()
 	s.webSharedManifest = nil
 	s.webSharedFile = ""
@@ -610,7 +609,7 @@ func (s *DaemonServer) handleClearWebFiles(conn *websocket.Conn, req RequestMess
 	}, req.ID))
 }
 
-func (s *DaemonServer) handleToggleWebShare(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleToggleWebShare(rs Responder, req RequestMessage) {
 	s.mu.Lock()
 	var payload struct {
 		Enabled *bool `json:"enabled"`
@@ -625,7 +624,7 @@ func (s *DaemonServer) handleToggleWebShare(conn *websocket.Conn, req RequestMes
 	s.Broadcast(NewEvent("status", s.getStatus(), req.ID))
 }
 
-func (s *DaemonServer) handleRegenerateSharePIN(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleRegenerateSharePIN(rs Responder, req RequestMessage) {
 	digits := 6
 	var payload struct {
 		Digits int `json:"digits"`
@@ -636,7 +635,7 @@ func (s *DaemonServer) handleRegenerateSharePIN(conn *websocket.Conn, req Reques
 	s.regeneratePINInternal(digits)
 }
 
-func (s *DaemonServer) handleSetWebShareAutoAccept(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleSetWebShareAutoAccept(rs Responder, req RequestMessage) {
 	var payload struct {
 		AutoAccept bool `json:"auto_accept"`
 	}
@@ -649,12 +648,12 @@ func (s *DaemonServer) handleSetWebShareAutoAccept(conn *websocket.Conn, req Req
 	s.Broadcast(NewEvent("status", s.getStatus(), req.ID))
 }
 
-func (s *DaemonServer) handleAcceptWebUpload(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleAcceptWebUpload(rs Responder, req RequestMessage) {
 	var payload struct {
 		Ticket string `json:"ticket"`
 	}
 	if err := json.Unmarshal(req.Payload, &payload); err != nil || payload.Ticket == "" {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid ticket"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid ticket"}, req.ID))
 		return
 	}
 
@@ -670,7 +669,7 @@ func (s *DaemonServer) handleAcceptWebUpload(conn *websocket.Conn, req RequestMe
 	s.mu.Unlock()
 
 	if !exists {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "ticket expired or not found"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "ticket expired or not found"}, req.ID))
 		return
 	}
 
@@ -679,12 +678,12 @@ func (s *DaemonServer) handleAcceptWebUpload(conn *websocket.Conn, req RequestMe
 	}, req.ID))
 }
 
-func (s *DaemonServer) handleRejectWebUpload(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleRejectWebUpload(rs Responder, req RequestMessage) {
 	var payload struct {
 		Ticket string `json:"ticket"`
 	}
 	if err := json.Unmarshal(req.Payload, &payload); err != nil || payload.Ticket == "" {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{"error": "invalid ticket"}, req.ID))
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid ticket"}, req.ID))
 		return
 	}
 
@@ -705,7 +704,7 @@ func (s *DaemonServer) handleRejectWebUpload(conn *websocket.Conn, req RequestMe
 	}, req.ID))
 }
 
-func (s *DaemonServer) handleTestDisk(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleTestDisk(rs Responder, req RequestMessage) {
 	var payload TestDiskPayload
 	if len(req.Payload) > 0 {
 		_ = json.Unmarshal(req.Payload, &payload)
@@ -734,7 +733,7 @@ func (s *DaemonServer) handleTestDisk(conn *websocket.Conn, req RequestMessage) 
 	go func() {
 		res, err := engine.BenchmarkDisk(targetDir, sizeBytes)
 		if err != nil {
-			s.sendTo(conn, NewEvent("action_error", map[string]string{
+			rs.Reply(NewEvent("action_error", map[string]string{
 				"error": fmt.Sprintf("disk benchmark failed: %v", err),
 			}, req.ID))
 			return
@@ -753,18 +752,18 @@ func (s *DaemonServer) handleTestDisk(conn *websocket.Conn, req RequestMessage) 
 			}))
 		}
 
-		s.sendTo(conn, NewEvent("benchmark_disk_result", res, req.ID))
+		rs.Reply(NewEvent("benchmark_disk_result", res, req.ID))
 	}()
 }
 
-func (s *DaemonServer) handleTestNetwork(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleTestNetwork(rs Responder, req RequestMessage) {
 	s.mu.RLock()
 	sess := s.activeSession
 	pairedName := s.pairedDeviceName
 	s.mu.RUnlock()
 
 	if sess == nil {
-		s.sendTo(conn, NewEvent("action_error", map[string]string{
+		rs.Reply(NewEvent("action_error", map[string]string{
 			"error": "Not paired with any device. Please pair with your phone or PC before running network benchmark.",
 		}, req.ID))
 		return
@@ -877,19 +876,19 @@ func (s *DaemonServer) handleTestNetwork(conn *websocket.Conn, req RequestMessag
 				remoteIP, speedStr, avgRTT, minRTT, maxRTT, linkType),
 		}))
 
-		s.sendTo(conn, NewEvent("benchmark_network_result", result, req.ID))
+		rs.Reply(NewEvent("benchmark_network_result", result, req.ID))
 	}()
 }
 
-func (s *DaemonServer) handleGetTransferSummary(conn *websocket.Conn, req RequestMessage) {
+func (s *DaemonServer) handleGetTransferSummary(rs Responder, req RequestMessage) {
 	rep := s.GetLastSummaryReport()
 	if rep == nil {
-		s.sendTo(conn, NewEvent("last_transfer_summary", map[string]interface{}{
+		rs.Reply(NewEvent("last_transfer_summary", map[string]interface{}{
 			"summary_report": nil,
 		}, req.ID))
 		return
 	}
-	s.sendTo(conn, NewEvent("last_transfer_summary", map[string]interface{}{
+	rs.Reply(NewEvent("last_transfer_summary", map[string]interface{}{
 		"summary_report":   rep,
 		"formatted_report": rep.FormattedReport,
 	}, req.ID))
