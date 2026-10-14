@@ -39,8 +39,7 @@ func scoreInterface(name string, ip net.IP) int {
 		return 10
 	}
 	// Cellular data modem interfaces (lower priority than local Wi-Fi / Hotspot)
-	if strings.HasPrefix(lower, "rmnet") || strings.HasPrefix(lower, "ccmni") ||
-		strings.HasPrefix(lower, "pdp") || strings.HasPrefix(lower, "wwan") {
+	if isCellular(lower) {
 		return 20
 	}
 
@@ -468,15 +467,9 @@ func calculateSweepRange(ip net.IP, mask net.IPMask) []string {
 
 // GetPrimaryLocalIP returns the primary routable IPv4 address
 func GetPrimaryLocalIP() string {
-	// The interface that carries the default route is the one other devices can reach. An
-	// interface without link keeps its address (Windows: Ethernet unplugged, connection sharing
-	// 192.168.137.1) and used to be chosen here (issue #19).
-	if ip := DefaultRouteIP(); ip != "" {
-		return ip
-	}
 	targets := GetActiveNetworkTargets()
-	if len(targets) > 0 {
-		return targets[0].LocalIP.String()
+	if ip := choosePrimaryIP(DefaultRouteIP(), targets); ip != "" {
+		return ip
 	}
 
 	// Direct interface address inspection as fallback
@@ -554,6 +547,38 @@ func IsSubnetReachable(ipStr string) bool {
 
 // DefaultRouteIP returns the local IPv4 address the system uses to reach the Internet, or ""
 // without a default route. A UDP "connection" only selects a route: no packet is sent.
+// isCellular reports whether a (lower-case) interface name is a cellular data modem: no
+// device of the local network can reach its address.
+func isCellular(lower string) bool {
+	return strings.HasPrefix(lower, "rmnet") || strings.HasPrefix(lower, "ccmni") ||
+		strings.HasPrefix(lower, "pdp") || strings.HasPrefix(lower, "wwan")
+}
+
+// choosePrimaryIP picks the address other devices can reach. The interface that carries the
+// default route comes first: an interface without link keeps its address (Windows: Ethernet
+// unplugged, connection sharing 192.168.137.1) and used to be chosen (#19). But on a phone
+// with mobile data on, the default route goes through the cellular modem, which the local
+// network cannot reach: the best local target is taken then (#109). targets are sorted best
+// first (GetActiveNetworkTargets).
+func choosePrimaryIP(defaultIP string, targets []NetworkTarget) string {
+	if defaultIP != "" {
+		for _, t := range targets {
+			if t.LocalIP.String() == defaultIP && isCellular(strings.ToLower(t.InterfaceName)) {
+				for _, local := range targets {
+					if !isCellular(strings.ToLower(local.InterfaceName)) {
+						return local.LocalIP.String()
+					}
+				}
+			}
+		}
+		return defaultIP
+	}
+	if len(targets) > 0 {
+		return targets[0].LocalIP.String()
+	}
+	return ""
+}
+
 func DefaultRouteIP() string {
 	conn, err := net.Dial("udp4", "8.8.8.8:80")
 	if err != nil {
