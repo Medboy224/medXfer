@@ -665,7 +665,7 @@ Valeurs par défaut ; toutes sont des paramètres (règle R4).
 
 | Id | Limite | Défaut |
 |---|---|---|
-| `LIM-01` | Connexions non authentifiées simultanées | 16 ; au plus 5 nouvelles par minute et par IP |
+| `LIM-01` | Connexions non authentifiées simultanées | 16 ; au plus 5 nouvelles par minute et par IP, 60 pour une IP qui s'est authentifiée (clé connue ou appairage) dans les 10 dernières minutes (#93) |
 | `LIM-02` | Durée du handshake TLS | 5 s |
 | `LIM-03` | Taille cumulée lue en état `UNAUTH` | 4 Kio |
 | `LIM-04` | Charge `CONTROL` | 1 Mio |

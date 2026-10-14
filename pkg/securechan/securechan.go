@@ -79,6 +79,7 @@ type Conn struct {
 	state      State
 	unauthRead int
 	release    func() // gives the Gate place back (LIM-01)
+	known      func() // tells the Gate that this address authenticated (#93)
 	pending    []byte // given back by Unread, read before the connection
 }
 
@@ -130,6 +131,9 @@ func (c *Conn) Authenticate() {
 	c.mu.Unlock()
 	if wasUnauth {
 		_ = c.Conn.SetDeadline(time.Time{})
+		if c.known != nil {
+			c.known() // a successful pairing: this address is a known device now
+		}
 	}
 	c.releaseGate()
 }
@@ -209,14 +213,14 @@ func handshake(ctx context.Context, raw net.Conn, cfg Config, server bool) (*Con
 		raw.Close()
 		return nil, errors.New("securechan: no identity")
 	}
-	release, charge := func() {}, func() {}
+	release, charge, known := func() {}, func() {}, func() {}
 	if server && cfg.Gate != nil {
 		adm, err := cfg.Gate.Admit(raw.RemoteAddr())
 		if err != nil {
 			raw.Close()
 			return nil, err
 		}
-		release, charge = adm.Release, adm.Charge
+		release, charge, known = adm.Release, adm.Charge, adm.Authenticated
 	}
 	var (
 		peer  identity.Fingerprint
@@ -272,11 +276,12 @@ func handshake(ctx context.Context, raw net.Conn, cfg Config, server bool) (*Con
 		release()
 		return nil, fmt.Errorf("securechan: handshake with %s: %w", raw.RemoteAddr(), err)
 	}
-	c := &Conn{Conn: tconn, peer: peer, state: state, release: release}
+	c := &Conn{Conn: tconn, peer: peer, state: state, release: release, known: known}
 	if state == Unauth {
 		charge()
 		_ = tconn.SetDeadline(time.Now().Add(UnauthTimeout))
 	} else {
+		known()
 		c.releaseGate() // an authenticated peer neither holds a place nor uses the quota
 	}
 	return c, nil

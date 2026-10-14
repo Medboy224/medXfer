@@ -205,3 +205,101 @@ func TestUnread(t *testing.T) {
 		t.Fatalf("read %q, %v", got, err)
 	}
 }
+
+// #93: an address that authenticated recently gets the larger quota for KnownFor; other
+// addresses keep the small one; the larger quota still ends.
+func TestGateKnownAddressGetsLargerQuota(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	g := &Gate{MaxUnauth: 1000, PerIPOneMinute: 5, KnownPerIPOneMinute: 60, KnownFor: 10 * time.Minute,
+		now: func() time.Time { return now }}
+	adm, err := g.Admit(fakeAddr("10.0.0.1:4000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adm.Authenticated()
+	adm.Release()
+	fail := func(addr string, n int) error {
+		for i := 0; i < n; i++ {
+			adm, err := g.Admit(fakeAddr(addr))
+			if err != nil {
+				return err
+			}
+			adm.Charge() // a failed handshake
+			adm.Release()
+		}
+		return nil
+	}
+	if err := fail("10.0.0.1:4001", 60); err != nil {
+		t.Fatalf("known address within its quota: %v", err)
+	}
+	if err := fail("10.0.0.1:4002", 1); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("61st failed handshake in the minute: %v, want ErrRateLimited", err)
+	}
+	if err := fail("10.0.0.2:4000", 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := fail("10.0.0.2:4001", 1); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("an unknown address got the larger quota: %v", err)
+	}
+	now = now.Add(11 * time.Minute) // KnownFor is over: back to the small quota
+	if err := fail("10.0.0.1:4003", 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := fail("10.0.0.1:4004", 1); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("the larger quota did not end: %v", err)
+	}
+}
+
+// #93 through the server: a device that paired (Authenticate) is not locked out by the
+// handshakes that fail after it, from its address.
+func TestServerGateRemembersPairedAddress(t *testing.T) {
+	a, b := newDevice(t), newDevice(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	gate := &Gate{MaxUnauth: 100, PerIPOneMinute: 2, KnownPerIPOneMinute: 20, KnownFor: time.Minute}
+	results := make(chan result, 32)
+	go func() {
+		for {
+			raw, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				conn, err := Server(context.Background(), raw, Config{Identity: a.id, AllowUnknown: true, Gate: gate,
+					HandshakeTimeout: 300 * time.Millisecond})
+				results <- result{conn, err}
+			}()
+		}
+	}()
+	c, err := Dial(context.Background(), ln.Addr().String(), Config{Identity: b.id, AllowUnknown: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	s := wait(t, results)
+	if s.err != nil || s.conn.State() != Unauth {
+		t.Fatalf("first connection: %v", s.err)
+	}
+	s.conn.Authenticate()    // the pairing succeeded
+	for i := 0; i < 5; i++ { // handshakes cut before they start: the Wi-Fi drops, the app restarts
+		raw, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw.Close()
+		if r := wait(t, results); r.err == nil || errors.Is(r.err, ErrRateLimited) {
+			t.Fatalf("cut handshake %d: %v, want a handshake error", i+1, r.err)
+		}
+	}
+	c2, err := Dial(context.Background(), ln.Addr().String(), Config{Identity: b.id, AllowUnknown: true})
+	if err != nil {
+		t.Fatalf("the paired device is locked out: %v", err)
+	}
+	defer c2.Close()
+	if r := wait(t, results); r.err != nil {
+		t.Fatalf("the paired device is locked out: %v", r.err)
+	}
+}
