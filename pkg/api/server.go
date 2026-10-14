@@ -501,8 +501,8 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 	}
 
 	// 2. Start Discovery Broadcast Server
-	discOffer := &discovery.TransferOffer{FileName: s.config.DeviceName, FileSize: 0}
-	s.discSrv = discovery.NewDiscoveryServer("node", nodePort, discOffer, s.config.DeviceName)
+	discOffer := &discovery.TransferOffer{} // no name: DISC-06
+	s.discSrv = discovery.NewDiscoveryServer("node", nodePort, discOffer)
 	if s.pairingCode != "" {
 		s.discSrv.SetPairingCode(s.pairingCode)
 	}

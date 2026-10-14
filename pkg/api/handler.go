@@ -144,10 +144,7 @@ func (s *DaemonServer) handleSetConfig(conn *websocket.Conn, req RequestMessage)
 
 	s.mu.Lock()
 	if cfg.DeviceName != "" {
-		s.config.DeviceName = cfg.DeviceName
-		if s.discSrv != nil {
-			s.discSrv.SetDeviceName(cfg.DeviceName)
-		}
+		s.config.DeviceName = cfg.DeviceName // sent after authentication only, never announced (DISC-06)
 	}
 	if cfg.DownloadDir != "" {
 		s.config.DownloadDir = cfg.DownloadDir

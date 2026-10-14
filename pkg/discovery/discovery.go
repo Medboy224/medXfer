@@ -2,11 +2,12 @@ package discovery
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -93,24 +94,25 @@ type DiscoveryServer struct {
 	peer Peer
 }
 
-// NewDiscoveryServer initializes a node's discovery responder
-func NewDiscoveryServer(role string, tcpPort int, offer *TransferOffer, customDeviceName ...string) *DiscoveryServer {
-	hostname := ""
-	if len(customDeviceName) > 0 && customDeviceName[0] != "" {
-		hostname = customDeviceName[0]
-	} else {
-		hostname, _ = os.Hostname()
-		if hostname == "" {
-			hostname = "medXfer-Node"
-		}
-	}
+// instanceName is the name a device announces: "medXfer-" and 4 hex digits drawn at each
+// launch. DISC-06: neither the host name nor the alias goes out in clear; the alias is sent
+// only once the peer is authenticated (pair_accept).
+func instanceName() string {
+	var b [2]byte
+	_, _ = rand.Read(b[:])
+	return "medXfer-" + hex.EncodeToString(b[:])
+}
 
+// NewDiscoveryServer initializes a node's discovery responder. It announces a generic instance
+// name, never the device's name (DISC-06, #65).
+func NewDiscoveryServer(role string, tcpPort int, offer *TransferOffer) *DiscoveryServer {
+	name := instanceName()
 	code, _, _ := GeneratePairingCode("")
 
 	return &DiscoveryServer{
 		peer: Peer{
-			ID:          hostname + fmt.Sprintf("-%d", tcpPort),
-			DeviceName:  hostname,
+			ID:          name + fmt.Sprintf("-%d", tcpPort),
+			DeviceName:  name,
 			Port:        tcpPort,
 			Version:     AppVersion,
 			Role:        role,
@@ -118,13 +120,6 @@ func NewDiscoveryServer(role string, tcpPort int, offer *TransferOffer, customDe
 			Offer:       offer,
 		},
 	}
-}
-
-// SetDeviceName updates the advertised device name in real-time
-func (s *DiscoveryServer) SetDeviceName(name string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.peer.DeviceName = name
 }
 
 // SetPairingCode updates the advertised 6-digit pairing code in real-time
@@ -166,6 +161,18 @@ func (s *DiscoveryServer) answer(q DiscoveryQuery, ip string) Peer {
 	if expected == "" || expected != provided {
 		p.PairingCode = ""
 	}
+	if p.Offer != nil {
+		p.Offer = publicOffer(p.Offer)
+	}
+	return p
+}
+
+// beacon is what the UDP broadcast announces from ip: the public offer, and never the pairing
+// code, which only a query that already knows it gets echoed.
+func (s *DiscoveryServer) beacon(ip string) Peer {
+	p := s.GetPeer()
+	p.HostIP = ip
+	p.PairingCode = ""
 	if p.Offer != nil {
 		p.Offer = publicOffer(p.Offer)
 	}
@@ -231,13 +238,7 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 				targets := GetActiveNetworkTargets()
 				for _, target := range targets {
 					lAddr := &net.UDPAddr{IP: target.LocalIP, Port: 0}
-					beaconPeer := s.GetPeer()
-					beaconPeer.HostIP = target.LocalIP.String()
-					beaconPeer.PairingCode = "" // NEVER broadcast secret pairing code
-					if beaconPeer.Offer != nil {
-						beaconPeer.Offer = publicOffer(beaconPeer.Offer)
-					}
-					data, err := json.Marshal(beaconPeer)
+					data, err := json.Marshal(s.beacon(target.LocalIP.String()))
 					if err != nil {
 						continue
 					}
