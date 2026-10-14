@@ -74,7 +74,7 @@ func TestGenerateAndParsePairingCode(t *testing.T) {
 }
 
 func TestDiscoveryServerPairingCode(t *testing.T) {
-	srv := NewDiscoveryServer("node", 18887, nil, "Test-Device")
+	srv := NewDiscoveryServer("node", 18887, nil)
 	initialCode := srv.GetPairingCode()
 	if initialCode == "" {
 		t.Fatal("expected auto-generated pairing code, got empty")
@@ -183,7 +183,7 @@ func TestProbePeerForCode(t *testing.T) {
 func TestAuthenticatedDiscoveryReflector(t *testing.T) {
 	// Test the logic of pairing validation on DiscoveryServer
 	offer := &TransferOffer{FileName: "confidential.docx", FileSize: 5000000}
-	srv := NewDiscoveryServer("sender", 18888, offer, "HostDev")
+	srv := NewDiscoveryServer("sender", 18888, offer)
 	srv.SetPairingCode("104-567")
 
 	// Verify that beacons are masked
@@ -231,7 +231,7 @@ func TestPublicOfferHidesTheTransfer(t *testing.T) {
 func TestAnswerRevealsNothingWithTheRightCode(t *testing.T) {
 	offer := &TransferOffer{FileName: "secret-plans.pdf", FileSize: 123456, FileID: "f1",
 		Batch: &manifest.Manifest{Items: []manifest.Item{{RelPath: "dir/other-secret.txt"}}}}
-	srv := NewDiscoveryServer("sender", 18888, offer, "HostDev")
+	srv := NewDiscoveryServer("sender", 18888, offer)
 	srv.SetPairingCode("104-567")
 
 	for _, c := range []struct {
