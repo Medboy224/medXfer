@@ -137,7 +137,9 @@ Choisir l'implémentation de `_medxfer._tcp` selon cinq critères :
 - **macOS et iOS**, Bonjour du système (`DISC-02`) : J9, après G2b et G8.
 - **Web Share v2** : J7.
 
-## 5. Décisions à valider avec ce plan
+## 5. Décisions (validées le 14 octobre 2026)
+
+D7 : `xfer daemon` sert au tableau de bord dans le navigateur, il reste donc dans les builds `devui`.
 
 | # | Décision | Raison |
 |---|---|---|
