@@ -97,6 +97,17 @@ type DaemonServer struct {
 	httpSrv *http.Server
 	nodeLn  net.Listener
 
+	// dataDir holds config.json, the identity, the trusted devices and the reports. It is set
+	// at construction: two daemons in one process (pkg/core) keep apart (D2 of the J6a plan).
+	dataDir   string
+	startOnce sync.Once
+	startErr  error
+
+	// Subscribers to Broadcast (pkg/core's event queue, D3 of the J6a plan).
+	sinkMu   sync.RWMutex
+	sinks    map[int]func(EventMessage)
+	nextSink int
+
 	// This device's identity and trusted devices (WP-3.1), loaded by Serve.
 	identity    *identity.Identity
 	trust       *identity.TrustStore
@@ -125,8 +136,14 @@ type DaemonServer struct {
 
 // NewDaemonServer initializes a daemon with default configurations
 func NewDaemonServer(port int, defaultOutDir, deviceName string) *DaemonServer {
+	return NewDaemonServerAt(filepath.Dir(GetConfigFilePath()), port, defaultOutDir, deviceName)
+}
+
+// NewDaemonServerAt is NewDaemonServer with its own data folder (config.json, identity,
+// trusted devices, reports) instead of the process-wide one (B6, D2 of the J6a plan).
+func NewDaemonServerAt(dataDir string, port int, defaultOutDir, deviceName string) *DaemonServer {
 	ctx, cancel := context.WithCancel(context.Background())
-	cfg := LoadConfig(defaultOutDir, deviceName)
+	cfg := LoadConfigFrom(filepath.Join(dataDir, "config.json"), defaultOutDir, deviceName)
 
 	// 6-digit PIN (1,000,000 combinations) and 128-bit token from crypto/rand (WEB-02, WEB-03).
 	// Since Go 1.24 crypto/rand cannot fail on supported platforms; refuse to start if it does.
@@ -167,6 +184,7 @@ func NewDaemonServer(port int, defaultOutDir, deviceName string) *DaemonServer {
 		benchBurstAckChan:  make(chan session.Message, 10),
 		ctx:                ctx,
 		cancel:             cancel,
+		dataDir:            dataDir,
 	}
 	srv.webShareTransferPauseCond = sync.NewCond(&srv.webShareTransferMu)
 	return srv
@@ -480,6 +498,21 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 	s.httpPort = httpPort
 	s.mu.Unlock()
 
+	if err := s.StartNode(); err != nil {
+		return err
+	}
+	return s.serveHTTP(httpLn)
+}
+
+// StartNode starts what makes this device a medXfer node, without any HTTP or WebSocket: its
+// identity and trusted devices, the single port (pairing and data, CHAN-01) and discovery.
+// Serve calls it; pkg/core calls it alone (API-01). Only the first call does anything.
+func (s *DaemonServer) StartNode() error {
+	s.startOnce.Do(func() { s.startErr = s.startNode() })
+	return s.startErr
+}
+
+func (s *DaemonServer) startNode() error {
 	if err := s.loadIdentity(); err != nil {
 		return err
 	}
@@ -507,7 +540,11 @@ func (s *DaemonServer) Serve(httpLn net.Listener) error {
 		s.discSrv.SetPairingCode(s.pairingCode)
 	}
 	s.discSrv.Start(s.ctx)
+	return nil
+}
 
+// serveHTTP serves the dashboard and its control WebSocket (devui) and the Web Share portal.
+func (s *DaemonServer) serveHTTP(httpLn net.Listener) error {
 	// 3. Start HTTP/WebSocket Router
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
@@ -686,6 +723,11 @@ func (s *DaemonServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // Broadcast sends a JSON event to all active Flutter clients
 func (s *DaemonServer) Broadcast(evt EventMessage) {
 	journalEvent(evt)
+	s.sinkMu.RLock()
+	for _, fn := range s.sinks {
+		fn(evt) // must not block (pkg/core: a bounded queue that drops, B11)
+	}
+	s.sinkMu.RUnlock()
 	s.clientsMu.Lock()
 	defer s.clientsMu.Unlock()
 	for client := range s.clients {
@@ -923,10 +965,34 @@ func (s *DaemonServer) NodeListenAddr() string {
 // PairingCode returns the code a peer must present to pair with this daemon.
 func (s *DaemonServer) PairingCode() string { return s.GetStatus().PairingCode }
 
+// Subscribe calls fn with every broadcast event, from then on, until cancel. fn must not block.
+func (s *DaemonServer) Subscribe(fn func(EventMessage)) (cancel func()) {
+	s.sinkMu.Lock()
+	if s.sinks == nil {
+		s.sinks = map[int]func(EventMessage){}
+	}
+	id := s.nextSink
+	s.nextSink++
+	s.sinks[id] = fn
+	s.sinkMu.Unlock()
+	return func() {
+		s.sinkMu.Lock()
+		delete(s.sinks, id)
+		s.sinkMu.Unlock()
+	}
+}
+
+// Dispatch runs one request: its replies go to rs, its other effects to Broadcast. It is the
+// entry point of every transport (the dashboard's WebSocket, pkg/core).
+func (s *DaemonServer) Dispatch(rs Responder, req RequestMessage) { s.dispatch(rs, req) }
+
+// DataDir is the folder of this daemon's configuration, identity and reports.
+func (s *DaemonServer) DataDir() string { return s.dataDir }
+
 // loadIdentity reads, or creates on first use, this device's identity and its trusted devices,
 // next to config.json (WP-3.1).
 func (s *DaemonServer) loadIdentity() error {
-	dir := filepath.Dir(GetConfigFilePath())
+	dir := s.dataDir
 	id, err := identity.LoadOrCreate(dir)
 	if err != nil {
 		return fmt.Errorf("device identity: %w", err)
@@ -1425,7 +1491,7 @@ func (s *DaemonServer) FinishTransferTracker() *TransferSummaryReport {
 	s.activeTracker = nil
 	s.trackerMu.Unlock()
 
-	if _, err := diag.SaveReport(ReportsDir(), report, maxSavedReports); err != nil {
+	if _, err := diag.SaveReport(filepath.Join(s.dataDir, "reports"), report, maxSavedReports); err != nil {
 		log.Printf("[diag] could not save the transfer report: %v", err)
 	}
 	return report

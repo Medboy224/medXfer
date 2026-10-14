@@ -160,7 +160,7 @@ func (s *DaemonServer) handleSetConfig(rs Responder, req RequestMessage) {
 	currentCfg := s.config
 	s.mu.Unlock()
 
-	if err := SaveConfig(currentCfg); err != nil {
+	if err := SaveConfigTo(filepath.Join(s.dataDir, "config.json"), currentCfg); err != nil {
 		rs.Reply(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed saving settings: %v", err)}, req.ID))
 		return
 	}

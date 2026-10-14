@@ -84,6 +84,12 @@ func GetConfigFilePath() string {
 
 // LoadConfig loads the saved settings from disk or returns defaults
 func LoadConfig(explicitOutDir, explicitDeviceName string) Config {
+	return LoadConfigFrom(GetConfigFilePath(), explicitOutDir, explicitDeviceName)
+}
+
+// LoadConfigFrom is LoadConfig with the configuration file given: each in-process core has its
+// own (D2 of the J6a plan).
+func LoadConfigFrom(cfgPath, explicitOutDir, explicitDeviceName string) Config {
 	cfg := Config{
 		CollisionPolicy: "auto_rename",
 		Workers:         0, // the receiver chooses: 4, or 8 for many small files
@@ -91,7 +97,6 @@ func LoadConfig(explicitOutDir, explicitDeviceName string) Config {
 	}
 
 	// 1. Read saved config from disk if available
-	cfgPath := GetConfigFilePath()
 	if data, err := os.ReadFile(cfgPath); err == nil {
 		var saved Config
 		if err := json.Unmarshal(data, &saved); err == nil {
@@ -159,7 +164,11 @@ func LoadConfig(explicitOutDir, explicitDeviceName string) Config {
 
 // SaveConfig writes the configuration to disk
 func SaveConfig(cfg Config) error {
-	cfgPath := GetConfigFilePath()
+	return SaveConfigTo(GetConfigFilePath(), cfg)
+}
+
+// SaveConfigTo writes the configuration to cfgPath.
+func SaveConfigTo(cfgPath string, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0755); err != nil {
 		return err
 	}
