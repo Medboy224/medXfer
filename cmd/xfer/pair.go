@@ -134,6 +134,10 @@ func runPair(ctx context.Context, in io.Reader, w io.Writer, dir string, args []
 // PINs destroyed (PAIR-04). The PIN goes to the screen only, never to a log (bible chapter 13).
 func pinScreen(w io.Writer, command string) func(code string, expires time.Time) {
 	return func(code string, expires time.Time) {
+		if code == "" && expires.IsZero() {
+			fmt.Fprintln(w, "[-] Too many wrong PINs: pairing stopped. Try again later.")
+			return
+		}
 		if code == "" {
 			fmt.Fprintf(w, "[-] Too many wrong PINs: a new PIN at %s.\n", expires.Format("15:04:05"))
 			return

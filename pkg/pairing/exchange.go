@@ -102,6 +102,10 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	var stopped <-chan struct{} // nil without a PIN: never ready
+	if o.PIN != nil {
+		stopped = o.PIN.stopped
+	}
 	go func() {
 		defer ln.Close()
 		for {
@@ -109,6 +113,10 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 			select {
 			case <-ctx.Done():
 				t.Stop()
+				return
+			case <-stopped: // a guesser at work: stop waiting, QR code included (#105)
+				t.Stop()
+				cancel(ErrTooManyPINs)
 				return
 			case <-t.C:
 				// A PIN destroyed and drawn again moves the deadline (PAIR-04).
@@ -130,6 +138,9 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 			case r := <-results:
 				return r, nil
 			default:
+			}
+			if errors.Is(context.Cause(ctx), ErrTooManyPINs) {
+				return Result{}, ErrTooManyPINs
 			}
 			if errors.Is(context.Cause(ctx), ErrExpired) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return Result{}, ErrExpired
