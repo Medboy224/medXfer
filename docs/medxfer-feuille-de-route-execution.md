@@ -205,6 +205,13 @@ Bible chapitre 9.
 ### J5 — Appairage par PIN · ≈ 5 à 8 jours (+ revue externe à planifier)
 Bible §6.2. Dépend de la gate G1. Lots : `Pairer.ByPIN` derrière l'interface, liaison au canal (`ekm`), confirmation de clé, 3 essais, vecteurs de test de la spécification, tests MITM sur l'appairage. **Critère de sortie :** appairage par PIN réussi ; revue cryptographique des chapitres 6 et 7 contractualisée ou datée (gate G4).
 
+**Résultat (14/10/2026) :** J5 est terminé sur le plan technique (PR #98 à #111).
+- G1 fermée : CPace `CPACE-RISTR255-SHA512` dans `pkg/pake`, vérifié contre le brouillon 21 et contre une autre implémentation.
+- PIN lié à la session TLS : 3 essais, PIN factice, arrêt après 2 séries.
+- Appairage et envoi ponctuel par PIN réussis entre le PC et le téléphone, dans les deux sens.
+- **Reste la gate G4** (revue externe contractualisée ou datée), qui conditionne la publication ; dossier prêt.
+- Détail dans [j5-report.md](j5-report.md).
+
 ### J6a — Cœur en-processus et découverte · ≈ 7 à 10 jours
 Remplacer `*websocket.Conn` par une interface de réponse dans les gestionnaires ; `pkg/core` avec les 4 fonctions ; `xfer ctl` et `testkit` en appels directs ; bibliothèque `c-shared` issue du prototype ; mDNS (Go ou plateforme, selon le prototype) avec balise UDP de repli ; adaptation au réseau Android (`set_network_info` si G2A-09 l'exige). **Critère de sortie :** tous les tests passent par l'API en-processus ; le daemon et son WebSocket ne servent plus qu'à `devui`.
 
