@@ -89,7 +89,8 @@ Les noms des appareils ne circulent qu'après la confirmation : A envoie le sien
 - **Validité :** 120 s, pour un seul appairage réussi (`PAIR-02`).
 - **Comptage des essais :** un essai est **réservé avant la réponse** du répondant et compte dès l'envoi de `pair_pin_reply`, que l'initiateur confirme ensuite ou non. Des connexions simultanées ne peuvent pas obtenir plus de 3 essais sur un même PIN.
 - **Destruction :** après 3 essais ratés, le PIN est détruit et un nouveau est affiché.
-- **Délai :** après chaque série de 3 PIN détruits d'affilée, un délai de 30 s s'applique, doublé à chaque série et plafonné à 10 min. Un appairage réussi le remet à zéro (`PAIR-04`, D5).
+- **Délai :** après une série de 3 PIN détruits d'affilée, un délai de 30 s s'applique, doublé à chaque série et plafonné à 10 min. Un appairage réussi le remet à zéro (`PAIR-04`, D5).
+- **Arrêt :** après **2 séries** de 3 PIN détruits d'affilée, le PIN est verrouillé et l'attente du répondant s'arrête (`ErrTooManyPINs`), y compris pour un QR offert en même temps. L'utilisateur doit relancer l'appairage (#105).
 - **Aucun essai disponible** (PIN épuisé, délai en cours, PIN déjà utilisé, PIN expiré) : le répondant **joue l'échange sur un PIN factice** tiré au hasard. L'initiateur reçoit `pair_pin_reply` puis `pair_reject`, exactement comme pour un mauvais PIN (`PAIR-07`).
 - **Refus immédiats, sans essai compté :** une suite inconnue, ou un PIN qui n'est pas offert sur cette écoute. Ils ne révèlent rien du PIN.
 
@@ -97,10 +98,7 @@ Les noms des appareils ne circulent qu'après la confirmation : A envoie le sien
 
 Chaque essai porte sur un PIN tiré à neuf, avec une probabilité de succès de 10⁻⁶ pour 6 chiffres.
 
-| Période | Essais possibles | Probabilité de succès |
-|---|---|---|
-| Première heure | Séries de 9 essais, séparées par 30, 60, 120, 240 et 480 s, puis par 600 s : environ 80 à 90 essais | ≈ 9 × 10⁻⁵ |
-| Heures suivantes | 9 essais par 10 min, soit environ 54 par heure | ≈ 5,4 × 10⁻⁵ par heure |
+Une attente du répondant (un `xfer pair --pin`, un `xfer send --pin`, ou un « Show a PIN ») admet au plus 2 séries × 3 PIN × 3 essais = **18 essais**, soit une probabilité de succès de **1,8 × 10⁻⁵ au plus**. Au-delà, l'attaquant a besoin que l'utilisateur relance l'appairage, ce que les messages d'arrêt découragent de faire sans réfléchir.
 
 ## 4. Correspondance avec le brouillon 21
 
@@ -143,7 +141,7 @@ Chaque essai porte sur un PIN tiré à neuf, avec une probabilité de succès de
 
 ## 6. Limites connues et questions pour la revue
 
-1. **Fenêtre d'appairage prolongeable.** Chaque PIN tiré à nouveau repousse la fin de l'attente du répondant. Un devineur peut donc garder la fenêtre ouverte tant que l'utilisateur ne l'arrête pas. L'utilisateur voit le PIN changer et un message après chaque série. **Faut-il un plafond absolu, par exemple N séries puis arrêt ?** Question ouverte côté produit : issue #105.
+1. **Fenêtre d'appairage bornée.** Chaque PIN tiré à nouveau repousse la fin de l'attente, mais l'attente s'arrête après 2 séries de PIN détruits (#105, §3.4). **Ce plafond de 18 essais par attente vous paraît-il suffisant ?**
 2. **Ordre des confirmations.** Le répondant confirme le premier (§3.3). **Confirmez-vous qu'il ne donne rien de plus qu'un essai en ligne par connexion ?**
 3. **PIN factice.** Sans essai disponible, le calcul est le même (CPace complet sur un PIN aléatoire). Seules quelques différences de temps restent possibles, liées à l'état interne : un verrou et l'accès au PIN. **Une différence de temps mesurable révélerait-elle l'état du compteur ?**
 4. **Effacement des secrets.** Le scalaire, l'ISK et `mac_key` ne sont pas effacés explicitement : Go ne le garantit pas, à cause du ramasse-miettes et des copies. **Est-ce acceptable pour des secrets éphémères de ce type ?**

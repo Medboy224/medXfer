@@ -267,7 +267,7 @@ Aucun code : le canal (§7) vérifie que l'empreinte du pair est dans `trusted.j
 | `PAIR-01` | Le PIN DOIT être tiré avec `crypto/rand`, uniformément dans [0, 10^6), sans biais modulo. | ✅ |
 | `PAIR-02` | Un PIN est valable 120 s au plus et pour une seule session d'appairage. | ✅ |
 | `PAIR-03` | L'identité et le contexte du PAKE DOIVENT inclure `fp_i`, `fp_r` et `ekm` (liaison au canal). | ✅ |
-| `PAIR-04` | Après **3** échecs, le PIN est détruit, la session fermée, un nouveau PIN est généré. Après 3 PIN détruits d'affilée, délai exponentiel avant d'en afficher un nouveau. | ✅ |
+| `PAIR-04` | Après **3** échecs, le PIN est détruit, la session fermée, un nouveau PIN est généré. Après 3 PIN détruits d'affilée, délai exponentiel avant d'en afficher un nouveau. Après **2 séries** de 3 PIN détruits d'affilée, l'attente s'arrête : l'utilisateur doit relancer l'appairage (#105). | ✅ |
 | `PAIR-05` | La confirmation de clé est obligatoire dans les deux sens. | ✅ |
 | `PAIR-06` | On NE DOIT PAS écrire soi-même de primitive (groupe, corps, hachage vers le groupe, encodage). Le protocole PAKE PEUT être assemblé sur une bibliothèque de groupe reconnue, à condition de vérifier tous les vecteurs de test de sa spécification et d'obtenir une revue externe avant la mise en service. Un protocole à constantes publiques DOIT les fixer sans connaissance du logarithme discret (voir l'incident de `schollz/pake`, Annexe B). Reformulée à la gate G1 (13 octobre 2026). | ✅ (`pkg/pake` : vecteurs A et B.3 du brouillon 21 ; revue externe : gate G4) |
 | `PAIR-07` | Un échec d'appairage NE DOIT révéler ni le nombre d'essais restants ni l'alias du répondant. | ✅ |

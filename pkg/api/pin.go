@@ -54,6 +54,11 @@ func (s *DaemonServer) handlePairPINShow(conn *websocket.Conn, req RequestMessag
 	}
 	addr := net.JoinHostPort(discovery.GetPrimaryLocalIP(), strconv.Itoa(ln.Addr().(*net.TCPAddr).Port))
 	pin, err := pairing.NewPIN(pairing.PINConfig{Digits: p.Digits, Show: func(code string, expires time.Time) {
+		if code == "" && expires.IsZero() { // too many wrong PINs: stopped (#105)
+			s.sendTo(conn, NewEvent("pair_pin_shown", map[string]any{"pin": "", "stopped": true, "address": addr,
+				"fingerprint": id.Fingerprint.Short()}, req.ID))
+			return
+		}
 		shown := ""
 		if code != "" {
 			shown = pairing.FormatPIN(code)

@@ -1816,6 +1816,11 @@ const IndexHTML = `<!DOCTYPE html>
     function onPINShown(d) {
       const box = document.getElementById("pinShown");
       const until = new Date(d.expires * 1000).toLocaleTimeString();
+      if (d.stopped) {
+        box.style.display = "none";
+        document.getElementById("pinHint").innerText = "Too many wrong PINs: PIN pairing stopped. Show a new PIN later.";
+        return;
+      }
       if (!d.pin) {
         box.style.display = "none";
         document.getElementById("pinHint").innerText = "Too many wrong PINs: a new PIN at " + until + ".";

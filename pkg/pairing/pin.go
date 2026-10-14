@@ -18,6 +18,7 @@ const (
 	PINAttempts    = 3                // PAIR-04
 	PINDelay       = 30 * time.Second // after PINAttempts PINs destroyed in a row (D5)
 	PINMaxDelay    = 10 * time.Minute
+	PINMaxSeries   = 2 // series of PINs destroyed in a row before the wait stops (#105)
 	minPINDigits   = 6
 	maxPINDigits   = 8
 	pinDestroyedIn = 3 // PINs destroyed in a row before a delay (PAIR-04)
@@ -26,6 +27,10 @@ const (
 // ErrBadPIN: the PIN typed is not 6 to 8 digits. It is a local error: nothing was sent.
 var ErrBadPIN = errors.New("pairing: a PIN is 6 to 8 digits")
 
+// ErrTooManyPINs: MaxSeries series of PINs were destroyed in a row. Past the typing mistakes
+// a user makes, it is a guesser at work: the responder stops waiting (#105).
+var ErrTooManyPINs = errors.New("pairing: too many wrong PINs, pairing stopped")
+
 // PINConfig sets a PIN's parameters; zero values take the defaults.
 type PINConfig struct {
 	Digits   int           // PINDigits; 8 is the stronger option (D4)
@@ -33,9 +38,13 @@ type PINConfig struct {
 	Attempts int           // PINAttempts
 	Delay    time.Duration // PINDelay, doubled at each new series, up to MaxDelay
 	MaxDelay time.Duration // PINMaxDelay
+	// MaxSeries is how many series of PINs destroyed in a row stop the wait: PINMaxSeries
+	// by default, negative for no limit.
+	MaxSeries int
 	// Show is called with each new PIN and when it expires; with "" when no PIN is valid,
-	// expires then being when the next one appears. Calls come one at a time, from any
-	// goroutine. The PIN is for the local screen only: it is never logged (bible chapter 13).
+	// expires then being when the next one appears, or zero once the PIN is stopped
+	// (ErrTooManyPINs). Calls come one at a time, from any goroutine. The PIN is for the
+	// local screen only: it is never logged (bible chapter 13).
 	Show func(code string, expires time.Time)
 	// Rand defaults to crypto/rand (PAIR-01).
 	Rand io.Reader
@@ -58,6 +67,7 @@ type PIN struct {
 	redraw    *time.Timer
 	paired    bool
 	closed    bool
+	stopped   chan struct{} // closed when MaxSeries series were destroyed (ErrTooManyPINs)
 }
 
 // NewPIN draws the first PIN and shows it.
@@ -80,10 +90,13 @@ func NewPIN(c PINConfig) (*PIN, error) {
 	if c.MaxDelay <= 0 {
 		c.MaxDelay = PINMaxDelay
 	}
+	if c.MaxSeries == 0 {
+		c.MaxSeries = PINMaxSeries
+	}
 	if c.Rand == nil {
 		c.Rand = rand.Reader
 	}
-	p := &PIN{cfg: c, delay: c.Delay}
+	p := &PIN{cfg: c, delay: c.Delay, stopped: make(chan struct{})}
 	p.mu.Lock()
 	err := p.drawLocked()
 	code, exp := string(p.code), p.expires
@@ -148,7 +161,8 @@ func (p *PIN) begin() (code []byte, ok bool) {
 
 // end closes an attempt begun by begin. A success uses the PIN (PAIR-02) and resets the
 // delay; the last failure destroys the PIN and draws another, after a delay once
-// pinDestroyedIn PINs were destroyed in a row (PAIR-04, D5).
+// pinDestroyedIn PINs were destroyed in a row (PAIR-04, D5). After MaxSeries such series
+// the PIN stops: no PIN any more, and Serve returns ErrTooManyPINs (#105).
 func (p *PIN) end(paired bool) {
 	p.mu.Lock()
 	if paired {
@@ -170,6 +184,13 @@ func (p *PIN) end(paired bool) {
 		if err == nil {
 			p.show(code, exp)
 		}
+		return
+	}
+	if p.cfg.MaxSeries > 0 && p.destroyed/pinDestroyedIn >= p.cfg.MaxSeries {
+		p.closed = true
+		close(p.stopped)
+		p.mu.Unlock()
+		p.show("", time.Time{})
 		return
 	}
 	wait := p.delay

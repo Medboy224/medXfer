@@ -273,7 +273,7 @@ func TestServePINExpires(t *testing.T) {
 // and reset by a pairing.
 func TestPINDelayDoublesAndResets(t *testing.T) {
 	const delay = 150 * time.Millisecond
-	p, screen := newPIN(t, PINConfig{Attempts: 1, Delay: delay, MaxDelay: 2 * delay})
+	p, screen := newPIN(t, PINConfig{Attempts: 1, Delay: delay, MaxDelay: 2 * delay, MaxSeries: -1})
 	defer p.Close()
 	next(t, screen)
 	fail := func() {
@@ -421,5 +421,72 @@ func rawPIN(t *testing.T, addr string, initiator Options, pin string, confirm bo
 		if err := ch.Send(session.Message{Type: TypePINConfirm, Confirm: tag}); err != nil {
 			return got
 		}
+	}
+}
+
+// #105: after MaxSeries series of PINs destroyed in a row, the PIN stops for good: the screen
+// says so (code "" and a zero time), no attempt is begun any more, and none is drawn.
+func TestPINStopsAfterMaxSeries(t *testing.T) {
+	p, screen := newPIN(t, PINConfig{Attempts: 1, Delay: 50 * time.Millisecond})
+	defer p.Close()
+	next(t, screen)
+	for series := 1; series <= PINMaxSeries; series++ {
+		for i := 0; i < pinDestroyedIn; i++ {
+			if _, ok := p.begin(); !ok {
+				t.Fatalf("series %d, PIN %d: no attempt", series, i+1)
+			}
+			p.end(false)
+			s := next(t, screen)
+			last := i == pinDestroyedIn-1
+			switch {
+			case !last && s.code == "":
+				t.Fatalf("series %d: no new PIN", series)
+			case last && series < PINMaxSeries && (s.code != "" || s.expires.IsZero()):
+				t.Fatalf("series %d: no delay (%+v)", series, s)
+			case last && series < PINMaxSeries:
+				if s := next(t, screen); s.code == "" {
+					t.Fatal("no PIN after the delay")
+				}
+			case last && (s.code != "" || !s.expires.IsZero()):
+				t.Fatalf("after %d series: %+v, want the stop", series, s)
+			}
+		}
+	}
+	select {
+	case <-p.stopped:
+	default:
+		t.Fatal("the PIN is not stopped")
+	}
+	if _, ok := p.begin(); ok {
+		t.Fatal("an attempt after the stop")
+	}
+	select {
+	case s := <-screen:
+		t.Fatalf("shown after the stop: %+v", s)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// #105: Serve stops at once with ErrTooManyPINs, a QR code offered beside the PIN included.
+func TestServeStopsAfterTooManyPINs(t *testing.T) {
+	responder := device(t, "pc")
+	ln, inv, _ := listen(t, responder, TTL)
+	p, screen := newPIN(t, PINConfig{Attempts: 1, Delay: 20 * time.Millisecond, MaxSeries: 1})
+	responder.PIN = p
+	done := serve(ln, inv, responder)
+	code := next(t, screen).code
+	for i := 0; i < pinDestroyedIn; i++ {
+		if _, err := JoinPIN(context.Background(), ln.Addr().String(), wrong(code), device(t, "attacker")); !errors.Is(err, ErrRefused) {
+			t.Fatalf("attempt %d: %v", i+1, err)
+		}
+		code = next(t, screen).code
+	}
+	select {
+	case s := <-done:
+		if !errors.Is(s.err, ErrTooManyPINs) {
+			t.Fatalf("Serve = %v, want ErrTooManyPINs", s.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not stop")
 	}
 }
