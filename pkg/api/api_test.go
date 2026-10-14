@@ -211,11 +211,13 @@ func TestInstantOfferAndSessionDispatch(t *testing.T) {
 	startOffer := time.Now()
 	pair.Send([]string{testFile}, testkit.SendOptions{})
 
-	// The receiver must show the incoming offer quickly.
-	pair.Receiver.WaitEvent("incoming_offer", 2*time.Second)
+	// The receiver shows the incoming offer without waiting seconds on the way (a fixed pause,
+	// a handshake timeout). 5 s is over 3 times the worst seen on a loaded CI runner (#117): the
+	// latency itself is xfer bench's to measure, not this test's.
+	pair.Receiver.WaitEvent("incoming_offer", 8*time.Second)
 	elapsed := time.Since(startOffer)
 	t.Logf("Received incoming_offer in %v", elapsed)
-	if elapsed > 1500*time.Millisecond {
+	if elapsed > 5*time.Second {
 		t.Fatalf("Offer took too long to show: %v", elapsed)
 	}
 
