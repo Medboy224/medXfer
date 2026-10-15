@@ -1,7 +1,7 @@
-// Package testkit starts daemons for tests and drives them like the user interface does,
-// through the control WebSocket (DEV-15, version 0). The same vocabulary (StartPair, Send,
-// AcceptOffer, WaitEvent) will be re-implemented with direct calls into the core in J6a,
-// without changing the tests.
+// Package testkit starts daemons for tests and drives them like the user interface does
+// (DEV-15). Since J6a (WP-6.3) it calls the daemon in the same process, without the control
+// WebSocket: the same requests and events, the same vocabulary (StartPair, Send, AcceptOffer,
+// WaitEvent). Only the tests of the dashboard's transport open a WebSocket.
 //
 // testkit does not import pkg/api: tests pass the daemon in, as anything that satisfies
 // Server, so the api package's own tests can use it.
@@ -31,18 +31,23 @@ const DefaultTimeout = 10 * time.Second
 // Server is what testkit needs from a daemon; *api.DaemonServer implements it.
 type Server interface {
 	Listen(port int) (net.Listener, error)
-	Serve(ln net.Listener) error
+	StartNode() error            // identity, single port, discovery; Serve calls it too
+	Serve(ln net.Listener) error // the HTTP server: Web Share portal, dashboard routes
 	Stop()
 	ControlToken() string
 	NodeListenAddr() string // "" until Serve has opened the peer listener
 	Fingerprint() string    // this daemon's key, once Serve has loaded it
 	TrustDevice(fingerprint, alias string) error
+	// The in-process control transport (WP-6.3): requests and events in the JSON the
+	// WebSocket would carry.
+	HandleJSON(request []byte, reply func(event []byte))
+	SubscribeJSON(fn func(event []byte)) (cancel func())
 }
 
-// Event is an event of the control WebSocket.
+// Event is an event of the control vocabulary.
 type Event = wsclient.Event
 
-// Node is a running daemon with a connected control client.
+// Node is a running daemon with a control client in the same process.
 type Node struct {
 	t        testing.TB
 	Server   Server
@@ -50,25 +55,34 @@ type Node struct {
 	Client   *wsclient.Client
 }
 
-// StartNode serves srv on a random port, connects a control client, and stops both when the
-// test ends. The daemon's first "status" event is left in the buffer.
+// StartNode serves srv on a random port (its HTTP server), connects an in-process control
+// client, and stops both when the test ends. As a WebSocket client would, the client first
+// gets the daemon's "status" event, left in the buffer.
 func StartNode(t testing.TB, srv Server) *Node {
 	t.Helper()
 	ln, err := srv.Listen(0)
 	if err != nil {
 		t.Fatalf("testkit: listen: %v", err)
 	}
-	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(srv.Stop)
+	// The node is up before the first request, as it was once a WebSocket could connect.
+	if err := srv.StartNode(); err != nil {
+		t.Fatalf("testkit: start: %v", err)
+	}
+	go func() { _ = srv.Serve(ln) }()
 
 	addr := "127.0.0.1:" + portOf(ln.Addr().String())
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
-	defer cancel()
-	c, err := wsclient.Dial(ctx, addr, srv.ControlToken())
-	if err != nil {
+	c := wsclient.Local(srv.HandleJSON, srv.SubscribeJSON)
+	t.Cleanup(func() { _ = c.Close() })
+	if _, err := c.Send("", "get_status", nil); err != nil { // the status a WebSocket gets first
 		t.Fatalf("testkit: %v", err)
 	}
-	t.Cleanup(func() { _ = c.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+	defer cancel()
+	if _, err := c.WaitFor(ctx, func(e Event) bool { return e.Event == "status" }); err != nil {
+		t.Fatalf("testkit: no first status: %v", err)
+	}
+	c.Rewind() // left in the buffer, as before
 	return &Node{t: t, Server: srv, HTTPAddr: addr, Client: c}
 }
 
