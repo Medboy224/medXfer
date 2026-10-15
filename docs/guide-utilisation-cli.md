@@ -87,3 +87,22 @@ Ajoutez `--once` pour ne rien enregistrer (confiance limitée à la session).
 | `This QR code has expired` | `xfer send` renouvelle son QR : utilisez celui affiché maintenant. Pour `xfer pair --show`, relancez la commande |
 | L'appareil n'apparaît pas dans la liste | Même réseau ? Sinon, passez l'adresse directement : `xfer recv --ip ADRESSE`, `--pin ADRESSE`, ou le QR |
 | L'adresse affichée ne répond pas | Sur un téléphone avec Wi-Fi **et** données mobiles, l'adresse Wi-Fi doit s'afficher depuis la correction de #109. Sinon, signalez-le avec `xfer bundle` |
+
+## 9. Windows : rendre le PC visible des autres appareils
+
+**Symptôme :** le PC trouve les autres appareils, mais eux ne le voient pas dans leur liste. Le transfert marche quand même avec l'adresse, le QR ou le PIN.
+
+**Cause :** le pare-feu de Windows bloque les recherches qui arrivent (mDNS, port UDP 5353), surtout quand le Wi-Fi est en profil « Privé » et que medXfer n'a été autorisé que pour le profil « Public », ou l'inverse.
+
+**Solution, une fois pour toutes :** dans un PowerShell lancé **en administrateur** :
+
+```powershell
+New-NetFirewallRule -DisplayName "medXfer mDNS" -Direction Inbound -Protocol UDP -LocalPort 5353 -Action Allow -Profile Private,Public
+```
+
+Le profil du Wi-Fi (Privé ou Public) n'a alors plus d'importance : la règle couvre les deux. Garder « Privé » à la maison est le choix habituel.
+
+Quand Windows affiche sa propre fenêtre « Autoriser l'accès » au premier lancement de medXfer, cochez **les deux** cases (réseaux privés et publics).
+
+L'installateur de la version publiée posera ces règles lui-même, et l'application signalera un PC invisible.
+
