@@ -66,6 +66,7 @@ type DaemonServer struct {
 	pendingWebUploads  map[string]*WebUploadRequest
 	transferCancel     context.CancelFunc // set while a transfer is active (LIM-08)
 	activeTransferID   string
+	endedTransferID    string             // the transfer endTransfer just ended: its peer's "complete" may come after (#129)
 	activeReceiver     *transfer.Receiver // this side's scheduler, when it receives
 	isPaused           bool
 	currentBatchItems  []BatchFileInfo // the queue the dashboard shows
