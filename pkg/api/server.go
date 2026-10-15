@@ -554,10 +554,9 @@ func (s *DaemonServer) serveHTTP(httpLn net.Listener) error {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/health", s.handleHealth)
 	if !s.controlDisabled {
-		// Control surface (API-04): loopback + Host + Origin + control token on every route.
-		mux.HandleFunc("/status", s.control(s.handleHTTPStatus))
-		s.registerDevUIRoutes(mux) // native picker, uploads, folder browsing: devui builds only
-		mux.HandleFunc("/ws", s.control(s.handleWebSocket))
+		// The control surface (/status, /ws, the dashboard's routes) exists in devui builds only
+		// (API-01, API-04, WP-6.6): the published binary has no control socket.
+		s.registerDevUIRoutes(mux)
 	}
 	mux.HandleFunc("/share", shareHeaders(s.handleSharePortal, true))
 	mux.HandleFunc("/api/share/list", shareHeaders(s.handleShareList, true))
@@ -673,55 +672,6 @@ func (s *DaemonServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": "1.0.0"})
-}
-
-func (s *DaemonServer) handleHTTPStatus(w http.ResponseWriter, r *http.Request) {
-	// The status carries the Web Share PIN/token and the pairing code: never serve it to the LAN.
-	if !isLoopbackRequest(r) {
-		http.Error(w, "Forbidden: status is restricted to localhost", http.StatusForbidden)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.getStatus())
-}
-
-func (s *DaemonServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	if !isLoopbackRequest(r) {
-		http.Error(w, "Forbidden: WebSocket control channel is restricted to localhost", http.StatusForbidden)
-		return
-	}
-
-	upgrader := websocket.Upgrader{
-		// control() already rejected foreign origins; checked again as defense in depth.
-		CheckOrigin:  func(r *http.Request) bool { o := r.Header.Get("Origin"); return o == "" || s.originAllowed(o) },
-		Subprotocols: []string{"medxfer.v1"}, // never echo the "token.<hex>" protocol
-	}
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		return
-	}
-
-	s.clientsMu.Lock()
-	s.clients[conn] = true
-	s.clientsMu.Unlock()
-
-	defer func() {
-		s.clientsMu.Lock()
-		delete(s.clients, conn)
-		s.clientsMu.Unlock()
-		conn.Close()
-	}()
-
-	// Send initial status immediately upon connection
-	s.sendTo(conn, NewEvent("status", s.getStatus()))
-
-	for {
-		var req RequestMessage
-		if err := conn.ReadJSON(&req); err != nil {
-			break
-		}
-		s.dispatch(wsResponder{s, conn}, req)
-	}
 }
 
 // Broadcast sends a JSON event to all active Flutter clients
