@@ -16,10 +16,9 @@ import (
 )
 
 const (
-	DiscoveryPort  = 19998
-	MulticastGroup = "239.255.255.250"
-	ProtocolMagic  = "MEDXFER_NODE_V3"
-	AppVersion     = "1.0.0"
+	DiscoveryPort = 19998
+	ProtocolMagic = "MEDXFER_NODE_V3"
+	AppVersion    = "1.0.0"
 )
 
 // TransferOffer represents an active file payload offered by a peer. Only its public part
@@ -225,118 +224,51 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 		}
 	}()
 
-	// 2. Interface-Bound UDP & Multicast Broadcaster (Zero-Leak Beacons)
-	go func() {
-		ticker := time.NewTicker(600 * time.Millisecond)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				targets := GetActiveNetworkTargets()
-				for _, target := range targets {
-					lAddr := &net.UDPAddr{IP: target.LocalIP, Port: 0}
-					data, err := json.Marshal(s.beacon(target.LocalIP.String()))
-					if err != nil {
-						continue
-					}
-
-					// Vector A: Subnet Broadcast
-					rAddr := &net.UDPAddr{IP: target.BroadcastIP, Port: DiscoveryPort}
-					if conn, err := net.DialUDP("udp4", lAddr, rAddr); err == nil {
-						_, _ = conn.Write(data)
-						_ = conn.Close()
-					}
-
-					// Vector B: SSDP-Style Local Multicast
-					mAddr := &net.UDPAddr{IP: net.ParseIP(MulticastGroup), Port: DiscoveryPort}
-					if mConn, err := net.DialUDP("udp4", lAddr, mAddr); err == nil {
-						_, _ = mConn.Write(data)
-						_ = mConn.Close()
-					}
-
-					// Vector C: Limited Local Broadcast (for ad-hoc / direct Ethernet cable links)
-					bcastAddr := &net.UDPAddr{IP: net.IPv4bcast, Port: DiscoveryPort}
-					if bConn, err := net.DialUDP("udp4", lAddr, bcastAddr); err == nil {
-						_, _ = bConn.Write(data)
-						_ = bConn.Close()
-					}
-				}
-			}
-		}
-	}()
+	// 2. Announce: mDNS (DISC-01), and the broadcast beacon as fallback (DISC-04).
+	p := s.GetPeer()
+	a := Announcement{Instance: p.DeviceName, Port: p.Port, Role: p.Role, IP: net.ParseIP(GetPrimaryLocalIP()),
+		Iface: multicastInterface()}
+	for _, d := range defaultDiscoverers {
+		_ = d.Announce(ctx, a) // one mechanism failing (no multicast, port taken) leaves the other
+	}
 }
 
-// DiscoverPeers searches the network via UDP beacons and falls back to a bounded TCP sweep
+// multicastInterface is the interface that carries this device's announced address, so that
+// multicast leaves by it and not by the default route: on a phone with mobile data on, that is
+// the cellular modem, which the local network cannot reach (#109, WP-6.0 note §3.2). nil: the
+// system's default.
+func multicastInterface() *net.Interface {
+	primary := GetPrimaryLocalIP()
+	for _, t := range GetActiveNetworkTargets() {
+		if t.LocalIP.String() == primary {
+			if ifi, err := interfaceByName(t.InterfaceName); err == nil {
+				return ifi
+			}
+		}
+	}
+	return nil
+}
+
+// DiscoverPeers finds the devices that announce themselves: by mDNS and the fallback beacon
+// (DISC-01, DISC-04). If none answers, it falls back to a bounded TCP sweep of the subnets
+// (AP-isolated hotspots, multicast and broadcast filtered).
 func DiscoverPeers(timeout time.Duration) ([]Peer, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Second)
+	defer cancel()
+	if found := browseAll(ctx, defaultDiscoverers, timeout, multicastInterface()); len(found) > 0 {
+		peers := make([]Peer, 0, len(found))
+		for _, f := range found {
+			peers = append(peers, peerOf(f))
+		}
+		return peers, nil
+	}
+	return sweepPeers(), nil
+}
+
+// sweepPeers probes the discovery port of every address of the active subnets (DISC-09).
+func sweepPeers() []Peer {
 	discovered := make(map[string]Peer)
 	var mu sync.Mutex
-
-	// STEP 1: Primary Discovery via Passive UDP Listener
-	udpDone := make(chan struct{})
-	go func() {
-		defer close(udpDone)
-		addr := net.UDPAddr{Port: DiscoveryPort, IP: net.IPv4zero}
-		conn, err := net.ListenUDP("udp4", &addr)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-
-		// Listen for up to 800ms or until caller timeout
-		listenTime := 800 * time.Millisecond
-		if timeout < listenTime {
-			listenTime = timeout
-		}
-		_ = conn.SetReadDeadline(time.Now().Add(listenTime))
-		buf := make([]byte, 2048)
-
-		for {
-			n, srcAddr, err := conn.ReadFromUDP(buf)
-			if err != nil {
-				break
-			}
-
-			var p Peer
-			if err := json.Unmarshal(buf[:n], &p); err == nil && p.Version == AppVersion {
-				srcIPStr := srcAddr.IP.String()
-				if p.HostIP == "" || p.HostIP == "127.0.0.1" || !IsSubnetReachable(p.HostIP) {
-					p.HostIP = srcIPStr
-				}
-				key := fmt.Sprintf("%s:%d", p.HostIP, p.Port)
-				mu.Lock()
-				discovered[key] = p
-				mu.Unlock()
-			}
-		}
-	}()
-
-	<-udpDone
-
-	// CHECK FOR REMOTE PEERS
-	mu.Lock()
-	hasRemote := false
-	for _, p := range discovered {
-		if !isLocalNetworkIP(p.HostIP) {
-			hasRemote = true
-			break
-		}
-	}
-
-	// FIX: If we found ACTUAL remote peers via UDP, return immediately (excluding local machine).
-	if hasRemote {
-		var results []Peer
-		for _, p := range discovered {
-			if !IsLocalNetworkIP(p.HostIP) {
-				results = append(results, p)
-			}
-		}
-		mu.Unlock()
-		return results, nil
-	}
-	mu.Unlock()
 
 	// STEP 2: Fallback Bounded TCP Sweep (For AP-isolated hotspots / blocked UDP)
 	targets := GetActiveNetworkTargets()
@@ -392,5 +324,5 @@ func DiscoverPeers(timeout time.Duration) ([]Peer, error) {
 		}
 	}
 	mu.Unlock()
-	return results, nil
+	return results
 }

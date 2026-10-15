@@ -1,0 +1,136 @@
+package discovery
+
+import (
+	"context"
+	"net"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+func freeUDPPort(t *testing.T) int {
+	t.Helper()
+	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	return c.LocalAddr().(*net.UDPAddr).Port
+}
+
+// DISC-04, D6: the fallback beacon carries the TXT (version, role), the name and the port, and
+// is read back by Browse; another app's datagrams, or another version's, are ignored.
+func TestBeaconAnnounceAndBrowse(t *testing.T) {
+	port := freeUDPPort(t)
+	loop := []*net.UDPAddr{{IP: net.IPv4(127, 0, 0, 1), Port: port}}
+	b := beaconDiscoverer{port: port, dests: func() []*net.UDPAddr { return loop }}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	results := make(chan []Found, 1)
+	go func() {
+		found, _ := b.Browse(ctx, 2*beaconEvery+500*time.Millisecond, nil)
+		results <- found
+	}()
+	time.Sleep(100 * time.Millisecond) // Browse listens
+	other, err := net.DialUDP("udp4", nil, loop[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, junk := range []string{`not json`, `{"v":2,"r":"node","n":"x","p":1}`, `{"v":1,"r":"node","n":"","p":1}`, `{"v":1,"n":"x","p":70000}`} {
+		_, _ = other.Write([]byte(junk))
+	}
+	other.Close()
+	if err := b.Announce(ctx, Announcement{Instance: "medXfer-be01", Port: 18888, Role: "sender"}); err != nil {
+		t.Fatal(err)
+	}
+	found := <-results
+	if len(found) < 2 { // one at once, then one every beaconEvery
+		t.Fatalf("found %+v, want the beacon at least twice", found)
+	}
+	for _, f := range found {
+		if f.Instance != "medXfer-be01" || f.Port != 18888 || f.Role != "sender" || f.Via != "beacon" || !f.IP.Equal(net.IPv4(127, 0, 0, 1)) {
+			t.Fatalf("beacon read as %+v", f)
+		}
+	}
+}
+
+type fixedDiscoverer []Found
+
+func (fixedDiscoverer) Announce(context.Context, Announcement) error { return nil }
+func (f fixedDiscoverer) Browse(context.Context, time.Duration, *net.Interface) ([]Found, error) {
+	return f, nil
+}
+
+// One entry per address and port, mDNS first; this device and incomplete entries are left out.
+func TestBrowseAllMerges(t *testing.T) {
+	remote := net.IPv4(192, 0, 2, 7) // TEST-NET-1: never a local address
+	mdnsSeen := fixedDiscoverer{{Instance: "medXfer-aa01", IP: remote, Port: 18888, Role: "node", Via: "mdns"}}
+	beaconSeen := fixedDiscoverer{
+		{Instance: "medXfer-aa01", IP: remote, Port: 18888, Role: "node", Via: "beacon"},
+		{Instance: "medXfer-bb02", IP: net.IPv4(192, 0, 2, 8), Port: 18888, Role: "sender", Via: "beacon"},
+		{Instance: "self", IP: net.IPv4(127, 0, 0, 1), Port: 18888, Via: "beacon"},
+		{Instance: "noport", IP: net.IPv4(192, 0, 2, 9), Via: "beacon"},
+	}
+	for _, order := range [][]Discoverer{{mdnsSeen, beaconSeen}, {beaconSeen, mdnsSeen}} {
+		got := browseAll(context.Background(), order, time.Second, nil)
+		if len(got) != 2 {
+			t.Fatalf("merged %+v, want 2 devices", got)
+		}
+		for _, f := range got {
+			if f.IP.Equal(remote) && f.Via != "mdns" {
+				t.Fatalf("the mDNS entry lost to the beacon's: %+v", f)
+			}
+		}
+	}
+}
+
+// A found device has the shape the callers know: a sender has an offer (whose content travels
+// only in the secure channel), a node has none.
+func TestPeerOfAndTXT(t *testing.T) {
+	p := peerOf(Found{Instance: "medXfer-cc03", IP: net.IPv4(192, 0, 2, 7), Port: 18888, Role: "sender"})
+	if p.DeviceName != "medXfer-cc03" || p.HostIP != "192.0.2.7" || p.Port != 18888 || p.Role != "sender" ||
+		p.Offer == nil || p.Offer.FileName != PrivateTransfer || p.ID != "medXfer-cc03-18888" {
+		t.Fatalf("peerOf sender: %+v", p)
+	}
+	if p := peerOf(Found{Instance: "n", IP: net.IPv4(192, 0, 2, 7), Port: 1, Role: "node"}); p.Offer != nil {
+		t.Fatalf("a node has an offer: %+v", p)
+	}
+	if role, ok := parseTXT([]string{"v=1", "r=sender"}); !ok || role != "sender" {
+		t.Fatalf("parseTXT: %q %v", role, ok)
+	}
+	if _, ok := parseTXT([]string{"v=2", "r=sender"}); ok {
+		t.Fatal("another version accepted")
+	}
+	if got := instanceOf("medXfer-cc03._medxfer._tcp.local."); got != "medXfer-cc03" {
+		t.Fatal(got)
+	}
+}
+
+// mDNS for real, in this process: announce, then browse. Multicast is not reliable on CI
+// runners, so this runs on demand, on the real devices (MEDXFER_MDNS_TEST=1, WP-6.7).
+func TestMDNSAnnounceAndBrowse(t *testing.T) {
+	if os.Getenv("MEDXFER_MDNS_TEST") != "1" {
+		t.Skip("set MEDXFER_MDNS_TEST=1 to run mDNS on this machine's network")
+	}
+	ip := net.ParseIP(GetPrimaryLocalIP())
+	name := instanceName()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := (mdnsDiscoverer{}).Announce(ctx, Announcement{Instance: name, Port: 18999, Role: "node", IP: ip, Iface: multicastInterface()}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	found, err := (mdnsDiscoverer{}).Browse(ctx, 3*time.Second, multicastInterface())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range found {
+		names = append(names, f.Instance)
+		if f.Instance == name && f.Port == 18999 && f.Role == "node" && f.IP.Equal(ip) {
+			return
+		}
+	}
+	t.Fatalf("own announcement %s not found (seen: %s)", name, strings.Join(names, ", "))
+}
