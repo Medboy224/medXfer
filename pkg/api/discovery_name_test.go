@@ -21,7 +21,7 @@ func TestDaemonAnnouncesNoName(t *testing.T) {
 		}
 	}
 	check("AliasSecret-Q7")
-	n.Request("set_config", map[string]any{"device_name": "OtherAlias-Z9"})
-	n.WaitEvent("status", 0)
+	// Wait for this request's own reply: the first status in the buffer is the start's (#127).
+	n.WaitReply(n.Request("set_config", map[string]any{"device_name": "OtherAlias-Z9"}), 0)
 	check("OtherAlias-Z9")
 }
