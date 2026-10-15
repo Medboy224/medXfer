@@ -215,6 +215,15 @@ Bible §6.2. Dépend de la gate G1. Lots : `Pairer.ByPIN` derrière l'interface,
 ### J6a — Cœur en-processus et découverte · ≈ 7 à 10 jours
 Remplacer `*websocket.Conn` par une interface de réponse dans les gestionnaires ; `pkg/core` avec les 4 fonctions ; `xfer ctl` et `testkit` en appels directs ; bibliothèque `c-shared` issue du prototype ; mDNS (Go ou plateforme, selon le prototype) avec balise UDP de repli ; adaptation au réseau Android (`set_network_info` si G2A-09 l'exige). **Critère de sortie :** tous les tests passent par l'API en-processus ; le daemon et son WebSocket ne servent plus qu'à `devui`.
 
+**Résultat (15/10/2026) :** J6a est terminé (PR #114 à #130).
+- `pkg/core` : medXfer en-processus, sans socket de contrôle.
+- La bibliothèque `c-shared` (5 fonctions) est vérifiée à travers la vraie frontière C sous Windows, Android et Linux.
+- Tous les tests passent en-processus.
+- Découverte mDNS sur demande, avec repli en diffusion et `set_network_info`.
+- Le daemon n'existe plus qu'avec `devui`.
+- Essai réel PC ↔ téléphone ↔ Zorin : 40 transferts de 64 Mo ; la mémoire du téléphone plafonne vers 50 à 67 Mo.
+- Détail dans [j6a-report.md](j6a-report.md).
+
 ### J6b — Application Flutter MVP · ≈ 8 à 12 jours
 Écrans : liste des appareils, appairage par QR (caméra) et par PIN, envoi (choix de fichiers/dossiers), réception (acceptation avec taille et expéditeur), progression, historique minimal, panneau développeur (`DEV-13`). Android : service de premier plan, destination des fichiers (décision issue de G2A-10). Windows, Linux : empaquetage. **Critère de sortie :** les gates G2a et G7 évaluées ; scénario complet Android ↔ Windows/Linux au Wi-Fi réel.
 
