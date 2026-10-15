@@ -119,6 +119,7 @@ func (s *DaemonServer) endTransfer(id string) {
 	}
 	s.activeReceiver = nil
 	s.activeTransferID = ""
+	s.endedTransferID = id // the receiver's "complete" may still be on its way (#129)
 	s.isPaused = false
 }
 
@@ -130,6 +131,7 @@ func (s *DaemonServer) dropTransfers() {
 	}
 	s.activeReceiver = nil
 	s.activeTransferID = ""
+	s.endedTransferID = ""
 	s.isPaused = false
 	s.lastOffered.close()
 	s.lastOffered, s.pendingOffer, s.incomingOffer = nil, nil, nil
@@ -435,11 +437,16 @@ func (s *DaemonServer) serveAccepted(msg session.Message) {
 }
 
 // peerCompleted ends this side of a transfer the receiver has finished.
+// The sender's Serve may end, with endTransfer, before the receiver's "complete" arrives: the
+// transfer that just ended is still completed, once (#129).
 func (s *DaemonServer) peerCompleted(msg session.Message) {
 	s.mu.Lock()
-	if msg.TransferID != "" && msg.TransferID != s.activeTransferID {
+	if msg.TransferID != "" && msg.TransferID != s.activeTransferID && msg.TransferID != s.endedTransferID {
 		s.mu.Unlock()
 		return
+	}
+	if msg.TransferID != "" && msg.TransferID == s.endedTransferID {
+		s.endedTransferID = ""
 	}
 	if s.transferCancel != nil {
 		s.transferCancel()
