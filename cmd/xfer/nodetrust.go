@@ -38,6 +38,19 @@ func parseTrustAnswer(s string) trustAnswer {
 	return trustRefused
 }
 
+// trustedAt is " - trusted 'alias'" when ip is the last address of a trusted device: it is
+// recognized in a discovery list before any pairing, on this device only (the alias never goes
+// out, DISC-06). It is a hint: the key is still checked when connecting (ID-05).
+func trustedAt(ts *identity.TrustStore, ip string) string {
+	if ts == nil {
+		return ""
+	}
+	if p, ok := ts.ByAddress(ip); ok && p.Alias != "" {
+		return fmt.Sprintf(" - trusted '%s'", p.Alias)
+	}
+	return ""
+}
+
 // trustQuestion shows both short fingerprints, to compare with the other screen.
 func trustQuestion(peerName string, peer, self identity.Fingerprint) string {
 	if peerName == "" {

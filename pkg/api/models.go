@@ -202,6 +202,8 @@ type DaemonStatus struct {
 	WebShareToken      string `json:"web_share_token,omitempty"`
 	WebShareAutoAccept bool   `json:"web_share_auto_accept"`
 	PairingCode        string `json:"pairing_code,omitempty"`
+	Discoverable       bool   `json:"discoverable"`       // announces itself now (DISC-05)
+	Instance           string `json:"instance,omitempty"` // the generic name it announces (DISC-07)
 }
 
 // WebUploadRequest represents a pending mobile file upload waiting for host approval

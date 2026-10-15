@@ -44,6 +44,12 @@ func (s *DaemonServer) dispatch(rs Responder, req RequestMessage) {
 	case "pair_pin":
 		s.handlePairPIN(rs, req)
 
+	case "set_discoverable":
+		s.handleSetDiscoverable(rs, req)
+
+	case "set_network_info":
+		s.handleSetNetworkInfo(rs, req)
+
 	case "trust_respond":
 		s.handleTrustRespond(rs, req)
 
@@ -184,7 +190,7 @@ func (s *DaemonServer) handleScan(rs Responder, req RequestMessage) {
 			}
 		}
 
-		rs.Reply(NewEvent("peers_list", filtered, req.ID))
+		rs.Reply(NewEvent("peers_list", s.recognize(filtered), req.ID))
 	}()
 }
 

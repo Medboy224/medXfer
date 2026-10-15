@@ -54,7 +54,7 @@ func (s *DaemonServer) handlePairPINShow(rs Responder, req RequestMessage) {
 	pin, err := pairing.NewPIN(pairing.PINConfig{Digits: p.Digits, Show: func(code string, expires time.Time) {
 		if code == "" && expires.IsZero() { // too many wrong PINs: stopped (#105)
 			rs.Reply(NewEvent("pair_pin_shown", map[string]any{"pin": "", "stopped": true, "address": addr,
-				"fingerprint": id.Fingerprint.Short()}, req.ID))
+				"fingerprint": id.Fingerprint.Short(), "instance": s.instance()}, req.ID))
 			return
 		}
 		shown := ""
@@ -67,6 +67,7 @@ func (s *DaemonServer) handlePairPINShow(rs Responder, req RequestMessage) {
 			"expires":     expires.Unix(),
 			"address":     addr,
 			"fingerprint": id.Fingerprint.Short(),
+			"instance":    s.instance(), // the name in the other device's list (DISC-07)
 		}, req.ID))
 	}})
 	if err != nil {

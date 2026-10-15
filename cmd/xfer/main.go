@@ -512,7 +512,7 @@ func handleNode() {
 						if p.PairingCode != "" {
 							codeStr = fmt.Sprintf(" [Code: %s]", p.PairingCode)
 						}
-						fmt.Printf("  [%d] %s (%s:%d)%s\n", i+1, p.DeviceName, p.HostIP, p.Port, codeStr)
+						fmt.Printf("  [%d] %s (%s:%d)%s%s\n", i+1, p.DeviceName, p.HostIP, p.Port, codeStr, trustedAt(nodeTrust, p.HostIP))
 					}
 				}
 			case "pair":
@@ -1043,6 +1043,7 @@ func runOneShotSend(offer protocol.Offer, files []string, port int, createHotspo
 	fmt.Println("==================================================")
 	fmt.Printf(" Sending      : %s\n", offerSummary(offer))
 	fmt.Printf(" Fingerprint  : %s\n", localID.Fingerprint.Short())
+	fmt.Printf(" Appears as   : %s   (the name in the receiver's list)\n", discServer.GetPeer().DeviceName)
 	fmt.Printf(" Direct IP    : %s:%d\n", getLocalIP(), port)
 	fmt.Printf(" Pairing Code : %s   (xfer recv %s: both screens then confirm)\n", pCode, pCode)
 	fmt.Println("--------------------------------------------------")
@@ -1398,6 +1399,7 @@ func fetchPeer(hostIP string) *discovery.Peer {
 }
 
 func selectOneShotSender() *discovery.Peer {
+	_, trust, _ := loadIdentity(configDir()) // to recognize trusted devices in the list
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Println("\n[*] Searching local network for medXfer senders...")
@@ -1418,11 +1420,7 @@ func selectOneShotSender() *discovery.Peer {
 		} else {
 			// What is sent is shown only once both devices have accepted each other.
 			for i, s := range senders {
-				kind := "file"
-				if s.Offer.IsBatch {
-					kind = "folder"
-				}
-				fmt.Printf("  [%d] %s (%s) - %s waiting\n", i+1, s.DeviceName, s.HostIP, kind)
+				fmt.Printf("  [%d] %s (%s) - transfer waiting%s\n", i+1, s.DeviceName, s.HostIP, trustedAt(trust, s.HostIP))
 			}
 		}
 		fmt.Print("Select an option or enter pairing code [r to refresh, q to quit]: ")

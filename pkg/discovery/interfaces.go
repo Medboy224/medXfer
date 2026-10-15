@@ -184,6 +184,9 @@ func parseIfconfigTargets() []NetworkTarget {
 
 // GetActiveNetworkTargets inspects OS interfaces based on capabilities and flags
 func GetActiveNetworkTargets() []NetworkTarget {
+	if t, ok := platformTargets(); ok { // the platform's list: Android apps cannot enumerate (DISC-10)
+		return t
+	}
 	var targets []NetworkTarget
 	seenSubnets := make(map[string]bool)
 
@@ -468,7 +471,11 @@ func calculateSweepRange(ip net.IP, mask net.IPMask) []string {
 // GetPrimaryLocalIP returns the primary routable IPv4 address
 func GetPrimaryLocalIP() string {
 	targets := GetActiveNetworkTargets()
-	if ip := choosePrimaryIP(DefaultRouteIP(), targets); ip != "" {
+	defaultIP := DefaultRouteIP()
+	if _, ok := platformTargets(); ok && !hasIP(targets, defaultIP) {
+		defaultIP = "" // the platform's list is the truth (DISC-10): a route outside it is ignored
+	}
+	if ip := choosePrimaryIP(defaultIP, targets); ip != "" {
 		return ip
 	}
 

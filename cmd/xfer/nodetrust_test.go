@@ -123,3 +123,24 @@ func TestNodeInvitation(t *testing.T) {
 		t.Fatalf("--once: %v, %v", a, ok)
 	}
 }
+
+// A trusted device is recognized in a discovery list by its last address (WP-6.5b).
+func TestTrustedAt(t *testing.T) {
+	ts, err := identity.OpenTrustStore(filepath.Join(t.TempDir(), identity.TrustFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ts.Add(identity.Peer{Fingerprint: other.Fingerprint, Alias: "phone", LastAddress: "192.0.2.7"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := trustedAt(ts, "192.0.2.7"); got != " - trusted 'phone'" {
+		t.Fatalf("trustedAt = %q", got)
+	}
+	if trustedAt(ts, "192.0.2.8") != "" || trustedAt(nil, "192.0.2.7") != "" {
+		t.Fatal("an unknown address, or no trust store, gave a label")
+	}
+}

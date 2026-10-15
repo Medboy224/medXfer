@@ -241,6 +241,9 @@ func multicastInterface() *net.Interface {
 	primary := GetPrimaryLocalIP()
 	for _, t := range GetActiveNetworkTargets() {
 		if t.LocalIP.String() == primary {
+			if idx := platformIndex(t.InterfaceName); idx > 0 { // given by the platform (DISC-10)
+				return &net.Interface{Index: idx, Name: t.InterfaceName, Flags: net.FlagUp | net.FlagMulticast}
+			}
 			if ifi, err := interfaceByName(t.InterfaceName); err == nil {
 				return ifi
 			}
