@@ -250,6 +250,7 @@ func (s *DaemonServer) handlePairShow(rs Responder, req RequestMessage) {
 		"uri":         u.String(),
 		"expires":     u.Expires.Unix(),
 		"fingerprint": id.Fingerprint.Short(),
+		"instance":    s.instance(), // the name in the other device's list (DISC-07)
 	}, req.ID))
 }
 

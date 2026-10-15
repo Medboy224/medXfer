@@ -115,7 +115,8 @@ type DaemonServer struct {
 	hub         *transfer.Hub    // the device's single port: control and data (CHAN-01)
 	hubControl  *transfer.Listener
 	discSrv     *discovery.DiscoveryServer
-	pairingCode string // finds this device on the network; gives no trust (WP-3.6b)
+	discCancel  context.CancelFunc // set while this device announces itself (DISC-05)
+	pairingCode string             // finds this device on the network; gives no trust (WP-3.6b)
 
 	// Pairing without the code (trust.go): the QR code shown by pair_show, and the unknown
 	// keys waiting for the user's trust_respond.
@@ -535,16 +536,19 @@ func (s *DaemonServer) startNode() error {
 
 	// 2. Start Discovery Broadcast Server
 	discOffer := &discovery.TransferOffer{} // no name: DISC-06
-	s.discSrv = discovery.NewDiscoveryServer("node", nodePort, discOffer)
+	disc := discovery.NewDiscoveryServer("node", nodePort, discOffer)
 	if s.pairingCode != "" {
-		s.discSrv.SetPairingCode(s.pairingCode)
+		disc.SetPairingCode(s.pairingCode)
 	}
-	s.discSrv.Start(s.ctx)
+	s.mu.Lock()
+	s.discSrv = disc // silent until SetDiscoverable (DISC-05)
+	s.mu.Unlock()
 	return nil
 }
 
 // serveHTTP serves the dashboard and its control WebSocket (devui) and the Web Share portal.
 func (s *DaemonServer) serveHTTP(httpLn net.Listener) error {
+	s.SetDiscoverable(true) // the dashboard's daemon is up for discovery while it serves
 	// 3. Start HTTP/WebSocket Router
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
@@ -874,6 +878,8 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 		WebShareToken:      s.webShareToken,
 		WebShareAutoAccept: s.webShareAutoAccept,
 		PairingCode:        s.pairingCode,
+		Discoverable:       s.discCancel != nil,
+		Instance:           s.instance(),
 	}
 }
 

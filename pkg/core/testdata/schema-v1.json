@@ -26,6 +26,8 @@
     "scan",
     "send",
     "set_config",
+    "set_discoverable",
+    "set_network_info",
     "set_web_share_auto_accept",
     "share_web_files",
     "skip_file",
