@@ -97,12 +97,14 @@ func main() {
 	}
 	cmd := normalizeCommand(args[0])
 	switch cmd {
-	case "daemon", "d", "server", "srv":
-		handleDaemon(args[1:])
-	case "dev-ui", "devui":
+	case "daemon", "d", "server", "srv", "dev-ui", "devui":
+		// The daemon and its control WebSocket serve the web dashboard only: a development tool
+		// (WP-6.6, decision D7 of the J6a plan). The app embeds the core (cmd/libmedxfer) and
+		// the commands below call it in-process.
 		if !api.DashboardAvailable {
-			fmt.Fprintln(os.Stderr, "[-] xfer dev-ui: the web dashboard is a development tool, not part of this build.\n"+
-				"    Build with: go build -tags devui -o xfer ./cmd/xfer   (build.bat does)")
+			fmt.Fprintln(os.Stderr, "[-] xfer "+cmd+": the daemon serves the web dashboard, a development tool not part of this build.\n"+
+				"    Build with: go build -tags devui -o xfer ./cmd/xfer   (build.bat does)\n"+
+				"    To send or receive, use xfer send, xfer recv, xfer pair or xfer node.")
 			os.Exit(1)
 		}
 		handleDaemon(args[1:])
@@ -1496,12 +1498,8 @@ func handleDaemon(args []string) {
 	fmt.Printf(" Port         : %d\n", st.LocalPort)
 	fmt.Printf(" Pairing Code : %s\n", st.PairingCode)
 	fmt.Println("--------------------------------------------------")
-	if api.DashboardAvailable {
-		fmt.Println(" Web Dashboard (development build, this device only):")
-		fmt.Printf("   👉 %s/\n", localURL)
-	} else {
-		fmt.Println(" Web Dashboard: not in this build (development tool, build with -tags devui)")
-	}
+	fmt.Println(" Web Dashboard (development build, this device only):") // devui builds only (WP-6.6)
+	fmt.Printf("   👉 %s/\n", localURL)
 	fmt.Printf(" Control token file: %s\n", tokenPath)
 	fmt.Println("--------------------------------------------------")
 	if *webShareFlag {
@@ -1627,8 +1625,7 @@ func printUsage() {
 		"               medXfer - Fast P2P Transfer        \n" +
 		"==================================================\n" +
 		"Usage:\n" +
-		"  xfer daemon [--port 19999] [--web-share]       (Headless daemon & control WebSocket)\n" +
-		"  xfer dev-ui [--port 19999] [--web-share]       (Daemon with the web dashboard; devui builds)\n" +
+		"  xfer daemon | dev-ui [--port 19999] [--web-share]  (Web dashboard daemon; devui builds only)\n" +
 		"  xfer node                                      (Persistent interactive CLI: QR code or fingerprints)\n" +
 		"  xfer share <file_or_folder...>                 (Instant Web Share with QR code & PIN)\n" +
 		"  xfer send [-i] <file_or_folder> [more...]      (Direct transfer: shows a QR code; -i prompts)\n" +

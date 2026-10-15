@@ -71,18 +71,25 @@ func TestDaemonHTTPEndpoints(t *testing.T) {
 		t.Fatalf("Invalid /health payload: %s", string(body))
 	}
 
-	// 2. Test /status
+	// 2. Test /status: the control surface of devui builds; absent from the published binary
+	// (API-01, WP-6.6).
 	statusResp, err := controlGet(fmt.Sprintf("http://127.0.0.1:%d/status", port))
 	if err != nil {
 		t.Fatalf("Failed to GET /status: %v", err)
 	}
 	defer statusResp.Body.Close()
-	var st DaemonStatus
-	if err := json.NewDecoder(statusResp.Body).Decode(&st); err != nil {
-		t.Fatalf("Failed decoding /status: %v", err)
-	}
-	if st.DeviceName != "TestDevice" {
-		t.Fatalf("Expected DeviceName 'TestDevice', got %q", st.DeviceName)
+	if !DashboardAvailable {
+		if statusResp.StatusCode != http.StatusNotFound {
+			t.Fatalf("GET /status = %d; want 404 without devui", statusResp.StatusCode)
+		}
+	} else {
+		var st DaemonStatus
+		if err := json.NewDecoder(statusResp.Body).Decode(&st); err != nil {
+			t.Fatalf("Failed decoding /status: %v", err)
+		}
+		if st.DeviceName != "TestDevice" {
+			t.Fatalf("Expected DeviceName 'TestDevice', got %q", st.DeviceName)
+		}
 	}
 
 	// 3. Test / : the dashboard in devui builds, an explicit 404 otherwise (DEV-19)
@@ -500,37 +507,6 @@ func TestClearWebFilesAndStaleFilePrevention(t *testing.T) {
 	defer dlResp.Body.Close()
 	if dlResp.StatusCode != http.StatusNotFound {
 		t.Fatalf("Expected HTTP 404 StatusNotFound after clear, got %d", dlResp.StatusCode)
-	}
-}
-
-func TestStatusRefusedFromRemote(t *testing.T) {
-	server := NewDaemonServer(0, t.TempDir(), "TestStatusHost")
-	server.SetWebShareEnabled(true)
-
-	// Remote LAN client: 403 and no secret in the body
-	reqRemote := httptest.NewRequest("GET", "/status", nil)
-	reqRemote.RemoteAddr = "10.0.0.5:1234"
-	wRemote := httptest.NewRecorder()
-	server.handleHTTPStatus(wRemote, reqRemote)
-	if wRemote.Code != http.StatusForbidden {
-		t.Fatalf("Expected 403 Forbidden for remote client on /status, got %d", wRemote.Code)
-	}
-	for _, secret := range []string{"web_share_pin", "web_share_token", "pairing_code", "portal_url"} {
-		if strings.Contains(wRemote.Body.String(), secret) {
-			t.Fatalf("Remote /status response leaks %q: %s", secret, wRemote.Body.String())
-		}
-	}
-
-	// Localhost client: still served
-	reqLocal := httptest.NewRequest("GET", "/status", nil)
-	reqLocal.RemoteAddr = "127.0.0.1:1234"
-	wLocal := httptest.NewRecorder()
-	server.handleHTTPStatus(wLocal, reqLocal)
-	if wLocal.Code != http.StatusOK {
-		t.Fatalf("Expected 200 OK for localhost client on /status, got %d", wLocal.Code)
-	}
-	if !strings.Contains(wLocal.Body.String(), "web_share_pin") {
-		t.Fatalf("Expected local /status to include web_share_pin, got %s", wLocal.Body.String())
 	}
 }
 

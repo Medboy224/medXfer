@@ -26,6 +26,9 @@ import (
 const DashboardAvailable = true
 
 func (s *DaemonServer) registerDevUIRoutes(mux *http.ServeMux) {
+	// Control surface (API-04): loopback + Host + Origin + control token on every route.
+	mux.HandleFunc("/status", s.control(s.handleHTTPStatus))
+	mux.HandleFunc("/ws", s.control(s.handleWebSocket))
 	mux.HandleFunc("/api/browse", s.control(s.handleBrowse))
 	mux.HandleFunc("/api/upload", s.control(s.handleUpload))
 	mux.HandleFunc("/api/fs/list", s.control(s.handleFSList))

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Checks that the production binary carries no diagnostic or development code
 # (DEV-10, DEV-12, DEV-19): faultconn, faultfs, the engine fault hooks, testkit and the
-# testing package, pprof, and the web dashboard (devui).
+# testing package, pprof, the web dashboard (devui), and its control surface (/ws, /status:
+# API-01, WP-6.6).
 # Usage: scripts/check-prod-binary.sh [extra go build flags]
 # Self-tests: "-tags diag" and "-tags devui" must both fail.
 set -euo pipefail
 
 forbidden='pkg/diag/faultconn|pkg/diag/faultfs|pkg/testkit|net/http/pprof|^testing$'
-forbidden_symbols="pkg/diag/faultconn|pkg/diag/faultfs|pkg/testkit|net/http/pprof|engine\.SetConnWrapper|engine\.SetStorageWrapper|engine\.buffersPeak|api\.\(\*DaemonServer\)\.(handleBrowse|handleUpload|handleFSList|handleFSMkdir)"
+forbidden_symbols="pkg/diag/faultconn|pkg/diag/faultfs|pkg/testkit|net/http/pprof|engine\.SetConnWrapper|engine\.SetStorageWrapper|engine\.buffersPeak|api\.\(\*DaemonServer\)\.(handleBrowse|handleUpload|handleFSList|handleFSMkdir|handleWebSocket|handleHTTPStatus)"
 # The dashboard page is a string constant: it leaves no symbol, so look for its text.
 forbidden_text='Live Transfer Telemetry'
 

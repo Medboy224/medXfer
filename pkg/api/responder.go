@@ -1,10 +1,6 @@
 package api
 
-import (
-	"encoding/json"
-
-	"github.com/gorilla/websocket"
-)
+import "encoding/json"
 
 // Responder receives the replies to one request (D1 of the J6a plan): what only the client
 // that asked should see, as opposed to Broadcast. A handler never knows the transport behind
@@ -12,14 +8,6 @@ import (
 type Responder interface {
 	Reply(evt EventMessage)
 }
-
-// wsResponder answers a request that came over the dashboard's WebSocket.
-type wsResponder struct {
-	s    *DaemonServer
-	conn *websocket.Conn
-}
-
-func (r wsResponder) Reply(evt EventMessage) { r.s.sendTo(r.conn, evt) }
 
 // jsonResponder answers with the event encoded in JSON, as the WebSocket would carry it.
 type jsonResponder func(event []byte)
