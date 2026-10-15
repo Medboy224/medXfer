@@ -16,3 +16,5 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+# Libraries built by scripts/build-lib.* (WP-6.4)
+/build/
