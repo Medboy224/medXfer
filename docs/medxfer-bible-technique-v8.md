@@ -201,10 +201,10 @@ Aujourd'hui (`session/tls.go`) le certificat est régénéré à chaque démarra
 ### 5.2 Exigences
 | Id | Exigence | Statut |
 |---|---|---|
-| `DISC-01` | Service mDNS `_medxfer._tcp`, port TCP du listener. Le TXT contient uniquement `v=1`. Le nom d'instance est `medXfer-` + 4 caractères hexadécimaux aléatoires tirés à chaque lancement. | ✅ |
+| `DISC-01` | Service mDNS `_medxfer._tcp`, port TCP du listener. Le TXT contient uniquement `v=1` et le rôle `r=` (`sender` quand un envoi attend, `node` sinon), qui n'identifie personne mais dit au receveur quels appareils envoient (WP-6.5). Le nom d'instance est `medXfer-` + 4 caractères hexadécimaux aléatoires tirés à chaque lancement. Le multicast sort par l'interface qui porte l'adresse annoncée, désignée par son index : sur un téléphone, jamais par les données mobiles (veille WP-6.0, §3.2). Sous Windows, l'annonce exige une règle de pare-feu UDP 5353 (J8). | ✅ (WP-6.5) |
 | `DISC-02` | iOS : Bonjour via l'API du système, avec `NSBonjourServices = ["_medxfer._tcp"]` et `NSLocalNetworkUsageDescription`. Aucun multicast brut sur iOS. | ✅ |
 | `DISC-03` | Android : acquérir un `MulticastLock` du Wi-Fi pendant la découverte. | ✅ |
-| `DISC-04` | Repli (bureau et Android seulement) : balise UDP vers un groupe de la plage non routée `224.0.0.0/24`. Ne pas réutiliser `239.255.255.250` (SSDP/UPnP). Charge utile identique au TXT. Au plus une balise toutes les 2 s. | 📏 |
+| `DISC-04` | Repli (bureau et Android seulement) : balise UDP en **diffusion sur chaque sous-réseau** (et diffusion limitée), port 19998, **sans groupe multicast**. Les adresses de `224.0.0.0/24` s'attribuent par l'IANA (revue d'expert, IESG) et ne se prennent pas d'office ; `239.255.255.250` est celle de SSDP/UPnP (veille WP-6.0, §4 ; D6 du plan J6a, validée le 15 octobre 2026). Charge utile : le TXT, plus le nom et le port. Au plus une balise toutes les 2 s. | ✅ (WP-6.5) |
 | `DISC-05` | L'appareil DOIT annoncer sa présence **uniquement** quand l'utilisateur l'a demandé (mode « recevoir » ouvert, ou envoi en attente). Le code actuel émet en permanence toutes les 600 ms. | ✅ |
 | `DISC-06` | Ni nom réel, ni nom d'hôte, ni liste de fichiers, ni clé publique dans l'annonce. Le nom affiché (alias) n'est transmis qu'*après* authentification (§6, §7). | ✅ |
 | `DISC-07` | Le sélecteur côté receveur reconnaît un appareil grâce au suffixe du nom générique (`…-4F2A`) affiché aussi sur l'écran de l'émetteur, à côté du PIN. | ✅ |
