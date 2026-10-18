@@ -8,6 +8,8 @@
 >
 > **Critère de sortie :** aucun chemin du code n'admet un appareil inconnu sans PIN ni QR ; rien n'est écrit dans `trusted.json` sans le oui des deux côtés ; une entrée présente d'un seul côté ne donne aucun privilège. Vérifié par les tests et par des essais réels.
 >
+> **État :** terminé le 18 octobre 2026, voir [report-confiance.md](report-confiance.md).
+>
 > **Durée estimée :** 4 à 6 jours. Une PR par lot, CI verte sur les trois systèmes avant fusion. À finir **avant J6b**, pour que l'application Flutter se construise sur ce modèle.
 
 ## 0. État de départ (constaté sur `main` le 18 octobre 2026)

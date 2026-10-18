@@ -227,6 +227,8 @@ Remplacer `*websocket.Conn` par une interface de réponse dans les gestionnaires
 ### Lot « Modèle de confiance » (avant J6b) · ≈ 4 à 6 jours
 Ajouté le 18/10/2026 (#143). Premier contact par PIN ou QR seulement : la question de confiance (comparaison d'empreintes) disparaît. Sessions éphémères par défaut. Confiance bilatérale, vérifiée à chaque connexion. Schéma du cœur v2. **Critère de sortie :** aucun appareil inconnu admis sans PIN ni QR ; rien d'écrit dans `trusted.json` sans le oui des deux ; une entrée d'un seul côté ne donne aucun privilège. Plan : [medxfer-plan-confiance.md](medxfer-plan-confiance.md).
 
+**Résultat (18/10/2026) :** le lot est terminé (PR #144 à #148, et celle du rapport). La question de confiance n'existe plus ; sessions éphémères ; confiance mutuelle vérifiée à chaque connexion ; schéma du cœur v2. Neuf essais réels entre le téléphone, Zorin et le PC Windows. Détail dans [report-confiance.md](report-confiance.md).
+
 ### J6b — Application Flutter MVP · ≈ 8 à 12 jours
 Écrans : liste des appareils, appairage par QR (caméra) et par PIN, envoi (choix de fichiers/dossiers), réception (acceptation avec taille et expéditeur), progression, historique minimal, panneau développeur (`DEV-13`). Android : service de premier plan, destination des fichiers (décision issue de G2A-10). Windows, Linux : empaquetage. **Critère de sortie :** les gates G2a et G7 évaluées ; scénario complet Android ↔ Windows/Linux au Wi-Fi réel.
 
