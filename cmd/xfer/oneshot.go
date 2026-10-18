@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/api"
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/identity"
@@ -129,8 +130,7 @@ type oneShotPairing struct {
 // serve waits on the hub's control connections until a receiver pairs: it renews the QR code
 // and the PIN as they expire (same port, new secret).
 func (p oneShotPairing) serve(ctx context.Context) (pairing.Result, error) {
-	name, _ := os.Hostname()
-	o := pairing.Options{Identity: p.id, Trust: p.trust, DeviceName: name, Offer: p.offer, Follow: p.follow,
+	o := pairing.Options{Identity: p.id, Trust: p.trust, DeviceName: api.DeviceName(), Offer: p.offer, Follow: p.follow,
 		BeforeAccept: p.before, OfferTrust: p.offerTrust, AskTrust: p.askTrust}
 	ttl := p.ttl
 	if p.pin != nil {

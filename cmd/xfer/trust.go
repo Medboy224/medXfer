@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/Medboy224/medXfer/pkg/api"
 	"github.com/Medboy224/medXfer/pkg/identity"
@@ -17,6 +18,8 @@ const trustUsage = `Usage:
   xfer id                               (this device's fingerprint)
   xfer trust list                       (trusted devices)
   xfer trust forget <fingerprint>       (full fingerprint, or enough of it to be unique)
+  xfer trust rename <fingerprint> NAME  (the name shown for it, on this device only)
+  xfer name [NAME]                      (this device's name, sent to a device once paired)
 `
 
 // configDir is where the identity and the trusted devices live: next to config.json.
@@ -90,6 +93,25 @@ func runTrust(w io.Writer, dir string, args []string) error {
 		}
 		fmt.Fprintf(w, "Forgotten: %s %s. Pair again to trust it.\n", p.Fingerprint.Short(), p.Alias)
 		return nil
+	case "rename", "mv":
+		if len(args) < 3 {
+			return fmt.Errorf("rename needs a fingerprint and a name\n%s", trustUsage)
+		}
+		p, err := ts.Find(args[1])
+		if err != nil {
+			return err
+		}
+		name := api.CleanDeviceName(strings.Join(args[2:], " "))
+		if name == "" {
+			return fmt.Errorf("give a name")
+		}
+		// Kept on this device only; the name the device sends no longer replaces it (N6).
+		p.Alias, p.Renamed = name, true
+		if err := ts.Add(p); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "%s is now shown as '%s' (on this device only).\n", p.Fingerprint.Short(), name)
+		return nil
 	}
 	return fmt.Errorf("unknown trust subcommand %q\n%s", args[0], trustUsage)
 }
@@ -115,4 +137,29 @@ func dialSecure(addr string, cfg securechan.Config) (*securechan.Conn, error) {
 		return nil, err
 	}
 	return securechan.Client(context.Background(), raw, cfg)
+}
+
+// handleName implements `xfer name [NAME]`: shows or sets this device's name, which a device
+// records once paired and shows in its scans (N5). It never goes out in an announcement.
+func handleName(args []string) {
+	if err := runName(os.Stdout, args); err != nil {
+		fmt.Fprintf(os.Stderr, "[-] %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runName(w io.Writer, args []string) error {
+	if len(args) == 0 {
+		fmt.Fprintf(w, "This device's name: %s\n", api.DeviceName())
+		return nil
+	}
+	name := api.CleanDeviceName(strings.Join(args, " "))
+	if name == "" {
+		return fmt.Errorf("give a name")
+	}
+	if err := api.SetDeviceName(name); err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "This device's name is now '%s'. Devices paired from now on will show it.\n", name)
+	return nil
 }

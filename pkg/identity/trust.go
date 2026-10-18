@@ -23,6 +23,9 @@ type Peer struct {
 	// trusted device is refused and reported (ID-05).
 	LastAddress string `json:"last_address,omitempty"`
 	AutoAccept  bool   `json:"auto_accept,omitempty"`
+	// Renamed: the user named this device (xfer trust rename); the name it sends no longer
+	// replaces the alias.
+	Renamed bool `json:"renamed,omitempty"`
 	// TagKey is the recognition key shared with this device when mutual trust was established:
 	// each side announces rotating tags made with it, which only the other recognizes
 	// (DISC-11). Empty for entries written before it existed: then not recognized.

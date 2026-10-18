@@ -127,12 +127,9 @@ func LoadConfigFrom(cfgPath, explicitOutDir, explicitDeviceName string) Config {
 	}
 
 	// 3. Fallback defaults if still empty or invalid on host OS
+	cfg.DeviceName = CleanDeviceName(cfg.DeviceName)
 	if cfg.DeviceName == "" {
-		if h, _ := os.Hostname(); h != "" {
-			cfg.DeviceName = h
-		} else {
-			cfg.DeviceName = "medXfer-Node"
-		}
+		cfg.DeviceName = DefaultDeviceName() // never "localhost" (#136)
 	}
 
 	needFallbackDir := false

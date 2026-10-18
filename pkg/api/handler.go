@@ -152,8 +152,8 @@ func (s *DaemonServer) handleSetConfig(rs Responder, req RequestMessage) {
 	}
 
 	s.mu.Lock()
-	if cfg.DeviceName != "" {
-		s.config.DeviceName = cfg.DeviceName // sent after authentication only, never announced (DISC-06)
+	if name := CleanDeviceName(cfg.DeviceName); name != "" {
+		s.config.DeviceName = name // sent after authentication only, never announced (DISC-06)
 	}
 	if cfg.DownloadDir != "" {
 		s.config.DownloadDir = cfg.DownloadDir
