@@ -87,11 +87,11 @@ func (s *DaemonServer) touchTrust(fp identity.Fingerprint, name, ip string) erro
 		return nil
 	}
 	p, ok := ts.Get(fp)
-	if !ok || (p.LastAddress == ip && (name == "" || p.Alias == name)) {
+	if !ok || (p.LastAddress == ip && (name == "" || p.Alias == name || p.Renamed)) {
 		return nil
 	}
 	p.LastAddress = ip
-	if name != "" {
+	if name != "" && !p.Renamed {
 		p.Alias = name
 	}
 	return ts.Add(p)

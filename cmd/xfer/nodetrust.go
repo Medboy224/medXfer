@@ -65,11 +65,11 @@ func touchPeer(ts *identity.TrustStore, fp identity.Fingerprint, name, ip string
 		return nil
 	}
 	p, ok := ts.Get(fp)
-	if !ok || (p.LastAddress == ip && (name == "" || p.Alias == name)) {
+	if !ok || (p.LastAddress == ip && (name == "" || p.Alias == name || p.Renamed)) {
 		return nil
 	}
 	p.LastAddress = ip
-	if name != "" {
+	if name != "" && !p.Renamed { // a name the user gave stays (xfer trust rename)
 		p.Alias = name
 	}
 	return ts.Add(p)

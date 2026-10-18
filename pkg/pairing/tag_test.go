@@ -152,3 +152,15 @@ func TestAnnounceTagsBound(t *testing.T) {
 		t.Fatal("the most recently trusted device does not come first")
 	}
 }
+
+// N6: an entry the user renamed keeps its name when the trust is established again.
+func TestTrustAgainKeepsTheUsersName(t *testing.T) {
+	a, b := device(t, "a"), device(t, "b")
+	if err := a.Trust.Add(identity.Peer{Fingerprint: b.Identity.Fingerprint, Alias: "Phone of Fatou", Renamed: true}); err != nil {
+		t.Fatal(err)
+	}
+	trustThrough(t, a, b)
+	if p, _ := a.Trust.Get(b.Identity.Fingerprint); p.Alias != "Phone of Fatou" || !p.Renamed || len(p.TagKey) != tagKeySize {
+		t.Fatalf("entry %+v", p)
+	}
+}

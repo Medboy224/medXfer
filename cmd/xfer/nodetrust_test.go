@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Medboy224/medXfer/pkg/api"
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/pairing"
 )
@@ -119,5 +120,45 @@ func TestTrustedAt(t *testing.T) {
 	}
 	if trustedAt(ts, "192.0.2.8") != "" || trustedAt(nil, "192.0.2.7") != "" {
 		t.Fatal("an unknown address, or no trust store, gave a label")
+	}
+}
+
+// N6: a name the user gave a trusted device (xfer trust rename) stays, whatever name the device
+// sends when it pairs again; xfer name sets this device's own name.
+func TestRenameAndName(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := identity.OpenTrustStore(filepath.Join(dir, identity.TrustFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestIdentity(t)
+	if err := ts.Add(identity.Peer{Fingerprint: a.Fingerprint, Alias: "localhost"}); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := runTrust(&out, dir, []string{"rename", a.Fingerprint.Short(), "Téléphone", "de", "Fatou"}); err != nil {
+		t.Fatal(err)
+	}
+	ts, _ = identity.OpenTrustStore(filepath.Join(dir, identity.TrustFile))
+	if p, _ := ts.Get(a.Fingerprint); p.Alias != "Téléphone de Fatou" || !p.Renamed {
+		t.Fatalf("after rename: %+v", p)
+	}
+	if err := touchPeer(ts, a.Fingerprint, "Samsung SM-A576B", "10.0.0.9"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := ts.Get(a.Fingerprint); p.Alias != "Téléphone de Fatou" || p.LastAddress != "10.0.0.9" {
+		t.Fatalf("the name the device sent replaced the user's: %+v", p)
+	}
+	if err := runTrust(&out, dir, []string{"rename", a.Fingerprint.Short(), " \t "}); err == nil {
+		t.Fatal("an empty name was accepted")
+	}
+
+	api.SetCustomConfigDir(t.TempDir())
+	t.Cleanup(func() { api.SetCustomConfigDir("") })
+	if err := runName(&out, []string{"PC", "d'Amadou"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := api.DeviceName(); got != "PC d'Amadou" {
+		t.Fatalf("device name %q", got)
 	}
 }

@@ -130,6 +130,8 @@ func main() {
 		handleID(args[1:])
 	case "trust":
 		handleTrust(args[1:])
+	case "name":
+		handleName(args[1:])
 	case "pair":
 		handlePair(args[1:])
 	case "help", "h", "?":
@@ -223,7 +225,8 @@ func handleNode() {
 	fmt.Println("==================================================")
 	fmt.Println("             medXfer Persistent Node              ")
 	fmt.Println("==================================================")
-	fmt.Printf(" Device Name : %s\n", discServer.GetPeer().DeviceName)
+	myName := api.DeviceName() // sent once paired; never announced (DISC-06)
+	fmt.Printf(" Device Name : %s   (announced as %s)\n", myName, discServer.GetPeer().DeviceName)
 	fmt.Printf(" Local IP    : %s\n", getLocalIP())
 	fmt.Printf(" Find code   : %s   (locates this node; trust comes from its key)\n", nodePairingCode)
 	fmt.Printf(" Fingerprint : %s\n", nodeID.Fingerprint.Short())
@@ -477,7 +480,7 @@ func handleNode() {
 			}
 			_ = ch.Send(session.Message{
 				Type:       "pair_accept",
-				DeviceName: discServer.GetPeer().DeviceName,
+				DeviceName: myName,
 				TrustsYou:  pairing.Declares(nodeTrust, peerFP),
 			})
 			devLabel := msg.DeviceName
@@ -731,7 +734,6 @@ func handleNode() {
 				}
 
 				target := net.JoinHostPort(targetIP, strconv.Itoa(targetPort))
-				myName := discServer.GetPeer().DeviceName
 				fmt.Printf("[*] Connecting to node at %s...\n", target)
 				dialCfg := pairCfg
 				if qr != nil {
@@ -1381,8 +1383,7 @@ func handleRecv(args []string) {
 // recvOptions are the pairing options of xfer recv: this device's key and list, and mutual
 // trust when asked (--trust) or offered by the sender (PAIR-10).
 func recvOptions(id *identity.Identity, trust *identity.TrustStore, offerTrust bool) pairing.Options {
-	name, _ := os.Hostname()
-	return pairing.Options{Identity: id, Trust: trust, DeviceName: name, OfferTrust: offerTrust,
+	return pairing.Options{Identity: id, Trust: trust, DeviceName: api.DeviceName(), OfferTrust: offerTrust,
 		AskTrust: askTrustFrom(os.Stdout, stdinLines())}
 }
 
@@ -1851,7 +1852,8 @@ func printUsage() {
 		"  xfer bench disk|net [...]                      (Disk and network benchmarks)\n" +
 		"  xfer bundle [-o FILE.zip]                      (Diagnostic bundle for a bug report)\n" +
 		"  xfer id                                        (This device's fingerprint)\n" +
-		"  xfer trust list|forget <fingerprint>           (Trusted devices)\n" +
+		"  xfer trust list|forget|rename <fingerprint>    (Trusted devices)\n" +
+		"  xfer name [NAME]                               (This device's name, sent once paired)\n" +
 		"  xfer pair --show | xfer pair <medxfer://...>   (Pair two devices by QR code)\n" +
 		"  xfer pair --pin | xfer pair --pin HOST[:PORT]  (Pair two devices by PIN)\n" +
 		"\n" +

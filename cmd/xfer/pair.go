@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/api"
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/pairing"
 )
@@ -51,7 +52,7 @@ func runPair(ctx context.Context, in io.Reader, w io.Writer, dir string, args []
 	if err != nil {
 		return err
 	}
-	name, _ := os.Hostname()
+	name := api.DeviceName()
 	lines := make(chan string)
 	rd := bufio.NewReader(in)
 	go func() {

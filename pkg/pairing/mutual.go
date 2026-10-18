@@ -193,8 +193,8 @@ func (t *TrustTalk) writeLocked() error {
 	p := t.peer
 	p.TagKey = t.tagKey
 	if old, ok := t.store.Get(p.Fingerprint); ok {
-		p.AutoAccept, p.AddedAt = old.AutoAccept, old.AddedAt
-		if p.Alias == "" {
+		p.AutoAccept, p.AddedAt, p.Renamed = old.AutoAccept, old.AddedAt, old.Renamed
+		if p.Alias == "" || old.Renamed {
 			p.Alias = old.Alias
 		}
 	}
