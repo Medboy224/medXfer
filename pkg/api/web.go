@@ -1494,7 +1494,7 @@ const IndexHTML = `<!DOCTYPE html>
         div.className = "peer-item";
         div.innerHTML = ` + "`" + `
           <div>
-            <div class="peer-info"><strong>${p.device_name || 'Device'}</strong> (${p.host_ip})</div>
+            <div class="peer-info"><strong>${p.trusted_alias ? (p.trusted_alias + ' (trusted)') : (p.device_name || 'Device')}</strong> (${p.host_ip})</div>
             <div class="peer-sub">Role: ${p.role} | Port: ${p.port}</div>
           </div>
           <div class="peer-actions">

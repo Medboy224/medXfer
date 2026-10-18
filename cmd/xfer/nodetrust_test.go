@@ -4,8 +4,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Medboy224/medXfer/pkg/api"
+	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/pairing"
 )
@@ -102,24 +104,29 @@ func TestNodeInvitation(t *testing.T) {
 	}
 }
 
-// A trusted device is recognized in a discovery list by its last address (WP-6.5b).
-func TestTrustedAt(t *testing.T) {
+// DISC-07, DISC-11: a device of mutual trust shows in a discovery list under the name recorded
+// here, recognized by its tag; a device at its last address without the tag stays anonymous.
+func TestListedName(t *testing.T) {
 	ts, err := identity.OpenTrustStore(filepath.Join(t.TempDir(), identity.TrustFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := identity.LoadOrCreate(t.TempDir())
-	if err != nil {
+	other := newTestIdentity(t)
+	key := make([]byte, 32)
+	key[0] = 7
+	if err := ts.Add(identity.Peer{Fingerprint: other.Fingerprint, Alias: "Naruto", LastAddress: "192.0.2.7", TagKey: key}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ts.Add(identity.Peer{Fingerprint: other.Fingerprint, Alias: "phone", LastAddress: "192.0.2.7"}); err != nil {
-		t.Fatal(err)
+	tag := pairing.Tag(key, other.Fingerprint, pairing.TagPeriodOf(time.Now()))
+	if got := listedName(ts, discovery.Peer{DeviceName: "medXfer-1a2b", HostIP: "192.0.2.9", Tags: []string{"zzzzzzzzzzzzz", tag}}); got != "Naruto (trusted)" {
+		t.Fatalf("listedName = %q", got)
 	}
-	if got := trustedAt(ts, "192.0.2.7"); got != " - trusted 'phone'" {
-		t.Fatalf("trustedAt = %q", got)
+	// Its address, taken by another device without the tag: not recognized.
+	if got := listedName(ts, discovery.Peer{DeviceName: "medXfer-9f9f", HostIP: "192.0.2.7"}); got != "medXfer-9f9f" {
+		t.Fatalf("recognized by its address: %q", got)
 	}
-	if trustedAt(ts, "192.0.2.8") != "" || trustedAt(nil, "192.0.2.7") != "" {
-		t.Fatal("an unknown address, or no trust store, gave a label")
+	if got := listedName(nil, discovery.Peer{DeviceName: "medXfer-1a2b", Tags: []string{tag}}); got != "medXfer-1a2b" {
+		t.Fatalf("no trust store: %q", got)
 	}
 }
 

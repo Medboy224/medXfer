@@ -6,8 +6,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/Medboy224/medXfer/pkg/discovery"
+	"github.com/Medboy224/medXfer/pkg/pairing"
 )
 
 // SetDiscoverable starts or stops announcing this device (mDNS, fallback beacon) and answering
@@ -85,26 +87,42 @@ func (s *DaemonServer) handleSetNetworkInfo(rs Responder, req RequestMessage) {
 	rs.Reply(NewEvent("status", s.getStatus(), req.ID))
 }
 
-// scannedPeer is a device of a scan, with the alias of the trusted device seen at its address:
-// recognized in the list before any pairing, locally only (the alias never goes out).
+// scannedPeer is a device of a scan, with the name this device recorded for it when it is a
+// device of mutual trust: recognized by its tags (DISC-11), never by its address, which another
+// device may take. The name never goes out (DISC-06); the tags mean nothing to the interface.
 type scannedPeer struct {
 	discovery.Peer
-	TrustedAlias string `json:"trusted_alias,omitempty"`
+	TrustedAlias string   `json:"trusted_alias,omitempty"`
+	Tags         []string `json:"-"`
 }
 
 func (s *DaemonServer) recognize(peers []discovery.Peer) []scannedPeer {
 	s.mu.RLock()
 	trust := s.trust
 	s.mu.RUnlock()
+	now := time.Now()
 	out := make([]scannedPeer, 0, len(peers))
 	for _, p := range peers {
 		sp := scannedPeer{Peer: p}
-		if trust != nil {
-			if known, ok := trust.ByAddress(p.HostIP); ok {
-				sp.TrustedAlias = known.Alias
+		if known, ok := pairing.Recognize(trust, p.Tags, now); ok {
+			sp.TrustedAlias = known.Alias
+			if sp.TrustedAlias == "" {
+				sp.TrustedAlias = known.Fingerprint.Short()
 			}
 		}
 		out = append(out, sp)
 	}
 	return out
+}
+
+// announceTags are the recognition tags this device announces (DISC-11): one per device of
+// mutual trust, read at each announcement.
+func (s *DaemonServer) announceTags() []string {
+	s.mu.RLock()
+	trust, id := s.trust, s.identity
+	s.mu.RUnlock()
+	if id == nil {
+		return nil
+	}
+	return pairing.AnnounceTags(trust, id.Fingerprint, time.Now())
 }

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/session"
@@ -19,18 +20,24 @@ import (
 // trustPromptTimeout bounds how long a question waits for the user.
 const trustPromptTimeout = 60 * time.Second
 
-// trustedAt is " - trusted 'alias'" when ip is the last address of a trusted device: it is
-// recognized in a discovery list before any pairing, on this device only (the alias never goes
-// out, DISC-06). It is a hint: the key and the mutual trust are still checked when connecting
-// (ID-05, PAIR-09).
-func trustedAt(ts *identity.TrustStore, ip string) string {
-	if ts == nil {
-		return ""
+// listedName is how a device of a discovery list is shown: under the name this device recorded
+// when it is a device of mutual trust, recognized by its tags (DISC-11), never by its address;
+// otherwise under its generic name. The name never goes out (DISC-06). It is a hint: the key and
+// the mutual trust are still checked when connecting (ID-05, PAIR-09).
+func listedName(ts *identity.TrustStore, p discovery.Peer) string {
+	if known, ok := pairing.Recognize(ts, p.Tags, time.Now()); ok {
+		name := known.Alias
+		if name == "" {
+			name = known.Fingerprint.Short()
+		}
+		return name + " (trusted)"
 	}
-	if p, ok := ts.ByAddress(ip); ok && p.Alias != "" {
-		return fmt.Sprintf(" - trusted '%s'", p.Alias)
-	}
-	return ""
+	return p.DeviceName
+}
+
+// announceTagsOf gives the recognition tags a device announces, read at each announcement.
+func announceTagsOf(ts *identity.TrustStore, self identity.Fingerprint) func() []string {
+	return func() []string { return pairing.AnnounceTags(ts, self, time.Now()) }
 }
 
 // keyChanged implements ID-05: if ip is the last address of a trusted device and the key

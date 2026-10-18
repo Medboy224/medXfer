@@ -545,6 +545,7 @@ func (s *DaemonServer) startNode() error {
 	if s.pairingCode != "" {
 		disc.SetPairingCode(s.pairingCode)
 	}
+	disc.SetTags(s.announceTags) // devices of mutual trust recognize this one (DISC-11)
 	s.mu.Lock()
 	s.discSrv = disc // silent until SetDiscoverable (DISC-05)
 	s.mu.Unlock()

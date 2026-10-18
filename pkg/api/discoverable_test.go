@@ -7,9 +7,9 @@ import (
 	"github.com/Medboy224/medXfer/pkg/identity"
 )
 
-// A trusted device is recognized in a scan by its last address, before any pairing; the alias
-// stays on this device (it is in the local peers_list only).
-func TestScanRecognizesTrustedDevices(t *testing.T) {
+// N1: a trusted device's last address is no longer enough to name a device in a scan: another
+// device may take it. Recognition is by tag (TestRecognizeByTag).
+func TestScanDoesNotRecognizeByAddress(t *testing.T) {
 	s, _ := startOwnIdentity(t, "Scanner")
 	known, err := identity.LoadOrCreate(t.TempDir())
 	if err != nil {
@@ -19,7 +19,7 @@ func TestScanRecognizesTrustedDevices(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := s.recognize([]discovery.Peer{{HostIP: "192.0.2.7", Port: 18888}, {HostIP: "192.0.2.8", Port: 18888}})
-	if len(got) != 2 || got[0].TrustedAlias != "phone" || got[1].TrustedAlias != "" {
+	if len(got) != 2 || got[0].TrustedAlias != "" || got[1].TrustedAlias != "" {
 		t.Fatalf("recognize: %+v", got)
 	}
 }
