@@ -67,7 +67,16 @@ Ajoutez `--once` pour ne rien enregistrer (confiance limitée à la session).
 
 ## 6. Mode interactif : `xfer node`
 
-`xfer node` garde une session ouverte, avec les commandes `scan`, `pair <n|ip|code>`, `pair --show`, `send <fichier>`, `stop`, `disconnect` et `exit`. Pratique pour plusieurs envois de suite au même appareil.
+`xfer node` garde une session ouverte, pratique pour plusieurs envois de suite au même appareil. Ses commandes :
+
+- `scan`, puis `pair <n>` : appairer l'appareil n° n de la liste ; `pair <ip>` ou `pair <ip:port>` marche aussi ;
+- `pair --show` : afficher un QR code pour l'autre appareil ;
+- `pair --pin` : afficher un PIN. Sur l'autre appareil, `pair --pin <ip:port>` (dans `xfer node`) ou `xfer pair --pin <ip:port>`, puis taper le PIN quand il est demandé ;
+- `send <fichier>`, `stop`, `disconnect`, `exit`.
+
+Ajouter `--once` à `pair` pour ne faire confiance à l'appareil que pour cette session.
+
+Si un autre medXfer occupe déjà le port 18887 sur l'appareil (le tableau de bord `xfer dev-ui`, un autre `xfer node`), `xfer node` le signale et prend un autre port. L'adresse affichée avec le PIN ou le QR code contient alors ce port : c'est elle qu'il faut taper.
 
 ## 7. Outils de développement
 

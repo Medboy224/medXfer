@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -31,11 +32,26 @@ import (
 	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
+// defaultPort is the device's single port: pairing, session and data (CHAN-01). Every mode
+// uses the same one, so that one firewall rule covers medXfer (#133).
 const defaultPort = 18887
 
-// nodePort is the single port of xfer node: pairing, session and data (CHAN-01). Every mode
-// uses the same one, so that one firewall rule covers medXfer (#133).
-const nodePort = defaultPort
+// listenNodePort opens the node's single port: defaultPort, or a free one when another medXfer
+// on this device holds it (CHAN-01), said on the screen. Silently left without a port, the node
+// used to pair (it dials out) but every download from it reached the other program.
+func listenNodePort() (net.Listener, error) {
+	l, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", defaultPort))
+	if err == nil {
+		return l, nil
+	}
+	if l, err = net.Listen("tcp4", "0.0.0.0:0"); err != nil {
+		return nil, err
+	}
+	fmt.Printf("[!] Port %d is taken (another medXfer on this device: xfer dev-ui, daemon or node?): using port %d.\n",
+		defaultPort, l.Addr().(*net.TCPAddr).Port)
+	fmt.Println("    On Windows, the firewall must let this port in, or the other device cannot download from here.")
+	return l, nil
+}
 
 // isLocalIP reports whether ipStr is this device; also under Android, which refuses
 // net.InterfaceAddrs (#132).
@@ -168,12 +184,20 @@ func reorderArgs(fs *flag.FlagSet, args []string) []string {
 }
 
 func handleNode() {
+	nodeLn, err := listenNodePort()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[-] Cannot listen: %v\n", err)
+		return
+	}
+	defer nodeLn.Close()
+	nodePort := nodeLn.Addr().(*net.TCPAddr).Port // announced by discovery, the QR code, the PIN and offers
+
 	nodePairingCode, _, _ := discovery.GeneratePairingCode(getLocalIP())
 
 	ctxDisc, cancelDisc := context.WithCancel(context.Background())
 	defer cancelDisc()
 	discOffer := &discovery.TransferOffer{FileName: "medXfer-Node", FileSize: 0}
-	discServer := discovery.NewDiscoveryServer("node", 18887, discOffer)
+	discServer := discovery.NewDiscoveryServer("node", nodePort, discOffer)
 	discServer.SetPairingCode(nodePairingCode)
 	discServer.Start(ctxDisc)
 
@@ -186,7 +210,9 @@ func handleNode() {
 	// the network; trust comes from the key (WP-3.6b): trusted, QR code secret, or the user.
 	pairCfg := securechan.Config{Identity: nodeID, Trust: nodeTrust, AllowUnknown: true, Gate: securechan.NewGate()}
 	localID = nodeID
-	var invite nodeInvitation // the QR code shown by `pair --show`
+	var invite nodeInvitation               // the QR code shown by `pair --show`
+	var nodePIN atomic.Pointer[pairing.PIN] // the PIN shown by `pair --pin` (bible §6.2)
+	var pinOnce atomic.Bool                 // that PIN trusts for this session only
 	// The node's single port: control connections to the loop below, data connections to the
 	// transfers registered with their peer's key (CHAN-01, CHAN-06).
 	nodeHub := transfer.NewHub(pairCfg)
@@ -205,6 +231,8 @@ func handleNode() {
 	fmt.Println("   pair <code|n|ip>  - Connect; both screens compare fingerprints")
 	fmt.Println("   pair --show       - Show a QR code for the other device [--once]")
 	fmt.Println("   pair <medxfer://> - Pair with the device that shows a QR code [--once]")
+	fmt.Println("   pair --pin        - Show a PIN for the other device [--once]")
+	fmt.Println("   pair --pin <ip|n> - Type the PIN shown by that device [--once]")
 	fmt.Println("   send <filepath>   - Send file/folder to paired device")
 	fmt.Println("   stop              - Cancel an active transfer gracefully")
 	fmt.Println("   disconnect        - End pairing session")
@@ -252,12 +280,8 @@ func handleNode() {
 	}()
 
 	go func() {
-		l, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", nodePort))
-		if err != nil {
-			return
-		}
 		control := nodeHub.Control()
-		go func() { _ = nodeHub.Serve(l) }()
+		go func() { _ = nodeHub.Serve(nodeLn) }()
 		for {
 			c, err := control.Accept()
 			if err != nil {
@@ -282,7 +306,7 @@ func handleNode() {
 				continue
 			}
 
-			if msg.Type != "pair_request" {
+			if msg.Type != "pair_request" && msg.Type != pairing.TypePIN {
 				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "pair_request expected"})
 				ch.Close()
 				continue
@@ -300,7 +324,22 @@ func handleNode() {
 			// The pairing code, if any, is ignored (WP-3.6b). A QR code's secret admits its
 			// scanner; otherwise an unknown key is trusted only if the user says so (WP-3.3).
 			answer := trustOnce
-			if msg.Secret != "" {
+			if msg.Type == pairing.TypePIN { // the PIN this node shows: both keys proved (PAIR-03)
+				name, err := pairing.RespondPIN(ch, conn, msg, nodePIN.Load(), nodeID.Fingerprint)
+				if err != nil {
+					_ = ch.Send(session.Message{Type: pairing.TypeReject, FileName: pairing.ErrRefused.Error()}) // PAIR-07
+					ch.Close()
+					fmt.Printf("\n[-] PIN pairing attempt from %s refused.\n", peerIP)
+					printPrompt()
+					continue
+				}
+				_ = conn.SetDeadline(time.Time{})
+				msg.DeviceName = name // sent only after both confirmations (PAIR-07)
+				answer = trustAlways
+				if pinOnce.Load() {
+					answer = trustOnce
+				}
+			} else if msg.Secret != "" {
 				var ok bool
 				if answer, ok = invite.redeem(msg.Secret); !ok {
 					_ = ch.Send(session.Message{Type: "pair_reject", FileName: pairing.ErrRefused.Error()}) // PAIR-07
@@ -510,19 +549,35 @@ func handleNode() {
 				}
 				once := false
 				var rawArg string
-				show := false
+				show, usePIN := false, false
 				for _, a := range args {
 					switch a {
 					case "--once":
 						once = true
 					case "--show":
 						show = true
+					case "--pin":
+						usePIN = true
 					default:
 						rawArg = strings.Trim(a, `'"`) // a URI pasted with its quotes
 					}
 				}
+				if usePIN && rawArg == "" { // show a PIN; the other device types it (bible §6.2)
+					addr := net.JoinHostPort(getLocalIP(), strconv.Itoa(nodePort))
+					p, err := pairing.NewPIN(pairing.PINConfig{Show: pinScreen(os.Stdout,
+						"pair --pin "+addr+"   (in xfer node; or: xfer pair --pin "+addr+")")})
+					if err != nil {
+						fmt.Printf("[-] %v\n", err)
+						break
+					}
+					pinOnce.Store(once)
+					nodePIN.Store(p)
+					if !show {
+						break
+					}
+				}
 				if show {
-					u, err := invite.renew(nodeID.Fingerprint, getLocalIP(), 18887, once)
+					u, err := invite.renew(nodeID.Fingerprint, getLocalIP(), nodePort, once)
 					if err != nil {
 						fmt.Printf("[-] %v\n", err)
 						break
@@ -534,11 +589,12 @@ func handleNode() {
 					break
 				}
 				if rawArg == "" {
-					fmt.Println("[-] Usage: pair <6-digit code | index | IP | medxfer://...> [--once], or pair --show [--once]")
+					fmt.Println("[-] Usage: pair <6-digit code | index | IP | medxfer://...> [--once], pair --show [--once],")
+					fmt.Println("    pair --pin [--once] (show a PIN), or pair --pin <index | IP> [--once] (type the PIN shown there)")
 					break
 				}
 				targetIP := rawArg
-				targetPort := 18887
+				targetPort := defaultPort
 				targetDeviceName := ""
 				var qr *pairing.URI
 
@@ -572,11 +628,32 @@ func handleNode() {
 					if lastScannedPeers[num-1].Port > 0 {
 						targetPort = lastScannedPeers[num-1].Port
 					}
+				} else if host, port, err := net.SplitHostPort(rawArg); err == nil {
+					// IP:PORT, as the PIN screen and the sender show it: a node whose port
+					// was taken listens on another one (CHAN-01).
+					if p, err := strconv.Atoi(port); err == nil && p > 0 && p < 65536 {
+						targetIP, targetPort = host, p
+					}
 				}
 
 				if targetIP == "" {
 					fmt.Println("[-] Target address could not be resolved.")
 					break
+				}
+
+				pinCode := ""
+				if usePIN { // typed here, never an argument: the PIN stays out of any history
+					fmt.Print("PIN shown on the other device: ")
+					select {
+					case pinCode = <-inputChan:
+					case <-time.After(trustPromptTimeout):
+						fmt.Println()
+					}
+					pinCode = strings.TrimSpace(pinCode)
+					if _, err := pairing.NormalizePIN(pinCode); err != nil {
+						fmt.Printf("[-] %v\n", err)
+						break
+					}
 				}
 
 				fmt.Printf("[*] Connecting to node at %s:%d...\n", targetIP, targetPort)
@@ -599,11 +676,23 @@ func handleNode() {
 
 				ch := session.NewChannel(conn)
 
-				req := session.Message{Type: "pair_request", DeviceName: discServer.GetPeer().DeviceName}
-				if qr != nil {
-					req.Secret = pairing.EncodeSecret(qr.Secret) // proves we saw the QR code
+				if pinCode != "" {
+					if err := pairing.InitiatePIN(ch, conn, pinCode, nodeID.Fingerprint, discServer.GetPeer().DeviceName); err != nil {
+						if errors.Is(err, pairing.ErrRefused) {
+							fmt.Println("[-] Pairing refused: check the PIN (a PIN changes after 3 wrong ones), or the address.")
+						} else {
+							fmt.Printf("[-] Pairing failed: %v\n", err)
+						}
+						ch.Close()
+						break
+					}
+				} else {
+					req := session.Message{Type: "pair_request", DeviceName: discServer.GetPeer().DeviceName}
+					if qr != nil {
+						req.Secret = pairing.EncodeSecret(qr.Secret) // proves we saw the QR code
+					}
+					_ = ch.Send(req)
 				}
-				_ = ch.Send(req)
 
 				// Wait for the answer: the other user may be asked to trust this device.
 				_ = conn.SetReadDeadline(time.Now().Add(trustPromptTimeout + 10*time.Second))
@@ -630,7 +719,7 @@ func handleNode() {
 				// The QR code's key is trusted; otherwise an unknown key is trusted only if our
 				// user says so (WP-3.3).
 				answer := trustOnce
-				if qr != nil {
+				if pinCode != "" || qr != nil { // the PIN, or the QR code's key, proved the device
 					if !once {
 						answer = trustAlways
 					}
