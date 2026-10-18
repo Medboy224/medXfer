@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,7 +12,7 @@ import (
 )
 
 // The schema the interface relies on (API-06): every action the core answers and every event it
-// sends, frozen in testdata/schema-v1.json. Adding, removing or renaming one fails this test
+// sends, frozen in testdata/schema-v<SchemaVersion>.json. Adding, removing or renaming one fails this test
 // until the golden file is updated on purpose (MEDXFER_UPDATE_GOLDEN=1 go test ./pkg/core), and
 // a change that breaks a caller bumps SchemaVersion.
 type schema struct {
@@ -78,7 +79,7 @@ func currentSchema(t *testing.T) schema {
 
 func TestSchemaIsFrozen(t *testing.T) {
 	got := currentSchema(t)
-	path := filepath.Join("testdata", "schema-v1.json")
+	path := filepath.Join("testdata", fmt.Sprintf("schema-v%d.json", SchemaVersion))
 	if os.Getenv("MEDXFER_UPDATE_GOLDEN") == "1" {
 		data, _ := json.MarshalIndent(got, "", "  ")
 		if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {

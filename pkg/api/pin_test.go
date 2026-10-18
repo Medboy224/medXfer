@@ -12,7 +12,7 @@ type pinShownEvent struct {
 }
 
 // Two daemons: one shows a PIN (pair_pin_show), the other types it (pair_pin); both end up
-// paired and trusting each other (bible §6.2, WP-5.4).
+// paired, for this session only: nothing is written (bible §6.2, PAIR-08).
 func TestPairPINBetweenDaemons(t *testing.T) {
 	a, na := startOwnIdentity(t, "Shower")
 	b, nb := startOwnIdentity(t, "Typist")
@@ -27,8 +27,8 @@ func TestPairPINBetweenDaemons(t *testing.T) {
 	nb.Request("pair_pin", map[string]any{"target": na.PeerAddr(), "pin": shown.PIN})
 	nb.WaitEvent("paired", 0)
 	na.WaitEvent("paired", 0)
-	if !a.trust.Contains(b.identity.Fingerprint) || !b.trust.Contains(a.identity.Fingerprint) {
-		t.Fatal("the two daemons do not trust each other")
+	if a.trust.Contains(b.identity.Fingerprint) || b.trust.Contains(a.identity.Fingerprint) {
+		t.Fatal("a PIN pairing wrote a trusted device")
 	}
 }
 

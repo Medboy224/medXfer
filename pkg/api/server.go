@@ -119,14 +119,18 @@ type DaemonServer struct {
 	discCancel  context.CancelFunc // set while this device announces itself (DISC-05)
 	pairingCode string             // finds this device on the network; gives no trust (WP-3.6b)
 
-	// Pairing without the code (trust.go): the QR code shown by pair_show, and the unknown
-	// keys waiting for the user's trust_respond.
-	invite       *pairing.Invitation
-	inviteOnce   bool
-	pin          *pairing.PIN // shown by pair_pin_show (pin.go)
-	pinOnce      bool
-	pendingTrust map[string]chan trustDecision
-	trustTimeout time.Duration // 0: defaultTrustTimeout
+	// Pairing and trust (trust.go, pin.go): the QR code shown by pair_show, the PIN shown by
+	// pair_pin_show, the PINs drawn on demand (PAIR-11), and the trust negotiation of the
+	// active session (PAIR-10). trust: offer mutual trust once paired.
+	invite        *pairing.Invitation
+	inviteTrust   bool
+	pin           *pairing.PIN
+	pinTrust      bool
+	pinDemand     *pairing.PINOnDemand
+	pinDemandFrom string               // the address of the last device that asked for a PIN
+	trustTalk     *pairing.TrustTalk   // of the active session
+	trustPeer     identity.Fingerprint // the key of the active session's device
+	trustOffered  time.Time            // our trust_offer waiting for an answer
 
 	benchPongChan     chan session.Message
 	benchBurstAckChan chan session.Message
@@ -1078,31 +1082,36 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 		devName := s.config.DeviceName
 		s.mu.RUnlock()
 
-		if msg.Type == pairing.TypePIN {
-			name, ok := s.acceptPIN(conn, ch, msg, devName)
+		ip, fp := ch.RemoteIP(), conn.PeerFingerprint()
+		var offer, mutual bool
+		switch msg.Type {
+		case pairing.TypePIN, pairing.TypePINWanted: // path P2: the PIN shown, or one on demand
+			name, trust, ok := s.acceptPIN(conn, ch, msg, devName)
 			if !ok {
 				ch.Close()
 				return
 			}
-			msg.DeviceName = name // sent only after the confirmations (PAIR-07)
-		} else if msg.Type == "pair_request" {
+			msg.DeviceName, offer = name, trust // the name is sent only after the confirmations (PAIR-07)
+		case "pair_request": // a QR code's secret (P1), or a device of mutual trust (P3)
 			// The pairing code, if any, is ignored: trust comes from the key (WP-3.6b).
-			decision, err := s.admitIncoming(conn, msg, ch.RemoteIP())
+			trust, err := s.admitIncoming(conn, msg, ip)
 			if err != nil {
-				_ = ch.Send(session.Message{Type: "pair_reject", FileName: err.Error()})
+				reject := session.Message{Type: "pair_reject", FileName: err.Error()}
+				if errors.Is(err, errPINRequired) {
+					reject.Code = codePINRequired
+				}
+				_ = ch.Send(reject)
 				ch.Close()
 				return
 			}
-			if err := s.rememberTrust(conn.PeerFingerprint(), msg.DeviceName, ch.RemoteIP(), decision); err != nil {
+			offer, mutual = trust, msg.Secret == ""
+			if err := s.touchTrust(fp, msg.DeviceName, ip); err != nil {
 				s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": "could not save the trusted device: " + err.Error()}))
 			}
 			ch.Authenticate()
 			_ = conn.SetDeadline(time.Time{})
-			_ = ch.Send(session.Message{
-				Type:       "pair_accept",
-				DeviceName: devName,
-			})
-		} else {
+			_ = ch.Send(session.Message{Type: "pair_accept", DeviceName: devName, TrustsYou: s.declares(fp)})
+		default:
 			_ = ch.Send(session.Message{Type: "pair_reject", FileName: "pair_request expected"})
 			ch.Close()
 			return
@@ -1110,29 +1119,9 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 
 		peerName := msg.DeviceName
 		if peerName == "" {
-			peerName = ch.RemoteIP()
+			peerName = ip
 		}
-
-		s.mu.Lock()
-		if s.sessionGraceTimer != nil {
-			s.sessionGraceTimer.Stop()
-			s.sessionGraceTimer = nil
-		}
-		s.isReconnecting = false
-		if s.activeSession != nil {
-			s.activeSession.Close()
-		}
-		s.activeSession = ch
-		s.pairedDeviceName = peerName
-		remoteIP := ch.RemoteIP()
-		s.mu.Unlock()
-
-		s.Broadcast(NewEvent("paired", map[string]string{
-			"ip":          remoteIP,
-			"device_name": peerName,
-		}))
-
-		go s.listenToSession(ch)
+		s.startSession(ch, fp, peerName, ip, mutual, offer, "")
 	}
 }
 
@@ -1169,6 +1158,10 @@ func (s *DaemonServer) listenToSession(sess *session.Channel) {
 }
 
 func (s *DaemonServer) handleSessionMessage(msg session.Message) {
+	if pairing.IsTrustMessage(msg.Type) { // PAIR-10
+		s.handleTrustMessage(msg)
+		return
+	}
 	switch msg.Type {
 	case "pair_request":
 		s.mu.Lock()
@@ -1183,37 +1176,6 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 				Type:       "pair_accept",
 				DeviceName: devName,
 			})
-			s.Broadcast(NewEvent("paired", map[string]string{
-				"ip":          sess.RemoteIP(),
-				"device_name": msg.DeviceName,
-			}))
-		}
-
-	case "pair_hello":
-		s.mu.Lock()
-		s.pairedDeviceName = msg.DeviceName
-		devName := s.config.DeviceName
-		sess := s.activeSession
-		s.mu.Unlock()
-
-		if sess != nil {
-			_ = sess.Send(session.Message{
-				Type:       "pair_hello_ack",
-				DeviceName: devName,
-			})
-			s.Broadcast(NewEvent("paired", map[string]string{
-				"ip":          sess.RemoteIP(),
-				"device_name": msg.DeviceName,
-			}))
-		}
-
-	case "pair_hello_ack":
-		s.mu.Lock()
-		s.pairedDeviceName = msg.DeviceName
-		sess := s.activeSession
-		s.mu.Unlock()
-
-		if sess != nil {
 			s.Broadcast(NewEvent("paired", map[string]string{
 				"ip":          sess.RemoteIP(),
 				"device_name": msg.DeviceName,

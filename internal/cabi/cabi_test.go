@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Medboy224/medXfer/pkg/core"
 )
 
 func decode(t *testing.T, s string) map[string]any {
@@ -29,7 +31,7 @@ func TestStartIsIdempotent(t *testing.T) {
 		t.Fatalf("call before start: %v", r)
 	}
 	first := decode(t, Start(config(t)))
-	if first["ok"] != true || first["already_started"] != false || first["schema"] != float64(1) {
+	if first["ok"] != true || first["already_started"] != false || first["schema"] != float64(core.SchemaVersion) {
 		t.Fatalf("first start: %v", first)
 	}
 	again := decode(t, Start(config(t)))

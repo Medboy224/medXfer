@@ -20,8 +20,11 @@ import (
 )
 
 // SchemaVersion is the version of the messages' schema, frozen by the golden files of
-// testdata (API-06). A change that breaks a caller bumps it.
-const SchemaVersion = 1
+// testdata (API-06). A change that breaks a caller bumps it. 2: the trust model (lot « Modèle
+// de confiance »): no more trust_request, trust_respond, trust_expired; trust_offer,
+// trust_answer, pin_needed, pin_requested, trust_offered, trust_established, trust_declined,
+// trust_incomplete; "once" becomes "trust" in the pairing actions.
+const SchemaVersion = 2
 
 // DefaultQueueSize bounds the event queue (B11): past it, an event is dropped and counted, and
 // the engine never waits for the interface.

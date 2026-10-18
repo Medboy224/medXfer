@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -50,8 +51,11 @@ func (s *DaemonServer) dispatch(rs Responder, req RequestMessage) {
 	case "set_network_info":
 		s.handleSetNetworkInfo(rs, req)
 
-	case "trust_respond":
-		s.handleTrustRespond(rs, req)
+	case "trust_offer":
+		s.handleTrustOffer(rs, req)
+
+	case "trust_answer":
+		s.handleTrustAnswer(rs, req)
 
 	case "disconnect":
 		s.handleDisconnect(rs, req)
@@ -220,7 +224,7 @@ func (s *DaemonServer) handlePair(rs Responder, req RequestMessage) {
 	}
 	target := net.JoinHostPort(payload.IP, strconv.Itoa(int(port)))
 	go func() {
-		if _, err := s.pairWith(target, nil, false, req.ID); err != nil {
+		if _, err := s.pairWith(target, nil, payload.Trust, req.ID); err != nil && !errors.Is(err, errPINNeeded) {
 			rs.Reply(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", target, err)}, req.ID))
 		}
 	}()
@@ -286,7 +290,9 @@ func (s *DaemonServer) handleSend(rs Responder, req RequestMessage) {
 
 func (s *DaemonServer) connectAndSend(targetIP string, paths []string, id string) {
 	if _, err := s.pairWith(targetIP, nil, false, id); err != nil {
-		s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", targetIP, err)}, id))
+		if !errors.Is(err, errPINNeeded) { // pin_needed: send again once paired by PIN
+			s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", targetIP, err)}, id))
+		}
 		return
 	}
 	_ = s.sendOverSession(paths, id)
