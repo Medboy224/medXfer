@@ -9,6 +9,8 @@ const DashboardAvailable = false
 
 func (s *DaemonServer) registerDevUIRoutes(*http.ServeMux) {}
 
+func (s *DaemonServer) removeStaging() {}
+
 func (s *DaemonServer) serveDashboard(w http.ResponseWriter) {
 	http.Error(w, "The medXfer web dashboard is a development tool, not part of this build "+
 		"(build with -tags devui). Web Share, if enabled, is at /share.", http.StatusNotFound)

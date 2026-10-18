@@ -25,7 +25,43 @@ import (
 // DashboardAvailable reports whether this build serves the web dashboard.
 const DashboardAvailable = true
 
+// stagingRoot holds the copies of the files picked in the dashboard: a browser gives their
+// content, not their path, so they are copied before being offered.
+func stagingRoot() string { return filepath.Join(os.TempDir(), "medxfer_staged") }
+
+// stagingMaxAge is how long another daemon's copies are kept: a daemon removes its own when it
+// stops, those of a killed one stayed for good (13 GB on a phone).
+const stagingMaxAge = 24 * time.Hour
+
+// cleanStaleStaging removes the copies older than maxAge, whichever daemon made them.
+func cleanStaleStaging(maxAge time.Duration) {
+	entries, err := os.ReadDir(stagingRoot())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "stage_") {
+			continue
+		}
+		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > maxAge {
+			_ = os.RemoveAll(filepath.Join(stagingRoot(), e.Name()))
+		}
+	}
+}
+
+// removeStaging removes this daemon's copies (Stop).
+func (s *DaemonServer) removeStaging() {
+	s.mu.Lock()
+	dirs := s.stageDirs
+	s.stageDirs = nil
+	s.mu.Unlock()
+	for _, d := range dirs {
+		_ = os.RemoveAll(d)
+	}
+}
+
 func (s *DaemonServer) registerDevUIRoutes(mux *http.ServeMux) {
+	go cleanStaleStaging(stagingMaxAge)
 	// Control surface (API-04): loopback + Host + Origin + control token on every route.
 	mux.HandleFunc("/status", s.control(s.handleHTTPStatus))
 	mux.HandleFunc("/ws", s.control(s.handleWebSocket))
@@ -128,9 +164,19 @@ func (s *DaemonServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cleanStaleStaging(stagingMaxAge)
 	stageID := fmt.Sprintf("stage_%d", time.Now().UnixNano())
-	stageDir := filepath.Join(os.TempDir(), "medxfer_staged", stageID)
+	stageDir := filepath.Join(stagingRoot(), stageID)
 	_ = os.MkdirAll(stageDir, 0755)
+	s.mu.Lock()
+	s.stageDirs = append(s.stageDirs, stageDir)
+	s.mu.Unlock()
+	complete := false
+	defer func() {
+		if !complete { // an upload cut short leaves nothing behind
+			_ = os.RemoveAll(stageDir)
+		}
+	}()
 
 	var savedPaths []string
 
@@ -154,6 +200,10 @@ func (s *DaemonServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 		cleanRel := strings.ReplaceAll(fileName, "\\", "/")
 		cleanRel = strings.TrimPrefix(cleanRel, "/")
+		if !filepath.IsLocal(filepath.FromSlash(cleanRel)) { // "../x" would land outside stageDir
+			http.Error(w, "invalid file name", http.StatusBadRequest)
+			return
+		}
 		fullDest := filepath.Join(stageDir, filepath.FromSlash(cleanRel))
 
 		_ = os.MkdirAll(filepath.Dir(fullDest), 0755)
@@ -174,6 +224,7 @@ func (s *DaemonServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	complete = len(savedPaths) > 0
 	if len(savedPaths) > 0 {
 		pathsToSend := savedPaths
 		if len(savedPaths) > 1 {

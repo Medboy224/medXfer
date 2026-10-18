@@ -46,8 +46,9 @@ type IPAuthRecord struct {
 
 // DaemonServer manages the headless background engine and WebSocket connections
 type DaemonServer struct {
-	controlToken       string // 256-bit secret required on every control route (API-04)
-	controlDisabled    bool   // share-only mode: no dashboard, /ws, /status or /api/fs/*
+	stageDirs          []string // the dashboard's copies of uploaded files, removed by Stop (devui)
+	controlToken       string   // 256-bit secret required on every control route (API-04)
+	controlDisabled    bool     // share-only mode: no dashboard, /ws, /status or /api/fs/*
 	mu                 sync.RWMutex
 	config             Config
 	clients            map[*websocket.Conn]bool
@@ -621,6 +622,7 @@ func (s *DaemonServer) Stop() {
 		s.activeHotspot = nil
 	}
 	s.hotspotMu.Unlock()
+	s.removeStaging()
 }
 
 // isLoopbackRequest checks whether an incoming HTTP request originated from localhost
