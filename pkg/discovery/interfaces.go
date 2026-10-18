@@ -15,6 +15,7 @@ import (
 type NetworkTarget struct {
 	InterfaceName string
 	LocalIP       net.IP
+	Mask          net.IPMask // the subnet's mask; nil when unknown
 	BroadcastIP   net.IP
 	SweepIPs      []string
 }
@@ -171,6 +172,7 @@ func parseIfconfigTargets() []NetworkTarget {
 					targets = append(targets, NetworkTarget{
 						InterfaceName: currentIface,
 						LocalIP:       ip.To4(),
+						Mask:          mask,
 						BroadcastIP:   bcast,
 						SweepIPs:      calculateSweepRange(ip.To4(), mask),
 					})
@@ -187,6 +189,11 @@ func GetActiveNetworkTargets() []NetworkTarget {
 	if t, ok := platformTargets(); ok { // the platform's list: Android apps cannot enumerate (DISC-10)
 		return t
 	}
+	return prioritizeARP(enumerateTargets())
+}
+
+// enumerateTargets lists the local subnets from the system, best first, without the ARP table.
+func enumerateTargets() []NetworkTarget {
 	var targets []NetworkTarget
 	seenSubnets := make(map[string]bool)
 
@@ -247,6 +254,7 @@ func GetActiveNetworkTargets() []NetworkTarget {
 						target: NetworkTarget{
 							InterfaceName: iface.Name,
 							LocalIP:       ip,
+							Mask:          mask,
 							BroadcastIP:   bcast,
 							SweepIPs:      calculateSweepRange(ip, mask),
 						},
@@ -305,6 +313,7 @@ func GetActiveNetworkTargets() []NetworkTarget {
 						target: NetworkTarget{
 							InterfaceName: "wlan0",
 							LocalIP:       ip,
+							Mask:          mask,
 							BroadcastIP:   bcast,
 							SweepIPs:      calculateSweepRange(ip, mask),
 						},
@@ -323,7 +332,11 @@ func GetActiveNetworkTargets() []NetworkTarget {
 	for _, st := range scoredTargets {
 		targets = append(targets, st.target)
 	}
+	return targets
+}
 
+// prioritizeARP puts the neighbors from the system's ARP table first in the sweep of targets.
+func prioritizeARP(targets []NetworkTarget) []NetworkTarget {
 	// Harvest active neighbor IPs from OS ARP cache and prioritize them
 	arpIPs := GetARPTableIPs()
 	for i := range targets {
@@ -525,26 +538,18 @@ func IsSubnetReachable(ipStr string) bool {
 	}
 	ip4 := ip.To4()
 
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return false
-	}
-
-	for _, addr := range addrs {
-		if ipNet, ok := addr.(*net.IPNet); ok {
-			if ipNet.IP.To4() != nil && ipNet.Contains(ip4) {
-				return true
-			}
+	nets := localNets() // the system's list, or the targets where it is refused (#132)
+	for _, n := range nets {
+		if n.Contains(ip4) {
+			return true
 		}
 	}
 
 	// Link-Local fallback (169.254.x.x) if we have any link-local interface
 	if ip4[0] == 169 && ip4[1] == 254 {
-		for _, addr := range addrs {
-			if ipNet, ok := addr.(*net.IPNet); ok {
-				if l4 := ipNet.IP.To4(); l4 != nil && l4[0] == 169 && l4[1] == 254 {
-					return true
-				}
+		for _, n := range nets {
+			if l4 := n.IP.To4(); l4 != nil && l4[0] == 169 && l4[1] == 254 {
+				return true
 			}
 		}
 	}

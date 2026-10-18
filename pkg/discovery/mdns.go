@@ -14,7 +14,9 @@ import (
 // (WP-6.0 note: docs/medxfer-j6a-veille-mdns.md). It never enumerates the interfaces, which
 // Android refuses; the interface multicast leaves by is given (Announcement.Iface), so that a
 // phone with mobile data on does not query the cellular network (§3.2 of the note).
-type mdnsDiscoverer struct{}
+type mdnsDiscoverer struct {
+	iface *net.Interface // Browse queries by it; nil: the system's default
+}
 
 // quiet drops the library's informative messages (no IPv6 listener, ...).
 var quiet = log.New(io.Discard, "", 0)
@@ -36,7 +38,7 @@ func (mdnsDiscoverer) Announce(ctx context.Context, a Announcement) error {
 	return nil
 }
 
-func (mdnsDiscoverer) Browse(ctx context.Context, timeout time.Duration, iface *net.Interface) ([]Found, error) {
+func (m mdnsDiscoverer) Browse(ctx context.Context, timeout time.Duration) ([]Found, error) {
 	entries := make(chan *mdns.ServiceEntry, 64)
 	done := make(chan []Found, 1)
 	go func() {
@@ -51,7 +53,7 @@ func (mdnsDiscoverer) Browse(ctx context.Context, timeout time.Duration, iface *
 		done <- found
 	}()
 	p := mdns.DefaultParams(Service)
-	p.Entries, p.Timeout, p.Interface, p.DisableIPv6, p.Logger = entries, timeout, iface, true, quiet
+	p.Entries, p.Timeout, p.Interface, p.DisableIPv6, p.Logger = entries, timeout, m.iface, true, quiet
 	err := mdns.QueryContext(ctx, p)
 	close(entries)
 	return <-done, err

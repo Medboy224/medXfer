@@ -25,6 +25,7 @@ var platform struct {
 // discovery and for the address this device announces. nil goes back to enumerating. Each
 // address must be IPv4 with a prefix.
 func SetNetworkInfo(ifaces []NetworkInterface) error {
+	defer forgetLocalNets()
 	if ifaces == nil {
 		platform.mu.Lock()
 		platform.ifaces = nil
@@ -85,7 +86,7 @@ func platformTargets() (targets []NetworkTarget, ok bool) {
 			for i := 0; i < 4; i++ {
 				bcast[i] = ip[i] | ^mask[i]
 			}
-			all = append(all, scored{NetworkTarget{InterfaceName: ifi.Name, LocalIP: ip, BroadcastIP: bcast,
+			all = append(all, scored{NetworkTarget{InterfaceName: ifi.Name, LocalIP: ip, Mask: mask, BroadcastIP: bcast,
 				SweepIPs: calculateSweepRange(ip, mask)}, score})
 		}
 	}

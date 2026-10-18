@@ -78,7 +78,7 @@ func (b beaconDiscoverer) Announce(ctx context.Context, a Announcement) error {
 
 // Browse listens to the beacons for timeout. Another listener on the port (this device's own
 // browse in another process) makes it return nothing: mDNS still runs beside it.
-func (b beaconDiscoverer) Browse(ctx context.Context, timeout time.Duration, _ *net.Interface) ([]Found, error) {
+func (b beaconDiscoverer) Browse(ctx context.Context, timeout time.Duration) ([]Found, error) {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{Port: b.port})
 	if err != nil {
 		return nil, err
