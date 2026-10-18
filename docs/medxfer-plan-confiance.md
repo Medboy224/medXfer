@@ -119,7 +119,7 @@ WP-C.3 et WP-C.4 sont indépendants de WP-C.2 (la ligne de commande n'utilise pa
 - Le portail Web Share (`/share`) et son PIN de repli (`WEB-03`) : un navigateur n'a pas d'identité, il n'entre pas dans ce modèle.
 - L'interface Flutter : J6b, sur ce modèle.
 
-## 5. Décisions à valider avec ce plan
+## 5. Décisions (validées le 18 octobre 2026)
 
 | # | Décision | Raison |
 |---|---|---|
