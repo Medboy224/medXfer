@@ -224,6 +224,9 @@ Remplacer `*websocket.Conn` par une interface de réponse dans les gestionnaires
 - Essai réel PC ↔ téléphone ↔ Zorin : 40 transferts de 64 Mo ; la mémoire du téléphone plafonne vers 50 à 67 Mo.
 - Détail dans [j6a-report.md](j6a-report.md).
 
+### Lot « Modèle de confiance » (avant J6b) · ≈ 4 à 6 jours
+Ajouté le 18/10/2026 (#143). Premier contact par PIN ou QR seulement : la question de confiance (comparaison d'empreintes) disparaît. Sessions éphémères par défaut. Confiance bilatérale, vérifiée à chaque connexion. Schéma du cœur v2. **Critère de sortie :** aucun appareil inconnu admis sans PIN ni QR ; rien d'écrit dans `trusted.json` sans le oui des deux ; une entrée d'un seul côté ne donne aucun privilège. Plan : [medxfer-plan-confiance.md](medxfer-plan-confiance.md).
+
 ### J6b — Application Flutter MVP · ≈ 8 à 12 jours
 Écrans : liste des appareils, appairage par QR (caméra) et par PIN, envoi (choix de fichiers/dossiers), réception (acceptation avec taille et expéditeur), progression, historique minimal, panneau développeur (`DEV-13`). Android : service de premier plan, destination des fichiers (décision issue de G2A-10). Windows, Linux : empaquetage. **Critère de sortie :** les gates G2a et G7 évaluées ; scénario complet Android ↔ Windows/Linux au Wi-Fi réel.
 
