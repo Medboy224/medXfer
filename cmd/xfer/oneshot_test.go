@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
@@ -278,5 +279,22 @@ func TestStartSendHubFallsBackWhenTaken(t *testing.T) {
 	}
 	if msg := unreachableSender("10.0.0.2:18887"); !strings.Contains(msg, "10.0.0.2:18887") || !strings.Contains(msg, "TCP port 18887") {
 		t.Fatal(msg)
+	}
+}
+
+// CHAN-01: a node whose port is held by another medXfer (xfer dev-ui on the same phone) takes
+// a free one and says so, instead of running without a port.
+func TestNodePortFallsBackWhenTaken(t *testing.T) {
+	busy, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", defaultPort))
+	if err == nil {
+		defer busy.Close()
+	} // else: already held, which is the case under test
+	l, err := listenNodePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if p := l.Addr().(*net.TCPAddr).Port; p == defaultPort || p == 0 {
+		t.Fatalf("node listening on %d", p)
 	}
 }
