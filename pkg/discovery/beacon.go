@@ -15,10 +15,11 @@ const beaconEvery = 2 * time.Second
 // beaconMsg is the fallback beacon: the TXT of the mDNS announcement, plus the name and port
 // that DNS-SD carries elsewhere (DISC-04). No address: the receiver takes the sender's.
 type beaconMsg struct {
-	V    int    `json:"v"`
-	Role string `json:"r"`
-	Name string `json:"n"`
-	Port int    `json:"p"`
+	V    int      `json:"v"`
+	Role string   `json:"r"`
+	Name string   `json:"n"`
+	Port int      `json:"p"`
+	Tags []string `json:"t,omitempty"` // recognition tags (DISC-11)
 }
 
 // beaconDiscoverer is the fallback of mDNS (DISC-04, D6 of the J6a plan): a UDP broadcast on
@@ -42,15 +43,15 @@ func broadcastDests(port int) []*net.UDPAddr {
 }
 
 func (b beaconDiscoverer) Announce(ctx context.Context, a Announcement) error {
-	data, err := json.Marshal(beaconMsg{V: 1, Role: a.Role, Name: a.Instance, Port: a.Port})
-	if err != nil {
-		return err
-	}
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
 	if err != nil {
 		return err
 	}
 	send := func() {
+		data, err := json.Marshal(beaconMsg{V: 1, Role: a.Role, Name: a.Instance, Port: a.Port, Tags: a.tagsNow()})
+		if err != nil {
+			return
+		}
 		dests := b.dests
 		if dests == nil {
 			dests = func() []*net.UDPAddr { return broadcastDests(b.port) }
@@ -108,7 +109,7 @@ func (b beaconDiscoverer) Browse(ctx context.Context, timeout time.Duration) ([]
 		if json.Unmarshal(buf[:n], &m) != nil || m.V != 1 || m.Port <= 0 || m.Port > 65535 || m.Name == "" {
 			continue // another app, or another version
 		}
-		found = append(found, Found{Instance: m.Name, IP: src.IP.To4(), Port: m.Port, Role: m.Role, Via: "beacon"})
+		found = append(found, Found{Instance: m.Name, IP: src.IP.To4(), Port: m.Port, Role: m.Role, Via: "beacon", Tags: cleanTags(m.Tags)})
 	}
 }
 

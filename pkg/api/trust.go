@@ -350,7 +350,7 @@ func (s *DaemonServer) startSession(ch *session.Channel, fp identity.Fingerprint
 	}
 	s.activeSession = ch
 	s.pairedDeviceName = name
-	s.trustTalk = pairing.NewTrustTalk(s.trust, identity.Peer{Fingerprint: fp, Alias: name, LastAddress: ip})
+	s.trustTalk = pairing.NewTrustTalk(s.trust, s.identity.Fingerprint, identity.Peer{Fingerprint: fp, Alias: name, LastAddress: ip})
 	s.trustPeer = fp
 	s.trustOffered = time.Time{}
 	s.mu.Unlock()

@@ -4,7 +4,9 @@ import (
 	"context"
 	"net"
 	"os"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -41,7 +43,15 @@ func TestBeaconAnnounceAndBrowse(t *testing.T) {
 		_, _ = other.Write([]byte(junk))
 	}
 	other.Close()
-	if err := b.Announce(ctx, Announcement{Instance: "medXfer-be01", Port: 18888, Role: "sender"}); err != nil {
+	// The tags are read at each beacon: the second one carries the new ones.
+	var calls atomic.Int32
+	tags := func() []string {
+		if calls.Add(1) == 1 {
+			return []string{"aaaaaaaaaaaaa"}
+		}
+		return []string{"bbbbbbbbbbbbb", "BAD!"}
+	}
+	if err := b.Announce(ctx, Announcement{Instance: "medXfer-be01", Port: 18888, Role: "sender", Tags: tags}); err != nil {
 		t.Fatal(err)
 	}
 	found := <-results
@@ -52,6 +62,26 @@ func TestBeaconAnnounceAndBrowse(t *testing.T) {
 		if f.Instance != "medXfer-be01" || f.Port != 18888 || f.Role != "sender" || f.Via != "beacon" || !f.IP.Equal(net.IPv4(127, 0, 0, 1)) {
 			t.Fatalf("beacon read as %+v", f)
 		}
+	}
+	if !slices.Equal(found[0].Tags, []string{"aaaaaaaaaaaaa"}) || !slices.Equal(found[1].Tags, []string{"bbbbbbbbbbbbb"}) {
+		t.Fatalf("tags read: %v then %v", found[0].Tags, found[1].Tags)
+	}
+}
+
+// DISC-11: the TXT carries the tags as t= fields, read back checked: at most 16, of a sane
+// length and alphabet; a found device keeps them.
+func TestTagsInTXT(t *testing.T) {
+	var many []string
+	for i := 0; i < 20; i++ {
+		many = append(many, "abcdefghijklm")
+	}
+	txt := txtOf("node", append([]string{"x y", strings.Repeat("a", 40)}, many...))
+	role, tags, ok := parseTXT(txt)
+	if !ok || role != "node" || len(tags) != maxTags || tags[0] != "abcdefghijklm" {
+		t.Fatalf("parseTXT: %q %v (%d) %v", role, tags, len(tags), ok)
+	}
+	if p := peerOf(Found{Instance: "n", IP: net.IPv4(192, 0, 2, 7), Port: 1, Role: "node", Tags: tags}); len(p.Tags) != maxTags {
+		t.Fatalf("peerOf dropped the tags: %+v", p)
 	}
 }
 
@@ -140,10 +170,10 @@ func TestPeerOfAndTXT(t *testing.T) {
 	if p := peerOf(Found{Instance: "n", IP: net.IPv4(192, 0, 2, 7), Port: 1, Role: "node"}); p.Offer != nil {
 		t.Fatalf("a node has an offer: %+v", p)
 	}
-	if role, ok := parseTXT([]string{"v=1", "r=sender"}); !ok || role != "sender" {
-		t.Fatalf("parseTXT: %q %v", role, ok)
+	if role, tags, ok := parseTXT([]string{"v=1", "r=sender"}); !ok || role != "sender" || tags != nil {
+		t.Fatalf("parseTXT: %q %v %v", role, tags, ok)
 	}
-	if _, ok := parseTXT([]string{"v=2", "r=sender"}); ok {
+	if _, _, ok := parseTXT([]string{"v=2", "r=sender"}); ok {
 		t.Fatal("another version accepted")
 	}
 	if got := instanceOf("medXfer-cc03._medxfer._tcp.local."); got != "medXfer-cc03" {

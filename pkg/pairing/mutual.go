@@ -1,6 +1,8 @@
 package pairing
 
 import (
+	"bytes"
+	"crypto/rand"
 	"errors"
 	"sync"
 	"time"
@@ -30,7 +32,9 @@ func Declares(store *identity.TrustStore, peer identity.Fingerprint) bool {
 // devices of mutual trust: one side offers, the other's user answers, the offerer commits.
 // Each side writes the other's key only once both said yes: the offerer as it sends
 // trust_commit, the other as it receives it. A lost trust_commit leaves an entry on one side,
-// which Mutual makes inert.
+// which Mutual makes inert. trust_commit carries the pair's recognition key (DISC-11), drawn by
+// the side that commits; when both commit (both offered), both keep the key of the device with
+// the smaller fingerprint.
 const (
 	TypeTrustOffer   = "trust_offer"
 	TypeTrustAccept  = "trust_accept"
@@ -67,6 +71,7 @@ var ErrNoOffer = errors.New("pairing: no trust offer to answer")
 // TrustTalk is one session's trust negotiation with peer. It is safe for concurrent use.
 type TrustTalk struct {
 	store *identity.TrustStore
+	self  identity.Fingerprint
 	peer  identity.Peer // the key, and the alias and address to write
 	now   func() time.Time
 
@@ -75,11 +80,25 @@ type TrustTalk struct {
 	askedAt     time.Time // the peer's offer, waiting for our user's answer
 	acceptedAt  time.Time // our yes, waiting for the peer's trust_commit
 	established bool
+	tagKey      []byte               // the recognition key kept
+	tagOwner    identity.Fingerprint // the device that drew it
 }
 
-// NewTrustTalk returns the negotiation of a session with peer, whose key it writes in store.
-func NewTrustTalk(store *identity.TrustStore, peer identity.Peer) *TrustTalk {
-	return &TrustTalk{store: store, peer: peer, now: time.Now}
+// NewTrustTalk returns the negotiation of a session between self and peer, whose key it writes
+// in store.
+func NewTrustTalk(store *identity.TrustStore, self identity.Fingerprint, peer identity.Peer) *TrustTalk {
+	return &TrustTalk{store: store, self: self, peer: peer, now: time.Now}
+}
+
+// keepTagKey keeps key, drawn by owner, unless the key already kept was drawn by a device with
+// a smaller fingerprint: both sides end with the same key.
+func (t *TrustTalk) keepTagKey(key []byte, owner identity.Fingerprint) {
+	if len(key) != tagKeySize {
+		return
+	}
+	if t.tagKey == nil || bytes.Compare(owner[:], t.tagOwner[:]) < 0 {
+		t.tagKey, t.tagOwner = append([]byte(nil), key...), owner
+	}
 }
 
 func (t *TrustTalk) live(at time.Time) bool {
@@ -128,10 +147,15 @@ func (t *TrustTalk) Handle(m session.Message) (*session.Message, TrustEvent, err
 			return nil, TrustNothing, nil // unasked, or after our user was told there was no answer
 		}
 		t.offeredAt = time.Time{}
+		key := make([]byte, tagKeySize)
+		if _, err := rand.Read(key); err != nil {
+			return nil, TrustNothing, err
+		}
+		t.keepTagKey(key, t.self)
 		if err := t.writeLocked(); err != nil {
 			return nil, TrustNothing, err
 		}
-		return &session.Message{Type: TypeTrustCommit}, t.establishedLocked(), nil
+		return &session.Message{Type: TypeTrustCommit, TagKey: key}, t.establishedLocked(), nil
 	case TypeTrustDecline:
 		if !t.live(t.offeredAt) {
 			return nil, TrustNothing, nil
@@ -143,6 +167,7 @@ func (t *TrustTalk) Handle(m session.Message) (*session.Message, TrustEvent, err
 			return nil, TrustNothing, nil
 		}
 		t.acceptedAt = time.Time{}
+		t.keepTagKey(m.TagKey, t.peer.Fingerprint)
 		if err := t.writeLocked(); err != nil {
 			return nil, TrustNothing, err
 		}
@@ -166,6 +191,7 @@ func (t *TrustTalk) writeLocked() error {
 		return errors.New("pairing: no trusted list")
 	}
 	p := t.peer
+	p.TagKey = t.tagKey
 	if old, ok := t.store.Get(p.Fingerprint); ok {
 		p.AutoAccept, p.AddedAt = old.AutoAccept, old.AddedAt
 		if p.Alias == "" {

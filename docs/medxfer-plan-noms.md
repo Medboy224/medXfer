@@ -85,7 +85,7 @@ WP-N.2 noms ──────────────┘
 - Le renouvellement de la clé de reconnaissance d'une paire : il se fait en reprenant la confiance (oubli, puis nouvelle demande).
 - L'interface Flutter : J6b, qui affichera `trusted_alias`.
 
-## 5. Décisions à valider avec ce plan
+## 5. Décisions (validées le 18 octobre 2026)
 
 | # | Décision | Raison |
 |---|---|---|

@@ -315,7 +315,7 @@ func handleNode() {
 		}
 		ch.Authenticate()
 		activeSession = ch
-		talk.Store(pairing.NewTrustTalk(nodeTrust, identity.Peer{Fingerprint: fp, Alias: name, LastAddress: ip}))
+		talk.Store(pairing.NewTrustTalk(nodeTrust, nodeID.Fingerprint, identity.Peer{Fingerprint: fp, Alias: name, LastAddress: ip}))
 		talkGen.Add(1)
 		sessionMutual.Store(mutual)
 		how := "for this session only, nothing saved"

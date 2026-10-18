@@ -12,12 +12,36 @@ import (
 const Service = "_medxfer._tcp"
 
 // TXT keys of an announcement (DISC-01), and the payload of the fallback beacon (DISC-04):
-// the protocol version, and the role, which tells a receiver which devices are sending. Neither
-// identifies anyone (DISC-06).
+// the protocol version, the role, which tells a receiver which devices are sending, and the
+// recognition tags (DISC-11): random to anyone but the devices of mutual trust, and changed
+// every few minutes. None identifies anyone (DISC-06).
 const (
 	txtVersion = "v=1"
 	txtRole    = "r="
+	txtTag     = "t="
 )
+
+// maxTags bounds the tags read from one announcement, and their length: what comes from the
+// network is checked (the tags themselves are pkg/pairing's).
+const (
+	maxTags   = 16
+	maxTagLen = 32
+)
+
+// cleanTags keeps at most maxTags tags of a sane length and alphabet.
+func cleanTags(in []string) []string {
+	var out []string
+	for _, t := range in {
+		if len(out) == maxTags {
+			break
+		}
+		if t == "" || len(t) > maxTagLen || strings.Trim(t, "abcdefghijklmnopqrstuvwxyz234567") != "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
 
 // Announcement is what a device says about itself on the network: a generic name drawn at
 // launch, its single port, its role ("sender" while a send waits, "node" otherwise).
@@ -27,6 +51,17 @@ type Announcement struct {
 	Role     string
 	IP       net.IP         // the address to announce
 	Iface    *net.Interface // the interface multicast leaves by; nil: the system's default
+	// Tags gives the recognition tags to announce now (DISC-11); nil: none. They change with the
+	// period and with the trusted devices: the announcement follows.
+	Tags func() []string
+}
+
+// tagsNow are a's tags at this moment, checked.
+func (a Announcement) tagsNow() []string {
+	if a.Tags == nil {
+		return nil
+	}
+	return cleanTags(a.Tags())
 }
 
 // Found is a device seen on the network, by one of the discoverers.
@@ -35,7 +70,8 @@ type Found struct {
 	IP       net.IP
 	Port     int
 	Role     string
-	Via      string // "mdns" or "beacon"
+	Via      string   // "mdns" or "beacon"
+	Tags     []string // recognition tags (DISC-11)
 }
 
 // Discoverer announces this device and finds the others (D5 of the J6a plan, D9 of J5: one
@@ -103,15 +139,16 @@ func better(a, b Found) bool {
 // peerOf is a found device in the shape the callers know.
 func peerOf(f Found) Peer {
 	p := Peer{ID: f.Instance + "-" + itoa(f.Port), DeviceName: f.Instance, HostIP: f.IP.String(), Port: f.Port,
-		Version: AppVersion, Role: f.Role}
+		Version: AppVersion, Role: f.Role, Tags: f.Tags}
 	if f.Role == "sender" { // a transfer waits; what it is travels only in the secure channel
 		p.Offer = &TransferOffer{FileName: PrivateTransfer}
 	}
 	return p
 }
 
-// parseTXT reads the role from TXT fields; ok is false for another version or another app.
-func parseTXT(fields []string) (role string, ok bool) {
+// parseTXT reads the role and the tags from TXT fields; ok is false for another version or
+// another app.
+func parseTXT(fields []string) (role string, tags []string, ok bool) {
 	for _, f := range fields {
 		if f == txtVersion {
 			ok = true
@@ -119,8 +156,20 @@ func parseTXT(fields []string) (role string, ok bool) {
 		if strings.HasPrefix(f, txtRole) {
 			role = strings.TrimPrefix(f, txtRole)
 		}
+		if strings.HasPrefix(f, txtTag) {
+			tags = append(tags, strings.TrimPrefix(f, txtTag))
+		}
 	}
-	return role, ok
+	return role, cleanTags(tags), ok
+}
+
+// txtOf is the TXT of an announcement with tags.
+func txtOf(role string, tags []string) []string {
+	txt := []string{txtVersion, txtRole + role}
+	for _, t := range tags {
+		txt = append(txt, txtTag+t)
+	}
+	return txt
 }
 
 // instanceOf is the first label of a DNS-SD service instance name.

@@ -62,6 +62,7 @@ type Message struct {
 	Confirm     []byte               `json:"confirm,omitempty"`     // PIN pairing: this side's key confirmation
 	TrustsYou   bool                 `json:"trusts_you,omitempty"`  // pairing: the sender has the peer in its trusted list (PAIR-09)
 	TrustOffer  bool                 `json:"trust_offer,omitempty"` // one-shot pairing: the sender wants mutual trust; the negotiation follows pair_accept (PAIR-10)
+	TagKey      []byte               `json:"tag_key,omitempty"`     // trust_commit: the pair's recognition key (DISC-11)
 	FileName    string               `json:"file_name,omitempty"`
 	FileSize    int64                `json:"file_size,omitempty"`
 	FileID      string               `json:"file_id,omitempty"` // Unique Cryptographic Hash
