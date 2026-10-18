@@ -23,6 +23,10 @@ type Peer struct {
 	// trusted device is refused and reported (ID-05).
 	LastAddress string `json:"last_address,omitempty"`
 	AutoAccept  bool   `json:"auto_accept,omitempty"`
+	// TagKey is the recognition key shared with this device when mutual trust was established:
+	// each side announces rotating tags made with it, which only the other recognizes
+	// (DISC-11). Empty for entries written before it existed: then not recognized.
+	TagKey []byte `json:"tag_key,omitempty"`
 }
 
 type peerJSON struct {

@@ -159,6 +159,7 @@ Ces ajouts n'apportent **aucune cryptographie** : ce sont des messages dans un c
 7. **Brouillon, pas encore RFC.** Le brouillon 21 attend l'éditeur RFC. Une révision des vecteurs à la publication serait vérifiée par les mêmes tests.
 8. **Bibliothèque de groupe.** `gtank/ristretto255` est épinglée dans `go.sum`. Sa revue est hors périmètre, mais **un avis sur ce choix est bienvenu**.
 9. **PIN à la demande** (§3.6). N'importe quel appareil du réseau peut faire afficher un PIN sur un appareil qui écoute. Il n'obtient pas d'essai de plus (même PIN tant qu'il est valable, borne du §3.5), mais il peut le faire apparaître à l'écran sans y avoir été invité. **Ce comportement, inspiré de l'association par saisie de code du Bluetooth, vous paraît-il acceptable ?**
+10. **Étiquettes de reconnaissance** (bible `DISC-11`). Une fois la confiance mutuelle établie, chaque appareil annonce `HMAC-SHA-256(K_AB, label ‖ fp ‖ période de 10 min)[:8]`, avec une clé de 32 octets échangée dans `trust_commit`, donc dans un canal déjà authentifié. HMAC vient de la bibliothèque standard de Go. Le but : qu'un appareil de confiance reconnaisse l'autre dans la découverte, sans qu'un tiers puisse relier deux annonces. **8 octets et 10 minutes vous paraissent-ils suffisants contre le suivi ?**
 
 ## 7. Références
 

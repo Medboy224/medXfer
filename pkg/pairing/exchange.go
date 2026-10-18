@@ -474,7 +474,7 @@ func negotiate(ctx context.Context, ch *session.Channel, conn *securechan.Conn, 
 	if o.Trust == nil {
 		return false
 	}
-	talk := NewTrustTalk(o.Trust, identity.Peer{Fingerprint: r.Fingerprint, Alias: r.Name, LastAddress: r.Address})
+	talk := NewTrustTalk(o.Trust, o.Identity.Fingerprint, identity.Peer{Fingerprint: r.Fingerprint, Alias: r.Name, LastAddress: r.Address})
 	_ = conn.SetDeadline(time.Now().Add(TrustAnswerTime + replyTimeout))
 	defer func() { _ = conn.SetDeadline(time.Time{}) }()
 	if o.OfferTrust {

@@ -11,8 +11,8 @@ import (
 
 // talks returns the negotiations of a session between a and b, on a clock the test moves.
 func talks(a, b Options, clock *time.Time) (ta, tb *TrustTalk) {
-	ta = NewTrustTalk(a.Trust, identity.Peer{Fingerprint: b.Identity.Fingerprint, Alias: "b", LastAddress: "10.0.0.2"})
-	tb = NewTrustTalk(b.Trust, identity.Peer{Fingerprint: a.Identity.Fingerprint, Alias: "a", LastAddress: "10.0.0.1"})
+	ta = NewTrustTalk(a.Trust, a.Identity.Fingerprint, identity.Peer{Fingerprint: b.Identity.Fingerprint, Alias: "b", LastAddress: "10.0.0.2"})
+	tb = NewTrustTalk(b.Trust, b.Identity.Fingerprint, identity.Peer{Fingerprint: a.Identity.Fingerprint, Alias: "a", LastAddress: "10.0.0.1"})
 	ta.now = func() time.Time { return *clock }
 	tb.now = func() time.Time { return *clock }
 	return ta, tb

@@ -58,6 +58,9 @@ type Peer struct {
 	Role        string         `json:"role"` // "sender", "receiver", "idle", "node"
 	PairingCode string         `json:"pairing_code,omitempty"`
 	Offer       *TransferOffer `json:"offer,omitempty"`
+	// Tags are the device's recognition tags (DISC-11): a device of mutual trust recognizes it
+	// by them, and shows the name it recorded. They name no one.
+	Tags []string `json:"tags,omitempty"`
 }
 
 // IsLocalNetworkIP checks if an IP belongs to the local machine
@@ -85,6 +88,7 @@ func isLocalNetworkIP(ipStr string) bool {
 type DiscoveryServer struct {
 	mu   sync.RWMutex
 	peer Peer
+	tags func() []string // the recognition tags to announce (DISC-11)
 }
 
 // instanceName is the name a device announces: "medXfer-" and 4 hex digits drawn at each
@@ -137,6 +141,25 @@ func (s *DiscoveryServer) SetOffer(offer *TransferOffer) {
 	s.peer.Offer = offer
 }
 
+// SetTags gives the recognition tags this device announces (DISC-11), read at each
+// announcement: nil announces none.
+func (s *DiscoveryServer) SetTags(f func() []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tags = f
+}
+
+// tagsNow are the tags to announce at this moment.
+func (s *DiscoveryServer) tagsNow() []string {
+	s.mu.RLock()
+	f := s.tags
+	s.mu.RUnlock()
+	if f == nil {
+		return nil
+	}
+	return cleanTags(f())
+}
+
 // GetPeer returns a thread-safe snapshot of the peer metadata
 func (s *DiscoveryServer) GetPeer() Peer {
 	s.mu.RLock()
@@ -150,6 +173,7 @@ func (s *DiscoveryServer) GetPeer() Peer {
 func (s *DiscoveryServer) answer(q DiscoveryQuery, ip string) Peer {
 	p := s.GetPeer()
 	p.HostIP = ip
+	p.Tags = s.tagsNow()
 	expected, _ := NormalizePairingCode(p.PairingCode)
 	provided, _ := NormalizePairingCode(q.PairingCode)
 	if expected == "" || expected != provided {
@@ -223,7 +247,7 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 	// alike, #132), and the broadcast beacon on every subnet as fallback (DISC-04). One
 	// mechanism failing (no multicast, port taken) leaves the others.
 	p := s.GetPeer()
-	base := Announcement{Instance: p.DeviceName, Port: p.Port, Role: p.Role}
+	base := Announcement{Instance: p.DeviceName, Port: p.Port, Role: p.Role, Tags: s.tagsNow}
 	ifaces := localInterfaces()
 	if len(ifaces) == 0 {
 		ifaces = []localInterface{{ip: net.ParseIP(GetPrimaryLocalIP()), iface: multicastInterface()}}
@@ -307,7 +331,8 @@ func sweepPeers() []Peer {
 
 		var p Peer
 		if err := json.Unmarshal(respBytes, &p); err == nil && p.Version == AppVersion && !isOwnName(p.DeviceName) {
-			p.HostIP = ip       // Probed address is guaranteed routable
+			p.HostIP = ip // Probed address is guaranteed routable
+			p.Tags = cleanTags(p.Tags)
 			key := p.DeviceName // one entry per device, even with several addresses (#132)
 			if key == "" {
 				key = fmt.Sprintf("%s:%d", p.HostIP, p.Port)
