@@ -1018,7 +1018,8 @@ func handleSend(args []string) {
 	portFlag := sendCmd.Int("port", defaultPort, "TCP port of this device (pairing and data); if the default one is taken, a free one")
 	chunkSizeMB := sendCmd.Int("chunk", protocol.DefaultChunkSize>>20, "Chunk size in MB (1 to 8)")
 	createNetwork := sendCmd.Bool("create-network", false, "Create a dedicated Wi-Fi Direct network")
-	pinFlag := sendCmd.Bool("pin", false, "show a PIN instead of a QR code (receiver without a camera)")
+	pinFlag := sendCmd.Bool("pin", false, "show only the PIN, without the QR code")
+	trustFlag := sendCmd.Bool("trust", false, "offer mutual trust to the receiver (both must accept)")
 	var interactive bool
 	sendCmd.BoolVar(&interactive, "i", false, "Require confirmation before sending")
 	sendCmd.BoolVar(&interactive, "interactive", false, "Require confirmation before sending")
@@ -1048,13 +1049,13 @@ func handleSend(args []string) {
 	}
 	portSet := false
 	sendCmd.Visit(func(f *flag.Flag) { portSet = portSet || f.Name == "port" })
-	runOneShotSend(offer, files, *portFlag, !portSet, *createNetwork, interactive, *pinFlag, trust)
+	runOneShotSend(offer, files, *portFlag, !portSet, *createNetwork, interactive, *pinFlag, *trustFlag, trust)
 }
 
 // runOneShotSend offers files on the device's single port: the receiver pairs on it (QR code,
 // or both users' confirmation), then pulls the whole offer on its data connections.
 // anyPort lets it take a free port when port is taken (another medXfer on this device).
-func runOneShotSend(offer protocol.Offer, files []string, port int, anyPort bool, createHotspot bool, interactive bool, usePIN bool, trust *identity.TrustStore) {
+func runOneShotSend(offer protocol.Offer, files []string, port int, anyPort bool, createHotspot bool, interactive bool, usePIN, offerTrust bool, trust *identity.TrustStore) {
 	var hs hotspot.Controller
 	if createHotspot {
 		hs = hotspot.New()
@@ -1130,10 +1131,10 @@ func runOneShotSend(offer protocol.Offer, files []string, port int, anyPort bool
 	fmt.Printf(" Fingerprint  : %s\n", localID.Fingerprint.Short())
 	fmt.Printf(" Appears as   : %s   (the name in the receiver's list)\n", discServer.GetPeer().DeviceName)
 	fmt.Printf(" Direct IP    : %s:%d\n", getLocalIP(), port)
-	fmt.Printf(" Pairing Code : %s   (xfer recv %s: both screens then confirm)\n", pCode, pCode)
+	fmt.Printf(" Pairing Code : %s   (xfer recv %s: then type the PIN shown here)\n", pCode, pCode)
 	fmt.Println("--------------------------------------------------")
 	msg, follow := session.OfferMessages(session.Message{DataPort: port, TransferID: base.String()}, offer)
-	startOneShotPairing(ctx, send, port, msg, follow, trust, usePIN)
+	startOneShotPairing(ctx, send, port, msg, follow, trust, usePIN, offerTrust)
 	fmt.Println("[*] Waiting for receiver to connect...")
 
 	tl := send.listener(ctx) // registered for the paired receiver only (CHAN-06)
@@ -1158,6 +1159,7 @@ func handleRecv(args []string) {
 	outDirFlag := recvCmd.String("out", ".", "Directory to save files")
 	workersFlag := recvCmd.Int("workers", 0, "data connections, 1 to 8; 0 chooses: 4, or 8 for many small files")
 	pinFlag := recvCmd.Bool("pin", false, "type the PIN shown by the sender at HOST[:PORT] (or --ip)")
+	trustFlag := recvCmd.Bool("trust", false, "offer mutual trust to the sender (both must accept)")
 
 	_ = recvCmd.Parse(reorderArgs(recvCmd, args))
 
@@ -1171,13 +1173,13 @@ func handleRecv(args []string) {
 			fmt.Println("[-] Give the address the sender shows: xfer recv --pin HOST[:PORT]")
 			return
 		}
-		recvFromPIN(addr, *outDirFlag, *workersFlag)
+		recvFromPIN(addr, *outDirFlag, *workersFlag, *trustFlag)
 		return
 	}
 
 	// The sender's QR code: its key comes from it, with the secret that lets this device in.
 	if recvCmd.NArg() > 0 && strings.HasPrefix(recvCmd.Arg(0), "medxfer://") {
-		recvFromURI(recvCmd.Arg(0), *outDirFlag, *workersFlag)
+		recvFromURI(recvCmd.Arg(0), *outDirFlag, *workersFlag, *trustFlag)
 		return
 	}
 
@@ -1239,51 +1241,68 @@ func handleRecv(args []string) {
 		return
 	}
 	localID = id
-	in := bufio.NewReader(os.Stdin)
 	senderHost := selectedPeer.HostIP
-
-	// The sender's key comes from the TLS handshake. This device's user accepts it (unless it
-	// is a trusted device's), then the sender's user decides about this device (decision D3).
-	answer, keyNote := trustOnce, "checked on both screens"
-	decide := func(fp identity.Fingerprint) bool {
-		if known, changed := keyChanged(trust, senderHost, fp); changed {
-			fmt.Println(keyChangedAlert(known, senderHost, fp))
-			return false
-		}
-		if p, ok := trustedPeer(trust, fp); ok {
-			keyNote = fmt.Sprintf("trusted device '%s'", p.Alias)
-		} else {
-			fmt.Print(trustQuestion(selectedPeer.DeviceName, fp, id.Fingerprint))
-			ans, _ := in.ReadString('\n')
-			if answer = parseTrustAnswer(ans); answer == trustRefused {
-				fmt.Println("[-] Download cancelled: sender not trusted.")
-				return false
-			}
-		}
-		fmt.Println("[*] Waiting for the sender to accept this device...")
-		return true
-	}
 	pairAddr := net.JoinHostPort(senderHost, strconv.Itoa(selectedPeer.Port)) // the sender's single port
 	fmt.Printf("[*] Connecting to %s...\n", pairAddr)
-	name, _ := os.Hostname()
-	o := pairing.Options{Identity: id, Trust: trust, Once: true, DeviceName: name}
-	r, err := pairing.Ask(context.Background(), pairAddr, decide, trustPromptTimeout+10*time.Second, o)
-	if errors.Is(err, pairing.ErrDeclined) {
-		return // decide said why
+	o := recvOptions(id, trust, *trustFlag)
+
+	// A device of mutual trust gets in at once (P3); any other pairs by the PIN the sender
+	// shows (PAIR-11, PAIR-12): never on fingerprints compared by eye.
+	keyNote := "a device of mutual trust"
+	r, err := pairing.JoinTrusted(context.Background(), pairAddr, o)
+	if errors.Is(err, pairing.ErrPINRequired) {
+		if known, changed := keyChanged(trust, senderHost, r.Fingerprint); changed {
+			fmt.Println(keyChangedAlert(known, senderHost, r.Fingerprint))
+			return
+		}
+		if trust != nil && trust.Contains(r.Fingerprint) {
+			fmt.Println("[*] This device trusts the sender, but the sender no longer trusts it: that gives nothing (pairing by PIN).")
+		}
+		keyNote = "proved by the PIN"
+		r, err = pairing.JoinPINOnDemand(context.Background(), pairAddr, typePIN("the sender"), o)
 	}
-	if err != nil {
-		fmt.Printf("[-] The sender did not accept this device: %v\n", err)
+	if errors.Is(err, pairing.ErrRefused) {
+		fmt.Println("[-] Refused: check the PIN (it changes after 3 wrong ones).")
 		return
 	}
-	if err := rememberPeer(trust, r.Fingerprint, r.Name, senderHost, answer); err != nil {
-		fmt.Printf("[-] Could not save the trusted device: %v\n", err)
+	if err != nil {
+		fmt.Printf("[-] Pairing with the sender failed: %v\n", err)
+		return
 	}
-	receiveAccepted(r, senderHost, keyNote, in, *outDirFlag, *workersFlag)
+	trustOutcome(os.Stdout, r, *trustFlag)
+	receiveAccepted(r, senderHost, keyNote, *outDirFlag, *workersFlag)
+}
+
+// recvOptions are the pairing options of xfer recv: this device's key and list, and mutual
+// trust when asked (--trust) or offered by the sender (PAIR-10).
+func recvOptions(id *identity.Identity, trust *identity.TrustStore, offerTrust bool) pairing.Options {
+	name, _ := os.Hostname()
+	return pairing.Options{Identity: id, Trust: trust, DeviceName: name, OfferTrust: offerTrust,
+		AskTrust: askTrustFrom(os.Stdout, stdinLines())}
+}
+
+// typePIN asks the user for the PIN that who shows: never an argument, it would stay in the
+// shell history (bible chapter 13).
+func typePIN(who string) func() (string, error) {
+	return func() (string, error) {
+		fmt.Printf("PIN shown by %s: ", who)
+		l, ok := <-stdinLines()
+		if !ok {
+			return "", errors.New("no terminal to type the PIN")
+		}
+		return strings.TrimSpace(l), nil
+	}
+}
+
+// readLine is the next line typed on the terminal, or "" without one.
+func readLine() string {
+	l, _ := <-stdinLines()
+	return l
 }
 
 // recvFromURI receives a one-shot send from its QR code: the sender's key comes from it, so
 // there is no trust question, and nothing is saved (PAIR-08).
-func recvFromURI(raw, outDir string, workers int) {
+func recvFromURI(raw, outDir string, workers int, offerTrust bool) {
 	u, err := pairing.Parse(raw, time.Now())
 	if errors.Is(err, pairing.ErrExpired) {
 		fmt.Println("[-] This QR code has expired: use the one the sender shows now.")
@@ -1293,40 +1312,37 @@ func recvFromURI(raw, outDir string, workers int) {
 		fmt.Printf("[-] %v\n", err)
 		return
 	}
-	id, _, err := loadIdentity(configDir())
+	id, trust, err := loadIdentity(configDir())
 	if err != nil {
 		fmt.Printf("[-] %v\n", err)
 		return
 	}
 	localID = id
-	name, _ := os.Hostname()
 	fmt.Printf("[*] Connecting to %s (key %s)...\n", u.Addr(), u.Fingerprint.Short())
-	r, err := pairing.Join(context.Background(), u, pairing.Options{Identity: id, Once: true, DeviceName: name})
+	r, err := pairing.Join(context.Background(), u, recvOptions(id, trust, offerTrust))
 	if err != nil {
 		fmt.Printf("[-] The sender refused this device: %v\n", err)
 		return
 	}
-	receiveAccepted(r, u.Host, "from the QR code", bufio.NewReader(os.Stdin), outDir, workers)
+	trustOutcome(os.Stdout, r, offerTrust)
+	receiveAccepted(r, u.Host, "from the QR code", outDir, workers)
 }
 
 // recvFromPIN receives a one-shot send by the PIN its sender shows (bible §6.2): the PIN
 // proves the sender, so there is no trust question, and nothing is saved (PAIR-08).
-func recvFromPIN(addr, outDir string, workers int) {
+func recvFromPIN(addr, outDir string, workers int, offerTrust bool) {
 	if _, _, err := net.SplitHostPort(addr); err != nil {
 		addr = net.JoinHostPort(addr, strconv.Itoa(defaultPort))
 	}
-	id, _, err := loadIdentity(configDir())
+	id, trust, err := loadIdentity(configDir())
 	if err != nil {
 		fmt.Printf("[-] %v\n", err)
 		return
 	}
 	localID = id
-	in := bufio.NewReader(os.Stdin)
-	fmt.Print("PIN shown by the sender: ")
-	line, _ := in.ReadString('\n')
-	name, _ := os.Hostname()
 	fmt.Printf("[*] Connecting to %s...\n", addr)
-	r, err := pairing.JoinPIN(context.Background(), addr, strings.TrimSpace(line), pairing.Options{Identity: id, Once: true, DeviceName: name})
+	// Asking for the PIN gets the one on the sender's screen (PAIR-11).
+	r, err := pairing.JoinPINOnDemand(context.Background(), addr, typePIN("the sender"), recvOptions(id, trust, offerTrust))
 	if errors.Is(err, pairing.ErrRefused) {
 		fmt.Println("[-] Refused: check the PIN (it changes after 3 wrong ones) and the address.")
 		return
@@ -1336,13 +1352,14 @@ func recvFromPIN(addr, outDir string, workers int) {
 		return
 	}
 	host, _, _ := net.SplitHostPort(addr)
-	receiveAccepted(r, host, "proved by the PIN", in, outDir, workers)
+	trustOutcome(os.Stdout, r, offerTrust)
+	receiveAccepted(r, host, "proved by the PIN", outDir, workers)
 }
 
 // receiveAccepted shows the offer that came with pair_accept, inside the secure channel, and
 // downloads it if the user confirms. Every data connection is pinned to the key the pairing
 // verified and joins the transfer (CHAN-06).
-func receiveAccepted(r pairing.Result, host, keyNote string, in *bufio.Reader, outDir string, workers int) {
+func receiveAccepted(r pairing.Result, host, keyNote string, outDir string, workers int) {
 	m := r.Offer
 	if m.Offer == nil || m.DataPort == 0 {
 		fmt.Println("[-] This device offers no transfer (to pair, run: xfer pair <uri>).")
@@ -1365,13 +1382,12 @@ func receiveAccepted(r pairing.Result, host, keyNote string, in *bufio.Reader, o
 		return
 	}
 	fmt.Print("[?] Confirm download? [Y/n]: ")
-	ans, _ := in.ReadString('\n')
-	ans = strings.TrimSpace(strings.ToLower(ans))
+	ans := strings.TrimSpace(strings.ToLower(readLine()))
 	if ans != "" && ans != "y" && ans != "yes" && ans != "o" && ans != "oui" {
 		fmt.Println("[-] Download cancelled by user.")
 		return
 	}
-	pullOffer(targetAddr, outDir, workers, offer, cfg, base, in)
+	pullOffer(targetAddr, outDir, workers, offer, cfg, base)
 }
 
 // printIncoming shows what the sender offers.
@@ -1391,8 +1407,8 @@ func printIncoming(o protocol.Offer, from, addr string) {
 
 // pullOffer downloads the whole offer from targetAddr, the sender's single port: one transfer,
 // every data connection pinned to the sender's key (cfg) and joining it (bible §8.3).
-// in is the terminal: Enter resumes a transfer paused on a full disk.
-func pullOffer(targetAddr, outDir string, workers int, offer protocol.Offer, cfg securechan.Config, base transfer.ID, in *bufio.Reader) {
+// Enter on the terminal resumes a transfer paused on a full disk.
+func pullOffer(targetAddr, outDir string, workers int, offer protocol.Offer, cfg securechan.Config, base transfer.ID) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1412,7 +1428,7 @@ func pullOffer(targetAddr, outDir string, workers int, offer protocol.Offer, cfg
 
 	go func() {
 		for {
-			if _, err := in.ReadString('\n'); err != nil {
+			if _, ok := <-stdinLines(); !ok {
 				return
 			}
 			if resume := takeDiskResume(); resume != nil {
@@ -1496,7 +1512,6 @@ func fetchPeer(hostIP string) *discovery.Peer {
 
 func selectOneShotSender() *discovery.Peer {
 	_, trust, _ := loadIdentity(configDir()) // to recognize trusted devices in the list
-	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Println("\n[*] Searching local network for medXfer senders...")
 		peers, err := discovery.DiscoverPeers(2 * time.Second)
@@ -1520,8 +1535,7 @@ func selectOneShotSender() *discovery.Peer {
 			}
 		}
 		fmt.Print("Select an option or enter pairing code [r to refresh, q to quit]: ")
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
+		input := strings.TrimSpace(readLine())
 		if strings.EqualFold(input, "q") {
 			return nil
 		}

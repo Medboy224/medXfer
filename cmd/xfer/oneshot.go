@@ -1,11 +1,11 @@
 package main
 
 // One-shot send and receive with mutual authentication (WP-3.5b), on the sender's single port
-// (WP-4.2). The sender shows a QR code (path P1): the receiver that redeems it, or one without
-// it that the sender's user accepts (decision D3), becomes the only key that may join the
-// transfer on the data connections (CHAN-06). The receiver pins the sender's key, taken from
-// the QR code or confirmed by its user. Nothing is written in trusted.json, unless the user
-// answers "always" (PAIR-08).
+// (WP-4.2). The sender shows a QR code (path P1) and a PIN (path P2, typed by a receiver
+// without a camera, or one that picks the sender in its list); a device of mutual trust needs
+// neither (P3). The receiver paired becomes the only key that may join the transfer on the data
+// connections (CHAN-06). Nothing is written in trusted.json, unless both users accept mutual
+// trust (--trust, PAIR-08, PAIR-10).
 
 import (
 	"bufio"
@@ -16,6 +16,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,23 +106,48 @@ func startSendHub(bind string, port int, anyPort bool, trust *identity.TrustStor
 	return hub, ln, err
 }
 
-// serveOneShotPairing waits on the hub's control connections until a receiver redeems the QR
-// code, or one without it is accepted by confirm. shown gets each URI: the first one, then a
-// new one each time the previous expires (same port, new secret). before runs once the
-// receiver is accepted, before pair_accept.
-func serveOneShotPairing(ctx context.Context, hub *transfer.Hub, id *identity.Identity, host string, port int,
-	ttl time.Duration, offer session.Message, follow []session.Message, confirm func(context.Context, pairing.Result) bool,
-	before func(pairing.Result) error, shown func(pairing.URI), pin func(code string, expires time.Time)) (pairing.Result, error) {
+// oneShotPairing is what xfer send serves on its single port (bible §6.1, §6.2): its QR code
+// and its PIN, both at once by default (D2 of the trust plan), and mutual trust when asked
+// (PAIR-10). A device of mutual trust gets in without either (P3).
+type oneShotPairing struct {
+	hub    *transfer.Hub
+	id     *identity.Identity
+	trust  *identity.TrustStore
+	host   string
+	port   int
+	ttl    time.Duration // of each QR code; with a PIN, no longer than a PIN lives (PAIR-02)
+	offer  session.Message
+	follow []session.Message
+	before func(pairing.Result) error // once the receiver is accepted, before pair_accept
+	shown  func(pairing.URI)          // each QR code: the first, then one per renewal; nil: none (--pin)
+	pin    func(code string, expires time.Time)
+	// offerTrust: --trust; askTrust asks the user about the receiver's offer.
+	offerTrust bool
+	askTrust   func(context.Context, pairing.Result) bool
+}
+
+// serve waits on the hub's control connections until a receiver pairs: it renews the QR code
+// and the PIN as they expire (same port, new secret).
+func (p oneShotPairing) serve(ctx context.Context) (pairing.Result, error) {
 	name, _ := os.Hostname()
-	o := pairing.Options{Identity: id, Once: true, DeviceName: name, Offer: offer, Follow: follow, Confirm: confirm, BeforeAccept: before}
+	o := pairing.Options{Identity: p.id, Trust: p.trust, DeviceName: name, Offer: p.offer, Follow: p.follow,
+		BeforeAccept: p.before, OfferTrust: p.offerTrust, AskTrust: p.askTrust}
+	ttl := p.ttl
+	if p.pin != nil {
+		ttl = min(ttl, pairing.TTL)
+	}
 	for {
-		ln := hub.Control()
+		ln := p.hub.Control()
 		var inv *pairing.Invitation
 		var err error
-		if pin != nil { // a PIN instead of the QR code, for a receiver without a camera (WP-5.4)
-			o.PIN, err = pairing.NewPIN(pairing.PINConfig{TTL: min(ttl, pairing.TTL), Show: pin}) // PAIR-02: 120 s at most
-		} else if inv, err = pairing.NewInvitation(ttl); err == nil {
-			shown(inv.URI(id.Fingerprint, host, port))
+		o.PIN = nil
+		if p.pin != nil { // for a receiver without a camera, or one that picks this device in its list
+			o.PIN, err = pairing.NewPIN(pairing.PINConfig{TTL: ttl, Show: p.pin})
+		}
+		if err == nil && p.shown != nil {
+			if inv, err = pairing.NewInvitation(ttl); err == nil {
+				p.shown(inv.URI(p.id.Fingerprint, p.host, p.port))
+			}
 		}
 		if err != nil {
 			ln.Close()
@@ -136,32 +162,34 @@ func serveOneShotPairing(ctx context.Context, hub *transfer.Hub, id *identity.Id
 	}
 }
 
-// startOneShotPairing runs serveOneShotPairing for `xfer send`: it prints the receive command
-// and the QR code, or the PIN (usePIN), and registers the transfers for the paired receiver.
+// startOneShotPairing serves the pairing of `xfer send`: it prints the QR code and the PIN
+// (only the PIN with usePIN), and registers the transfer for the paired receiver.
 func startOneShotPairing(ctx context.Context, send *oneShotSend, port int, data session.Message, follow []session.Message,
-	trust *identity.TrustStore, usePIN bool) {
+	trust *identity.TrustStore, usePIN, offerTrust bool) {
 	first := true
 	ready := make(chan struct{})
 	var readyOnce sync.Once
-	shown := func(u pairing.URI) {
-		if !first {
-			fmt.Println("\n[*] The QR code has expired: here is a new one.")
+	var shown func(pairing.URI)
+	if !usePIN {
+		shown = func(u pairing.URI) {
+			if !first {
+				fmt.Println("\n[*] The QR code and the PIN have expired: here are new ones.")
+			}
+			first = false
+			printReceiveCommand(os.Stdout, u)
 		}
-		first = false
-		printReceiveCommand(os.Stdout, u)
+	}
+	addr := net.JoinHostPort(getLocalIP(), strconv.Itoa(port))
+	screen := pinScreen(os.Stdout, fmt.Sprintf("xfer recv, then pick this device; or: xfer recv --pin %s", addr))
+	pin := func(code string, expires time.Time) {
+		screen(code, expires)
 		readyOnce.Do(func() { close(ready) })
 	}
-	var pin func(string, time.Time)
-	if usePIN {
-		screen := pinScreen(os.Stdout, fmt.Sprintf("xfer recv --pin %s", net.JoinHostPort(getLocalIP(), strconv.Itoa(port))))
-		pin = func(code string, expires time.Time) {
-			screen(code, expires)
-			readyOnce.Do(func() { close(ready) })
-		}
-	}
-	confirm := receiverConfirm(os.Stdout, askLine, trust)
+	p := oneShotPairing{hub: send.hub, id: localID, trust: trust, host: getLocalIP(), port: port, ttl: sendQRTTL,
+		offer: data, follow: follow, before: send.register, shown: shown, pin: pin,
+		offerTrust: offerTrust, askTrust: askTrustFrom(os.Stdout, stdinLines())}
 	go func() {
-		r, err := serveOneShotPairing(ctx, send.hub, localID, getLocalIP(), port, sendQRTTL, data, follow, confirm, send.register, shown, pin)
+		r, err := p.serve(ctx)
 		readyOnce.Do(func() { close(ready) })
 		if err != nil {
 			if ctx.Err() == nil {
@@ -173,9 +201,46 @@ func startOneShotPairing(ctx context.Context, send *oneShotSend, port int, data 
 		if name == "" {
 			name = r.Address
 		}
-		fmt.Printf("\n[+] Receiver '%s' (%s) paired, key %s.\n", name, r.Address, r.Fingerprint.Short())
+		how := "proved by the QR code or the PIN, for this transfer only"
+		if r.Mutual {
+			how = "a device of mutual trust"
+		}
+		fmt.Printf("\n[+] Receiver '%s' (%s) paired, key %s: %s.\n", name, r.Address, r.Fingerprint.Short(), how)
+		trustOutcome(os.Stdout, r, offerTrust)
 	}()
-	<-ready // the QR code is on screen before the sender says it is waiting
+	<-ready // the QR code and the PIN are on screen before the sender says it is waiting
+}
+
+// trustOutcome says how a trust negotiation ended, if one ran (PAIR-10).
+func trustOutcome(w io.Writer, r pairing.Result, offered bool) {
+	switch {
+	case r.Trusted:
+		fmt.Fprintf(w, "[+] '%s' is now a trusted device, on both sides: next time, no PIN (xfer trust list).\n", r.Name)
+	case offered && !r.Mutual:
+		fmt.Fprintln(w, "[*] No mutual trust: nothing was saved, this session stays temporary.")
+	}
+}
+
+// askTrustFrom asks the user whether to accept the other device's offer of mutual trust: an
+// explicit yes only, within the time ctx leaves (PAIR-10).
+func askTrustFrom(w io.Writer, lines <-chan string) func(context.Context, pairing.Result) bool {
+	return func(ctx context.Context, r pairing.Result) bool {
+		name := r.Name
+		if name == "" {
+			name = r.Address
+		}
+		fmt.Fprintf(w, "\n[?] '%s' (key %s) offers mutual trust: both devices would then reconnect without a PIN.\n"+
+			"    Accept? [y/N]: ", name, r.Fingerprint.Short())
+		select {
+		case l := <-lines:
+			if a := strings.ToLower(strings.TrimSpace(l)); a == "y" || a == "yes" || a == "o" || a == "oui" {
+				return true
+			}
+		case <-ctx.Done():
+			fmt.Fprintln(w, "\n[-] No answer: declined.")
+		}
+		return false
+	}
 }
 
 // printReceiveCommand shows how to receive: the QR code, its URI, or the pairing code.
@@ -188,51 +253,33 @@ func printReceiveCommand(w io.Writer, u pairing.URI) {
 	}
 }
 
-// receiverConfirm decides about a receiver that has no QR code: a trusted device is let in,
-// any other one is shown to the user, who compares both fingerprints (D3, WP-3.3). The answer
-// defaults to no; ID-05 applies.
-func receiverConfirm(w io.Writer, ask func(context.Context) string, trust *identity.TrustStore) func(context.Context, pairing.Result) bool {
-	return func(ctx context.Context, r pairing.Result) bool {
-		if known, changed := keyChanged(trust, r.Address, r.Fingerprint); changed {
-			fmt.Fprintf(w, "\n%s\n", keyChangedAlert(known, r.Address, r.Fingerprint))
-			return false
+// stdinLines are the lines typed on the terminal, read by one goroutine for the rest of the
+// program (xfer send, xfer recv): several readers of os.Stdin, each with its own buffer, would
+// steal each other's lines. It starts at the first call: xfer node and xfer ctl read os.Stdin
+// their own way.
+var stdinLines = sync.OnceValue(func() <-chan string {
+	lines := make(chan string)
+	go func() {
+		r := bufio.NewReader(os.Stdin)
+		for {
+			l, err := r.ReadString('\n')
+			if l != "" {
+				lines <- l
+			}
+			if err != nil {
+				close(lines)
+				return
+			}
 		}
-		if p, ok := trustedPeer(trust, r.Fingerprint); ok {
-			fmt.Fprintf(w, "\n[+] Trusted device '%s' connected from %s.\n", p.Alias, r.Address)
-			_ = rememberPeer(trust, r.Fingerprint, r.Name, r.Address, trustOnce)
-			return true
-		}
-		fmt.Fprintf(w, "\n\n[?] A receiver without the QR code is asking for the transfer, from %s.\n", r.Address)
-		fmt.Fprint(w, trustQuestion(r.Name, r.Fingerprint, localID.Fingerprint))
-		answer := parseTrustAnswer(ask(ctx))
-		if answer == trustRefused {
-			fmt.Fprintln(w, "[-] Receiver refused.")
-			return false
-		}
-		if err := rememberPeer(trust, r.Fingerprint, r.Name, r.Address, answer); err != nil {
-			fmt.Fprintf(w, "[-] Could not save the trusted device: %v\n", err)
-		}
-		return true
-	}
-}
-
-func trustedPeer(trust *identity.TrustStore, fp identity.Fingerprint) (identity.Peer, bool) {
-	if trust == nil {
-		return identity.Peer{}, false
-	}
-	return trust.Get(fp)
-}
+	}()
+	return lines
+})
 
 // askLine reads the user's answer, or "" (no) when ctx ends, after trustPromptTimeout, or
 // without a terminal.
 func askLine(ctx context.Context) string {
-	line := make(chan string, 1)
-	go func() {
-		s, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		line <- s
-	}()
 	select {
-	case s := <-line:
+	case s := <-stdinLines():
 		return s
 	case <-ctx.Done():
 	case <-time.After(trustPromptTimeout):

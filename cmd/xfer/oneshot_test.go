@@ -98,50 +98,26 @@ func TestOneShotSendAdmitsOnlyThePairedReceiver(t *testing.T) {
 	}
 }
 
-func TestReceiverConfirm(t *testing.T) {
-	self, trust := testDevice(t)
-	localID = self
-	stranger, _ := testDevice(t)
-	friend, _ := testDevice(t)
-	if err := trust.Add(identity.Peer{Fingerprint: friend.Fingerprint, Alias: "phone", LastAddress: "10.0.0.7"}); err != nil {
-		t.Fatal(err)
-	}
-	answer := func(s string) func(context.Context) string {
-		return func(context.Context) string { return s }
-	}
-	r := pairing.Result{Fingerprint: stranger.Fingerprint, Name: "laptop", Address: "10.0.0.9"}
-	var out bytes.Buffer
-
-	for _, no := range []string{"", "n\n", "whatever\n"} {
-		if receiverConfirm(&out, answer(no), trust)(context.Background(), r) {
-			t.Fatalf("answer %q let a stranger in", no)
+// PAIR-10: the other device's offer of mutual trust is accepted on an explicit yes only; no
+// answer in time is a no.
+func TestAskTrustFrom(t *testing.T) {
+	r := pairing.Result{Name: "phone"}
+	for answer, want := range map[string]bool{"y\n": true, "oui\n": true, "\n": false, "n\n": false, "always\n": false} {
+		lines := make(chan string, 1)
+		lines <- answer
+		var out bytes.Buffer
+		if got := askTrustFrom(&out, lines)(context.Background(), r); got != want {
+			t.Errorf("answer %q: %v, want %v", answer, got, want)
+		}
+		if !strings.Contains(out.String(), "phone") || !strings.Contains(out.String(), "[y/N]") {
+			t.Fatalf("question: %q", out.String())
 		}
 	}
-	if !strings.Contains(out.String(), stranger.Fingerprint.Short()) || !strings.Contains(out.String(), self.Fingerprint.Short()) {
-		t.Fatalf("both fingerprints must be shown:\n%s", out.String())
-	}
-	if !receiverConfirm(&out, answer("y\n"), trust)(context.Background(), r) || trust.Contains(stranger.Fingerprint) {
-		t.Fatal(`"y" must let the receiver in for this send only`)
-	}
-	if !receiverConfirm(&out, answer("a\n"), trust)(context.Background(), r) || !trust.Contains(stranger.Fingerprint) {
-		t.Fatal(`"a" must let the receiver in and remember it`)
-	}
-
-	// A trusted device needs no question.
-	asked := false
-	ask := func(context.Context) string { asked = true; return "" }
-	if !receiverConfirm(&out, ask, trust)(context.Background(), pairing.Result{Fingerprint: friend.Fingerprint, Address: "10.0.0.7"}) || asked {
-		t.Fatal("a trusted device was not let in at once")
-	}
-
-	// ID-05: the trusted device's address with another key is refused, without a question.
-	out.Reset()
-	impostor, _ := testDevice(t)
-	if receiverConfirm(&out, answer("a\n"), trust)(context.Background(), pairing.Result{Fingerprint: impostor.Fingerprint, Address: "10.0.0.7"}) {
-		t.Fatal("a changed key was let in")
-	}
-	if !strings.Contains(out.String(), "REFUSED") {
-		t.Fatalf("no alert for a changed key:\n%s", out.String())
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	var out bytes.Buffer
+	if askTrustFrom(&out, make(chan string))(ctx, r) {
+		t.Fatal("no answer was taken for a yes")
 	}
 }
 
@@ -177,8 +153,9 @@ func TestServeOneShotPairingRenewsTheQRCode(t *testing.T) {
 	offer := protocol.Offer{Root: "a.bin", Items: []protocol.OfferItem{{Path: "a.bin", Size: 1}}, TotalBytes: 1, ChunkSize: protocol.DefaultChunkSize}
 	msg, follow := session.OfferMessages(session.Message{DataPort: port}, offer)
 	go func() {
-		r, err := serveOneShotPairing(context.Background(), hub, sender, "127.0.0.1", port, 300*time.Millisecond,
-			msg, follow, nil, before, shown, nil)
+		p := oneShotPairing{hub: hub, id: sender, host: "127.0.0.1", port: port, ttl: 300 * time.Millisecond,
+			offer: msg, follow: follow, before: before, shown: shown}
+		r, err := p.serve(context.Background())
 		done <- result{r, err}
 	}()
 	var u pairing.URI
@@ -201,7 +178,7 @@ func TestServeOneShotPairingRenewsTheQRCode(t *testing.T) {
 	var err error
 	for i := 0; i < 5; i++ { // retry if the code expired meanwhile
 		u, _ = latest()
-		if r, err = pairing.Join(context.Background(), u, pairing.Options{Identity: receiver, Once: true}); err == nil {
+		if r, err = pairing.Join(context.Background(), u, pairing.Options{Identity: receiver}); err == nil {
 			break
 		}
 	}
@@ -216,8 +193,8 @@ func TestServeOneShotPairingRenewsTheQRCode(t *testing.T) {
 	}
 }
 
-// xfer send --pin: a PIN instead of the QR code, on the device's single port. The receiver that
-// types it pairs, is registered before pair_accept, and gets the offer; nothing else is shown.
+// xfer send --pin: the PIN alone, on the device's single port. The receiver that types it pairs,
+// is registered before pair_accept, and gets the offer; no QR code is shown.
 func TestServeOneShotPairingByPIN(t *testing.T) {
 	sender, _ := testDevice(t)
 	receiver, _ := testDevice(t)
@@ -226,7 +203,6 @@ func TestServeOneShotPairingByPIN(t *testing.T) {
 	pins := make(chan string, 8)
 	var registered identity.Fingerprint
 	before := func(r pairing.Result) error { registered = r.Fingerprint; return nil }
-	noQR := func(pairing.URI) { t.Error("a QR code was shown for xfer send --pin") }
 	type result struct {
 		r   pairing.Result
 		err error
@@ -235,8 +211,9 @@ func TestServeOneShotPairingByPIN(t *testing.T) {
 	offer := protocol.Offer{Root: "a.bin", Items: []protocol.OfferItem{{Path: "a.bin", Size: 1}}, TotalBytes: 1, ChunkSize: protocol.DefaultChunkSize}
 	msg, follow := session.OfferMessages(session.Message{DataPort: port}, offer)
 	go func() {
-		r, err := serveOneShotPairing(context.Background(), hub, sender, "127.0.0.1", port, time.Minute,
-			msg, follow, nil, before, noQR, func(code string, _ time.Time) { pins <- code })
+		p := oneShotPairing{hub: hub, id: sender, host: "127.0.0.1", port: port, ttl: time.Minute,
+			offer: msg, follow: follow, before: before, pin: func(code string, _ time.Time) { pins <- code }}
+		r, err := p.serve(context.Background())
 		done <- result{r, err}
 	}()
 	var code string
@@ -245,7 +222,7 @@ func TestServeOneShotPairingByPIN(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no PIN shown")
 	}
-	r, err := pairing.JoinPIN(context.Background(), addr, code, pairing.Options{Identity: receiver, Once: true})
+	r, err := pairing.JoinPIN(context.Background(), addr, code, pairing.Options{Identity: receiver})
 	if err != nil {
 		t.Fatalf("join: %v", err)
 	}
@@ -254,6 +231,63 @@ func TestServeOneShotPairingByPIN(t *testing.T) {
 	}
 	if s := <-done; s.err != nil || s.r.Fingerprint != receiver.Fingerprint || registered != receiver.Fingerprint {
 		t.Fatalf("sender: %+v, %v (registered %s)", s.r, s.err, registered.Short())
+	}
+}
+
+// D2, PAIR-09: by default xfer send shows its QR code and its PIN; a receiver that picks it in
+// its list gets in by the PIN on demand, and a device of mutual trust gets in with neither.
+func TestServeOneShotPairingShowsBothAndAdmitsMutualTrust(t *testing.T) {
+	sender, senderTrust := testDevice(t)
+	stranger, _ := testDevice(t)
+	friend, friendTrust := testDevice(t)
+	for _, x := range []struct {
+		ts *identity.TrustStore
+		fp identity.Fingerprint
+	}{{senderTrust, friend.Fingerprint}, {friendTrust, sender.Fingerprint}} {
+		if err := x.ts.Add(identity.Peer{Fingerprint: x.fp}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		join func(addr string, pins <-chan string) (pairing.Result, error)
+		who  identity.Fingerprint
+	}{
+		{"PIN on demand", func(addr string, pins <-chan string) (pairing.Result, error) {
+			return pairing.JoinPINOnDemand(context.Background(), addr, func() (string, error) { return <-pins, nil },
+				pairing.Options{Identity: stranger})
+		}, stranger.Fingerprint},
+		{"mutual trust", func(addr string, _ <-chan string) (pairing.Result, error) {
+			return pairing.JoinTrusted(context.Background(), addr, pairing.Options{Identity: friend, Trust: friendTrust})
+		}, friend.Fingerprint},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			hub, addr := startTestHub(t, sender)
+			port := portNum(t, addr)
+			pins := make(chan string, 8)
+			qr := make(chan pairing.URI, 8)
+			offer := protocol.Offer{Root: "a.bin", Items: []protocol.OfferItem{{Path: "a.bin", Size: 1}}, TotalBytes: 1, ChunkSize: protocol.DefaultChunkSize}
+			msg, follow := session.OfferMessages(session.Message{DataPort: port}, offer)
+			p := oneShotPairing{hub: hub, id: sender, trust: senderTrust, host: "127.0.0.1", port: port, ttl: time.Minute,
+				offer: msg, follow: follow, shown: func(u pairing.URI) { qr <- u }, pin: func(code string, _ time.Time) { pins <- code }}
+			done := make(chan pairing.Result, 1)
+			go func() { r, _ := p.serve(context.Background()); done <- r }()
+			select {
+			case <-qr:
+			case <-time.After(5 * time.Second):
+				t.Fatal("no QR code shown")
+			}
+			r, err := c.join(addr, pins)
+			if err != nil || r.Offer.Offer == nil {
+				t.Fatalf("join: %+v, %v", r, err)
+			}
+			if got := <-done; got.Fingerprint != c.who {
+				t.Fatalf("sender paired with %s", got.Fingerprint.Short())
+			}
+			if senderTrust.Contains(stranger.Fingerprint) {
+				t.Fatal("a PIN pairing wrote the receiver (PAIR-08)")
+			}
+		})
 	}
 }
 

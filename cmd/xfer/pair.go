@@ -18,11 +18,11 @@ import (
 )
 
 const pairUsage = `Usage:
-  xfer pair --show [--once] [--port N] [--ip ADDR]   (show a QR code; the other device scans it)
-  xfer pair [--once] 'medxfer://v1/pair?...'        (pair with the device that shows the QR code)
-  xfer pair --pin [--digits 8] [--once] [--port N]   (show a PIN; with --show, a QR code too)
-  xfer pair --pin [--once] HOST[:PORT]               (type the PIN shown by the device at HOST)
-  --once: trust the device for this session only, write nothing (PAIR-08)
+  xfer pair --show [--port N] [--ip ADDR]   (show a QR code; the other device scans it)
+  xfer pair 'medxfer://v1/pair?...'        (pair with the device that shows the QR code)
+  xfer pair --pin [--digits 8] [--port N]   (show a PIN; with --show, a QR code too)
+  xfer pair --pin HOST[:PORT]               (type the PIN shown by the device at HOST)
+Both devices become trusted devices of each other, if both users accept (PAIR-10).
 `
 
 // handlePair implements `xfer pair` (bible §6.1 and §6.2, paths P1 and P2). It exits with
@@ -42,7 +42,6 @@ func runPair(ctx context.Context, in io.Reader, w io.Writer, dir string, args []
 	show := fs.Bool("show", false, "show a QR code and wait for the other device")
 	pin := fs.Bool("pin", false, "pair by PIN: show one, or type the one shown at HOST")
 	digits := fs.Int("digits", pairing.PINDigits, "digits of the PIN shown, 6 or 8 (--pin)")
-	once := fs.Bool("once", false, "trust for this session only")
 	port := fs.Int("port", 0, "TCP port to listen on (--show, --pin; default: any free port)")
 	ip := fs.String("ip", "", "address to show (--show, --pin; default: the interface of the default route)")
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
@@ -53,7 +52,23 @@ func runPair(ctx context.Context, in io.Reader, w io.Writer, dir string, args []
 		return err
 	}
 	name, _ := os.Hostname()
-	o := pairing.Options{Identity: id, Trust: trust, Once: *once, DeviceName: name}
+	lines := make(chan string)
+	rd := bufio.NewReader(in)
+	go func() {
+		for {
+			l, err := rd.ReadString('\n')
+			if l != "" {
+				lines <- l
+			}
+			if err != nil {
+				close(lines)
+				return
+			}
+		}
+	}()
+	// xfer pair is for a lasting trust (D6): this side offers it; the other may offer too
+	// (xfer pair), or its user answers.
+	o := pairing.Options{Identity: id, Trust: trust, DeviceName: name, OfferTrust: true, AskTrust: askTrustFrom(w, lines)}
 
 	if *show || (*pin && fs.NArg() == 0) {
 		if fs.NArg() != 0 {
@@ -95,7 +110,7 @@ func runPair(ctx context.Context, in io.Reader, w io.Writer, dir string, args []
 		if err != nil {
 			return err
 		}
-		return pairedMessage(w, r, *once)
+		return pairedMessage(w, r)
 	}
 
 	if fs.NArg() != 1 {
@@ -106,17 +121,23 @@ func runPair(ctx context.Context, in io.Reader, w io.Writer, dir string, args []
 		if _, _, err := net.SplitHostPort(addr); err != nil {
 			addr = net.JoinHostPort(addr, strconv.Itoa(defaultPort))
 		}
-		fmt.Fprintf(w, "PIN shown on the other device: ")
-		line, _ := bufio.NewReader(in).ReadString('\n')
 		fmt.Fprintf(w, "[*] Connecting to %s...\n", addr)
-		r, err := pairing.JoinPIN(ctx, addr, strings.TrimSpace(line), o)
+		typed := func() (string, error) { // asking for the PIN gets the one on its screen (PAIR-11)
+			fmt.Fprintf(w, "PIN shown on the other device: ")
+			l, ok := <-lines
+			if !ok {
+				return "", errors.New("no PIN typed")
+			}
+			return strings.TrimSpace(l), nil
+		}
+		r, err := pairing.JoinPINOnDemand(ctx, addr, typed, o)
 		if errors.Is(err, pairing.ErrRefused) {
 			return errors.New("pairing refused: check the PIN (a PIN changes after 3 wrong ones), or the address")
 		}
 		if err != nil {
 			return err
 		}
-		return pairedMessage(w, r, *once)
+		return pairedMessage(w, r)
 	}
 	u, err := pairing.Parse(fs.Arg(0), time.Now())
 	if err != nil {
@@ -127,7 +148,7 @@ func runPair(ctx context.Context, in io.Reader, w io.Writer, dir string, args []
 	if err != nil {
 		return err
 	}
-	return pairedMessage(w, r, *once)
+	return pairedMessage(w, r)
 }
 
 // pinScreen prints each PIN with the command to type on the other device, and the wait after
@@ -147,15 +168,14 @@ func pinScreen(w io.Writer, command string) func(code string, expires time.Time)
 	}
 }
 
-func pairedMessage(w io.Writer, r pairing.Result, once bool) error {
+func pairedMessage(w io.Writer, r pairing.Result) error {
 	name := r.Name
 	if name == "" {
 		name = r.Address
 	}
-	if once {
-		fmt.Fprintf(w, "[+] Paired with '%s' (key %s) for this session.\n", name, r.Fingerprint.Short())
-	} else {
-		fmt.Fprintf(w, "[+] Paired with '%s' (key %s): now a trusted device (xfer trust list).\n", name, r.Fingerprint.Short())
+	if !r.Trusted {
+		return fmt.Errorf("paired with '%s' (key %s), but the other device did not accept mutual trust: nothing was saved", name, r.Fingerprint.Short())
 	}
+	fmt.Fprintf(w, "[+] Paired with '%s' (key %s): now a trusted device, on both sides (xfer trust list).\n", name, r.Fingerprint.Short())
 	return nil
 }

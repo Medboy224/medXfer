@@ -118,7 +118,8 @@ func serve(ln net.Listener, inv *Invitation, o Options) <-chan served {
 	return ch
 }
 
-func TestPairingTrustsBothWays(t *testing.T) {
+// PAIR-08: a QR code pairs both devices for the session; nothing is written.
+func TestQRPairsForTheSession(t *testing.T) {
 	shower, scanner := device(t, "pc"), device(t, "phone")
 	ln, inv, u := listen(t, shower, TTL)
 	done := serve(ln, inv, shower)
@@ -134,11 +135,8 @@ func TestPairingTrustsBothWays(t *testing.T) {
 	if s.err != nil || s.r.Fingerprint != scanner.Identity.Fingerprint || s.r.Name != "phone" {
 		t.Fatalf("shower: %+v, %v", s.r, s.err)
 	}
-	if p, ok := shower.Trust.Get(scanner.Identity.Fingerprint); !ok || p.Alias != "phone" {
-		t.Fatal("the shower does not trust the scanner")
-	}
-	if p, ok := scanner.Trust.Get(shower.Identity.Fingerprint); !ok || p.Alias != "pc" || p.LastAddress != "127.0.0.1" {
-		t.Fatalf("the scanner does not trust the shower: %+v", p)
+	if shower.Trust.Contains(scanner.Identity.Fingerprint) || scanner.Trust.Contains(shower.Identity.Fingerprint) || r.Trusted || s.r.Trusted {
+		t.Fatal("a pairing without a trust offer wrote a trusted device")
 	}
 	// The QR code is used: nobody can redeem it again.
 	if _, err := Join(context.Background(), u, device(t, "late")); err == nil {
@@ -180,8 +178,8 @@ func TestJoinPinsTheShowersKey(t *testing.T) {
 	}
 }
 
-// PAIR-08: --once writes nothing on disk.
-func TestOnceWritesNothing(t *testing.T) {
+// PAIR-08: by default, a pairing writes nothing on disk, not even an empty list.
+func TestSessionWritesNothing(t *testing.T) {
 	dirs := map[string]string{"pc": t.TempDir(), "phone": t.TempDir()}
 	opts := map[string]Options{}
 	for name, dir := range dirs {
@@ -193,7 +191,7 @@ func TestOnceWritesNothing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		opts[name] = Options{Identity: id, Trust: ts, DeviceName: name, Once: true}
+		opts[name] = Options{Identity: id, Trust: ts, DeviceName: name}
 	}
 	ln, inv, u := listen(t, opts["pc"], TTL)
 	done := serve(ln, inv, opts["pc"])
@@ -205,7 +203,7 @@ func TestOnceWritesNothing(t *testing.T) {
 	}
 	for name, dir := range dirs {
 		if _, err := os.Stat(filepath.Join(dir, identity.TrustFile)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("%s: a --once pairing wrote trusted.json (%v)", name, err)
+			t.Fatalf("%s: a session wrote trusted.json (%v)", name, err)
 		}
 	}
 }
@@ -255,76 +253,98 @@ func TestAcceptCarriesTheOffer(t *testing.T) {
 	}
 }
 
-// Without the QR code, the shower's user decides (D3): a no is neutral and the wait goes on,
-// a yes pairs.
-func TestHelloIsDecidedByTheShowersUser(t *testing.T) {
-	shower, intruder, scanner := device(t, "pc"), device(t, "intruder"), device(t, "phone")
-	var asked []string
-	shower.Confirm = func(_ context.Context, r Result) bool {
-		asked = append(asked, r.Name) // calls are serialised by Serve
-		return r.Fingerprint == scanner.Identity.Fingerprint
-	}
-	ln, inv, u := listen(t, shower, TTL)
-	done := serve(ln, inv, shower)
-
-	if _, err := Ask(context.Background(), u.Addr(), accept(u.Fingerprint), time.Second, intruder); !errors.Is(err, ErrRefused) {
-		t.Fatalf("refused hello: %v, want ErrRefused", err)
-	}
-	r, err := Ask(context.Background(), u.Addr(), accept(u.Fingerprint), time.Second, scanner)
-	if err != nil || r.Fingerprint != shower.Identity.Fingerprint {
-		t.Fatalf("accepted hello: %+v, %v", r, err)
-	}
-	s := <-done
-	if s.err != nil || s.r.Fingerprint != scanner.Identity.Fingerprint {
-		t.Fatalf("shower: %+v, %v", s.r, s.err)
-	}
-	if strings.Join(asked, ",") != "intruder,phone" {
-		t.Fatalf("the shower's user was asked about %v", asked)
+// trustBoth makes a and b devices of mutual trust.
+func trustBoth(t *testing.T, a, b Options) {
+	t.Helper()
+	for _, x := range []struct{ self, other Options }{{a, b}, {b, a}} {
+		if err := x.self.Trust.Add(identity.Peer{Fingerprint: x.other.Identity.Fingerprint, Alias: x.other.DeviceName}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
-// With no Confirm (xfer pair --show), a hello is refused: only the QR code pairs.
-func TestHelloWithoutConfirmIsRefused(t *testing.T) {
-	shower := device(t, "pc")
-	ln, inv, u := listen(t, shower, TTL)
-	_ = serve(ln, inv, shower)
-	if _, err := Ask(context.Background(), u.Addr(), accept(u.Fingerprint), time.Second, device(t, "phone")); !errors.Is(err, ErrRefused) {
-		t.Fatalf("hello without Confirm: %v, want ErrRefused", err)
-	}
-}
-
-// accept is the scanner's user accepting exactly the key want.
-func accept(want identity.Fingerprint) func(identity.Fingerprint) bool {
-	return func(fp identity.Fingerprint) bool { return fp == want }
-}
-
-// Without a QR code the scanner learns the shower's key from TLS, not from discovery: its user
-// sees that key, and a no sends nothing (the shower's user is never asked).
-func TestAskShowsTheKeyFromTLS(t *testing.T) {
+// PAIR-09, PAIR-12: without a code, only a device of mutual trust gets in (P3). An unknown one
+// is told to use a PIN or a QR code (nothing sent, the key seen returned for ID-05), and so is
+// one trusted on one side only.
+func TestJoinTrustedNeedsMutualTrust(t *testing.T) {
 	shower, scanner := device(t, "pc"), device(t, "phone")
-	asked := make(chan struct{}, 4)
-	shower.Confirm = func(context.Context, Result) bool { asked <- struct{}{}; return true }
 	ln, inv, u := listen(t, shower, TTL)
 	done := serve(ln, inv, shower)
 
-	var seen identity.Fingerprint
-	_, err := Ask(context.Background(), u.Addr(), func(fp identity.Fingerprint) bool { seen = fp; return false }, time.Second, scanner)
-	if !errors.Is(err, ErrDeclined) {
-		t.Fatalf("declined: %v, want ErrDeclined", err)
+	r, err := JoinTrusted(context.Background(), u.Addr(), scanner)
+	if !errors.Is(err, ErrPINRequired) || r.Fingerprint != shower.Identity.Fingerprint {
+		t.Fatalf("unknown: %+v, %v; want ErrPINRequired with the key seen", r, err)
 	}
-	if seen != shower.Identity.Fingerprint {
-		t.Fatalf("the scanner's user saw %s, the shower is %s", seen.Short(), shower.Identity.Fingerprint.Short())
+	if err := scanner.Trust.Add(identity.Peer{Fingerprint: shower.Identity.Fingerprint, Alias: "pc"}); err != nil {
+		t.Fatal(err)
 	}
-	select {
-	case <-asked:
-		t.Fatal("the shower's user was asked although the scanner declined")
-	case <-time.After(200 * time.Millisecond):
+	if _, err := JoinTrusted(context.Background(), u.Addr(), scanner); !errors.Is(err, ErrPINRequired) {
+		t.Fatalf("trusted on the scanner's side only: %v, want ErrPINRequired", err)
 	}
-	r, err := Ask(context.Background(), u.Addr(), accept(shower.Identity.Fingerprint), time.Second, scanner)
-	if err != nil || r.Fingerprint != shower.Identity.Fingerprint {
-		t.Fatalf("accepted: %+v, %v", r, err)
+	trustBoth(t, shower, scanner)
+	r, err = JoinTrusted(context.Background(), u.Addr(), scanner)
+	if err != nil || !r.Mutual || r.Name != "pc" {
+		t.Fatalf("mutual: %+v, %v", r, err)
 	}
-	if s := <-done; s.err != nil || s.r.Fingerprint != scanner.Identity.Fingerprint {
+	if s := <-done; s.err != nil || !s.r.Mutual || s.r.Fingerprint != scanner.Identity.Fingerprint {
 		t.Fatalf("shower: %+v, %v", s.r, s.err)
+	}
+}
+
+// PAIR-10 in a one-shot pairing: the side that offers says so in its pairing message, and the
+// negotiation follows pair_accept. Both write only on two yes; a no writes nothing; two offers
+// need no question.
+func TestOneShotTrustNegotiation(t *testing.T) {
+	for _, c := range []struct {
+		name                     string
+		scannerOffers, showerOff bool
+		showerSays, scannerSays  bool
+		want                     bool
+	}{
+		{"scanner offers, shower accepts", true, false, true, false, true},
+		{"scanner offers, shower declines", true, false, false, false, false},
+		{"shower offers, scanner accepts", false, true, false, true, true},
+		{"both offer", true, true, false, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			shower, scanner := device(t, "pc"), device(t, "phone")
+			shower.OfferTrust, scanner.OfferTrust = c.showerOff, c.scannerOffers
+			var askedShower, askedScanner bool
+			shower.AskTrust = func(_ context.Context, r Result) bool {
+				askedShower = r.Name == "phone"
+				return c.showerSays
+			}
+			scanner.AskTrust = func(_ context.Context, r Result) bool {
+				askedScanner = r.Name == "pc"
+				return c.scannerSays
+			}
+			ln, inv, u := listen(t, shower, TTL)
+			done := serve(ln, inv, shower)
+			r, err := Join(context.Background(), u, scanner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := <-done
+			if s.err != nil {
+				t.Fatal(s.err)
+			}
+			if r.Trusted != c.want || s.r.Trusted != c.want {
+				t.Fatalf("trusted: scanner %v, shower %v; want %v", r.Trusted, s.r.Trusted, c.want)
+			}
+			both := shower.Trust.Contains(scanner.Identity.Fingerprint) && scanner.Trust.Contains(shower.Identity.Fingerprint)
+			none := !shower.Trust.Contains(scanner.Identity.Fingerprint) && !scanner.Trust.Contains(shower.Identity.Fingerprint)
+			if (c.want && !both) || (!c.want && !none) {
+				t.Fatal("the lists do not match the answers")
+			}
+			if c.scannerOffers && c.showerOff && (askedShower || askedScanner) {
+				t.Fatal("a user was asked although both offered")
+			}
+			if c.scannerOffers && !c.showerOff && !askedShower {
+				t.Fatal("the shower's user was not asked")
+			}
+			if c.showerOff && !c.scannerOffers && !askedScanner {
+				t.Fatal("the scanner's user was not asked")
+			}
+		})
 	}
 }

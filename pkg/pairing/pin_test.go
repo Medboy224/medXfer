@@ -66,8 +66,8 @@ func wrong(code string) string {
 	return string(b)
 }
 
-// Bible §6.2: the PIN typed on the initiator pairs both devices, each trusting the other under
-// the name sent after the confirmations.
+// Bible §6.2: the PIN typed on the initiator pairs both devices, each knowing the other by the
+// name sent after the confirmations; nothing is written (PAIR-08).
 func TestPINPairsBothWays(t *testing.T) {
 	responder, initiator := device(t, "pc"), device(t, "phone")
 	addr, _, code, done := servePIN(t, responder, PINConfig{})
@@ -82,11 +82,8 @@ func TestPINPairsBothWays(t *testing.T) {
 	if s.err != nil || s.r.Fingerprint != initiator.Identity.Fingerprint || s.r.Name != "phone" {
 		t.Fatalf("responder: %+v, %v", s.r, s.err)
 	}
-	if p, ok := responder.Trust.Get(initiator.Identity.Fingerprint); !ok || p.Alias != "phone" {
-		t.Fatal("the responder does not trust the initiator")
-	}
-	if p, ok := initiator.Trust.Get(responder.Identity.Fingerprint); !ok || p.Alias != "pc" {
-		t.Fatal("the initiator does not trust the responder")
+	if responder.Trust.Contains(initiator.Identity.Fingerprint) || initiator.Trust.Contains(responder.Identity.Fingerprint) {
+		t.Fatal("a PIN pairing without a trust offer wrote a trusted device (PAIR-08)")
 	}
 }
 
