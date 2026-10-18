@@ -2,6 +2,8 @@ package pairing
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -17,6 +19,10 @@ const (
 	TypePINWanted = "pair_pin_wanted" // initiator -> responder: show a PIN
 	TypePINReady  = "pair_pin_ready"  // responder -> initiator: a PIN is on screen, type it
 )
+
+// ErrNoPINTyped: after pair_pin_ready, the initiator closed the connection without typing the
+// PIN on it. It may type it on a new connection (pair_pin): not a failed attempt.
+var ErrNoPINTyped = errors.New("pairing: the PIN was not typed on this connection")
 
 // typingTime bounds how long a responder waits for the PIN typed after pair_pin_ready: no more
 // than a PIN lives (PAIR-02).
@@ -37,6 +43,12 @@ func (p *PIN) reusable() (reuse, stopped bool) {
 		return false, false
 	}
 	return true, false
+}
+
+// Live reports whether p can still answer a demand: not paired, expired, closed or stopped.
+func (p *PIN) Live() bool {
+	reuse, _ := p.reusable()
+	return reuse
 }
 
 // PINOnDemand draws a PIN when a device asks for one, and keeps it while it is valid: every
@@ -80,6 +92,17 @@ func (d *PINOnDemand) Get() (*PIN, error) {
 	return p, nil
 }
 
+// Current returns the PIN on screen without drawing one: nil when none is live. A device that
+// asked for a PIN may type it on a new connection (pair_pin).
+func (d *PINOnDemand) Current() *PIN {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.pin != nil && d.pin.Live() {
+		return d.pin
+	}
+	return nil
+}
+
 // Reset forgets the current PIN and a stop: the user asked to pair again.
 func (d *PINOnDemand) Reset() {
 	d.mu.Lock()
@@ -118,7 +141,7 @@ func AnswerPINWanted(ch *session.Channel, conn *securechan.Conn, get func() (*PI
 	_ = conn.SetDeadline(time.Now().Add(typingTime))
 	m, err := ch.Read()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %v", ErrNoPINTyped, err)
 	}
 	if m.Type != TypePIN {
 		return "", ErrRefused

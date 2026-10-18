@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "actions": [
     "accept_web_upload",
     "cancel",
@@ -34,7 +34,8 @@
     "test_disk",
     "test_network",
     "toggle_web_share",
-    "trust_respond",
+    "trust_answer",
+    "trust_offer",
     "web_share_cancel",
     "web_share_pause",
     "web_share_resume"
@@ -66,6 +67,8 @@
     "pair_show",
     "paired",
     "peers_list",
+    "pin_needed",
+    "pin_requested",
     "reconnecting",
     "status",
     "transfer_accepted",
@@ -77,8 +80,10 @@
     "transfer_rejected",
     "transfer_resumed",
     "transfer_start",
-    "trust_expired",
-    "trust_request",
+    "trust_declined",
+    "trust_established",
+    "trust_incomplete",
+    "trust_offered",
     "web_files_cleared",
     "web_files_shared",
     "web_share_auth_failed",

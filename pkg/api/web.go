@@ -147,6 +147,7 @@ const IndexHTML = `<!DOCTYPE html>
         <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">
           <div id="pairedBox" style="display: none;">
             <div style="font-size: 14px; margin-bottom: 10px;">🟢 Paired with: <strong id="pairedIP"></strong></div>
+            <button class="btn btn-secondary" onclick="sendCmd('trust_offer', {})" title="Both users must accept (PAIR-10)">🤝 Trust this device</button>
             <button class="btn btn-danger" onclick="disconnectNode()">Disconnect</button>
           </div>
           <div id="unpairedBox">
@@ -671,14 +672,39 @@ const IndexHTML = `<!DOCTYPE html>
       log("SEND", msg);
     }
 
-    // An unknown device (WP-3.6b): the user compares both fingerprints with the other screen.
-    // OK trusts it for this session; the answer defaults to no.
-    function onTrustRequest(d) {
-      const who = (d.device_name || "Unknown device") + (d.ip ? " (" + d.ip + ")" : "");
-      const ok = confirm("New device: " + who + "\n\nIts fingerprint:  " + d.short +
-        "\nOurs:             " + d.self +
-        "\n\nCheck that the other screen shows the same two fingerprints.\nTrust it for this session?");
-      sendCmd("trust_respond", { fingerprint: d.fingerprint, answer: ok ? "once" : "no" });
+    // The trust model (bible chapter 6): a device seen for the first time shows a PIN on demand,
+    // which the user types here (pin_needed); this device shows one when picked by another
+    // (pin_requested). Mutual trust is offered and answered within a session.
+    function onPINNeeded(d) {
+      const pin = prompt("Type the PIN now shown on the other device (" + d.target + "):");
+      if (pin && pin.trim()) {
+        sendCmd("pair_pin", { target: d.target, pin: pin.trim() });
+        return;
+      }
+      document.querySelectorAll(".peer-actions button").forEach(b => {
+        if (b.innerText.indexOf("Pairing") !== -1) { b.innerText = "Pair"; b.disabled = false; }
+      });
+      const pairBtn = document.getElementById("pairBtn");
+      if (pairBtn) { pairBtn.innerText = "Pair"; pairBtn.disabled = false; }
+    }
+
+    function onPINRequested(d) {
+      const box = document.getElementById("pinShown");
+      if (d.stopped || !d.pin) {
+        box.style.display = "none";
+        document.getElementById("pinHint").innerText = "Too many wrong PINs: no more PINs on demand. Show a PIN to start again.";
+        return;
+      }
+      box.innerText = d.pin;
+      box.style.display = "block";
+      document.getElementById("pinHint").innerText = "The device at " + d.from + " wants to pair: it must type this PIN" +
+        " (valid until " + new Date(d.expires * 1000).toLocaleTimeString() + "; this device: " + d.fingerprint + ").";
+    }
+
+    function onTrustOffered(d) {
+      const ok = confirm("'" + (d.device_name || "The other device") + "' (" + d.fingerprint + ") offers mutual trust:" +
+        "\nboth devices would then reconnect without a PIN.\n\nAccept? (no answer in " + d.timeout_s + " s means no)");
+      sendCmd("trust_answer", { accept: ok });
     }
 
     function handleEvent(msg) {
@@ -690,14 +716,30 @@ const IndexHTML = `<!DOCTYPE html>
         onPINShown(msg.data);
         return;
       }
+      if (msg.event === "pin_requested") {
+        onPINRequested(msg.data);
+        return;
+      }
       log("RECV:" + msg.event, msg.data);
 
       switch (msg.event) {
         case "pair_failed":
           document.getElementById("pinHint").innerText = "Pairing failed: check the PIN (it changes after 3 wrong ones) and the address.";
           break;
-        case "trust_request":
-          onTrustRequest(msg.data);
+        case "pin_needed":
+          onPINNeeded(msg.data);
+          break;
+        case "trust_offered":
+          onTrustOffered(msg.data);
+          break;
+        case "trust_established":
+          alert("Mutual trust established with '" + msg.data.device_name + "': both devices now reconnect without a PIN.");
+          break;
+        case "trust_declined":
+          alert(msg.data.reason === "no_answer" ? "No answer to the trust offer: the session stays temporary." : "Trust declined by the other device: the session stays temporary.");
+          break;
+        case "trust_incomplete":
+          log("WARN", "Trust with " + msg.data.fingerprint + " is on one side only (" + msg.data.side + "): it gives nothing; pair by PIN or QR code, then offer trust again.");
           break;
         case "benchmark_disk_result":
           onBenchmarkDiskResult(msg.data);

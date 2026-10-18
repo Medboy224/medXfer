@@ -52,76 +52,75 @@ func pairRequest(t *testing.T, addr string, cfg securechan.Config, msg session.M
 	return out
 }
 
-type trustRequestEvent struct {
+// noEvent fails if n received an event named name.
+func noEvent(t *testing.T, n *testkit.Node, name string) {
+	t.Helper()
+	for _, e := range n.Client.Events() {
+		if e.Event == name {
+			t.Fatalf("unexpected event %s", name)
+		}
+	}
+}
+
+type incompleteEvent struct {
 	Fingerprint string `json:"fingerprint"`
-	Short       string `json:"short"`
-	Self        string `json:"self"`
-	DeviceName  string `json:"device_name"`
-	Direction   string `json:"direction"`
+	Side        string `json:"side"`
 }
 
-// WP-3.6b: the pairing code gives no trust. An unknown key, even with the right code, waits
-// for the user, who sees both fingerprints; "no" refuses, "once" admits without saving,
-// "always" saves.
-func TestUnknownDeviceIsDecidedByTheUser(t *testing.T) {
+// PAIR-12: a device seen for the first time is never admitted on a pair_request, even with
+// the pairing code: it needs a PIN or a QR code (pair_reject, code pin_required). No one is
+// asked to compare fingerprints.
+func TestUnknownDeviceNeedsAPINOrAQRCode(t *testing.T) {
 	s, n := startOwnIdentity(t, "Daemon")
-	addr := n.PeerAddr()
-	for _, c := range []struct {
-		answer, want string
-		saved        bool
-	}{{"no", "pair_reject", false}, {"once", "pair_accept", false}, {"always", "pair_accept", true}} {
-		peer := testPeerChan(t)
-		resp := pairRequest(t, addr, peer, session.Message{DeviceName: "laptop", PairingCode: s.PairingCode()}, 10*time.Second)
-		var req trustRequestEvent
-		if err := n.WaitEvent("trust_request", 0).Decode(&req); err != nil {
-			t.Fatal(err)
-		}
-		if req.Fingerprint != peer.Identity.Fingerprint.String() || req.Short != peer.Identity.Fingerprint.Short() ||
-			req.Self != s.identity.Fingerprint.Short() || req.DeviceName != "laptop" || req.Direction != "incoming" {
-			t.Fatalf("trust_request: %+v", req)
-		}
-		n.Request("trust_respond", map[string]string{"fingerprint": req.Fingerprint, "answer": c.answer})
-		if got := <-resp; got.Type != c.want {
-			t.Fatalf("answer %q: got %+v, want %s", c.answer, got, c.want)
-		}
-		if s.trust.Contains(peer.Identity.Fingerprint) != c.saved {
-			t.Fatalf("answer %q: saved = %v", c.answer, !c.saved)
-		}
+	got := <-pairRequest(t, n.PeerAddr(), testPeerChan(t), session.Message{DeviceName: "laptop", PairingCode: s.PairingCode()}, 10*time.Second)
+	if got.Type != "pair_reject" || got.Code != codePINRequired {
+		t.Fatalf("got %+v, want pair_reject (%s)", got, codePINRequired)
 	}
+	noEvent(t, n, "paired")
 }
 
-// No answer is a no (D3: never a silent acceptance).
-func TestUnknownDeviceWithoutAnswerIsRefused(t *testing.T) {
-	s, n := startOwnIdentity(t, "Daemon")
-	s.mu.Lock()
-	s.trustTimeout = 300 * time.Millisecond
-	s.mu.Unlock()
-	resp := pairRequest(t, n.PeerAddr(), testPeerChan(t), session.Message{PairingCode: s.PairingCode()}, 10*time.Second)
-	if got := <-resp; got.Type != "pair_reject" {
-		t.Fatalf("got %+v, want pair_reject", got)
-	}
-	n.WaitEvent("trust_expired", 0)
-}
-
-// A trusted device is admitted at once, without a code or a question.
-func TestTrustedDeviceIsAdmittedAtOnce(t *testing.T) {
+// PAIR-09: a device of mutual trust is admitted at once (P3). A trust on one side only gives
+// nothing, and the user hears of it (trust_incomplete), whichever side lacks it.
+func TestOnlyMutualTrustIsAdmittedAtOnce(t *testing.T) {
 	s, n := startOwnIdentity(t, "Daemon")
 	peer := testPeerChan(t)
-	if err := s.TrustDevice(peer.Identity.Fingerprint.String(), "phone"); err != nil {
+	fp := peer.Identity.Fingerprint
+
+	// It trusts us, we do not trust it.
+	if got := <-pairRequest(t, n.PeerAddr(), peer, session.Message{TrustsYou: true}, 5*time.Second); got.Type != "pair_reject" || got.Code != codePINRequired {
+		t.Fatalf("one-sided (remote): %+v", got)
+	}
+	var inc incompleteEvent
+	if err := n.WaitEvent("trust_incomplete", 0).Decode(&inc); err != nil || inc.Side != "remote" || inc.Fingerprint != fp.Short() {
+		t.Fatalf("trust_incomplete: %+v, %v", inc, err)
+	}
+
+	// We trust it, it does not trust us.
+	if err := s.TrustDevice(fp.String(), "phone"); err != nil {
 		t.Fatal(err)
 	}
-	if got := <-pairRequest(t, n.PeerAddr(), peer, session.Message{}, 5*time.Second); got.Type != "pair_accept" {
-		t.Fatalf("got %+v, want pair_accept", got)
+	if got := <-pairRequest(t, n.PeerAddr(), peer, session.Message{}, 5*time.Second); got.Type != "pair_reject" || got.Code != codePINRequired {
+		t.Fatalf("one-sided (local): %+v", got)
 	}
-	for _, e := range n.Client.Events() {
-		if e.Event == "trust_request" {
-			t.Fatal("the user was asked about a trusted device")
-		}
+	if err := n.WaitEvent("trust_incomplete", 0).Decode(&inc); err != nil || inc.Side != "local" {
+		t.Fatalf("trust_incomplete: %+v, %v", inc, err)
+	}
+
+	// Both: admitted at once, and the answer declares our side.
+	got := <-pairRequest(t, n.PeerAddr(), peer, session.Message{TrustsYou: true}, 5*time.Second)
+	if got.Type != "pair_accept" || !got.TrustsYou {
+		t.Fatalf("mutual: %+v, want pair_accept declaring the trust", got)
+	}
+	var paired struct {
+		Mutual bool `json:"mutual"`
+	}
+	if err := n.WaitEvent("paired", 0).Decode(&paired); err != nil || !paired.Mutual {
+		t.Fatalf("paired: %+v, %v", paired, err)
 	}
 }
 
-// pair_show returns a QR code URI; its secret admits one device, which becomes trusted. A
-// wrong or reused secret is refused at once, without asking the user (PAIR-07).
+// pair_show returns a QR code URI; its secret admits one device, for this session only
+// (PAIR-08). A wrong or reused secret is refused at once (PAIR-07).
 func TestPairShowSecretAdmitsOnce(t *testing.T) {
 	s, n := startOwnIdentity(t, "Daemon")
 	n.Request("pair_show", nil)
@@ -154,24 +153,17 @@ func TestPairShowSecretAdmitsOnce(t *testing.T) {
 	if got := <-pairRequest(t, addr, scanner, session.Message{Secret: pairing.EncodeSecret(u.Secret), DeviceName: "phone"}, 5*time.Second); got.Type != "pair_accept" {
 		t.Fatalf("right secret: %+v", got)
 	}
-	if p, ok := s.trust.Get(scanner.Identity.Fingerprint); !ok || p.Alias != "phone" {
-		t.Fatal("the device that scanned the QR code is not trusted")
+	if s.trust.Contains(scanner.Identity.Fingerprint) {
+		t.Fatal("a QR code pairing wrote the device (PAIR-08)")
 	}
 	if got := <-pairRequest(t, addr, pinned(), session.Message{Secret: pairing.EncodeSecret(u.Secret)}, 5*time.Second); got.Type != "pair_reject" {
 		t.Fatalf("reused secret: %+v", got)
 	}
-	for _, e := range n.Client.Events() {
-		if e.Event == "trust_request" {
-			t.Fatal("a QR code pairing asked the user")
-		}
-	}
 }
 
-// Two daemons: one shows a QR code, the other joins it with pair_uri; both end up paired and
-// trusting each other.
-func TestPairURIBetweenDaemons(t *testing.T) {
-	a, na := startOwnIdentity(t, "Shower")
-	b, nb := startOwnIdentity(t, "Scanner")
+// pairByQR pairs b with a by a's QR code; trust asks b to offer mutual trust once paired.
+func pairByQR(t *testing.T, na, nb *testkit.Node, trust bool) {
+	t.Helper()
 	na.Request("pair_show", nil)
 	var shown struct {
 		URI string `json:"uri"`
@@ -185,15 +177,115 @@ func TestPairURIBetweenDaemons(t *testing.T) {
 		t.Fatal(err)
 	}
 	u.Host = "127.0.0.1"
-	nb.Request("pair_uri", map[string]string{"uri": u.String()})
+	nb.Request("pair_uri", map[string]any{"uri": u.String(), "trust": trust})
 	nb.WaitEvent("paired", 0)
 	na.WaitEvent("paired", 0)
-	if !a.trust.Contains(b.identity.Fingerprint) || !b.trust.Contains(a.identity.Fingerprint) {
-		t.Fatal("the two daemons do not trust each other")
+}
+
+// Two daemons pair by QR code: a session, nothing written on either side (PAIR-08).
+func TestPairURIBetweenDaemons(t *testing.T) {
+	a, na := startOwnIdentity(t, "Shower")
+	b, nb := startOwnIdentity(t, "Scanner")
+	pairByQR(t, na, nb, false)
+	if a.trust.Contains(b.identity.Fingerprint) || b.trust.Contains(a.identity.Fingerprint) {
+		t.Fatal("a session wrote a trusted device")
 	}
 }
 
-// ID-05: a trusted device's address that presents another key is refused, without asking.
+// PAIR-10, PAIR-09 end to end: b offers mutual trust, a's user accepts, both write the other.
+// They then reconnect at once (P3, mutual). Once a forgets b, b's next pairing needs a PIN
+// again, and b hears that its own entry is incomplete.
+func TestMutualTrustBetweenDaemons(t *testing.T) {
+	a, na := startOwnIdentity(t, "Laptop")
+	b, nb := startOwnIdentity(t, "Phone")
+	pairByQR(t, na, nb, true)
+	var offered struct {
+		DeviceName string `json:"device_name"`
+		TimeoutS   int    `json:"timeout_s"`
+	}
+	if err := na.WaitEvent("trust_offered", 0).Decode(&offered); err != nil || offered.TimeoutS != 60 {
+		t.Fatalf("trust_offered: %+v, %v", offered, err)
+	}
+	na.Request("trust_answer", map[string]bool{"accept": true})
+	na.WaitEvent("trust_established", 0)
+	nb.WaitEvent("trust_established", 0)
+	if !a.trust.Contains(b.identity.Fingerprint) || !b.trust.Contains(a.identity.Fingerprint) {
+		t.Fatal("mutual trust not written on both sides")
+	}
+
+	port := portNumber(t, na.PeerAddr())
+	nb.Request("disconnect", nil)
+	nb.Request("pair", map[string]any{"ip": "127.0.0.1", "port": port})
+	var paired struct {
+		Mutual bool `json:"mutual"`
+	}
+	if err := nb.WaitEvent("paired", 0).Decode(&paired); err != nil || !paired.Mutual {
+		t.Fatalf("reconnection: %+v, %v", paired, err)
+	}
+
+	if _, err := a.trust.Forget(b.identity.Fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	nb.Request("disconnect", nil)
+	nb.Request("pair", map[string]any{"ip": "127.0.0.1", "port": port})
+	var inc incompleteEvent
+	if err := nb.WaitEvent("trust_incomplete", 0).Decode(&inc); err != nil || inc.Side != "local" {
+		t.Fatalf("trust_incomplete: %+v, %v", inc, err)
+	}
+	nb.WaitEvent("pin_needed", 0)
+	na.WaitEvent("pin_requested", 0)
+}
+
+// A no writes nothing, and the offerer hears it.
+func TestTrustOfferDeclined(t *testing.T) {
+	a, na := startOwnIdentity(t, "Laptop")
+	b, nb := startOwnIdentity(t, "Phone")
+	pairByQR(t, na, nb, true)
+	na.WaitEvent("trust_offered", 0)
+	na.Request("trust_answer", map[string]bool{"accept": false})
+	var declined struct {
+		Reason string `json:"reason"`
+	}
+	if err := nb.WaitEvent("trust_declined", 0).Decode(&declined); err != nil || declined.Reason != "declined" {
+		t.Fatalf("trust_declined: %+v, %v", declined, err)
+	}
+	if a.trust.Contains(b.identity.Fingerprint) || b.trust.Contains(a.identity.Fingerprint) {
+		t.Fatal("a declined offer wrote a trusted device")
+	}
+	na.Request("trust_answer", map[string]bool{"accept": true}) // nothing left to answer
+	na.WaitEvent("action_error", 0)
+}
+
+// PAIR-11 between daemons: b picks a (pair, by address); a shows a PIN on demand
+// (pin_requested), b is asked to type it (pin_needed), then pair_pin pairs them. The first
+// connection, closed before the PIN is typed, is no failure on a's side.
+func TestPairByPINOnDemand(t *testing.T) {
+	a, na := startOwnIdentity(t, "Laptop")
+	b, nb := startOwnIdentity(t, "Phone")
+	nb.Request("pair", map[string]any{"ip": "127.0.0.1", "port": portNumber(t, na.PeerAddr())})
+	var asked struct {
+		PIN  string `json:"pin"`
+		From string `json:"from"`
+	}
+	if err := na.WaitEvent("pin_requested", 0).Decode(&asked); err != nil || len(strings.ReplaceAll(asked.PIN, " ", "")) != 6 || asked.From != "127.0.0.1" {
+		t.Fatalf("pin_requested: %+v, %v", asked, err)
+	}
+	var needed struct {
+		Target string `json:"target"`
+	}
+	if err := nb.WaitEvent("pin_needed", 0).Decode(&needed); err != nil || needed.Target == "" {
+		t.Fatalf("pin_needed: %+v, %v", needed, err)
+	}
+	nb.Request("pair_pin", map[string]any{"target": needed.Target, "pin": asked.PIN})
+	nb.WaitEvent("paired", 0)
+	na.WaitEvent("paired", 0)
+	noEvent(t, na, "pair_failed")
+	if a.trust.Contains(b.identity.Fingerprint) || b.trust.Contains(a.identity.Fingerprint) {
+		t.Fatal("a PIN pairing wrote a trusted device (PAIR-08)")
+	}
+}
+
+// ID-05: a trusted device's address that presents another key is refused.
 func TestDaemonRefusesChangedKey(t *testing.T) {
 	s, n := startOwnIdentity(t, "Daemon")
 	known, err := identity.LoadOrCreate(t.TempDir())
@@ -203,35 +295,8 @@ func TestDaemonRefusesChangedKey(t *testing.T) {
 	if err := s.trust.Add(identity.Peer{Fingerprint: known.Fingerprint, Alias: "phone", LastAddress: "127.0.0.1"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := <-pairRequest(t, n.PeerAddr(), testPeerChan(t), session.Message{}, 5*time.Second); got.Type != "pair_reject" || got.FileName != errKeyChanged.Error() {
+	if got := <-pairRequest(t, n.PeerAddr(), testPeerChan(t), session.Message{TrustsYou: true}, 5*time.Second); got.Type != "pair_reject" || got.FileName != errKeyChanged.Error() {
 		t.Fatalf("got %+v, want pair_reject (%s)", got, errKeyChanged)
-	}
-}
-
-// Without a QR code, both users decide (D3): the daemon that connects asks its user about the
-// other's key ("outgoing"), then the other asks its own ("incoming"). Nothing is saved.
-func TestPairWithoutQRBothUsersDecide(t *testing.T) {
-	a, na := startOwnIdentity(t, "Responder")
-	b, nb := startOwnIdentity(t, "Initiator")
-	nb.Request("pair", map[string]any{"ip": "127.0.0.1", "port": portNumber(t, na.PeerAddr()), "code": a.PairingCode()})
-	for _, side := range []struct {
-		n         *testkit.Node
-		other     *DaemonServer
-		direction string
-	}{{nb, a, "outgoing"}, {na, b, "incoming"}} {
-		var req trustRequestEvent
-		if err := side.n.WaitEvent("trust_request", 0).Decode(&req); err != nil {
-			t.Fatal(err)
-		}
-		if req.Fingerprint != side.other.identity.Fingerprint.String() || req.Direction != side.direction {
-			t.Fatalf("trust_request: %+v", req)
-		}
-		side.n.Request("trust_respond", map[string]string{"fingerprint": req.Fingerprint, "answer": "once"})
-	}
-	nb.WaitEvent("paired", 0)
-	na.WaitEvent("paired", 0)
-	if a.trust.Contains(b.identity.Fingerprint) || b.trust.Contains(a.identity.Fingerprint) {
-		t.Fatal(`"once" saved a trusted device`)
 	}
 }
 
@@ -263,7 +328,7 @@ func TestUnknownMessageIsUnsupported(t *testing.T) {
 	defer conn.Close()
 	ch := session.NewChannel(conn)
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-	if err := ch.Send(session.Message{Type: "pair_request", DeviceName: "phone"}); err != nil {
+	if err := ch.Send(session.Message{Type: "pair_request", DeviceName: "phone", TrustsYou: true}); err != nil {
 		t.Fatal(err)
 	}
 	if m, err := ch.Read(); err != nil || m.Type != "pair_accept" {

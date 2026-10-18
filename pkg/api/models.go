@@ -227,6 +227,9 @@ type PairPayload struct {
 	IP   string `json:"ip,omitempty"`
 	Port int    `json:"port,omitempty"`
 	Code string `json:"code,omitempty"` // finds the device on the network; gives no trust (WP-3.6b)
+	// Trust offers mutual trust once paired (PAIR-10). A device that is not of mutual trust
+	// shows a PIN on demand: pin_needed, then pair_pin.
+	Trust bool `json:"trust,omitempty"`
 }
 
 // SendPayload parameters for "send" action

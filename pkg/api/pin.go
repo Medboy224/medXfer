@@ -20,18 +20,19 @@ import (
 	"github.com/Medboy224/medXfer/pkg/session"
 )
 
-// PairPINShowPayload asks for a PIN; once keeps the trust to the session (PAIR-08), digits is
-// 6 (default) or 8.
+// PairPINShowPayload asks for a PIN; digits is 6 (default) or 8; trust offers mutual trust once
+// paired (PAIR-10).
 type PairPINShowPayload struct {
-	Once   bool `json:"once,omitempty"`
+	Trust  bool `json:"trust,omitempty"`
 	Digits int  `json:"digits,omitempty"`
 }
 
-// PairPINPayload pairs with the device at target, by the PIN it shows.
+// PairPINPayload pairs with the device at target, by the PIN it shows (pair_pin_show, or on
+// demand after pin_needed).
 type PairPINPayload struct {
 	Target string `json:"target"`
 	PIN    string `json:"pin"`
-	Once   bool   `json:"once,omitempty"`
+	Trust  bool   `json:"trust,omitempty"`
 }
 
 // handlePairPINShow draws a PIN for this daemon's control listener and sends it in
@@ -75,9 +76,12 @@ func (s *DaemonServer) handlePairPINShow(rs Responder, req RequestMessage) {
 		return
 	}
 	s.mu.Lock()
-	old := s.pin
-	s.pin, s.pinOnce = pin, p.Once
+	old, demand := s.pin, s.pinDemand
+	s.pin, s.pinTrust = pin, p.Trust
 	s.mu.Unlock()
+	if demand != nil {
+		demand.Reset() // the user pairs again: PINs on demand may be drawn again (#105)
+	}
 	if old != nil {
 		old.Close()
 	}
@@ -96,7 +100,7 @@ func (s *DaemonServer) handlePairPIN(rs Responder, req RequestMessage) {
 		return
 	}
 	go func() {
-		_, err := s.pairWithPIN(strings.TrimSpace(p.Target), p.PIN, p.Once, req.ID)
+		_, err := s.pairWithPIN(strings.TrimSpace(p.Target), p.PIN, p.Trust, req.ID)
 		switch {
 		case errors.Is(err, pairing.ErrRefused):
 			s.Broadcast(NewEvent("pair_failed", map[string]string{}, req.ID))
@@ -109,7 +113,7 @@ func (s *DaemonServer) handlePairPIN(rs Responder, req RequestMessage) {
 // pairWithPIN opens a control session with target and runs the initiator's side of the PIN
 // path; on success the session becomes the active one. A known device that shows another key
 // is refused first (ID-05).
-func (s *DaemonServer) pairWithPIN(target, pin string, once bool, reqID string) (*session.Channel, error) {
+func (s *DaemonServer) pairWithPIN(target, pin string, offer bool, reqID string) (*session.Channel, error) {
 	if !strings.Contains(target, ":") {
 		target = net.JoinHostPort(target, strconv.Itoa(18887))
 	}
@@ -124,8 +128,7 @@ func (s *DaemonServer) pairWithPIN(target, pin string, once bool, reqID string) 
 	fp := connPeer.PeerFingerprint()
 	if known, changed := s.keyChanged(host, fp); changed {
 		connPeer.Close()
-		return nil, fmt.Errorf("REFUSED: %s is the address of '%s' (%s), but the device there presents another key (%s)",
-			host, known.Alias, known.Fingerprint.Short(), fp.Short())
+		return nil, keyChangedError(host, known, fp)
 	}
 	s.mu.RLock()
 	name, self := s.config.DeviceName, s.identity.Fingerprint
@@ -135,45 +138,72 @@ func (s *DaemonServer) pairWithPIN(target, pin string, once bool, reqID string) 
 		ch.Close()
 		return nil, err
 	}
-	decision := trustAlways
-	if once {
-		decision = trustOnce
-	}
-	return s.finishOutgoing(ch, connPeer, fp, host, decision, reqID)
+	return s.finishOutgoing(ch, connPeer, fp, host, offer, reqID)
 }
 
-// acceptPIN answers an incoming pair_pin with the PIN of pair_pin_show: ID-05 first, then the
-// PAKE. It returns the initiator's name once both sides confirmed, after pair_accept. Any
-// failure gets the same neutral pair_reject (PAIR-07) and a pair_failed event.
-func (s *DaemonServer) acceptPIN(conn *securechan.Conn, ch *session.Channel, msg session.Message, devName string) (string, bool) {
+// acceptPIN answers an incoming pair_pin, or a pair_pin_wanted (PAIR-11), with the PIN shown
+// by pair_pin_show or the one drawn on demand: ID-05 first, then the PAKE. It returns the
+// initiator's name once both sides confirmed, after pair_accept, and whether this side asked to
+// offer mutual trust (pair_pin_show with trust). Nothing is written (PAIR-08). Any failure gets
+// the same neutral pair_reject (PAIR-07) and a pair_failed event.
+func (s *DaemonServer) acceptPIN(conn *securechan.Conn, ch *session.Channel, msg session.Message, devName string) (string, bool, bool) {
 	ip, fp := ch.RemoteIP(), conn.PeerFingerprint()
-	refuse := func() (string, bool) {
+	refuse := func() (string, bool, bool) {
 		_ = ch.Send(session.Message{Type: pairing.TypeReject, FileName: pairing.ErrRefused.Error()})
 		s.Broadcast(NewEvent("pair_failed", map[string]string{}))
-		return "", false
+		return "", false, false
 	}
 	if known, changed := s.keyChanged(ip, fp); changed {
-		s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": fmt.Sprintf(
-			"REFUSED: %s is the address of '%s' (%s), but the device there presents another key (%s)",
-			ip, known.Alias, known.Fingerprint.Short(), fp.Short())}))
+		s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": keyChangedError(ip, known, fp).Error()}))
 		return refuse()
 	}
-	s.mu.RLock()
-	pin, once, self := s.pin, s.pinOnce, s.identity.Fingerprint
-	s.mu.RUnlock()
-	name, err := pairing.RespondPIN(ch, conn, msg, pin, self)
+	s.mu.Lock()
+	shown, trust, self := s.pin, s.pinTrust, s.identity.Fingerprint
+	if shown != nil && !shown.Live() {
+		shown = nil
+	}
+	if s.pinDemand == nil {
+		s.pinDemand = pairing.NewPINOnDemand(pairing.PINConfig{Show: s.showOnDemand})
+	}
+	demand := s.pinDemand
+	if msg.Type == pairing.TypePINWanted {
+		s.pinDemandFrom = ip
+	}
+	s.mu.Unlock()
+	if shown == nil {
+		trust = false
+	}
+	var name string
+	var err error
+	if msg.Type == pairing.TypePINWanted {
+		// The PIN on screen answers, else one is drawn and shown (pin_requested).
+		name, err = pairing.AnswerPINWanted(ch, conn, func() (*pairing.PIN, error) {
+			if shown != nil {
+				return shown, nil
+			}
+			return demand.Get()
+		}, self)
+	} else {
+		pin := shown
+		if pin == nil {
+			pin = demand.Current() // asked for on another connection, typed on this one
+		}
+		name, err = pairing.RespondPIN(ch, conn, msg, pin, self)
+	}
+	if errors.Is(err, pairing.ErrNoPINTyped) {
+		return "", false, false // to be typed on another connection: nothing failed
+	}
 	if err != nil {
 		return refuse()
 	}
-	decision := trustAlways
-	if once {
-		decision = trustOnce
+	if shown == nil {
+		demand.Close() // a PIN serves one pairing (PAIR-02)
 	}
-	if err := s.rememberTrust(fp, name, ip, decision); err != nil {
+	if err := s.touchTrust(fp, name, ip); err != nil {
 		s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": "could not save the trusted device: " + err.Error()}))
 	}
 	ch.Authenticate()
 	_ = conn.SetDeadline(time.Time{})
-	_ = ch.Send(session.Message{Type: pairing.TypeAccept, DeviceName: devName})
-	return name, true
+	_ = ch.Send(session.Message{Type: pairing.TypeAccept, DeviceName: devName, TrustsYou: s.declares(fp)})
+	return name, trust, true
 }
