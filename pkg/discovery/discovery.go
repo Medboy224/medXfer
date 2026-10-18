@@ -69,15 +69,9 @@ func IsLocalNetworkIP(ipStr string) bool {
 	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
 		return true
 	}
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return false
-	}
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok {
-			if ipnet.IP.Equal(ip) {
-				return true
-			}
+	for _, n := range localNets() { // the system's list, or the targets where it is refused (#132)
+		if n.IP.Equal(ip) {
+			return true
 		}
 	}
 	return false
@@ -106,6 +100,7 @@ func instanceName() string {
 // name, never the device's name (DISC-06, #65).
 func NewDiscoveryServer(role string, tcpPort int, offer *TransferOffer) *DiscoveryServer {
 	name := instanceName()
+	registerOwnName(name) // never list ourselves (#132)
 	code, _, _ := GeneratePairingCode("")
 
 	return &DiscoveryServer{
@@ -224,13 +219,21 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 		}
 	}()
 
-	// 2. Announce: mDNS (DISC-01), and the broadcast beacon as fallback (DISC-04).
+	// 2. Announce: mDNS on every local interface (DISC-01; Wi-Fi and the phone's own hotspot
+	// alike, #132), and the broadcast beacon on every subnet as fallback (DISC-04). One
+	// mechanism failing (no multicast, port taken) leaves the others.
 	p := s.GetPeer()
-	a := Announcement{Instance: p.DeviceName, Port: p.Port, Role: p.Role, IP: net.ParseIP(GetPrimaryLocalIP()),
-		Iface: multicastInterface()}
-	for _, d := range defaultDiscoverers {
-		_ = d.Announce(ctx, a) // one mechanism failing (no multicast, port taken) leaves the other
+	base := Announcement{Instance: p.DeviceName, Port: p.Port, Role: p.Role}
+	ifaces := localInterfaces()
+	if len(ifaces) == 0 {
+		ifaces = []localInterface{{ip: net.ParseIP(GetPrimaryLocalIP()), iface: multicastInterface()}}
 	}
+	for _, li := range ifaces {
+		a := base
+		a.IP, a.Iface = li.ip, li.iface
+		_ = mdnsDiscoverer{}.Announce(ctx, a)
+	}
+	_ = beaconDiscoverer{port: DiscoveryPort}.Announce(ctx, base)
 }
 
 // multicastInterface is the interface that carries this device's announced address, so that
@@ -258,7 +261,14 @@ func multicastInterface() *net.Interface {
 func DiscoverPeers(timeout time.Duration) ([]Peer, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout+time.Second)
 	defer cancel()
-	if found := browseAll(ctx, defaultDiscoverers, timeout, multicastInterface()); len(found) > 0 {
+	ds := []Discoverer{beaconDiscoverer{port: DiscoveryPort}}
+	for _, li := range localInterfaces() {
+		ds = append(ds, mdnsDiscoverer{iface: li.iface})
+	}
+	if len(ds) == 1 {
+		ds = append(ds, mdnsDiscoverer{iface: multicastInterface()})
+	}
+	if found := browseAll(ctx, ds, timeout); len(found) > 0 {
 		peers := make([]Peer, 0, len(found))
 		for _, f := range found {
 			peers = append(peers, peerOf(f))
@@ -296,9 +306,12 @@ func sweepPeers() []Peer {
 		}
 
 		var p Peer
-		if err := json.Unmarshal(respBytes, &p); err == nil && p.Version == AppVersion {
-			p.HostIP = ip // Probed address is guaranteed routable
-			key := fmt.Sprintf("%s:%d", p.HostIP, p.Port)
+		if err := json.Unmarshal(respBytes, &p); err == nil && p.Version == AppVersion && !isOwnName(p.DeviceName) {
+			p.HostIP = ip       // Probed address is guaranteed routable
+			key := p.DeviceName // one entry per device, even with several addresses (#132)
+			if key == "" {
+				key = fmt.Sprintf("%s:%d", p.HostIP, p.Port)
+			}
 			mu.Lock()
 			discovered[key] = p
 			mu.Unlock()

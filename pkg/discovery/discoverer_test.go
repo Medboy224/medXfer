@@ -29,7 +29,7 @@ func TestBeaconAnnounceAndBrowse(t *testing.T) {
 	defer cancel()
 	results := make(chan []Found, 1)
 	go func() {
-		found, _ := b.Browse(ctx, 2*beaconEvery+500*time.Millisecond, nil)
+		found, _ := b.Browse(ctx, 2*beaconEvery+500*time.Millisecond)
 		results <- found
 	}()
 	time.Sleep(100 * time.Millisecond) // Browse listens
@@ -58,11 +58,11 @@ func TestBeaconAnnounceAndBrowse(t *testing.T) {
 type fixedDiscoverer []Found
 
 func (fixedDiscoverer) Announce(context.Context, Announcement) error { return nil }
-func (f fixedDiscoverer) Browse(context.Context, time.Duration, *net.Interface) ([]Found, error) {
+func (f fixedDiscoverer) Browse(context.Context, time.Duration) ([]Found, error) {
 	return f, nil
 }
 
-// One entry per address and port, mDNS first; this device and incomplete entries are left out.
+// One entry per device, mDNS first; this device and incomplete entries are left out.
 func TestBrowseAllMerges(t *testing.T) {
 	remote := net.IPv4(192, 0, 2, 7) // TEST-NET-1: never a local address
 	mdnsSeen := fixedDiscoverer{{Instance: "medXfer-aa01", IP: remote, Port: 18888, Role: "node", Via: "mdns"}}
@@ -73,7 +73,7 @@ func TestBrowseAllMerges(t *testing.T) {
 		{Instance: "noport", IP: net.IPv4(192, 0, 2, 9), Via: "beacon"},
 	}
 	for _, order := range [][]Discoverer{{mdnsSeen, beaconSeen}, {beaconSeen, mdnsSeen}} {
-		got := browseAll(context.Background(), order, time.Second, nil)
+		got := browseAll(context.Background(), order, time.Second)
 		if len(got) != 2 {
 			t.Fatalf("merged %+v, want 2 devices", got)
 		}
@@ -82,6 +82,50 @@ func TestBrowseAllMerges(t *testing.T) {
 				t.Fatalf("the mDNS entry lost to the beacon's: %+v", f)
 			}
 		}
+	}
+}
+
+// #132, as a phone without net.InterfaceAddrs sees it (the platform gives its interfaces):
+//   - itself, by its own name or by one of its addresses (Wi-Fi, its own hotspot), is left out;
+//   - a device seen under two addresses appears once, under the one in our subnets, even when
+//     only the beacon saw that one.
+func TestBrowseAllSelfAndDuplicates(t *testing.T) {
+	t.Cleanup(func() { _ = SetNetworkInfo(nil) })
+	if err := SetNetworkInfo([]NetworkInterface{
+		{Name: "wlan0", Addrs: []string{"192.0.2.50/24"}},
+		{Name: "swlan0", Addrs: []string{"198.51.100.1/24"}}, // the phone's own hotspot
+		{Name: "rmnet0", Addrs: []string{"203.0.113.40/28"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registerOwnName("medXfer-se1f")
+	seen := fixedDiscoverer{
+		{Instance: "medXfer-se1f", IP: net.IPv4(203, 0, 113, 99), Port: 18887, Via: "mdns"}, // own name
+		{Instance: "medXfer-0th3", IP: net.IPv4(192, 0, 2, 50), Port: 18887, Via: "mdns"},   // own Wi-Fi address
+		{Instance: "medXfer-0th4", IP: net.IPv4(198, 51, 100, 1), Port: 18887, Via: "beacon"},
+		{Instance: "medXfer-pc01", IP: net.IPv4(100, 64, 0, 9), Port: 18887, Via: "mdns"}, // not reachable
+		{Instance: "medXfer-pc01", IP: net.IPv4(198, 51, 100, 7), Port: 18887, Via: "beacon"},
+		{Instance: "medXfer-pc01", IP: net.IPv4(198, 51, 100, 8), Port: 18887, Via: "beacon"},
+	}
+	got := browseAll(context.Background(), []Discoverer{seen}, time.Second)
+	if len(got) != 1 || got[0].Instance != "medXfer-pc01" || !got[0].IP.Equal(net.IPv4(198, 51, 100, 7)) {
+		t.Fatalf("browsed %+v, want medXfer-pc01 once, at 198.51.100.7", got)
+	}
+	for _, ip := range []string{"192.0.2.50", "198.51.100.1", "203.0.113.40"} {
+		if !IsLocalNetworkIP(ip) {
+			t.Fatalf("%s not recognized as ours", ip)
+		}
+	}
+	if IsLocalNetworkIP("198.51.100.7") || !IsSubnetReachable("198.51.100.7") || IsSubnetReachable("100.64.0.9") {
+		t.Fatal("subnets from the platform's list")
+	}
+	// mDNS runs on Wi-Fi and the hotspot, never on the cellular modem.
+	var names []string
+	for _, li := range localInterfaces() {
+		names = append(names, li.ip.String())
+	}
+	if strings.Join(names, " ") != "192.0.2.50 198.51.100.1" {
+		t.Fatalf("mDNS interfaces: %v", names)
 	}
 }
 
@@ -121,7 +165,7 @@ func TestMDNSAnnounceAndBrowse(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(200 * time.Millisecond)
-	found, err := (mdnsDiscoverer{}).Browse(ctx, 3*time.Second, multicastInterface())
+	found, err := (mdnsDiscoverer{iface: multicastInterface()}).Browse(ctx, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

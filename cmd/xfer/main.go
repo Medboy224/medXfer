@@ -36,26 +36,10 @@ const defaultPort = 18888
 // nodePort is the single port of xfer node: pairing, session and data (CHAN-01).
 const nodePort = 18887
 
+// isLocalIP reports whether ipStr is this device; also under Android, which refuses
+// net.InterfaceAddrs (#132).
 func isLocalIP(ipStr string) bool {
-	if ipStr == "127.0.0.1" || ipStr == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(ipStr)
-	if ip == nil || ip.IsLoopback() {
-		return true
-	}
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return false
-	}
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok {
-			if ipnet.IP.Equal(ip) {
-				return true
-			}
-		}
-	}
-	return false
+	return ipStr == "localhost" || discovery.IsLocalNetworkIP(ipStr)
 }
 
 func getLocalIP() string {

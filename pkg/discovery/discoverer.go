@@ -44,43 +44,60 @@ type Discoverer interface {
 	// Announce announces a until ctx ends.
 	Announce(ctx context.Context, a Announcement) error
 	// Browse returns the devices seen within timeout.
-	Browse(ctx context.Context, timeout time.Duration, iface *net.Interface) ([]Found, error)
+	Browse(ctx context.Context, timeout time.Duration) ([]Found, error)
 }
 
-// defaultDiscoverers are mDNS first, the broadcast beacon as fallback (DISC-01, DISC-04).
-var defaultDiscoverers = []Discoverer{mdnsDiscoverer{}, beaconDiscoverer{port: DiscoveryPort}}
-
-// browseAll runs every discoverer at once and merges what they see, one entry per address and
-// port, mDNS first. This device is left out.
-func browseAll(ctx context.Context, ds []Discoverer, timeout time.Duration, iface *net.Interface) []Found {
+// browseAll runs every discoverer at once and merges what they see (#132):
+//   - this device is left out, by the names it announces and by its addresses;
+//   - one entry per device (instance name), seen under several addresses when it has several
+//     networks (Wi-Fi and its own hotspot): the address reachable from one of our subnets is
+//     kept, mDNS before the beacon.
+func browseAll(ctx context.Context, ds []Discoverer, timeout time.Duration) []Found {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	byKey := map[string]Found{}
+	var all []Found
 	for _, d := range ds {
 		wg.Add(1)
 		go func(d Discoverer) {
 			defer wg.Done()
-			found, _ := d.Browse(ctx, timeout, iface)
+			found, _ := d.Browse(ctx, timeout)
 			mu.Lock()
-			defer mu.Unlock()
-			for _, f := range found {
-				if f.IP == nil || f.Port == 0 || IsLocalNetworkIP(f.IP.String()) {
-					continue
-				}
-				key := net.JoinHostPort(f.IP.String(), itoa(f.Port))
-				if old, ok := byKey[key]; ok && old.Via == "mdns" {
-					continue
-				}
-				byKey[key] = f
-			}
+			all = append(all, found...)
+			mu.Unlock()
 		}(d)
 	}
 	wg.Wait()
-	out := make([]Found, 0, len(byKey))
-	for _, f := range byKey {
-		out = append(out, f)
+	byName := map[string]Found{}
+	var order []string
+	for _, f := range all {
+		if f.IP == nil || f.Port == 0 || f.Instance == "" || isSelf(f) {
+			continue
+		}
+		old, ok := byName[f.Instance]
+		if !ok {
+			order = append(order, f.Instance)
+			byName[f.Instance] = f
+			continue
+		}
+		if better(f, old) {
+			byName[f.Instance] = f
+		}
+	}
+	out := make([]Found, 0, len(order))
+	for _, name := range order {
+		out = append(out, byName[name])
 	}
 	return out
+}
+
+// better reports whether a is a better way to reach a device than b: an address in one of our
+// subnets first, then mDNS before the beacon.
+func better(a, b Found) bool {
+	ra, rb := IsSubnetReachable(a.IP.String()), IsSubnetReachable(b.IP.String())
+	if ra != rb {
+		return ra
+	}
+	return a.Via == "mdns" && b.Via != "mdns"
 }
 
 // peerOf is a found device in the shape the callers know.
