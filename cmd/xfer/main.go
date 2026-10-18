@@ -207,12 +207,13 @@ func handleNode() {
 		return
 	}
 	// Control connections: unknown keys start UNAUTH. The pairing code only finds this node on
-	// the network; trust comes from the key (WP-3.6b): trusted, QR code secret, or the user.
+	// the network: a device pairs by a PIN or a QR code, or as a device of mutual trust (bible
+	// chapter 6, PAIR-09, PAIR-12).
 	pairCfg := securechan.Config{Identity: nodeID, Trust: nodeTrust, AllowUnknown: true, Gate: securechan.NewGate()}
 	localID = nodeID
 	var invite nodeInvitation               // the QR code shown by `pair --show`
 	var nodePIN atomic.Pointer[pairing.PIN] // the PIN shown by `pair --pin` (bible §6.2)
-	var pinOnce atomic.Bool                 // that PIN trusts for this session only
+	var offerTrustOnPair atomic.Bool        // pair --pin --trust: offer mutual trust once paired
 	// The node's single port: control connections to the loop below, data connections to the
 	// transfers registered with their peer's key (CHAN-01, CHAN-06).
 	nodeHub := transfer.NewHub(pairCfg)
@@ -228,11 +229,11 @@ func handleNode() {
 	fmt.Println("--------------------------------------------------")
 	fmt.Println(" Commands:")
 	fmt.Println("   scan              - Find devices on the network")
-	fmt.Println("   pair <code|n|ip>  - Connect; both screens compare fingerprints")
-	fmt.Println("   pair --show       - Show a QR code for the other device [--once]")
-	fmt.Println("   pair <medxfer://> - Pair with the device that shows a QR code [--once]")
-	fmt.Println("   pair --pin        - Show a PIN for the other device [--once]")
-	fmt.Println("   pair --pin <ip|n> - Type the PIN shown by that device [--once]")
+	fmt.Println("   pair <n|ip|code>  - Pair: that device shows a PIN, type it here [--trust]")
+	fmt.Println("   pair --show       - Show a QR code for the other device [--trust]")
+	fmt.Println("   pair <medxfer://> - Pair with the device that shows a QR code [--trust]")
+	fmt.Println("   pair --pin        - Show a PIN for the other device [--trust]")
+	fmt.Println("   trust             - Offer mutual trust to the paired device: no PIN next time")
 	fmt.Println("   send <filepath>   - Send file/folder to paired device")
 	fmt.Println("   stop              - Cancel an active transfer gracefully")
 	fmt.Println("   disconnect        - End pairing session")
@@ -268,9 +269,94 @@ func handleNode() {
 
 	inputChan := make(chan string)
 	msgChan := make(chan session.Message)
-	trustReqChan := make(chan *trustRequest) // incoming unknown keys, decided in the command loop
-	var pendingTrust *trustRequest
 	disconnectChan := make(chan bool)
+
+	// The trust negotiation of the active session (PAIR-10): the other device's offer waits for
+	// the next line typed; an offer of ours is over when answered, or after TrustAnswerTime.
+	var talk atomic.Pointer[pairing.TrustTalk]
+	var talkGen atomic.Int64 // bumped when an offer of ours is answered, or the session ends
+	var sessionMutual atomic.Bool
+	pendingTrustAsk := false
+	endTalk := func() {
+		talk.Store(nil)
+		talkGen.Add(1)
+		sessionMutual.Store(false)
+		pendingTrustAsk = false
+	}
+	offerTrust := func() {
+		t := talk.Load()
+		if activeSession == nil || t == nil {
+			fmt.Println("[-] You must 'pair' with a device first.")
+			return
+		}
+		if sessionMutual.Load() {
+			fmt.Println("[*] This device is already a device of mutual trust.")
+			return
+		}
+		if err := activeSession.Send(t.Offer()); err != nil {
+			fmt.Printf("[-] %v\n", err)
+			return
+		}
+		g := talkGen.Add(1)
+		fmt.Printf("[*] Mutual trust offered: waiting for the other device's answer (%d s)...\n", int(pairing.TrustAnswerTime.Seconds()))
+		time.AfterFunc(pairing.TrustAnswerTime, func() {
+			if talkGen.Load() == g {
+				fmt.Println("\n[-] No answer to the trust offer: the session stays temporary.")
+				printPrompt()
+			}
+		})
+	}
+	// startSession makes ch the active session with the device fp (pairing done). offer: offer
+	// mutual trust at once (--trust).
+	startSession := func(ch *session.Channel, fp identity.Fingerprint, name, ip string, mutual, offer, incoming bool) {
+		if err := touchPeer(nodeTrust, fp, name, ip); err != nil {
+			fmt.Printf("\n[-] Could not save the trusted device: %v\n", err)
+		}
+		ch.Authenticate()
+		activeSession = ch
+		talk.Store(pairing.NewTrustTalk(nodeTrust, identity.Peer{Fingerprint: fp, Alias: name, LastAddress: ip}))
+		talkGen.Add(1)
+		sessionMutual.Store(mutual)
+		how := "for this session only, nothing saved"
+		if mutual {
+			how = "a device of mutual trust"
+		}
+		if incoming {
+			fmt.Printf("\n\n[+] Device '%s' (%s) paired, key %s: %s. Press Enter to refresh prompt.\n", name, ip, fp.Short(), how)
+		} else {
+			fmt.Printf("[+] Paired with '%s' (%s), key %s: %s.\n", name, ip, fp.Short(), how)
+		}
+		go func(c *session.Channel) {
+			for {
+				m, err := c.Read()
+				if err != nil {
+					disconnectChan <- true
+					return
+				}
+				msgChan <- m
+			}
+		}(ch)
+		if offer && !mutual {
+			offerTrust()
+		}
+	}
+
+	// PINs on demand (PAIR-11): drawn when a device picks this node in its list, unless a PIN
+	// shown by `pair --pin` is still valid. The PIN goes to the screen only.
+	var demandFrom atomic.Value
+	pinDemand := pairing.NewPINOnDemand(pairing.PINConfig{Show: func(code string, expires time.Time) {
+		from, _ := demandFrom.Load().(string)
+		switch {
+		case code != "":
+			fmt.Printf("\n\n[?] The device at %s wants to pair: it must type this PIN:  %s   (until %s)\n",
+				from, pairing.FormatPIN(code), expires.Format("15:04:05"))
+		case expires.IsZero():
+			fmt.Println("\n[-] Too many wrong PINs: no more PINs for devices that ask (pair --pin starts again).")
+		default:
+			fmt.Printf("\n[-] Too many wrong PINs: a new PIN at %s.\n", expires.Format("15:04:05"))
+		}
+		printPrompt()
+	}})
 
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
@@ -306,7 +392,7 @@ func handleNode() {
 				continue
 			}
 
-			if msg.Type != "pair_request" && msg.Type != pairing.TypePIN {
+			if msg.Type != "pair_request" && msg.Type != pairing.TypePIN && msg.Type != pairing.TypePINWanted {
 				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "pair_request expected"})
 				ch.Close()
 				continue
@@ -321,11 +407,37 @@ func handleNode() {
 				printPrompt()
 				continue
 			}
-			// The pairing code, if any, is ignored (WP-3.6b). A QR code's secret admits its
-			// scanner; otherwise an unknown key is trusted only if the user says so (WP-3.3).
-			answer := trustOnce
-			if msg.Type == pairing.TypePIN { // the PIN this node shows: both keys proved (PAIR-03)
-				name, err := pairing.RespondPIN(ch, conn, msg, nodePIN.Load(), nodeID.Fingerprint)
+			// The pairing code, if any, is ignored (WP-3.6b). A PIN (shown, or on demand) or a QR
+			// code's secret admits a device for the session; a device of mutual trust needs
+			// neither (P3). Anything else is told to use a PIN or a QR code (PAIR-12).
+			offer, mutual := false, false
+			switch {
+			case msg.Type == pairing.TypePIN || msg.Type == pairing.TypePINWanted:
+				shown := nodePIN.Load()
+				if shown != nil && !shown.Live() {
+					shown = nil
+				}
+				var name string
+				var err error
+				if msg.Type == pairing.TypePINWanted {
+					demandFrom.Store(peerIP)
+					name, err = pairing.AnswerPINWanted(ch, conn, func() (*pairing.PIN, error) {
+						if shown != nil {
+							return shown, nil
+						}
+						return pinDemand.Get()
+					}, nodeID.Fingerprint)
+				} else {
+					pin := shown
+					if pin == nil {
+						pin = pinDemand.Current() // asked for on another connection
+					}
+					name, err = pairing.RespondPIN(ch, conn, msg, pin, nodeID.Fingerprint)
+				}
+				if errors.Is(err, pairing.ErrNoPINTyped) {
+					ch.Close()
+					continue
+				}
 				if err != nil {
 					_ = ch.Send(session.Message{Type: pairing.TypeReject, FileName: pairing.ErrRefused.Error()}) // PAIR-07
 					ch.Close()
@@ -333,73 +445,51 @@ func handleNode() {
 					printPrompt()
 					continue
 				}
+				if shown == nil {
+					pinDemand.Close() // a PIN serves one pairing (PAIR-02)
+				}
 				_ = conn.SetDeadline(time.Time{})
 				msg.DeviceName = name // sent only after both confirmations (PAIR-07)
-				answer = trustAlways
-				if pinOnce.Load() {
-					answer = trustOnce
-				}
-			} else if msg.Secret != "" {
+				offer = shown != nil && offerTrustOnPair.Load()
+			case msg.Secret != "":
 				var ok bool
-				if answer, ok = invite.redeem(msg.Secret); !ok {
+				if offer, ok = invite.redeem(msg.Secret); !ok {
 					_ = ch.Send(session.Message{Type: "pair_reject", FileName: pairing.ErrRefused.Error()}) // PAIR-07
 					ch.Close()
 					fmt.Printf("\n[-] Pairing attempt from %s refused: wrong or expired QR code.\n", peerIP)
 					printPrompt()
 					continue
 				}
-			} else if conn.State() == securechan.Unauth {
-				req := &trustRequest{name: msg.DeviceName, ip: peerIP, fp: peerFP,
-					expires: time.Now().Add(trustPromptTimeout), reply: make(chan trustAnswer, 1)}
-				answer = trustRefused
-				select {
-				case trustReqChan <- req:
-					select {
-					case answer = <-req.reply:
-					case <-time.After(trustPromptTimeout):
-					}
-				case <-time.After(trustPromptTimeout):
+			case pairing.Mutual(nodeTrust, peerFP, msg.TrustsYou):
+				mutual = true
+			default:
+				switch {
+				case msg.TrustsYou:
+					fmt.Printf("\n[*] '%s' (%s) trusts this node, but this node no longer trusts it: it must pair by PIN.\n", msg.DeviceName, peerIP)
+				case nodeTrust.Contains(peerFP):
+					fmt.Printf("\n[*] This node trusts '%s' (%s), but it no longer trusts this node: it must pair by PIN.\n", msg.DeviceName, peerIP)
 				}
-				if answer == trustRefused {
-					_ = ch.Send(session.Message{Type: "pair_reject", FileName: "device not trusted"})
-					ch.Close()
-					fmt.Printf("\n[-] Pairing with %s refused: device not trusted.\n", peerIP)
-					printPrompt()
-					continue
-				}
+				_ = ch.Send(session.Message{Type: "pair_reject", FileName: pairing.ErrPINRequired.Error(), Code: pairing.CodePINRequired})
+				ch.Close()
+				printPrompt()
+				continue
 			}
-			if err := rememberPeer(nodeTrust, peerFP, msg.DeviceName, peerIP, answer); err != nil {
-				fmt.Printf("\n[-] Could not save the trusted device: %v\n", err)
-			}
-
-			ch.Authenticate()
 			_ = ch.Send(session.Message{
 				Type:       "pair_accept",
 				DeviceName: discServer.GetPeer().DeviceName,
+				TrustsYou:  pairing.Declares(nodeTrust, peerFP),
 			})
-			activeSession = ch
 			devLabel := msg.DeviceName
 			if devLabel == "" {
 				devLabel = "Remote Node"
 			}
-			fmt.Printf("\n\n[+] Device '%s' (%s) paired, key %s. Press Enter to refresh prompt.\n", devLabel, activeSession.RemoteIP(), peerFP.Short())
-
-			go func(c *session.Channel) {
-				for {
-					m, err := c.Read()
-					if err != nil {
-						disconnectChan <- true
-						return
-					}
-					msgChan <- m
-				}
-			}(activeSession)
+			startSession(ch, peerFP, devLabel, peerIP, mutual, offer, true)
 		}
 	}()
 
 	printPrompt = func() {
-		if pendingTrust != nil {
-			fmt.Print("\n[?] Trust this device? [y]es for this session / [a]lways / [N]o: ")
+		if pendingTrustAsk {
+			fmt.Print("\n[?] Accept mutual trust? [y/N]: ")
 			return
 		}
 		if pendingOffer != nil {
@@ -431,28 +521,26 @@ func handleNode() {
 
 	for {
 		select {
-		case req := <-trustReqChan:
-			pendingTrust = req
-			fmt.Printf("\n\n%s", trustQuestion(req.name, req.fp, nodeID.Fingerprint))
-			continue
 		case text := <-inputChan:
 			text = strings.TrimSpace(text)
-			if resume := takeDiskResume(); resume != nil && pendingTrust == nil && pendingOffer == nil {
+			if resume := takeDiskResume(); resume != nil && !pendingTrustAsk && pendingOffer == nil {
 				fmt.Println("[*] Resuming...")
 				resume()
 				printPrompt()
 				continue
 			}
-			if pendingTrust != nil {
-				req := pendingTrust
-				pendingTrust = nil
-				if time.Now().After(req.expires) {
-					fmt.Println("[-] Too late: the pairing request has expired.")
-				} else {
-					answer := parseTrustAnswer(text)
-					req.reply <- answer
-					if answer == trustRefused {
-						fmt.Println("[-] Device not trusted.")
+			if pendingTrustAsk { // the other device's offer of mutual trust (PAIR-10)
+				pendingTrustAsk = false
+				a := strings.ToLower(text)
+				yes := a == "y" || a == "yes" || a == "o" || a == "oui"
+				if t := talk.Load(); t != nil && activeSession != nil {
+					if m, err := t.Answer(yes); err != nil {
+						fmt.Println("[-] Too late: the trust offer has expired.")
+					} else {
+						_ = activeSession.Send(m)
+						if !yes {
+							fmt.Println("[-] Mutual trust declined: the session stays temporary.")
+						}
 					}
 				}
 				printPrompt()
@@ -547,50 +635,50 @@ func handleNode() {
 				if len(parts) == 2 {
 					args = strings.Fields(parts[1])
 				}
-				once := false
 				var rawArg string
-				show, usePIN := false, false
+				show, usePIN, wantTrust := false, false, false
 				for _, a := range args {
 					switch a {
-					case "--once":
-						once = true
+					case "--trust":
+						wantTrust = true
 					case "--show":
 						show = true
 					case "--pin":
 						usePIN = true
+					case "--once": // a session saves nothing anyway (PAIR-08)
 					default:
 						rawArg = strings.Trim(a, `'"`) // a URI pasted with its quotes
 					}
 				}
-				if usePIN && rawArg == "" { // show a PIN; the other device types it (bible §6.2)
-					addr := net.JoinHostPort(getLocalIP(), strconv.Itoa(nodePort))
-					p, err := pairing.NewPIN(pairing.PINConfig{Show: pinScreen(os.Stdout,
-						"pair --pin "+addr+"   (in xfer node; or: xfer pair --pin "+addr+")")})
-					if err != nil {
-						fmt.Printf("[-] %v\n", err)
-						break
+				if (usePIN || show) && rawArg == "" {
+					if usePIN { // show a PIN; the other device types it (bible §6.2)
+						addr := net.JoinHostPort(getLocalIP(), strconv.Itoa(nodePort))
+						p, err := pairing.NewPIN(pairing.PINConfig{Show: pinScreen(os.Stdout,
+							"pair --pin "+addr+"   (in xfer node; or: xfer pair --pin "+addr+")")})
+						if err != nil {
+							fmt.Printf("[-] %v\n", err)
+							break
+						}
+						offerTrustOnPair.Store(wantTrust)
+						nodePIN.Store(p)
+						pinDemand.Reset() // the user pairs again: PINs on demand may be drawn again (#105)
 					}
-					pinOnce.Store(once)
-					nodePIN.Store(p)
-					if !show {
-						break
+					if show {
+						u, err := invite.renew(nodeID.Fingerprint, getLocalIP(), nodePort, wantTrust)
+						if err != nil {
+							fmt.Printf("[-] %v\n", err)
+							break
+						}
+						fmt.Println(" On the other device, scan this QR code or run there:")
+						fmt.Printf("   xfer pair '%s'   (or, in xfer node: pair <uri>)\n\n", u)
+						discovery.PrintTerminalQR(u.String())
+						fmt.Printf(" This device: %s   (valid %d s, for one device)\n", nodeID.Fingerprint.Short(), int(pairing.TTL.Seconds()))
 					}
-				}
-				if show {
-					u, err := invite.renew(nodeID.Fingerprint, getLocalIP(), nodePort, once)
-					if err != nil {
-						fmt.Printf("[-] %v\n", err)
-						break
-					}
-					fmt.Println(" On the other device, scan this QR code or run there:")
-					fmt.Printf("   xfer pair '%s'   (or, in xfer node: pair <uri>)\n\n", u)
-					discovery.PrintTerminalQR(u.String())
-					fmt.Printf(" This device: %s   (valid %d s, for one device)\n", nodeID.Fingerprint.Short(), int(pairing.TTL.Seconds()))
 					break
 				}
 				if rawArg == "" {
-					fmt.Println("[-] Usage: pair <6-digit code | index | IP | medxfer://...> [--once], pair --show [--once],")
-					fmt.Println("    pair --pin [--once] (show a PIN), or pair --pin <index | IP> [--once] (type the PIN shown there)")
+					fmt.Println("[-] Usage: pair <index | IP[:port] | 6-digit code | medxfer://...> [--trust], pair --show [--trust],")
+					fmt.Println("    or pair --pin [--trust] (show a PIN)")
 					break
 				}
 				targetIP := rawArg
@@ -607,7 +695,7 @@ func handleNode() {
 					qr = &u
 					targetIP, targetPort = u.Host, u.Port
 				} else if normCode, err := discovery.NormalizePairingCode(rawArg); err == nil {
-					// The code only finds the device; its key is checked below.
+					// The code only finds the device; it pairs by a PIN below.
 					fmt.Printf("[*] Searching for device with code '%s'...\n", normCode)
 					ctxPair, cancelPair := context.WithTimeout(context.Background(), 4*time.Second)
 					peer, err := discovery.ResolvePairingCode(ctxPair, normCode, 4*time.Second)
@@ -641,123 +729,106 @@ func handleNode() {
 					break
 				}
 
-				pinCode := ""
-				if usePIN { // typed here, never an argument: the PIN stays out of any history
-					fmt.Print("PIN shown on the other device: ")
-					select {
-					case pinCode = <-inputChan:
-					case <-time.After(trustPromptTimeout):
-						fmt.Println()
-					}
-					pinCode = strings.TrimSpace(pinCode)
-					if _, err := pairing.NormalizePIN(pinCode); err != nil {
-						fmt.Printf("[-] %v\n", err)
-						break
-					}
-				}
-
-				fmt.Printf("[*] Connecting to node at %s:%d...\n", targetIP, targetPort)
+				target := net.JoinHostPort(targetIP, strconv.Itoa(targetPort))
+				myName := discServer.GetPeer().DeviceName
+				fmt.Printf("[*] Connecting to node at %s...\n", target)
 				dialCfg := pairCfg
 				if qr != nil {
 					dialCfg.Expected, dialCfg.AllowUnknown = qr.Fingerprint, false // the QR code's key
 				}
-				conn, err := dialSecure(net.JoinHostPort(targetIP, strconv.Itoa(int(targetPort))), dialCfg)
+				conn, err := dialSecure(target, dialCfg)
 				if err != nil {
 					fmt.Println("[-] Failed to connect:", err)
 					break
 				}
-
 				peerFP := conn.PeerFingerprint()
 				if known, changed := keyChanged(nodeTrust, targetIP, peerFP); changed && qr == nil {
 					fmt.Println(keyChangedAlert(known, targetIP, peerFP))
 					conn.Close()
 					break
 				}
-
 				ch := session.NewChannel(conn)
 
-				if pinCode != "" {
-					if err := pairing.InitiatePIN(ch, conn, pinCode, nodeID.Fingerprint, discServer.GetPeer().DeviceName); err != nil {
+				// A QR code's secret, or a device this node trusts (mutual trust is checked on
+				// both sides, PAIR-09); otherwise a PIN on demand (PAIR-11).
+				declares := pairing.Declares(nodeTrust, peerFP)
+				byPIN := qr == nil && !declares
+				var resp session.Message
+				if !byPIN {
+					req := session.Message{Type: "pair_request", DeviceName: myName, TrustsYou: declares}
+					if qr != nil {
+						req.Secret = pairing.EncodeSecret(qr.Secret) // proves we saw the QR code
+					}
+					_ = ch.Send(req)
+					_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+					resp, err = ch.Read()
+					_ = conn.SetReadDeadline(time.Time{})
+					if err == nil && qr == nil && resp.Type == pairing.TypeReject && resp.Code == pairing.CodePINRequired {
+						fmt.Println("[*] This node trusts that device, but it no longer trusts this node: that gives nothing (pairing by PIN).")
+						ch.Close()
+						if conn, err = dialSecure(target, pairCfg); err != nil {
+							fmt.Println("[-] Failed to connect:", err)
+							break
+						}
+						peerFP = conn.PeerFingerprint()
+						ch = session.NewChannel(conn)
+						byPIN = true
+					}
+				}
+				if byPIN {
+					if err := pairing.RequestPIN(ch, conn); err != nil {
 						if errors.Is(err, pairing.ErrRefused) {
-							fmt.Println("[-] Pairing refused: check the PIN (a PIN changes after 3 wrong ones), or the address.")
+							fmt.Println("[-] The other device shows no PIN (too many wrong ones?): try again later.")
 						} else {
 							fmt.Printf("[-] Pairing failed: %v\n", err)
 						}
 						ch.Close()
 						break
 					}
-				} else {
-					req := session.Message{Type: "pair_request", DeviceName: discServer.GetPeer().DeviceName}
-					if qr != nil {
-						req.Secret = pairing.EncodeSecret(qr.Secret) // proves we saw the QR code
+					// Typed here, never an argument: the PIN stays out of any history.
+					_ = conn.SetDeadline(time.Now().Add(pairing.TTL))
+					fmt.Print("PIN shown on the other device: ")
+					var typed string
+					select {
+					case typed = <-inputChan:
+					case <-time.After(pairing.TTL):
+						fmt.Println()
 					}
-					_ = ch.Send(req)
+					if err := pairing.InitiatePIN(ch, conn, strings.TrimSpace(typed), nodeID.Fingerprint, myName); err != nil {
+						if errors.Is(err, pairing.ErrRefused) {
+							fmt.Println("[-] Pairing refused: check the PIN (a PIN changes after 3 wrong ones).")
+						} else {
+							fmt.Printf("[-] Pairing failed: %v\n", err)
+						}
+						ch.Close()
+						break
+					}
+					_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+					resp, err = ch.Read()
+					_ = conn.SetDeadline(time.Time{})
 				}
-
-				// Wait for the answer: the other user may be asked to trust this device.
-				_ = conn.SetReadDeadline(time.Now().Add(trustPromptTimeout + 10*time.Second))
-				resp, err := ch.Read()
-				_ = conn.SetReadDeadline(time.Time{})
-
-				if err != nil || (resp.Type != "pair_accept" && resp.Type != "pair_hello_ack") {
+				if err != nil || resp.Type != "pair_accept" {
 					reason := "refused by the other device"
 					if err != nil {
 						reason = err.Error()
-					}
-					if resp.FileName != "" {
+					} else if resp.FileName != "" {
 						reason = resp.FileName
 					}
 					fmt.Printf("[-] Pairing rejected: %s\n", reason)
 					ch.Close()
 					break
 				}
-
 				remoteName := resp.DeviceName
 				if remoteName == "" {
 					remoteName = targetDeviceName
 				}
-				// The QR code's key is trusted; otherwise an unknown key is trusted only if our
-				// user says so (WP-3.3).
-				answer := trustOnce
-				if pinCode != "" || qr != nil { // the PIN, or the QR code's key, proved the device
-					if !once {
-						answer = trustAlways
-					}
-				} else if conn.State() == securechan.Unauth {
-					fmt.Print(trustQuestion(remoteName, peerFP, nodeID.Fingerprint))
-					answer = trustRefused
-					select {
-					case reply := <-inputChan:
-						answer = parseTrustAnswer(reply)
-					case <-time.After(trustPromptTimeout):
-						fmt.Println()
-					}
-					if answer == trustRefused {
-						fmt.Println("[-] Pairing cancelled: device not trusted.")
-						ch.Close()
-						break
-					}
-				}
-				if err := rememberPeer(nodeTrust, peerFP, remoteName, targetIP, answer); err != nil {
-					fmt.Printf("[-] Could not save the trusted device: %v\n", err)
-				}
-				ch.Authenticate()
-				activeSession = ch
 				if remoteName == "" {
 					remoteName = targetIP
 				}
-				fmt.Printf("[+] Paired successfully with '%s' (%s)!\n", remoteName, targetIP)
-
-				go func(c *session.Channel) {
-					for {
-						msg, err := c.Read()
-						if err != nil {
-							disconnectChan <- true
-							return
-						}
-						msgChan <- msg
-					}
-				}(activeSession)
+				mutual := !byPIN && qr == nil && pairing.Mutual(nodeTrust, peerFP, resp.TrustsYou)
+				startSession(ch, peerFP, remoteName, targetIP, mutual, wantTrust, false)
+			case "trust":
+				offerTrust()
 			case "disconnect":
 				if activeSession != nil {
 					activeSession.Send(session.Message{Type: "disconnect"})
@@ -765,6 +836,7 @@ func handleNode() {
 					activeSession = nil
 					lastOffered.close() // its data connections end with the session
 					lastOffered, incomingOffer, pendingOffer = nil, nil, nil
+					endTalk()
 					fmt.Println("[*] Disconnected.")
 				}
 			case "stop":
@@ -847,6 +919,7 @@ func handleNode() {
 					activeSession = nil
 					lastOffered.close() // its data connections end with the session
 					lastOffered, incomingOffer, pendingOffer = nil, nil, nil
+					endTalk()
 				}
 				if transferCancel != nil {
 					transferCancel()
@@ -916,6 +989,36 @@ func handleNode() {
 				}
 				printPrompt()
 
+			case pairing.TypeTrustOffer, pairing.TypeTrustAccept, pairing.TypeTrustDecline, pairing.TypeTrustCommit:
+				t := talk.Load()
+				if t == nil || activeSession == nil {
+					break
+				}
+				reply, ev, err := t.Handle(msg)
+				if err != nil {
+					fmt.Printf("\n[-] Could not save the trusted device: %v\n", err)
+					printPrompt()
+					break
+				}
+				if reply != nil {
+					_ = activeSession.Send(*reply)
+				}
+				switch ev {
+				case pairing.TrustAsked:
+					pendingTrustAsk = true
+					fmt.Println("\n\n[?] The paired device offers mutual trust: both devices would then reconnect without a PIN.")
+					printPrompt()
+				case pairing.TrustEstablished:
+					talkGen.Add(1)
+					sessionMutual.Store(true)
+					fmt.Println("\n[+] Mutual trust established, on both sides: next time, no PIN (xfer trust list).")
+					printPrompt()
+				case pairing.TrustDeclined:
+					talkGen.Add(1)
+					fmt.Println("\n[-] Mutual trust declined by the other device: the session stays temporary.")
+					printPrompt()
+				}
+
 			case session.TypeError: // never answered: two peers must not ping-pong errors
 				fmt.Printf("\n[-] The peer could not handle a message: %s (%s)\n", msg.Error, msg.Code)
 				printPrompt()
@@ -933,6 +1036,7 @@ func handleNode() {
 				activeSession = nil
 				lastOffered.close() // its data connections end with the session
 				lastOffered, incomingOffer, pendingOffer = nil, nil, nil
+				endTalk()
 				if transferCancel != nil {
 					transferCancel()
 					transferCancel = nil
