@@ -9,26 +9,6 @@ import (
 	"github.com/Medboy224/medXfer/pkg/pairing"
 )
 
-func TestParseTrustAnswer(t *testing.T) {
-	for in, want := range map[string]trustAnswer{
-		"y": trustOnce, "Yes": trustOnce, "o": trustOnce, " oui ": trustOnce,
-		"a": trustAlways, "always": trustAlways, "toujours": trustAlways,
-		"": trustRefused, "n": trustRefused, "no": trustRefused, "yolo": trustRefused, "ok": trustRefused,
-	} {
-		if got := parseTrustAnswer(in); got != want {
-			t.Errorf("parseTrustAnswer(%q) = %v, want %v", in, got, want)
-		}
-	}
-}
-
-func TestTrustQuestionShowsBothFingerprints(t *testing.T) {
-	a, b := newTestIdentity(t), newTestIdentity(t)
-	q := trustQuestion("phone", a.Fingerprint, b.Fingerprint)
-	if !strings.Contains(q, a.Fingerprint.Short()) || !strings.Contains(q, b.Fingerprint.Short()) || !strings.Contains(q, "[N]o") {
-		t.Fatalf("question:\n%s", q)
-	}
-}
-
 // ID-05: the address of a trusted device presenting another key is reported; the same key,
 // or an address nobody trusted, is not.
 func TestKeyChanged(t *testing.T) {
@@ -38,7 +18,7 @@ func TestKeyChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	known, other := newTestIdentity(t), newTestIdentity(t)
-	if err := rememberPeer(ts, known.Fingerprint, "phone", "192.168.1.20", trustAlways); err != nil {
+	if err := ts.Add(identity.Peer{Fingerprint: known.Fingerprint, Alias: "phone", LastAddress: "192.168.1.20"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, bad := keyChanged(ts, "192.168.1.20", known.Fingerprint); bad {
@@ -57,26 +37,23 @@ func TestKeyChanged(t *testing.T) {
 	}
 }
 
-func TestRememberPeer(t *testing.T) {
+// PAIR-08: touchPeer never adds a device; it updates where a trusted one was seen.
+func TestTouchPeer(t *testing.T) {
 	ts, err := identity.OpenTrustStore(filepath.Join(t.TempDir(), identity.TrustFile))
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := newTestIdentity(t)
-	if err := rememberPeer(ts, a.Fingerprint, "phone", "10.0.0.2", trustOnce); err != nil {
+	if err := touchPeer(ts, a.Fingerprint, "phone", "10.0.0.2"); err != nil {
 		t.Fatal(err)
 	}
 	if ts.Contains(a.Fingerprint) {
-		t.Fatal("a once-only decision was saved")
+		t.Fatal("an unknown device was saved")
 	}
-	if err := rememberPeer(ts, a.Fingerprint, "phone", "10.0.0.2", trustAlways); err != nil {
+	if err := ts.Add(identity.Peer{Fingerprint: a.Fingerprint, Alias: "phone", LastAddress: "10.0.0.2"}); err != nil {
 		t.Fatal(err)
 	}
-	if p, ok := ts.Get(a.Fingerprint); !ok || p.LastAddress != "10.0.0.2" || p.Alias != "phone" {
-		t.Fatalf("saved peer = %+v, %v", p, ok)
-	}
-	// A trusted device seen at a new address: the address is updated.
-	if err := rememberPeer(ts, a.Fingerprint, "", "10.0.0.7", trustRefused); err != nil {
+	if err := touchPeer(ts, a.Fingerprint, "", "10.0.0.7"); err != nil {
 		t.Fatal(err)
 	}
 	if p, _ := ts.Get(a.Fingerprint); p.LastAddress != "10.0.0.7" || p.Alias != "phone" {
@@ -93,7 +70,7 @@ func newTestIdentity(t *testing.T) *identity.Identity {
 	return id
 }
 
-// xfer node's QR code: its secret admits one device, saved unless --once (WP-3.6b).
+// xfer node's QR code: its secret admits one device; with --trust, mutual trust is offered.
 func TestNodeInvitation(t *testing.T) {
 	id, _ := testDevice(t)
 	var n nodeInvitation
@@ -112,15 +89,15 @@ func TestNodeInvitation(t *testing.T) {
 	if _, ok := n.redeem(pairing.EncodeSecret(bad)); ok {
 		t.Fatal("a wrong secret was accepted")
 	}
-	if a, ok := n.redeem(pairing.EncodeSecret(u.Secret)); !ok || a != trustAlways {
-		t.Fatalf("right secret: %v, %v", a, ok)
+	if offer, ok := n.redeem(pairing.EncodeSecret(u.Secret)); !ok || offer {
+		t.Fatalf("right secret: %v, %v", offer, ok)
 	}
 	if _, ok := n.redeem(pairing.EncodeSecret(u.Secret)); ok {
 		t.Fatal("the secret was accepted twice")
 	}
 	u, _ = n.renew(id.Fingerprint, "10.0.0.2", 18887, true)
-	if a, ok := n.redeem(pairing.EncodeSecret(u.Secret)); !ok || a != trustOnce {
-		t.Fatalf("--once: %v, %v", a, ok)
+	if offer, ok := n.redeem(pairing.EncodeSecret(u.Secret)); !ok || !offer {
+		t.Fatalf("--trust: %v, %v", offer, ok)
 	}
 }
 

@@ -1,12 +1,13 @@
 package main
 
-// Provisional trust for the command line (WP-3.3, ID-05): the first time a device with an
-// unknown key connects, the user sees both short fingerprints and decides; never a silent
-// trust. A trusted device's address that shows up with another key is refused and reported.
+// Trust on the command line (bible chapter 6, lot « Modèle de confiance »): a device seen for
+// the first time pairs by a PIN or a QR code, never on fingerprints compared by eye (PAIR-12);
+// a session writes nothing (PAIR-08); mutual trust is offered and accepted on both sides
+// (PAIR-10). A trusted device's address that shows up with another key is refused and
+// reported (ID-05).
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,32 +16,13 @@ import (
 	"github.com/Medboy224/medXfer/pkg/session"
 )
 
-// trustAnswer is the user's decision about an unknown key.
-type trustAnswer int
-
-const (
-	trustRefused trustAnswer = iota // default: anything but an explicit yes
-	trustOnce                       // this session only
-	trustAlways                     // saved in trusted.json
-)
-
-// trustPromptTimeout bounds how long an incoming pairing waits for the user.
+// trustPromptTimeout bounds how long a question waits for the user.
 const trustPromptTimeout = 60 * time.Second
-
-// parseTrustAnswer reads the user's reply. Only an explicit yes trusts: the default is no.
-func parseTrustAnswer(s string) trustAnswer {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "y", "yes", "o", "oui":
-		return trustOnce
-	case "a", "always", "t", "toujours":
-		return trustAlways
-	}
-	return trustRefused
-}
 
 // trustedAt is " - trusted 'alias'" when ip is the last address of a trusted device: it is
 // recognized in a discovery list before any pairing, on this device only (the alias never goes
-// out, DISC-06). It is a hint: the key is still checked when connecting (ID-05).
+// out, DISC-06). It is a hint: the key and the mutual trust are still checked when connecting
+// (ID-05, PAIR-09).
 func trustedAt(ts *identity.TrustStore, ip string) string {
 	if ts == nil {
 		return ""
@@ -49,19 +31,6 @@ func trustedAt(ts *identity.TrustStore, ip string) string {
 		return fmt.Sprintf(" - trusted '%s'", p.Alias)
 	}
 	return ""
-}
-
-// trustQuestion shows both short fingerprints, to compare with the other screen.
-func trustQuestion(peerName string, peer, self identity.Fingerprint) string {
-	if peerName == "" {
-		peerName = "unknown device"
-	}
-	return fmt.Sprintf("[?] New device '%s'.\n"+
-		"    Its fingerprint:  %s\n"+
-		"    Ours:             %s\n"+
-		"    Check that the other screen shows the same two fingerprints.\n"+
-		"    Trust it? [y]es for this session / [a]lways / [N]o: ",
-		peerName, peer.Short(), self.Short())
 }
 
 // keyChanged implements ID-05: if ip is the last address of a trusted device and the key
@@ -89,35 +58,53 @@ func keyChangedAlert(known identity.Peer, ip string, fp identity.Fingerprint) st
 		ip, name, known.Fingerprint.Short(), fp.Short(), name, known.Fingerprint.Short())
 }
 
-// rememberPeer records the decision: a new trusted device (trustAlways), or the last address
-// of an already trusted one.
-func rememberPeer(ts *identity.TrustStore, fp identity.Fingerprint, name, ip string, answer trustAnswer) error {
+// touchPeer records where a trusted device was seen, and its name. It never adds a device:
+// only a trust negotiation both users accepted does (PAIR-08, PAIR-10).
+func touchPeer(ts *identity.TrustStore, fp identity.Fingerprint, name, ip string) error {
 	if ts == nil {
 		return nil
 	}
-	if p, ok := ts.Get(fp); ok {
-		if p.LastAddress == ip && (name == "" || p.Alias == name) {
-			return nil
-		}
-		p.LastAddress = ip
-		if name != "" {
-			p.Alias = name
-		}
-		return ts.Add(p)
-	}
-	if answer != trustAlways {
+	p, ok := ts.Get(fp)
+	if !ok || (p.LastAddress == ip && (name == "" || p.Alias == name)) {
 		return nil
 	}
-	return ts.Add(identity.Peer{Fingerprint: fp, Alias: name, LastAddress: ip})
+	p.LastAddress = ip
+	if name != "" {
+		p.Alias = name
+	}
+	return ts.Add(p)
 }
 
-// trustRequest is an incoming pairing waiting for the user's decision in the command loop.
-type trustRequest struct {
-	name    string
-	ip      string
-	fp      identity.Fingerprint
-	expires time.Time
-	reply   chan trustAnswer // buffered: the command loop never blocks on it
+// nodeInvitation is the QR code shown by `pair --show` in xfer node (WP-3.6b): its secret
+// admits one device, for the session; with --trust, mutual trust is offered once paired.
+type nodeInvitation struct {
+	mu    sync.Mutex
+	inv   *pairing.Invitation
+	trust bool
+}
+
+// renew replaces the QR code with a new one, valid pairing.TTL.
+func (n *nodeInvitation) renew(fp identity.Fingerprint, host string, port int, trust bool) (pairing.URI, error) {
+	inv, err := pairing.NewInvitation(pairing.TTL)
+	if err != nil {
+		return pairing.URI{}, err
+	}
+	n.mu.Lock()
+	n.inv, n.trust = inv, trust
+	n.mu.Unlock()
+	return inv.URI(fp, host, port), nil
+}
+
+// redeem checks a scanner's secret: single use, before expiry, in constant time. offer: the
+// QR code was shown with --trust.
+func (n *nodeInvitation) redeem(secret string) (offer, ok bool) {
+	n.mu.Lock()
+	inv, trust := n.inv, n.trust
+	n.mu.Unlock()
+	if inv == nil || inv.Redeem(pairing.DecodeSecret(secret), time.Now()) != nil {
+		return false, false
+	}
+	return trust, true
 }
 
 // localID is this device's identity once a command has loaded it (node, send, recv).
@@ -129,38 +116,4 @@ func sessionPeer(s *session.Channel) identity.Fingerprint {
 		return identity.Fingerprint{}
 	}
 	return s.PeerFingerprint()
-}
-
-// nodeInvitation is the QR code shown by `pair --show` in xfer node (WP-3.6b): its secret
-// admits one device, which becomes trusted (this session only with --once).
-type nodeInvitation struct {
-	mu   sync.Mutex
-	inv  *pairing.Invitation
-	once bool
-}
-
-// renew replaces the QR code with a new one, valid pairing.TTL.
-func (n *nodeInvitation) renew(fp identity.Fingerprint, host string, port int, once bool) (pairing.URI, error) {
-	inv, err := pairing.NewInvitation(pairing.TTL)
-	if err != nil {
-		return pairing.URI{}, err
-	}
-	n.mu.Lock()
-	n.inv, n.once = inv, once
-	n.mu.Unlock()
-	return inv.URI(fp, host, port), nil
-}
-
-// redeem checks a scanner's secret: single use, before expiry, in constant time.
-func (n *nodeInvitation) redeem(secret string) (trustAnswer, bool) {
-	n.mu.Lock()
-	inv, once := n.inv, n.once
-	n.mu.Unlock()
-	if inv == nil || inv.Redeem(pairing.DecodeSecret(secret), time.Now()) != nil {
-		return trustRefused, false
-	}
-	if once {
-		return trustOnce, true
-	}
-	return trustAlways, true
 }
