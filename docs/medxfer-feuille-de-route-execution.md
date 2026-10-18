@@ -233,7 +233,7 @@ Bible chapitre 11 : listener séparé, jeton porteur sans cookie (fragment d'URL
 ### J8 — Mesure, optimisation, finitions v1 · ≈ 5 à 8 jours
 Matrice d'appareils réels (§14.3), gate G3, optimisations ciblées d'après le rapport par étape, benchmark nocturne en CI (`DEV-21`), suppression de `devui` si G7 est remplie, ingénierie de livraison (signature, paquets, `SECURITY.md`, documentation d'utilisation, premier `README`). **Critère de sortie :** objectif de 80 % d'iperf3 atteint ou plan écrit ; toutes les exigences ont leur test vert.
 
-**Pare-feu Windows (constat de WP-6.5, 15/10/2026) :** sans règle entrante, un PC Windows trouve les autres mais reste invisible, sans message. L'installateur pose les règles de medXfer (UDP 5353 mDNS, UDP 19998 balise, TCP 18888 transferts) sur les profils Privé et Public ; l'application vérifie au lancement qu'elles existent et sinon propose de les ajouter (élévation UAC), avec le message « Ce PC n'est pas visible par les autres appareils ».
+**Pare-feu Windows (constat de WP-6.5, 15/10/2026) :** sans règle entrante, un PC Windows trouve les autres mais reste invisible, sans message. L'installateur pose les règles de medXfer (UDP 5353 mDNS, UDP 19998 balise, TCP 18887, le port unique de medXfer : appairage et transferts, #133) sur les profils Privé et Public ; l'application vérifie au lancement qu'elles existent et sinon propose de les ajouter (élévation UAC), avec le message « Ce PC n'est pas visible par les autres appareils ».
 
 ### J9 — macOS et iOS · à planifier quand la gate G8 est levée
 Prototype G2b, Bonjour, permission « réseau local », comportement en arrière-plan sur iPhone, empaquetage et distribution. Pas de plan détaillé avant que l'environnement macOS existe.
