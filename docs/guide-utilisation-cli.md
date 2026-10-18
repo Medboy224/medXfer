@@ -9,53 +9,58 @@ Les deux appareils doivent être sur le **même réseau** (même Wi-Fi, ou le po
 | Je veux… | Sur l'appareil qui envoie | Sur l'appareil qui reçoit |
 |---|---|---|
 | Envoyer, l'autre a une caméra | `xfer send fichier` | Scanner le QR, ou copier la commande `xfer recv 'medxfer://…'` affichée |
-| Envoyer, l'autre n'a pas de caméra | `xfer send --pin fichier` | `xfer recv --pin ADRESSE`, puis taper le PIN affiché |
-| Envoyer sans rien recopier | `xfer send fichier` | `xfer recv`, choisir l'appareil dans la liste, puis répondre à la question de confiance (§3) |
+| Envoyer sans caméra | `xfer send fichier` | `xfer recv`, choisir l'appareil dans la liste, puis taper le PIN que l'émetteur affiche |
+| Envoyer en donnant l'adresse | `xfer send fichier` | `xfer recv --pin ADRESSE`, puis taper le PIN affiché |
+| Ne plus taper de PIN avec cet appareil | `xfer send --trust fichier` | `xfer recv --trust` : si les deux acceptent, la prochaine fois il n'y aura plus de PIN (§3) |
 
-`ADRESSE` est affichée par l'émetteur, par exemple `10.86.69.174:18887`. Tous les modes de medXfer utilisent ce même port, 18887.
+`xfer send` affiche **à la fois** le QR code et le PIN. `ADRESSE` est affichée par l'émetteur, par exemple `10.86.69.174:18887`. Tous les modes de medXfer utilisent ce même port, 18887.
 
 Pour recevoir dans un autre dossier : `xfer recv … --out DOSSIER`.
 
-## 2. Pourquoi parfois un PIN, parfois une question, parfois rien ?
+## 2. Pourquoi parfois un PIN, parfois rien ?
 
-medXfer ne transfère qu'entre appareils qui se sont **reconnus**. Il y a quatre façons de se reconnaître, de la plus simple à la plus prudente :
+medXfer ne transfère qu'entre appareils qui se sont **reconnus**. Un appareil vu pour la première fois se reconnaît par un **QR code** ou un **PIN**, jamais autrement : personne n'a à comparer de longues empreintes à l'œil.
 
-| Situation | Ce que vous voyez | Pourquoi |
+| Situation | Ce que vous voyez | Ce qui est enregistré |
 |---|---|---|
-| **Les deux appareils se font déjà confiance** | Rien : seulement « Confirm download? » | Ils se sont appairés avant (`always`). |
-| **QR code** | Rien à taper, le QR suffit | Le QR contient l'empreinte de l'émetteur et un secret à usage unique. C'est la voie la plus sûre. |
-| **PIN** (`--pin`) | Un PIN de 6 chiffres à recopier | Pour un appareil sans caméra. Le PIN change après 3 erreurs ; après 6 PIN faux de suite, l'attente s'arrête : relancez la commande. |
-| **Comparaison d'empreintes** | `[?] New device …` avec deux empreintes | Quand on choisit l'appareil dans la liste, sans QR ni PIN. |
+| **QR code** | Rien à taper : le QR suffit | Rien. Le QR contient l'empreinte de l'émetteur et un secret à usage unique : c'est la voie la plus sûre. |
+| **PIN** | L'émetteur affiche 6 chiffres, vous les tapez | Rien. Le PIN change après 3 erreurs ; après 6 PIN faux de suite, l'attente s'arrête : relancez la commande. |
+| **Appareils de confiance mutuelle** | Rien : seulement « Confirm download? » | Ils l'ont demandé tous les deux, une fois (§3). |
 
-**C'est normal de ne pas taper de PIN** quand on choisit l'émetteur dans la liste de `xfer recv` : c'est le chemin « comparaison d'empreintes », ou « confiance » si les appareils se connaissent déjà.
+Par défaut, **une session ne laisse aucune trace** : la fois suivante, il faudra de nouveau le QR code ou le PIN.
 
-## 3. La question de confiance
+**Choisir l'appareil dans la liste** (`xfer recv`, `pair 1` dans `xfer node`) fait afficher un PIN par l'appareil choisi : c'est ce PIN qu'on tape. Comme en Bluetooth, l'un affiche, l'autre tape.
 
-```
-[?] New device 'medXfer-3fa2'.
-    Its fingerprint:  VBXJ-OWIT-Y77L-5SVW
-    Ours:             H5LS-AC4T-RLXV-UQL6
-    Check that the other screen shows the same two fingerprints.
-    Trust it? [y]es for this session / [a]lways / [N]o:
-```
+## 3. La confiance mutuelle
 
-- **Vérifiez que l'autre écran affiche les deux mêmes empreintes**, inversées. Sinon, répondez `N` : un autre appareil se fait passer pour lui.
-- `y` (ou `o`) : confiance pour ce transfert seulement.
-- `a` (ou `t`) : confiance **toujours** ; la prochaine fois, plus de question.
-- Rien, ou `N` : refusé. C'est la réponse par défaut.
+Deux appareils qui se servent souvent l'un de l'autre peuvent se faire confiance, pour ne plus taper de PIN. Il faut que **les deux** le veuillent :
+
+- l'un le propose : `--trust` sur `xfer send`, `xfer recv` ou `pair` dans `xfer node`, ou la commande `trust` dans une session de `xfer node` ;
+- l'autre voit :
+
+  ```
+  [?] 'medXfer-3fa2' (key VBXJ-OWIT-Y77L-5SVW) offers mutual trust: both devices would then reconnect without a PIN.
+      Accept? [y/N]:
+  ```
+
+  et répond `y` (ou `o`). Rien, ou `N` : refusé. Sans réponse en 60 s, c'est non. Si les deux ont mis `--trust`, aucune question n'est posée.
+
+Si les deux acceptent, chacun enregistre l'autre (`xfer trust list`). Sinon, rien n'est enregistré, et le transfert a lieu quand même.
+
+La confiance reste **mutuelle** : si l'un des deux oublie l'autre (`xfer trust forget`), elle cesse **pour les deux**, et l'autre est prévenu (« … no longer trusts … ») avant de repasser par le PIN.
 
 Si un appareil connu se présente un jour avec une **autre** empreinte, medXfer refuse et affiche `REFUSED` : c'est le signe d'une possible interception.
 
 ## 4. Appairer deux appareils une fois pour toutes
 
-Ensuite, plus aucune question entre eux.
+`xfer pair` sert à établir la confiance mutuelle, sans rien envoyer. Lancé des deux côtés, il ne pose aucune question.
 
 | Méthode | Appareil A | Appareil B |
 |---|---|---|
 | QR | `xfer pair --show` | `xfer pair 'medxfer://…'` (la commande affichée par A) |
 | PIN | `xfer pair --pin` | `xfer pair --pin ADRESSE`, puis taper le PIN |
 
-Ajoutez `--once` pour ne rien enregistrer (confiance limitée à la session).
+Si l'autre côté refuse, la commande le dit, et rien n'est enregistré.
 
 ## 5. Gérer les appareils de confiance
 
@@ -63,18 +68,16 @@ Ajoutez `--once` pour ne rien enregistrer (confiance limitée à la session).
 |---|---|
 | `xfer id` | L'empreinte de cet appareil |
 | `xfer trust list` | Les appareils de confiance |
-| `xfer trust forget EMPREINTE` | Oublier un appareil : la prochaine fois, il faudra QR, PIN ou question |
+| `xfer trust forget EMPREINTE` | Oublier un appareil : la confiance cesse pour les deux, il faudra de nouveau le QR ou le PIN |
 
 ## 6. Mode interactif : `xfer node`
 
 `xfer node` garde une session ouverte, pratique pour plusieurs envois de suite au même appareil. Ses commandes :
 
-- `scan`, puis `pair <n>` : appairer l'appareil n° n de la liste ; `pair <ip>` ou `pair <ip:port>` marche aussi ;
-- `pair --show` : afficher un QR code pour l'autre appareil ;
-- `pair --pin` : afficher un PIN. Sur l'autre appareil, `pair --pin <ip:port>` (dans `xfer node`) ou `xfer pair --pin <ip:port>`, puis taper le PIN quand il est demandé ;
+- `scan`, puis `pair <n>` : appairer l'appareil n° n de la liste. L'autre appareil affiche un PIN (« it must type this PIN »), que vous tapez ici. `pair <ip>`, `pair <ip:port>` et `pair <code>` marchent aussi. Avec un appareil de confiance mutuelle, pas de PIN ;
+- `pair --show` : afficher un QR code pour l'autre appareil ; `pair --pin` : afficher un PIN à l'avance ;
+- `trust` : proposer la confiance mutuelle à l'appareil appairé ; `--trust` sur `pair` fait de même dès l'appairage ;
 - `send <fichier>`, `stop`, `disconnect`, `exit`.
-
-Ajouter `--once` à `pair` pour ne faire confiance à l'appareil que pour cette session.
 
 Si un autre medXfer occupe déjà le port 18887 sur l'appareil (le tableau de bord `xfer dev-ui`, un autre `xfer node`), `xfer node` le signale et prend un autre port. L'adresse affichée avec le PIN ou le QR code contient alors ce port : c'est elle qu'il faut taper.
 
@@ -98,6 +101,9 @@ Si un autre medXfer occupe déjà le port 18887 sur l'appareil (le tableau de bo
 | L'adresse affichée ne répond pas | Sur un téléphone avec Wi-Fi **et** données mobiles, l'adresse Wi-Fi doit s'afficher depuis la correction de #109. Sinon, signalez-le avec `xfer bundle` |
 | `The sender could not be reached at …` | Le receveur n'arrive pas à télécharger chez l'émetteur. Si l'émetteur est un PC Windows, son pare-feu bloque le port : voir §9, puis renvoyez |
 | `Port 18887 is taken … using port N` | Un autre medXfer tourne déjà sur cet appareil (`xfer node`, le tableau de bord). Fermez-le, ou ouvrez aussi le port N dans le pare-feu de Windows |
+| `… no longer trusts this device / node: that gives nothing (pairing by PIN)` | La confiance n'existe plus que d'un côté (l'autre vous a oublié, ou l'inverse). Tapez le PIN ; pour ne plus en taper, reproposez la confiance (§3) |
+| `The other device shows no PIN (too many wrong ones?)` | Trop de PIN faux chez l'autre appareil : il n'en affiche plus. Relancez-y la commande (`pair --pin` dans `xfer node`) |
+| `No answer to the trust offer: the session stays temporary` | L'autre n'a pas répondu en 60 s : rien n'est enregistré, recommencez si besoin |
 
 ## 9. Windows : le pare-feu
 

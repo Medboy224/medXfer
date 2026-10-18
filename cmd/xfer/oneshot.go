@@ -201,9 +201,12 @@ func startOneShotPairing(ctx context.Context, send *oneShotSend, port int, data 
 		if name == "" {
 			name = r.Address
 		}
-		how := "proved by the QR code or the PIN, for this transfer only"
-		if r.Mutual {
+		how := "proved by the QR code or the PIN"
+		switch {
+		case r.Mutual:
 			how = "a device of mutual trust"
+		case !r.Trusted:
+			how += ", for this transfer only"
 		}
 		fmt.Printf("\n[+] Receiver '%s' (%s) paired, key %s: %s.\n", name, r.Address, r.Fingerprint.Short(), how)
 		trustOutcome(os.Stdout, r, offerTrust)

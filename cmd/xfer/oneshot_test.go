@@ -319,11 +319,11 @@ func TestStartSendHubFallsBackWhenTaken(t *testing.T) {
 // CHAN-01: a node whose port is held by another medXfer (xfer dev-ui on the same phone) takes
 // a free one and says so, instead of running without a port.
 func TestNodePortFallsBackWhenTaken(t *testing.T) {
-	busy, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", defaultPort))
+	busy, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", defaultPort)) // the loopback: no firewall prompt
 	if err == nil {
 		defer busy.Close()
 	} // else: already held, which is the case under test
-	l, err := listenNodePort()
+	l, err := listenNodePort("127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}

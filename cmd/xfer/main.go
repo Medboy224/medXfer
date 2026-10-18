@@ -39,12 +39,13 @@ const defaultPort = 18887
 // listenNodePort opens the node's single port: defaultPort, or a free one when another medXfer
 // on this device holds it (CHAN-01), said on the screen. Silently left without a port, the node
 // used to pair (it dials out) but every download from it reached the other program.
-func listenNodePort() (net.Listener, error) {
-	l, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", defaultPort))
+// bind is 0.0.0.0 for the network; tests use the loopback (no firewall prompt on Windows).
+func listenNodePort(bind string) (net.Listener, error) {
+	l, err := net.Listen("tcp4", net.JoinHostPort(bind, strconv.Itoa(defaultPort)))
 	if err == nil {
 		return l, nil
 	}
-	if l, err = net.Listen("tcp4", "0.0.0.0:0"); err != nil {
+	if l, err = net.Listen("tcp4", net.JoinHostPort(bind, "0")); err != nil {
 		return nil, err
 	}
 	fmt.Printf("[!] Port %d is taken (another medXfer on this device: xfer dev-ui, daemon or node?): using port %d.\n",
@@ -184,7 +185,7 @@ func reorderArgs(fs *flag.FlagSet, args []string) []string {
 }
 
 func handleNode() {
-	nodeLn, err := listenNodePort()
+	nodeLn, err := listenNodePort("0.0.0.0")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Cannot listen: %v\n", err)
 		return
