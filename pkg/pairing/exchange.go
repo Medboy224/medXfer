@@ -3,10 +3,8 @@ package pairing
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/identity"
@@ -18,7 +16,7 @@ import (
 // Message types of the exchange, inside the TLS channel.
 const (
 	TypeSecret = "pair_secret" // scanner -> shower: {secret, device_name}
-	TypeHello  = "pair_hello"  // scanner without the QR code -> shower: {device_name}; the shower's user decides
+	TypeHello  = "pair_hello"  // a device of mutual trust -> shower: {device_name, trusts_you} (P3, PAIR-09)
 	TypeAccept = "pair_accept" // shower -> scanner: {device_name}, and the offer of a one-shot send
 	TypeReject = "pair_reject" // shower -> scanner: neutral reason
 
@@ -43,8 +41,12 @@ func pinCI(initiator, responder identity.Fingerprint) []byte {
 // replyTimeout bounds the wait for pair_accept after pair_secret: no user is involved.
 const replyTimeout = 10 * time.Second
 
-// ErrDeclined: this side's user did not accept the other device's key (Ask).
-var ErrDeclined = errors.New("pairing: the other device's key was not accepted")
+// CodePINRequired is the pair_reject code of a device that is not of mutual trust: a PIN or a
+// QR code is needed (PAIR-12).
+const CodePINRequired = "pin_required"
+
+// ErrPINRequired: the other device is not of mutual trust; pair with a PIN or a QR code.
+var ErrPINRequired = errors.New("pairing: a PIN or a QR code is needed")
 
 // Result is the device a pairing succeeded with.
 type Result struct {
@@ -54,24 +56,30 @@ type Result struct {
 	// Offer is, on the scanner's side, the shower's pair_accept message: for a one-shot send it
 	// carries the transfer (file, size, batch, data port).
 	Offer session.Message
+	// Mutual: the devices were already of mutual trust (P3). Trusted: they became so during
+	// this pairing, both users having said yes (PAIR-10). Otherwise nothing was written
+	// (PAIR-08).
+	Mutual, Trusted bool
 }
 
 // Options of both sides.
 type Options struct {
 	Identity *identity.Identity
-	Trust    *identity.TrustStore
-	// Once keeps the trust to this session: nothing is written in trusted.json (PAIR-08).
-	Once bool
+	// Trust is this device's list: read for mutual trust (P3), written only by a trust
+	// negotiation both users accepted (PAIR-10).
+	Trust *identity.TrustStore
+	// OfferTrust: this side wants mutual trust (--trust): it says so in its pairing message,
+	// and the negotiation follows pair_accept on the same connection.
+	OfferTrust bool
+	// AskTrust asks this side's user whether to accept the other's offer of mutual trust;
+	// ctx ends at TrustAnswerTime. Nil answers no.
+	AskTrust func(ctx context.Context, peer Result) bool
 	// DeviceName is sent to the other side, which shows it and uses it as the alias.
 	DeviceName string
 	// Offer (shower) is sent with pair_accept: the transfer a one-shot send offers, and Follow
 	// right after it: the pages of an offer too big for one message (session.OfferMessages).
 	Offer  session.Message
 	Follow []session.Message
-	// Confirm (shower) decides a pair_hello, sent by a device that has no QR code: provisional
-	// trust, confirmed by the user (WP-3.3, decision D3). Nil refuses every pair_hello. Calls
-	// come one at a time; ctx ends when the wait is over.
-	Confirm func(ctx context.Context, r Result) bool
 	// BeforeAccept (shower), when set, runs once the scanner is accepted and before pair_accept
 	// is sent: a one-shot send registers there the transfer the scanner will join on the data
 	// connections, so that its first DATA_JOIN finds it. An error refuses the pairing.
@@ -81,18 +89,12 @@ type Options struct {
 	PIN *PIN
 }
 
-func remember(o Options, r Result) error {
-	if o.Once || o.Trust == nil {
-		return nil
-	}
-	return o.Trust.Add(identity.Peer{Fingerprint: r.Fingerprint, Alias: r.Name, LastAddress: r.Address})
-}
-
 // Serve is the shower's side: it waits on ln until a scanner presents the invitation's secret,
-// or one without it is accepted by o.Confirm, or a device types o.PIN, or all of them expire.
-// inv may be nil when o.PIN is set. Refusals are neutral and the wait goes on. On success the
-// scanner's key is trusted (unless o.Once) and returned. ln may be the control listener of a
-// pkg/transfer.Hub, whose connections are already secure.
+// or a device types o.PIN (shown at once, or asked for on demand), or a device of mutual trust
+// says hello, or all of them expire. inv may be nil when o.PIN is set. Refusals are neutral and
+// the wait goes on. Nothing is written, unless both users accept mutual trust (PAIR-08,
+// PAIR-10). ln may be the control listener of a pkg/transfer.Hub, whose connections are
+// already secure.
 func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Result, error) {
 	if inv == nil && o.PIN == nil {
 		return Result{}, errors.New("pairing: nothing to serve")
@@ -129,7 +131,6 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 	}()
 
 	gate := securechan.NewGate()
-	var confirmMu sync.Mutex
 	results := make(chan Result, 1)
 	for {
 		raw, err := ln.Accept()
@@ -151,7 +152,7 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 			return Result{}, err
 		}
 		go func() {
-			r, err := serveOne(ctx, raw, inv, o, gate, &confirmMu)
+			r, err := serveOne(ctx, raw, inv, o, gate)
 			if err == nil {
 				select {
 				case results <- r:
@@ -177,7 +178,7 @@ func serveDeadline(inv *Invitation, pin *PIN) time.Time {
 	return d
 }
 
-func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gate *securechan.Gate, confirmMu *sync.Mutex) (Result, error) {
+func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gate *securechan.Gate) (Result, error) {
 	// A connection routed by the device's single port (pkg/transfer.Hub) is already secure.
 	conn, ok := raw.(*securechan.Conn)
 	if !ok {
@@ -199,6 +200,7 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 		return Result{}, ErrRefused
 	}
 	r := Result{Fingerprint: conn.PeerFingerprint(), Name: msg.DeviceName, Address: ch.RemoteIP()}
+	theyOffer := msg.TrustOffer
 	switch msg.Type {
 	case TypeSecret:
 		if inv == nil {
@@ -208,37 +210,30 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 			_, _ = reject()
 			return Result{}, err
 		}
-	case TypeHello:
-		if o.Confirm == nil {
-			return reject()
+	case TypeHello: // P3 only: no question, no code (PAIR-09, PAIR-12)
+		if !Mutual(o.Trust, r.Fingerprint, msg.TrustsYou) {
+			_ = ch.Send(session.Message{Type: TypeReject, FileName: ErrPINRequired.Error(), Code: CodePINRequired})
+			return Result{}, ErrPINRequired
 		}
-		confirmMu.Lock()
-		ok := ctx.Err() == nil && o.Confirm(ctx, r)
-		confirmMu.Unlock()
-		if !ok || ctx.Err() != nil {
-			return reject()
-		}
+		r.Mutual = true
 	case TypePIN:
-		name, err := RespondPIN(ch, conn, msg, o.PIN, o.Identity.Fingerprint)
+		c, err := respondPIN(ch, conn, msg, o.PIN, o.Identity.Fingerprint)
 		if err != nil {
 			_, _ = reject()
 			return Result{}, err
 		}
-		r.Name = name
+		r.Name, theyOffer = c.DeviceName, c.TrustOffer
 	case TypePINWanted: // a device picked this one in a list: the PIN on screen answers it
-		name, err := AnswerPINWanted(ch, conn, func() (*PIN, error) { return o.PIN, nil }, o.Identity.Fingerprint)
+		c, err := answerPINWanted(ch, conn, func() (*PIN, error) { return o.PIN, nil }, o.Identity.Fingerprint)
 		if err != nil {
 			_, _ = reject()
 			return Result{}, err
 		}
-		r.Name = name
+		r.Name, theyOffer = c.DeviceName, c.TrustOffer
 	default:
 		return reject()
 	}
 	conn.Authenticate() // also lifts the Unauth deadline, which the user's answer may have passed
-	if err := remember(o, r); err != nil {
-		return Result{}, fmt.Errorf("saving the trusted device: %w", err)
-	}
 	if o.BeforeAccept != nil {
 		if err := o.BeforeAccept(r); err != nil {
 			_, _ = reject()
@@ -247,6 +242,8 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 	}
 	accept := o.Offer
 	accept.Type, accept.DeviceName = TypeAccept, o.DeviceName
+	accept.TrustsYou = Declares(o.Trust, r.Fingerprint)
+	accept.TrustOffer = o.OfferTrust && !r.Mutual
 	if err := ch.Send(accept); err != nil {
 		return Result{}, err
 	}
@@ -254,6 +251,9 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 		if err := ch.Send(m); err != nil {
 			return Result{}, err
 		}
+	}
+	if !r.Mutual && (o.OfferTrust || theyOffer) {
+		r.Trusted = negotiate(ctx, ch, conn, o, r)
 	}
 	return r, nil
 }
@@ -265,8 +265,15 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 // (PIN.begin). With no attempt left, it answers on a decoy PIN: the initiator sees the same
 // exchange and the same refusal (PAIR-07).
 func RespondPIN(ch *session.Channel, conn *securechan.Conn, msg session.Message, pin *PIN, self identity.Fingerprint) (string, error) {
+	c, err := respondPIN(ch, conn, msg, pin, self)
+	return c.DeviceName, err
+}
+
+// respondPIN is RespondPIN returning the initiator's pair_pin_confirm: its name, and whether it
+// offers mutual trust.
+func respondPIN(ch *session.Channel, conn *securechan.Conn, msg session.Message, pin *PIN, self identity.Fingerprint) (session.Message, error) {
 	if pin == nil || !slices.Contains(pake.Suites(), msg.Suite) {
-		return "", ErrRefused
+		return session.Message{}, ErrRefused
 	}
 	code, counted := pin.begin()
 	paired := false
@@ -275,35 +282,35 @@ func RespondPIN(ch *session.Channel, conn *securechan.Conn, msg session.Message,
 	} else {
 		var err error
 		if code, err = drawPIN(pin.cfg.Rand, pin.cfg.Digits); err != nil {
-			return "", err
+			return session.Message{}, err
 		}
 	}
 	ekm, err := conn.ChannelBinding()
 	if err != nil {
-		return "", err
+		return session.Message{}, err
 	}
 	ex, err := pake.New(msg.Suite, pake.Params{Password: code, CI: pinCI(conn.PeerFingerprint(), self),
 		SID: ekm, Role: pake.Responder})
 	if err != nil {
-		return "", err
+		return session.Message{}, err
 	}
 	s, err := ex.Finish(msg.Share)
 	if err != nil {
-		return "", ErrRefused
+		return session.Message{}, ErrRefused
 	}
 	if err := ch.Send(session.Message{Type: TypePINReply, Share: ex.Share(), Confirm: s.Tag()}); err != nil {
-		return "", err
+		return session.Message{}, err
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(replyTimeout))
 	m, err := ch.Read()
 	if err != nil {
-		return "", err
+		return session.Message{}, err
 	}
 	if m.Type != TypePINConfirm || !s.Verify(m.Confirm) || !counted {
-		return "", ErrRefused
+		return session.Message{}, ErrRefused
 	}
 	paired = true
-	return m.DeviceName, nil
+	return m, nil
 }
 
 // JoinPIN is the initiator's side of the PIN path (bible §6.2): it connects to addr, whose key
@@ -321,7 +328,7 @@ func JoinPIN(ctx context.Context, addr, pin string, o Options) (Result, error) {
 		return Result{}, err
 	}
 	defer ch.Close()
-	if err := InitiatePIN(ch, conn, pin, o.Identity.Fingerprint, o.DeviceName); err != nil {
+	if err := initiatePIN(ch, conn, pin, o.Identity.Fingerprint, o.DeviceName, o.OfferTrust); err != nil {
 		return Result{}, err
 	}
 	return awaitAccept(ch, conn, conn.PeerFingerprint(), host, replyTimeout, o)
@@ -332,6 +339,12 @@ func JoinPIN(ctx context.Context, addr, pin string, o Options) (Result, error) {
 // holds the PIN. On success the connection is in AUTH and the caller reads pair_accept. A
 // wrong PIN, or a relay, gives ErrRefused.
 func InitiatePIN(ch *session.Channel, conn *securechan.Conn, pin string, self identity.Fingerprint, name string) error {
+	return initiatePIN(ch, conn, pin, self, name, false)
+}
+
+// initiatePIN is InitiatePIN that also says, in pair_pin_confirm, whether this side offers
+// mutual trust.
+func initiatePIN(ch *session.Channel, conn *securechan.Conn, pin string, self identity.Fingerprint, name string, offer bool) error {
 	code, err := NormalizePIN(pin)
 	if err != nil {
 		return err
@@ -360,53 +373,51 @@ func InitiatePIN(ch *session.Channel, conn *securechan.Conn, pin string, self id
 		return ErrRefused
 	}
 	conn.Authenticate() // the responder holds the PIN: its offer may pass the Unauth limit
-	return ch.Send(session.Message{Type: TypePINConfirm, Confirm: s.Tag(), DeviceName: name})
+	return ch.Send(session.Message{Type: TypePINConfirm, Confirm: s.Tag(), DeviceName: name, TrustOffer: offer})
 }
 
 // Join is the scanner's side: it connects to the URI's address pinning the URI's key, sends
-// the secret, and on acceptance trusts the shower (unless o.Once).
+// the secret, and waits for pair_accept.
 func Join(ctx context.Context, u URI, o Options) (Result, error) {
 	if !time.Now().Before(u.Expires) {
 		return Result{}, ErrExpired
 	}
-	msg := session.Message{Type: TypeSecret, Secret: EncodeSecret(u.Secret), DeviceName: o.DeviceName}
-	return exchange(ctx, u.Addr(), u.Fingerprint, nil, msg, replyTimeout, o)
-}
-
-// Ask is the scanner's side without a QR code. The shower's key is not known in advance (the
-// discovery that found the shower carries no key, DISC-06): Ask reads it in the TLS handshake
-// and passes it to decide, which shows it to the user (or finds it among the trusted devices,
-// or refuses it under ID-05). Only if decide accepts does Ask send pair_hello, then it waits up
-// to wait for the shower's user. A refusal by decide returns ErrDeclined; nothing is sent.
-func Ask(ctx context.Context, addr string, decide func(identity.Fingerprint) bool, wait time.Duration, o Options) (Result, error) {
-	return exchange(ctx, addr, identity.Fingerprint{}, decide, session.Message{Type: TypeHello, DeviceName: o.DeviceName}, wait, o)
-}
-
-// exchange connects to addr, pinning fp when it is set, otherwise asking decide about the key
-// presented, then sends msg and waits up to wait for pair_accept.
-func exchange(ctx context.Context, addr string, fp identity.Fingerprint, decide func(identity.Fingerprint) bool,
-	msg session.Message, wait time.Duration, o Options) (Result, error) {
-	cfg := securechan.Config{Identity: o.Identity, Expected: fp}
-	if fp.IsZero() {
-		cfg.Trust, cfg.AllowUnknown = o.Trust, true
-	}
-	conn, ch, host, err := dial(ctx, addr, cfg)
+	conn, ch, host, err := dial(ctx, u.Addr(), securechan.Config{Identity: o.Identity, Expected: u.Fingerprint})
 	if err != nil {
 		return Result{}, err
 	}
 	defer ch.Close()
-	if fp.IsZero() {
-		fp = conn.PeerFingerprint()
-		// The user may take its time: the Unauth deadline must not cut the connection.
-		_ = conn.SetDeadline(time.Now().Add(wait))
-		if decide == nil || !decide(fp) {
-			return Result{}, ErrDeclined
-		}
-	}
+	msg := session.Message{Type: TypeSecret, Secret: EncodeSecret(u.Secret), DeviceName: o.DeviceName,
+		TrustsYou: Declares(o.Trust, u.Fingerprint), TrustOffer: o.OfferTrust}
 	if err := ch.Send(msg); err != nil {
 		return Result{}, err
 	}
-	return awaitAccept(ch, conn, fp, host, wait, o)
+	return awaitAccept(ch, conn, u.Fingerprint, host, replyTimeout, o)
+}
+
+// JoinTrusted reaches the device at addr without a code, as a device of mutual trust (P3):
+// only if its key is in this side's list, and only if it has this side in its own. Otherwise
+// it returns ErrPINRequired, with the key seen in the Result (for ID-05): pair by a PIN on
+// demand (JoinPINOnDemand) or a QR code then.
+func JoinTrusted(ctx context.Context, addr string, o Options) (Result, error) {
+	conn, ch, host, err := dial(ctx, addr, securechan.Config{Identity: o.Identity, Trust: o.Trust, AllowUnknown: true})
+	if err != nil {
+		return Result{}, err
+	}
+	defer ch.Close()
+	fp := conn.PeerFingerprint()
+	if !Declares(o.Trust, fp) {
+		return Result{Fingerprint: fp, Address: host}, ErrPINRequired // nothing is sent
+	}
+	if err := ch.Send(session.Message{Type: TypeHello, DeviceName: o.DeviceName, TrustsYou: true}); err != nil {
+		return Result{}, err
+	}
+	r, err := awaitAccept(ch, conn, fp, host, replyTimeout, Options{Identity: o.Identity, Trust: o.Trust})
+	if errors.Is(err, ErrPINRequired) {
+		r.Fingerprint, r.Address = fp, host
+	}
+	r.Mutual = err == nil
+	return r, err
 }
 
 // dial opens the secure channel of a pairing to addr.
@@ -427,13 +438,16 @@ func dial(ctx context.Context, addr string, cfg securechan.Config) (*securechan.
 	return conn, session.NewChannel(conn), host, nil
 }
 
-// awaitAccept waits up to wait for pair_accept and its offer, then trusts the shower (unless
-// o.Once).
+// awaitAccept waits up to wait for pair_accept and its offer; then, if either side offers
+// mutual trust, the negotiation runs on the same connection.
 func awaitAccept(ch *session.Channel, conn *securechan.Conn, fp identity.Fingerprint, host string, wait time.Duration, o Options) (Result, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(wait))
 	resp, err := ch.Read()
 	if err != nil {
 		return Result{}, err
+	}
+	if resp.Type == TypeReject && resp.Code == CodePINRequired {
+		return Result{}, ErrPINRequired
 	}
 	if resp.Type != TypeAccept {
 		return Result{}, ErrRefused
@@ -446,8 +460,56 @@ func awaitAccept(ch *session.Channel, conn *securechan.Conn, fp identity.Fingerp
 		resp.Offer = &offer
 	}
 	r := Result{Fingerprint: fp, Name: resp.DeviceName, Address: host, Offer: resp}
-	if err := remember(o, r); err != nil {
-		return Result{}, fmt.Errorf("saving the trusted device: %w", err)
+	if o.OfferTrust || resp.TrustOffer {
+		r.Trusted = negotiate(context.Background(), ch, conn, o, r)
 	}
 	return r, nil
+}
+
+// negotiate runs the trust negotiation of a one-shot pairing, on its connection (PAIR-10):
+// the sides that offer send trust_offer; a side asked answers with its user's choice
+// (o.AskTrust, TrustAnswerTime at most). It reports whether mutual trust was written on this
+// side. The transfer does not depend on it.
+func negotiate(ctx context.Context, ch *session.Channel, conn *securechan.Conn, o Options, r Result) bool {
+	if o.Trust == nil {
+		return false
+	}
+	talk := NewTrustTalk(o.Trust, identity.Peer{Fingerprint: r.Fingerprint, Alias: r.Name, LastAddress: r.Address})
+	_ = conn.SetDeadline(time.Now().Add(TrustAnswerTime + replyTimeout))
+	defer func() { _ = conn.SetDeadline(time.Time{}) }()
+	if o.OfferTrust {
+		if err := ch.Send(talk.Offer()); err != nil {
+			return false
+		}
+	}
+	for {
+		m, err := ch.Read()
+		if err != nil || !IsTrustMessage(m.Type) {
+			return false
+		}
+		reply, ev, err := talk.Handle(m)
+		if err != nil {
+			return false
+		}
+		if reply != nil && ch.Send(*reply) != nil {
+			return false
+		}
+		switch ev {
+		case TrustAsked:
+			yes := false
+			if o.AskTrust != nil {
+				actx, cancel := context.WithTimeout(ctx, TrustAnswerTime)
+				yes = o.AskTrust(actx, r)
+				cancel()
+			}
+			answer, err := talk.Answer(yes)
+			if err != nil || ch.Send(answer) != nil || !yes {
+				return false
+			}
+		case TrustEstablished:
+			return true
+		case TrustDeclined:
+			return false
+		}
+	}
 }

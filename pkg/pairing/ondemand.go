@@ -129,24 +129,30 @@ func (d *PINOnDemand) Close() {
 // gets the caller's neutral pair_reject (PAIR-07); get failing (no PIN may be drawn) is
 // ErrRefused.
 func AnswerPINWanted(ch *session.Channel, conn *securechan.Conn, get func() (*PIN, error), self identity.Fingerprint) (string, error) {
+	c, err := answerPINWanted(ch, conn, get, self)
+	return c.DeviceName, err
+}
+
+// answerPINWanted is AnswerPINWanted returning the initiator's pair_pin_confirm.
+func answerPINWanted(ch *session.Channel, conn *securechan.Conn, get func() (*PIN, error), self identity.Fingerprint) (session.Message, error) {
 	p, err := get()
 	if err != nil || p == nil {
-		return "", ErrRefused
+		return session.Message{}, ErrRefused
 	}
 	if err := ch.Send(session.Message{Type: TypePINReady}); err != nil {
-		return "", err
+		return session.Message{}, err
 	}
 	// The user reads the PIN on this screen and types it there: the Unauth deadline of the
 	// handshake would cut the connection meanwhile.
 	_ = conn.SetDeadline(time.Now().Add(typingTime))
 	m, err := ch.Read()
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrNoPINTyped, err)
+		return session.Message{}, fmt.Errorf("%w: %v", ErrNoPINTyped, err)
 	}
 	if m.Type != TypePIN {
-		return "", ErrRefused
+		return session.Message{}, ErrRefused
 	}
-	return RespondPIN(ch, conn, m, p, self)
+	return respondPIN(ch, conn, m, p, self)
 }
 
 // RequestPIN is the initiator's side: it asks the responder to show a PIN and waits until it
@@ -183,7 +189,7 @@ func JoinPINOnDemand(ctx context.Context, addr string, typed func() (string, err
 	if err != nil {
 		return Result{}, err
 	}
-	if err := InitiatePIN(ch, conn, pin, o.Identity.Fingerprint, o.DeviceName); err != nil {
+	if err := initiatePIN(ch, conn, pin, o.Identity.Fingerprint, o.DeviceName, o.OfferTrust); err != nil {
 		return Result{}, err
 	}
 	return awaitAccept(ch, conn, conn.PeerFingerprint(), host, replyTimeout, o)

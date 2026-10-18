@@ -155,9 +155,8 @@ func pull(t *testing.T, addr string, offer protocol.Offer, join joinFunc) string
 // oneShotThroughCapture starts the sender's side of xfer send for path on a loopback hub,
 // behind a recording relay: everything the receiver sends or receives, pairing and data, goes
 // through the device's single port, hence through the relay. It returns the relay and the
-// first URI shown (whose address is the relay's).
-func oneShotThroughCapture(t *testing.T, sender *identity.Identity, path, name string, size int,
-	confirm func(context.Context, pairing.Result) bool) (*capture, pairing.URI, transfer.ID) {
+// first URI shown (whose address is the relay's), and the PINs shown.
+func oneShotThroughCapture(t *testing.T, sender *identity.Identity, path, name string, size int) (*capture, pairing.URI, <-chan string) {
 	t.Helper()
 	hub, addr := startTestHub(t, sender)
 	relay := startCapture(t, addr)
@@ -167,12 +166,12 @@ func oneShotThroughCapture(t *testing.T, sender *identity.Identity, path, name s
 	offer, files := fileOffer(t, path, base)
 	msg, follow := session.OfferMessages(session.Message{DataPort: port, TransferID: base.String()}, offer)
 	uris := make(chan pairing.URI, 1)
+	pins := make(chan string, 8)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() {
-		_, _ = serveOneShotPairing(ctx, hub, sender, "127.0.0.1", port, time.Minute, msg, follow, confirm, send.register,
-			func(u pairing.URI) { uris <- u }, nil)
-	}()
+	p := oneShotPairing{hub: hub, id: sender, host: "127.0.0.1", port: port, ttl: time.Minute, offer: msg, follow: follow,
+		before: send.register, shown: func(u pairing.URI) { uris <- u }, pin: func(code string, _ time.Time) { pins <- code }}
+	go func() { _, _ = p.serve(ctx) }()
 	go func() {
 		if tl := send.listener(ctx); tl != nil {
 			if s, err := transfer.NewSender(offer, files); err == nil {
@@ -180,7 +179,7 @@ func oneShotThroughCapture(t *testing.T, sender *identity.Identity, path, name s
 			}
 		}
 	}()
-	return relay, <-uris, base
+	return relay, <-uris, pins
 }
 
 func TestCaptureShowsNothingOfTheTransfer(t *testing.T) {
@@ -188,10 +187,10 @@ func TestCaptureShowsNothingOfTheTransfer(t *testing.T) {
 	path, name, marker := markedFile(t, size)
 	senderID, _ := testDevice(t)
 	receiverID, _ := testDevice(t)
-	relay, u, _ := oneShotThroughCapture(t, senderID, path, name, size, nil)
+	relay, u, _ := oneShotThroughCapture(t, senderID, path, name, size)
 
 	// The receiver: xfer recv 'medxfer://...', through the relay for pairing and data alike.
-	r, err := pairing.Join(context.Background(), u, pairing.Options{Identity: receiverID, Once: true})
+	r, err := pairing.Join(context.Background(), u, pairing.Options{Identity: receiverID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,20 +251,19 @@ func portNum(t *testing.T, addr string) int {
 	return n
 }
 
-// The same capture for the path without a QR code (xfer recv <code>): the receiver reads the
-// sender's key in TLS, both users accept, and the offer comes with pair_accept. The discovery
-// reply that found the sender carries nothing of the transfer either (pkg/discovery,
-// TestAnswerRevealsNothingWithTheRightCode).
+// The same capture for the path without a QR code (xfer recv, the sender picked in the list):
+// the receiver asks for the PIN, types the one the sender shows (PAIR-11), and the offer comes
+// with pair_accept. The discovery reply that found the sender carries nothing of the transfer
+// either (pkg/discovery, TestAnswerRevealsNothingWithTheRightCode).
 func TestCaptureShowsNothingOfTheCodePath(t *testing.T) {
 	const size = 2 << 20
 	path, name, marker := markedFile(t, size)
 	senderID, _ := testDevice(t)
 	receiverID, _ := testDevice(t)
-	confirm := func(_ context.Context, r pairing.Result) bool { return r.Fingerprint == receiverID.Fingerprint }
-	relay, _, _ := oneShotThroughCapture(t, senderID, path, name, size, confirm)
+	relay, _, pins := oneShotThroughCapture(t, senderID, path, name, size)
 
-	accept := func(fp identity.Fingerprint) bool { return fp == senderID.Fingerprint }
-	r, err := pairing.Ask(context.Background(), relay.addr, accept, 10*time.Second, pairing.Options{Identity: receiverID, Once: true})
+	typed := func() (string, error) { return <-pins, nil }
+	r, err := pairing.JoinPINOnDemand(context.Background(), relay.addr, typed, pairing.Options{Identity: receiverID})
 	if err != nil {
 		t.Fatal(err)
 	}

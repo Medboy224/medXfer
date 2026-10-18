@@ -71,7 +71,6 @@ func onDemand(t *testing.T, c PINConfig) (*PINOnDemand, <-chan shown) {
 // and the pairing goes on as the PIN path. No PIN is shown before the demand.
 func TestPINOnDemandPairs(t *testing.T) {
 	responder, initiator := device(t, "pc"), device(t, "phone")
-	initiator.Once = true
 	d, screen := onDemand(t, PINConfig{})
 	addr := serveOnDemand(t, responder, d)
 	select {
@@ -92,7 +91,6 @@ func TestPINOnDemandPairs(t *testing.T) {
 // screen, and the next demand gets that same PIN, so a guesser gains nothing by asking.
 func TestPINOnDemandKeepsItsPINAndAttempts(t *testing.T) {
 	responder, initiator := device(t, "pc"), device(t, "phone")
-	initiator.Once = true
 	d, screen := onDemand(t, PINConfig{Attempts: 2})
 	addr := serveOnDemand(t, responder, d)
 	var first string
