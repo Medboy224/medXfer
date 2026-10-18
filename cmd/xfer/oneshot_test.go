@@ -255,3 +255,28 @@ func TestServeOneShotPairingByPIN(t *testing.T) {
 		t.Fatalf("sender: %+v, %v (registered %s)", s.r, s.err, registered.Short())
 	}
 }
+
+// #133, CHAN-01: xfer send takes the device's port; when another medXfer holds it, a free
+// port, unless the user chose the port.
+func TestStartSendHubFallsBackWhenTaken(t *testing.T) {
+	busy, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	port := busy.Addr().(*net.TCPAddr).Port
+	if _, _, err := startSendHub("127.0.0.1", port, false, nil); err == nil {
+		t.Fatal("a port chosen by the user was replaced")
+	}
+	_, ln, err := startSendHub("127.0.0.1", port, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if got := ln.Addr().(*net.TCPAddr).Port; got == port || got == 0 {
+		t.Fatalf("listening on %d", got)
+	}
+	if msg := unreachableSender("10.0.0.2:18887"); !strings.Contains(msg, "10.0.0.2:18887") || !strings.Contains(msg, "TCP port 18887") {
+		t.Fatal(msg)
+	}
+}

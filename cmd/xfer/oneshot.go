@@ -93,6 +93,18 @@ func startOneShotHub(bind string, port int, trust *identity.TrustStore) (*transf
 	return hub, ln, nil
 }
 
+// startSendHub opens the one-shot hub on port; when it is taken and anyPort is set, on a free
+// port instead, which discovery and the offer then announce (CHAN-01).
+func startSendHub(bind string, port int, anyPort bool, trust *identity.TrustStore) (*transfer.Hub, net.Listener, error) {
+	hub, ln, err := startOneShotHub(bind, port, trust)
+	if err != nil && anyPort {
+		if hub2, ln2, err2 := startOneShotHub(bind, 0, trust); err2 == nil {
+			return hub2, ln2, nil
+		}
+	}
+	return hub, ln, err
+}
+
 // serveOneShotPairing waits on the hub's control connections until a receiver redeems the QR
 // code, or one without it is accepted by confirm. shown gets each URI: the first one, then a
 // new one each time the previous expires (same port, new secret). before runs once the

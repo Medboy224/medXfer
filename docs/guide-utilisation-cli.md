@@ -12,7 +12,7 @@ Les deux appareils doivent être sur le **même réseau** (même Wi-Fi, ou le po
 | Envoyer, l'autre n'a pas de caméra | `xfer send --pin fichier` | `xfer recv --pin ADRESSE`, puis taper le PIN affiché |
 | Envoyer sans rien recopier | `xfer send fichier` | `xfer recv`, choisir l'appareil dans la liste, puis répondre à la question de confiance (§3) |
 
-`ADRESSE` est affichée par l'émetteur, par exemple `10.86.69.174:18888`.
+`ADRESSE` est affichée par l'émetteur, par exemple `10.86.69.174:18887`. Tous les modes de medXfer utilisent ce même port, 18887.
 
 Pour recevoir dans un autre dossier : `xfer recv … --out DOSSIER`.
 
@@ -87,20 +87,32 @@ Ajoutez `--once` pour ne rien enregistrer (confiance limitée à la session).
 | `This QR code has expired` | `xfer send` renouvelle son QR : utilisez celui affiché maintenant. Pour `xfer pair --show`, relancez la commande |
 | L'appareil n'apparaît pas dans la liste | Même réseau ? Sinon, passez l'adresse directement : `xfer recv --ip ADRESSE`, `--pin ADRESSE`, ou le QR |
 | L'adresse affichée ne répond pas | Sur un téléphone avec Wi-Fi **et** données mobiles, l'adresse Wi-Fi doit s'afficher depuis la correction de #109. Sinon, signalez-le avec `xfer bundle` |
+| `The sender could not be reached at …` | Le receveur n'arrive pas à télécharger chez l'émetteur. Si l'émetteur est un PC Windows, son pare-feu bloque le port : voir §9, puis renvoyez |
+| `Port 18887 is taken … using port N` | Un autre medXfer tourne déjà sur cet appareil (`xfer node`, le tableau de bord). Fermez-le, ou ouvrez aussi le port N dans le pare-feu de Windows |
 
-## 9. Windows : rendre le PC visible des autres appareils
+## 9. Windows : le pare-feu
 
-**Symptôme :** le PC trouve les autres appareils, mais eux ne le voient pas dans leur liste. Le transfert marche quand même avec l'adresse, le QR ou le PIN.
+**Symptômes :**
 
-**Cause :** le pare-feu de Windows bloque les recherches qui arrivent (mDNS, port UDP 5353), surtout quand le Wi-Fi est en profil « Privé » et que medXfer n'a été autorisé que pour le profil « Public », ou l'inverse.
+- le PC trouve les autres appareils, mais eux ne le voient pas dans leur liste ;
+- un autre appareil n'arrive pas à s'appairer avec le PC ;
+- le PC envoie, mais le receveur ne reçoit rien et finit par afficher `The sender could not be reached`. Dans l'autre sens, tout marche.
+
+**Cause :** le pare-feu de Windows bloque ce qui arrive vers medXfer :
+
+- les recherches de la découverte (mDNS, port UDP 5353) ;
+- le port de medXfer, TCP 18887, où l'autre appareil se connecte pour s'appairer **et pour télécharger** : c'est toujours le receveur qui se connecte à l'émetteur.
+
+Le problème se pose surtout quand le Wi-Fi est en profil « Privé » et que medXfer n'a été autorisé que pour le profil « Public », ou l'inverse.
 
 **Solution, une fois pour toutes :** dans un PowerShell lancé **en administrateur** :
 
 ```powershell
 New-NetFirewallRule -DisplayName "medXfer mDNS" -Direction Inbound -Protocol UDP -LocalPort 5353 -Action Allow -Profile Private,Public
+New-NetFirewallRule -DisplayName "medXfer" -Direction Inbound -Protocol TCP -LocalPort 18887 -Action Allow -Profile Private,Public
 ```
 
-Le profil du Wi-Fi (Privé ou Public) n'a alors plus d'importance : la règle couvre les deux. Garder « Privé » à la maison est le choix habituel.
+Le profil du Wi-Fi (Privé ou Public) n'a alors plus d'importance : les règles couvrent les deux. Garder « Privé » à la maison est le choix habituel.
 
 Quand Windows affiche sa propre fenêtre « Autoriser l'accès » au premier lancement de medXfer, cochez **les deux** cases (réseaux privés et publics).
 

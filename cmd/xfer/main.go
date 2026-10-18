@@ -31,10 +31,11 @@ import (
 	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
-const defaultPort = 18888
+const defaultPort = 18887
 
-// nodePort is the single port of xfer node: pairing, session and data (CHAN-01).
-const nodePort = 18887
+// nodePort is the single port of xfer node: pairing, session and data (CHAN-01). Every mode
+// uses the same one, so that one firewall rule covers medXfer (#133).
+const nodePort = defaultPort
 
 func isLocalIP(ipStr string) bool {
 	if ipStr == "127.0.0.1" || ipStr == "localhost" {
@@ -471,6 +472,7 @@ func handleNode() {
 				var ctx context.Context
 				ctx, transferCancel = context.WithCancel(context.Background())
 				addr := net.JoinHostPort(activeSession.RemoteIP(), strconv.Itoa(m.DataPort))
+				fmt.Printf("[*] Connecting to sender at %s...\n", addr) // up to ~45 s when a firewall drops it (#133)
 				// Every data connection is pinned to the session's peer and joins its transfer (CHAN-06).
 				cfg := securechan.Config{Identity: localID, Expected: sessionPeer(activeSession)}
 				go func(ctx context.Context, s *session.Channel) {
@@ -940,7 +942,7 @@ func runNodeServe(parentCtx context.Context, o *nodeOffer) error {
 // =====================================================================
 func handleSend(args []string) {
 	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
-	portFlag := sendCmd.Int("port", defaultPort, "TCP port of this device (pairing and data)")
+	portFlag := sendCmd.Int("port", defaultPort, "TCP port of this device (pairing and data); if the default one is taken, a free one")
 	chunkSizeMB := sendCmd.Int("chunk", protocol.DefaultChunkSize>>20, "Chunk size in MB (1 to 8)")
 	createNetwork := sendCmd.Bool("create-network", false, "Create a dedicated Wi-Fi Direct network")
 	pinFlag := sendCmd.Bool("pin", false, "show a PIN instead of a QR code (receiver without a camera)")
@@ -971,12 +973,15 @@ func handleSend(args []string) {
 		fmt.Printf("[-] Cannot send: %v\n", err)
 		return
 	}
-	runOneShotSend(offer, files, *portFlag, *createNetwork, interactive, *pinFlag, trust)
+	portSet := false
+	sendCmd.Visit(func(f *flag.Flag) { portSet = portSet || f.Name == "port" })
+	runOneShotSend(offer, files, *portFlag, !portSet, *createNetwork, interactive, *pinFlag, trust)
 }
 
 // runOneShotSend offers files on the device's single port: the receiver pairs on it (QR code,
 // or both users' confirmation), then pulls the whole offer on its data connections.
-func runOneShotSend(offer protocol.Offer, files []string, port int, createHotspot bool, interactive bool, usePIN bool, trust *identity.TrustStore) {
+// anyPort lets it take a free port when port is taken (another medXfer on this device).
+func runOneShotSend(offer protocol.Offer, files []string, port int, anyPort bool, createHotspot bool, interactive bool, usePIN bool, trust *identity.TrustStore) {
 	var hs hotspot.Controller
 	if createHotspot {
 		hs = hotspot.New()
@@ -1008,12 +1013,17 @@ func runOneShotSend(offer protocol.Offer, files []string, port int, createHotspo
 	}()
 
 	// The device's single port: the receiver pairs on it, then joins the transfer (CHAN-01).
-	hub, hubLn, err := startOneShotHub("0.0.0.0", port, trust)
+	hub, hubLn, err := startSendHub("0.0.0.0", port, anyPort, trust)
 	if err != nil {
 		fmt.Printf("[-] Cannot listen on port %d: %v\n", port, err)
 		return
 	}
 	defer hubLn.Close()
+	if got := hubLn.Addr().(*net.TCPAddr).Port; got != port {
+		fmt.Printf("[!] Port %d is taken (another medXfer on this device?): using port %d.\n", port, got)
+		fmt.Printf("    On Windows, the firewall must let this port in, or the receiver cannot download.\n")
+		port = got
+	}
 	base, err := transfer.NewID()
 	if err != nil {
 		fmt.Printf("[-] %v\n", err)
@@ -1359,6 +1369,9 @@ func receiveOffer(ctx context.Context, targetAddr, outDir string, workers int, o
 	if err != nil {
 		if ctx.Err() == nil {
 			fmt.Printf("\n[-] Download failed: %v\n", err)
+			if errors.Is(err, transfer.ErrTransferFailed) {
+				fmt.Print(unreachableSender(targetAddr))
+			}
 		}
 		return err
 	}
@@ -1378,6 +1391,14 @@ func receiveOffer(ctx context.Context, targetAddr, outDir string, workers int, o
 	}
 	events.printLimiting()
 	return nil
+}
+
+// unreachableSender explains a download whose data connections could not reach the sender
+// (#133): the usual cause is the sender's firewall, Windows above all.
+func unreachableSender(addr string) string {
+	_, port, _ := net.SplitHostPort(addr)
+	return fmt.Sprintf("    The sender could not be reached at %s. If it is a Windows PC, its firewall must let\n"+
+		"    TCP port %s in (see the guide, section 9). Then send again.\n", addr, port)
 }
 
 // fetchPeer asks the device at hostIP whether it is sending. Its answer only says that a
