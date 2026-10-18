@@ -271,18 +271,14 @@ const IndexHTML = `<!DOCTYPE html>
 
         <h2 style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">Send Files or Folder</h2>
         
-        <!-- Hidden Universal Browser File Inputs -->
-        <input type="file" id="browserFileInput" multiple style="display:none" onchange="onBrowserFilesSelected(this.files)">
-        <input type="file" id="browserFolderInput" webkitdirectory directory multiple style="display:none" onchange="onBrowserFilesSelected(this.files)">
-
-        <!-- Unified Modern Drop & Pick Zone -->
-        <div id="dropZone" class="drop-zone" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+        <!-- Pick on this device: files are sent from where they are, never copied (#137). A
+             browser gives no path for <input type=file> or a drop, so there is neither. -->
+        <div id="dropZone" class="drop-zone" onclick="openSendPicker()">
           <div class="drop-icon">📦</div>
-          <div class="drop-title">Drag & drop files or folders here</div>
-          <div class="drop-subtitle">or choose from your device:</div>
+          <div class="drop-title">Choose files or a folder on this device</div>
+          <div class="drop-subtitle">They are sent from where they are, never copied.</div>
           <div class="drop-buttons" onclick="event.stopPropagation()">
-            <button type="button" class="btn-picker" onclick="triggerPickFiles()">📄 Choose Files</button>
-            <button type="button" class="btn-picker" onclick="triggerPickFolder()">📁 Choose Folder</button>
+            <button type="button" class="btn-picker" onclick="openSendPicker()">📂 Browse this device</button>
           </div>
         </div>
 
@@ -291,10 +287,6 @@ const IndexHTML = `<!DOCTYPE html>
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
             <strong id="selectedFilesSummary" style="font-size:13px; color:var(--primary);">0 files selected</strong>
             <button type="button" class="btn btn-danger" style="width:auto; padding:3px 10px; font-size:11px;" onclick="clearAllSelected()">✕ Clear / Cancel</button>
-          </div>
-          <!-- Real-time Staging Progress Bar -->
-          <div id="stagingProgressBarContainer" style="display:none; width: 100%; height: 6px; background: #1e293b; border-radius: 9999px; overflow: hidden; margin: 6px 0;">
-            <div id="stagingProgressBar" style="height: 100%; width: 0%; background: #3b82f6; transition: width 0.1s ease;"></div>
           </div>
           <div id="selectedFilesList" style="font-size:12px; color:var(--muted); max-height:100px; overflow-y:auto;"></div>
         </div>
@@ -612,7 +604,7 @@ const IndexHTML = `<!DOCTYPE html>
 
       <div class="modal-btns">
         <button class="btn btn-secondary" onclick="closeDirPicker()">Cancel</button>
-        <button class="btn btn-success" onclick="confirmSelectedDir()">✓ Select This Folder</button>
+        <button class="btn btn-success" id="fsConfirmBtn" onclick="confirmSelectedDir()">✓ Select This Folder</button>
       </div>
     </div>
   </div>
@@ -1494,48 +1486,13 @@ const IndexHTML = `<!DOCTYPE html>
     }
 
     let selectedNativePaths = [];
-    let stagedBrowserFiles = [];
-    let stagedServerPaths = null;
-    let isStaging = false;
+    let sendPicked = new Set(); // files ticked in the device browser, by path
 
-    function onDragOver(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      const zone = document.getElementById("dropZone");
-      if (zone) zone.classList.add("dragover");
-    }
-
-    function onDragLeave(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      const zone = document.getElementById("dropZone");
-      if (zone) zone.classList.remove("dragover");
-    }
-
-    function onDrop(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      const zone = document.getElementById("dropZone");
-      if (zone) zone.classList.remove("dragover");
-      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        onBrowserFilesSelected(e.dataTransfer.files);
-      }
-    }
-
-    function triggerPickFiles() {
-      const input = document.getElementById("browserFileInput");
-      if (input) {
-        input.value = "";
-        input.click();
-      }
-    }
-
-    function triggerPickFolder() {
-      const input = document.getElementById("browserFolderInput");
-      if (input) {
-        input.value = "";
-        input.click();
-      }
+    // The device browser picks what to send: files ticked (several, across folders), or a
+    // whole folder. Only their paths go to the daemon (#137).
+    function openSendPicker() {
+      sendPicked = new Set();
+      openDirPicker("sendPathInput");
     }
 
     function setNativeSelection(paths) {
@@ -1558,138 +1515,8 @@ const IndexHTML = `<!DOCTYPE html>
       document.getElementById("sendPathInput").value = paths.join("\n");
     }
 
-    function onBrowserFilesSelected(fileList) {
-      if (!fileList || fileList.length === 0) return;
-      const files = Array.from(fileList);
-      if (files.length === 0) return;
-
-      // Abort any existing background staging request
-      if (currentStagingXHR) {
-        currentStagingXHR.abort();
-        currentStagingXHR = null;
-      }
-      isStaging = false;
-      selectedNativePaths = [];
-      stagedServerPaths = null;
-      stagedBrowserFiles = files;
-
-      const box = document.getElementById("selectedFilesBox");
-      const summary = document.getElementById("selectedFilesSummary");
-      const list = document.getElementById("selectedFilesList");
-
-      let totalBytes = 0;
-      list.innerHTML = "";
-      for (const f of stagedBrowserFiles) {
-        totalBytes += f.size;
-        const item = document.createElement("div");
-        const name = f.webkitRelativePath || f.name;
-        item.innerText = "• " + name + " (" + formatMB(f.size) + ")";
-        list.appendChild(item);
-      }
-
-      summary.innerText = "⏳ Staging " + stagedBrowserFiles.length + " file" + (stagedBrowserFiles.length > 1 ? "s" : "") + " (" + formatMB(totalBytes) + ")...";
-      box.style.display = "block";
-      document.getElementById("sendPathInput").value = "";
-
-      // Background stage immediately so files are ready when user clicks Send
-      startBackgroundStaging();
-    }
-
-    let currentStagingXHR = null;
-
-    function startBackgroundStaging() {
-      if (stagedBrowserFiles.length === 0) return;
-      if (currentStagingXHR) {
-        currentStagingXHR.abort();
-        currentStagingXHR = null;
-      }
-
-      isStaging = true;
-      const progressContainer = document.getElementById("stagingProgressBarContainer");
-      const progressBar = document.getElementById("stagingProgressBar");
-      if (progressContainer) progressContainer.style.display = "block";
-      if (progressBar) progressBar.style.width = "0%";
-
-      const formData = new FormData();
-      let totalBytes = 0;
-      for (const file of stagedBrowserFiles) {
-        const relPath = file.webkitRelativePath || file.name;
-        formData.append("files", file, relPath);
-        totalBytes += file.size;
-      }
-
-      const summary = document.getElementById("selectedFilesSummary");
-      if (summary) {
-        summary.innerText = "⏳ Staging " + stagedBrowserFiles.length + " file(s) (0%)...";
-      }
-
-      const xhr = new XMLHttpRequest();
-      currentStagingXHR = xhr;
-
-      xhr.upload.onprogress = function(e) {
-        if (e.lengthComputable) {
-          const pct = Math.min(99, Math.round((e.loaded / e.total) * 100));
-          if (progressBar) progressBar.style.width = pct + "%";
-          if (summary) {
-            summary.innerText = "⏳ Staging " + stagedBrowserFiles.length + " file(s) (" + pct + "% - " + formatMB(e.loaded) + " / " + formatMB(e.total) + ")";
-          }
-          const sendBtn = document.getElementById("sendTransferBtn");
-          if (sendBtn && sendBtn.disabled) {
-            sendBtn.innerText = "⏳ Staging (" + pct + "%)...";
-          }
-          const shareBtn = document.getElementById("shareWebBtn");
-          if (shareBtn && shareBtn.disabled) {
-            shareBtn.innerText = "⏳ Staging (" + pct + "%)...";
-          }
-        }
-      };
-
-      xhr.onload = function() {
-        currentStagingXHR = null;
-        isStaging = false;
-        if (progressContainer) progressContainer.style.display = "none";
-        if (xhr.status === 200) {
-          try {
-            const data = JSON.parse(xhr.responseText);
-            stagedServerPaths = data.paths || [];
-            if (summary) {
-              summary.innerText = "✓ Ready to send (" + stagedBrowserFiles.length + " files - " + formatMB(totalBytes) + ")";
-            }
-          } catch (err) {
-            if (summary) summary.innerText = "⚠️ Staging response parse error";
-          }
-        } else {
-          if (summary) summary.innerText = "⚠️ Staging failed (HTTP " + xhr.status + ")";
-        }
-      };
-
-      xhr.onerror = function() {
-        currentStagingXHR = null;
-        isStaging = false;
-        if (progressContainer) progressContainer.style.display = "none";
-        if (summary) summary.innerText = "⚠️ Staging network error";
-      };
-
-      xhr.onabort = function() {
-        currentStagingXHR = null;
-        isStaging = false;
-        if (progressContainer) progressContainer.style.display = "none";
-      };
-
-      xhr.open("POST", "/api/upload");
-      xhr.setRequestHeader("Authorization", "Bearer " + CONTROL_TOKEN);
-      xhr.send(formData);
-    }
-
     function clearAllSelected(clearInput = true) {
-      if (currentStagingXHR) {
-        currentStagingXHR.abort();
-        currentStagingXHR = null;
-      }
-      isStaging = false;
       selectedNativePaths = [];
-      stagedBrowserFiles = [];
-      stagedServerPaths = null;
 
       // Re-enable send and share buttons if they were disabled waiting
       const sendBtn = document.getElementById("sendTransferBtn");
@@ -1703,11 +1530,6 @@ const IndexHTML = `<!DOCTYPE html>
         shareBtn.innerText = "🌐 Share to Web Portal";
       }
 
-      const progressContainer = document.getElementById("stagingProgressBarContainer");
-      if (progressContainer) progressContainer.style.display = "none";
-
-      document.getElementById("browserFileInput").value = "";
-      document.getElementById("browserFolderInput").value = "";
       document.getElementById("selectedFilesBox").style.display = "none";
       if (clearInput) {
         document.getElementById("sendPathInput").value = "";
@@ -1734,8 +1556,6 @@ const IndexHTML = `<!DOCTYPE html>
 
     function onManualPathInput() {
       selectedNativePaths = [];
-      stagedBrowserFiles = [];
-      stagedServerPaths = null;
     }
 
     function parsePaths() {
@@ -1751,53 +1571,12 @@ const IndexHTML = `<!DOCTYPE html>
     }
 
     async function preparePathsForSend() {
-      // 1. If native paths were selected via OS dialog
+      // 1. The paths picked in the device browser
       if (selectedNativePaths && selectedNativePaths.length > 0) {
         return selectedNativePaths;
       }
 
-      // 2. If browser files were selected
-      if (stagedBrowserFiles.length > 0) {
-        if (stagedServerPaths && stagedServerPaths.length > 0) {
-          return stagedServerPaths;
-        }
-
-        const btn = document.getElementById("sendTransferBtn");
-        const origText = btn ? btn.innerText : "Send";
-        if (btn) {
-          btn.innerText = "⏳ Staging files...";
-          btn.disabled = true;
-        }
-
-        // Wait up to 60s for staging to finish (with abort check)
-        const waitStart = Date.now();
-        while (isStaging && (Date.now() - waitStart < 60000)) {
-          await new Promise(r => setTimeout(r, 150));
-        }
-
-        if (stagedServerPaths && stagedServerPaths.length > 0) {
-          if (btn) {
-            btn.innerText = origText;
-            btn.disabled = false;
-          }
-          return stagedServerPaths;
-        }
-
-        if (btn) {
-          btn.innerText = origText;
-          btn.disabled = false;
-        }
-
-        if (isStaging) {
-          if (currentStagingXHR) currentStagingXHR.abort();
-          alert("Staging timed out. Please try selecting the files again or use 'Choose Files' for instant local selection.");
-        } else {
-          alert("Failed to stage files for transfer. Please click '✕ Clear / Cancel' and select files again.");
-        }
-        return [];
-      }
-
-      // 3. Fall back to manual path input
+      // 2. Else the paths typed by hand
       return parsePaths();
     }
 
@@ -2053,6 +1832,7 @@ const IndexHTML = `<!DOCTYPE html>
         }
       }
       document.getElementById("dirPickerModal").style.display = "flex";
+      updateFSConfirm();
       loadFSDir(initialDir);
     }
 
@@ -2062,6 +1842,11 @@ const IndexHTML = `<!DOCTYPE html>
 
     function selectPathForInput(selectedPath) {
       if (!selectedPath) return;
+      if (dirPickerTargetInput === "sendPathInput") {
+        setNativeSelection([selectedPath]);
+        closeDirPicker();
+        return;
+      }
       if (dirPickerTargetInput) {
         clearBrowserFiles();
         document.getElementById(dirPickerTargetInput).value = selectedPath;
@@ -2073,8 +1858,24 @@ const IndexHTML = `<!DOCTYPE html>
     }
 
     function confirmSelectedDir() {
+      if (dirPickerTargetInput === "sendPathInput" && sendPicked.size > 0) {
+        setNativeSelection(Array.from(sendPicked));
+        closeDirPicker();
+        return;
+      }
       const selectedPath = document.getElementById("fsCurrentPath").value.trim();
       selectPathForInput(selectedPath);
+    }
+
+    // The confirm button says what it will select: the ticked files, or the folder shown.
+    function updateFSConfirm() {
+      const btn = document.getElementById("fsConfirmBtn");
+      if (!btn) return;
+      if (dirPickerTargetInput === "sendPathInput" && sendPicked.size > 0) {
+        btn.innerText = "✓ Select " + sendPicked.size + (sendPicked.size === 1 ? " file" : " files");
+      } else {
+        btn.innerText = "✓ Select This Folder";
+      }
     }
 
     async function loadFSDir(dirPath) {
@@ -2134,8 +1935,16 @@ const IndexHTML = `<!DOCTYPE html>
             row.style.display = "flex";
             row.style.justifyContent = "space-between";
             row.style.alignItems = "center";
-            row.innerHTML = '<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;">📄 ' + f.name + '</span> <span style="color:var(--muted); font-size:11px; margin-left:8px; white-space:nowrap;">' + formatMB(f.size) + '</span>';
-            row.onclick = () => selectPathForInput(f.path);
+            const render = () => {
+              const mark = sendPicked.has(f.path) ? "☑" : "☐";
+              row.innerHTML = '<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;">' + mark + ' 📄 ' + f.name + '</span> <span style="color:var(--muted); font-size:11px; margin-left:8px; white-space:nowrap;">' + formatMB(f.size) + '</span>';
+            };
+            render();
+            row.onclick = () => {
+              if (sendPicked.has(f.path)) sendPicked.delete(f.path); else sendPicked.add(f.path);
+              render();
+              updateFSConfirm();
+            };
             listEl.appendChild(row);
           });
         }
