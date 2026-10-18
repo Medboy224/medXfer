@@ -283,8 +283,10 @@ func TestResumeIsNoSpeed(t *testing.T) {
 		}
 		ev.mu.Unlock()
 		for _, pr := range resumed {
-			if pr.SpeedMBps != 0 {
-				t.Fatalf("a resume that received nothing yet shows %.1f MB/s (%d bytes found on disk)", pr.SpeedMBps, pr.Bytes)
+			// The few KiB the valve lets through are real network bytes; the bytes found on
+			// disk would show hundreds of MB/s.
+			if pr.SpeedMBps > 1 {
+				t.Fatalf("a resume that received almost nothing shows %.1f MB/s (%d bytes found on disk)", pr.SpeedMBps, pr.Bytes)
 			}
 		}
 		if len(resumed) >= 3 {

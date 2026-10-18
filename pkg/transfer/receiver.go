@@ -263,8 +263,8 @@ type run struct {
 	conns atomic.Int32
 	evMu  sync.Mutex
 	speed *speedMeter
-	// received counts the bytes of this session's chunks: the speed. bytes also counts what a
-	// resume finds on disk and the files already there, which arrive in no time.
+	// received counts the bytes read from the data connections: the speed. bytes also counts
+	// what a resume finds on disk and the files already there, which arrive in no time.
 	received atomic.Int64
 	chunks   uint32 // chunk size
 
@@ -651,7 +651,6 @@ func (ru *run) write(t task, data []byte, sum [32]byte) error {
 		if first && st.total > 0 {
 			st.hashes[t.index], st.fresh[t.index] = sum, true
 			ru.bytes.Add(int64(len(data)))
-			ru.received.Add(int64(len(data)))
 			st.counted.Add(int64(len(data)))
 		}
 		st.mu.RUnlock()
@@ -696,7 +695,6 @@ func (ru *run) write(t task, data []byte, sum [32]byte) error {
 			return nil
 		}
 		ru.bytes.Add(int64(len(data)))
-		ru.received.Add(int64(len(data)))
 		st.counted.Add(int64(len(data)))
 	}
 	if t.index < st.total {
@@ -1246,7 +1244,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 		// buffers back, and must not count as network time (DEV-04).
 		readStart := time.Now()
 		_ = conn.SetReadDeadline(readStart.Add(chunkReadTimeout))
-		h, p, err := protocol.ReadFrame(conn, limits, buf)
+		h, p, err := protocol.ReadFrame(countingReader{conn, &ru.received}, limits, buf)
 		if err != nil {
 			free <- buf
 			drop()

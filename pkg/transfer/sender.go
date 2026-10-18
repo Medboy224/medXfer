@@ -36,6 +36,7 @@ type Sender struct {
 	hashes [][][32]byte // per item, the SHA-256 of the chunks served, for the digest
 
 	bytes    atomic.Int64
+	wire     atomic.Int64 // bytes written to the data connections: the speed
 	streams  atomic.Int32
 	finished atomic.Bool // the receiver sent DONE
 	partial  atomic.Bool
@@ -132,14 +133,14 @@ func (s *Sender) reportProgress(ctx context.Context) {
 	}
 	t := time.NewTicker(progressEvery)
 	defer t.Stop()
-	speed := newSpeedMeter()
+	speed := newSenderSpeedMeter()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			p := s.Progress()
-			p.SpeedMBps = speed.update(p.Bytes)
+			p.SpeedMBps = speed.update(s.wire.Load())
 			s.events.OnProgress(p)
 		}
 	}
@@ -196,7 +197,7 @@ func (s *Sender) serveConn(c net.Conn) {
 	for out := range ready {
 		start := time.Now()
 		_ = c.SetWriteDeadline(start.Add(time.Minute))
-		_, err := c.Write(out)
+		_, err := writeCounted(c, out, &s.wire)
 		s.stage(StageNetWrite, start, int64(len(out)))
 		if err != nil {
 			c.Close() // ends the preparing goroutine's read
@@ -429,28 +430,4 @@ func (s *Sender) closeFiles() {
 		}
 		delete(s.files, i)
 	}
-}
-
-// speedMeter smooths the throughput seen through successive byte counts.
-type speedMeter struct {
-	last  int64
-	at    time.Time
-	speed float64
-}
-
-func newSpeedMeter() *speedMeter { return &speedMeter{at: time.Now()} }
-
-func (m *speedMeter) update(bytes int64) float64 {
-	now := time.Now()
-	if dt := now.Sub(m.at).Seconds(); dt > 0 {
-		// Bytes counted again from less (a file started over, a full disk) are no speed.
-		inst := max(float64(bytes-m.last), 0) / (1 << 20) / dt
-		if m.speed == 0 {
-			m.speed = inst
-		} else {
-			m.speed = 0.7*m.speed + 0.3*inst
-		}
-	}
-	m.last, m.at = bytes, now
-	return m.speed
 }

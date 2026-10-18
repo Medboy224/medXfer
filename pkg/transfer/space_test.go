@@ -59,8 +59,9 @@ func TestCheckSpaceSkippedFolderNeedsNothing(t *testing.T) {
 // Bytes counted again from less (a file started over, a full disk) never make a negative speed.
 func TestSpeedIsNeverNegative(t *testing.T) {
 	m := newSpeedMeter()
-	m.last, m.at = 100<<20, m.at.Add(-time.Second) // 100 MiB counted, no speed yet
-	if s := m.update(10 << 20); s < 0 {
+	t0 := m.samples[0].at
+	m.updateAt(t0.Add(time.Second), 100<<20) // 100 MiB counted
+	if s := m.updateAt(t0.Add(2*time.Second), 10<<20); s < 0 {
 		t.Fatalf("speed %.1f MB/s after the count went back", s)
 	}
 }
