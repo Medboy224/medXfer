@@ -109,15 +109,6 @@ func TestRemoteClientAccessRestriction(t *testing.T) {
 		t.Fatalf("Expected 403 Forbidden for remote client on /api/fs/mkdir, got %d", wRemoteMkdir.Code)
 	}
 
-	// 5. Remote access to /api/upload must be 403 Forbidden
-	reqRemoteUpload := httptest.NewRequest("POST", "/api/upload", nil)
-	reqRemoteUpload.RemoteAddr = remoteIP
-	wRemoteUpload := httptest.NewRecorder()
-	server.handleUpload(wRemoteUpload, reqRemoteUpload)
-	if wRemoteUpload.Code != http.StatusForbidden {
-		t.Fatalf("Expected 403 Forbidden for remote client on /api/upload, got %d", wRemoteUpload.Code)
-	}
-
 	// 6. Remote access to /api/browse must be 403 Forbidden
 	reqRemoteBrowse := httptest.NewRequest("GET", "/api/browse", nil)
 	reqRemoteBrowse.RemoteAddr = remoteIP

@@ -13,7 +13,6 @@ import (
 
 var devUIRoutes = []route{
 	{"GET", "/api/browse"},
-	{"POST", "/api/upload"},
 	{"GET", "/api/fs/list"},
 	{"POST", "/api/fs/mkdir?dir=x&name=y"},
 }

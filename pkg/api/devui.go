@@ -3,15 +3,14 @@
 package api
 
 // The web dashboard is a development tool (DEV-19): it exists only in builds with the
-// "devui" tag, together with the native file picker, the upload drop zone and the folder
-// browser, which nothing else uses. Production binaries have none of it (CI checks).
+// "devui" tag, together with the native file picker and the folder browser, which nothing else
+// uses. Files to send are picked on this device and passed by path, never copied (#137). Production binaries have none of it (CI checks).
 
 import (
 	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -19,18 +18,22 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"time"
 )
 
 // DashboardAvailable reports whether this build serves the web dashboard.
 const DashboardAvailable = true
 
+// legacyStaging is where older dashboards copied the files picked in the browser, and never
+// removed them (#137, 13 GB on a phone). Files are now sent from where they are: the folder is
+// removed when the dashboard starts.
+func legacyStaging() string { return filepath.Join(os.TempDir(), "medxfer_staged") }
+
 func (s *DaemonServer) registerDevUIRoutes(mux *http.ServeMux) {
+	go func() { _ = os.RemoveAll(legacyStaging()) }()
 	// Control surface (API-04): loopback + Host + Origin + control token on every route.
 	mux.HandleFunc("/status", s.control(s.handleHTTPStatus))
 	mux.HandleFunc("/ws", s.control(s.handleWebSocket))
 	mux.HandleFunc("/api/browse", s.control(s.handleBrowse))
-	mux.HandleFunc("/api/upload", s.control(s.handleUpload))
 	mux.HandleFunc("/api/fs/list", s.control(s.handleFSList))
 	mux.HandleFunc("/api/fs/mkdir", s.control(s.handleFSMkdir))
 }
@@ -109,105 +112,6 @@ return p`)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"paths": paths,
 	})
-}
-
-func (s *DaemonServer) handleUpload(w http.ResponseWriter, r *http.Request) {
-	if !isLoopbackRequest(r) {
-		http.Error(w, "Forbidden: Staging upload is restricted to localhost", http.StatusForbidden)
-		return
-	}
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	reader, err := r.MultipartReader()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	stageID := fmt.Sprintf("stage_%d", time.Now().UnixNano())
-	stageDir := filepath.Join(os.TempDir(), "medxfer_staged", stageID)
-	_ = os.MkdirAll(stageDir, 0755)
-
-	var savedPaths []string
-
-	for {
-		part, err := reader.NextPart()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		fileName := part.FileName()
-		if fileName == "" {
-			fileName = part.FormName()
-		}
-		if fileName == "" {
-			continue
-		}
-
-		cleanRel := strings.ReplaceAll(fileName, "\\", "/")
-		cleanRel = strings.TrimPrefix(cleanRel, "/")
-		fullDest := filepath.Join(stageDir, filepath.FromSlash(cleanRel))
-
-		_ = os.MkdirAll(filepath.Dir(fullDest), 0755)
-		outFile, err := os.Create(fullDest)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		_, copyErr := io.Copy(outFile, part)
-		outFile.Close()
-		if copyErr != nil {
-			http.Error(w, copyErr.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		savedPaths = append(savedPaths, fullDest)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if len(savedPaths) > 0 {
-		pathsToSend := savedPaths
-		if len(savedPaths) > 1 {
-			// Check if all files share a single common top-level folder inside stageDir
-			// (e.g. when user selected a folder using webkitdirectory)
-			firstRel, _ := filepath.Rel(stageDir, savedPaths[0])
-			firstParts := strings.Split(filepath.ToSlash(firstRel), "/")
-			if len(firstParts) > 1 {
-				commonFolder := firstParts[0]
-				allShare := true
-				for _, sp := range savedPaths[1:] {
-					rel, _ := filepath.Rel(stageDir, sp)
-					parts := strings.Split(filepath.ToSlash(rel), "/")
-					if len(parts) <= 1 || parts[0] != commonFolder {
-						allShare = false
-						break
-					}
-				}
-				if allShare {
-					// Send user's actual folder, so receiver creates user's folder, NOT stage_...
-					pathsToSend = []string{filepath.Join(stageDir, commonFolder)}
-				}
-			}
-		}
-
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":      "ok",
-			"stage_dir":   stageDir,
-			"paths":       pathsToSend,
-			"total_files": len(savedPaths),
-		})
-	} else {
-		http.Error(w, "no files received", http.StatusBadRequest)
-	}
 }
 
 type FSQuickDir struct {
