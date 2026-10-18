@@ -79,6 +79,8 @@ Hors périmètre : un autre processus malveillant tournant sous le même compte 
 |---|---|---|
 | A1 lit les fichiers | TLS 1.3 sur *toutes* les connexions, aucun texte clair | `CHAN-01`, `CHAN-02`, `CHAN-05` |
 | A2 intercepte (MITM) | Épinglage d'empreinte (mTLS) + PAKE lié au canal | `CHAN-03`, `PAIR-03`, `PAIR-05` |
+| A2 s'interpose au premier contact | Premier contact par QR ou PIN seulement, jamais sur une comparaison d'empreintes à l'œil | `PAIR-11`, `PAIR-12` |
+| A3 profite d'une confiance unilatérale ou oubliée | Confiance mutuelle déclarée à chaque session ; rien d'écrit sans les deux oui | `PAIR-08` à `PAIR-10` |
 | A2 force un repli en clair | Aucun chemin de repli ; handshake raté = connexion fermée | `CHAN-05` |
 | A3 télécharge sans appairage | Connexion de données acceptée seulement si l'empreinte du pair correspond au transfert | `CHAN-06` |
 | A3 devine le code | PAKE, 3 essais, durée de vie limitée | `PAIR-04` |
@@ -217,7 +219,16 @@ Aujourd'hui (`session/tls.go`) le certificat est régénéré à chaque démarra
 ## 6. Couche C — Appairage
 
 **But :** passer de « deux inconnus » à « deux appareils qui se font confiance », sans exposer de secret faible.
-Les trois chemins aboutissent au même état : *l'empreinte du pair est dans la liste de confiance*.
+
+Trois états entre deux appareils (lot « Modèle de confiance », [plan](medxfer-plan-confiance.md)) :
+
+| État | Comment on y entre | Ce qu'il permet | Ce qui est écrit sur disque |
+|---|---|---|---|
+| **Inconnu** | — | Se voir dans la découverte. | Rien |
+| **Session** | P1 (QR) ou P2 (PIN) réussi | Envoyer et recevoir tant que la session dure ; chaque offre reste à accepter. | **Rien** (`PAIR-08`) |
+| **Confiance mutuelle** | Demande de confiance acceptée des deux côtés (§6.5) | Se reconnecter par P3, sans PIN ni QR. | L'empreinte de l'autre, **de chaque côté** |
+
+Un appareil inconnu n'est jamais admis autrement que par P1 ou P2 : aucune décision ne repose sur une comparaison d'empreintes à l'œil (`PAIR-12`). L'empreinte reste affichable pour qui veut vérifier (`ID-03`).
 
 ### 6.1 Chemin P1 — QR code (secret fort)
 Le QR contient : empreinte de l'émetteur, adresse, port, secret aléatoire de 128 bits, expiration.
@@ -227,7 +238,7 @@ Déroulement :
 1. Le receveur scanne le QR et se connecte en **épinglant `fp`** (le QR est un canal hors-bande : la caméra est le canal authentifié).
 2. Dans le canal TLS déjà authentifié, il envoie `pair_secret` avec le secret.
 3. L'émetteur le compare en temps constant. Le secret est à usage unique, durée de vie 120 s par défaut.
-4. Chacun enregistre l'empreinte de l'autre.
+4. La session est ouverte. Rien n'est enregistré (`PAIR-08`) : la confiance durable passe par la demande du §6.5.
 
 Pourquoi aucun PAKE ici : le secret a 128 bits d'entropie, et l'attaquant ne peut pas faire de MITM puisque l'empreinte vient du QR.
 
@@ -246,7 +257,7 @@ Déroulement (le **répondant** affiche le PIN ; l'**initiateur** le saisit) :
    - chacun envoie `HMAC-SHA-512(mac_key, lv_cat(Y, AD))` sur son propre message, et vérifie celui du pair.
 
    L'ISK contient le CI (les deux empreintes) et le sid (`ekm`) : la confirmation lie donc l'échange au canal.
-5. Succès : chacun enregistre l'empreinte de l'autre, la connexion passe en état `AUTH`, et seulement alors l'alias est échangé.
+5. Succès : la connexion passe en état `AUTH`, et seulement alors l'alias est échangé. La session est ouverte ; rien n'est enregistré (`PAIR-08`).
 
 Messages (`pkg/pairing`) :
 1. initiateur → répondant : `pair_pin {suite, share: Ya}` ;
@@ -258,8 +269,15 @@ Un essai compte dès l'envoi de `pair_pin_reply`. Sans essai disponible, le rép
 
 **Pourquoi le MITM échoue :** un attaquant qui relaie ouvre deux sessions TLS distinctes. Les `ekm` et les empreintes diffèrent d'un côté à l'autre ; les confirmations ne correspondent donc pas. Sans le PIN il ne peut pas non plus dériver la clé PAKE.
 
-### 6.3 Chemin P3 — Appareil de confiance
-Aucun code : le canal (§7) vérifie que l'empreinte du pair est dans `trusted.json`. L'envoi exige quand même l'acceptation du receveur, sauf si l'utilisateur a activé « accepter automatiquement » pour cet appareil.
+**PIN à la demande** (`PAIR-11`) : quand un appareil en choisit un autre dans la liste de la découverte, c'est l'appareil choisi qui affiche un PIN, et celui qui l'a choisi le tape, comme l'association par saisie de code en Bluetooth.
+1. initiateur → répondant : `pair_pin_wanted` ;
+2. le répondant affiche un PIN, puis répond `pair_pin_ready` ; s'il ne peut en afficher aucun (`PAIR-04`, après les séries de PIN détruits), `pair_reject`, neutre ;
+3. l'initiateur fait taper le PIN, puis le déroulement ci-dessus reprend sur la **même** connexion, à `pair_pin`. Le délai `UNAUTH` est prolongé le temps de la saisie, sans dépasser la vie d'un PIN (`PAIR-02`).
+
+Tant que le PIN affiché est valable, chaque nouvelle demande reçoit **le même** PIN, avec ses essais et ses délais : redemander ne donne aucun essai de plus à qui devine (`PAIR-04`). Un envoi ponctuel affiche son PIN d'emblée (avec le QR) et répond aux demandes avec celui-là.
+
+### 6.3 Chemin P3 — Appareil de confiance mutuelle
+Aucun code, à une condition : la confiance est **mutuelle** (`PAIR-09`). Le canal (§7) vérifie que l'empreinte du pair est dans `trusted.json` ; en plus, chaque côté déclare dans son premier message de session (`trusts_you`) s'il a l'autre dans sa liste, et P3 ne s'applique que si les deux le déclarent. Sinon, c'est un premier contact : P1 ou P2. L'envoi exige quand même l'acceptation du receveur, sauf si l'utilisateur a activé « accepter automatiquement » pour cet appareil.
 
 ### 6.4 Exigences
 | Id | Exigence | Statut |
@@ -271,9 +289,29 @@ Aucun code : le canal (§7) vérifie que l'empreinte du pair est dans `trusted.j
 | `PAIR-05` | La confirmation de clé est obligatoire dans les deux sens. | ✅ |
 | `PAIR-06` | On NE DOIT PAS écrire soi-même de primitive (groupe, corps, hachage vers le groupe, encodage). Le protocole PAKE PEUT être assemblé sur une bibliothèque de groupe reconnue, à condition de vérifier tous les vecteurs de test de sa spécification et d'obtenir une revue externe avant la mise en service. Une **pré-version (RC)** peut être publiée avant cette revue, avec l'avertissement de la gate G4 (§16) ; la version 1.0 finale ne le peut pas (décision du 14 octobre 2026). Un protocole à constantes publiques DOIT les fixer sans connaissance du logarithme discret (voir l'incident de `schollz/pake`, Annexe B). Reformulée à la gate G1 (13 octobre 2026). | ✅ (`pkg/pake` : vecteurs A et B.3 du brouillon 21 ; revue externe : gate G4) |
 | `PAIR-07` | Un échec d'appairage NE DOIT révéler ni le nombre d'essais restants ni l'alias du répondant. | ✅ |
-| `PAIR-08` | Mode « un seul envoi » (sans mémoriser l'appareil) : la confiance n'est pas écrite dans `trusted.json` et disparaît avec la session, sauf demande explicite. | ✅ |
+| `PAIR-08` | **Éphémère par défaut** : une session ouverte par P1 ou P2 n'écrit rien dans `trusted.json` et disparaît avec elle. Seule une demande de confiance acceptée des deux côtés écrit (`PAIR-10`). | 📏 à faire (WP-C.2 à WP-C.4) : aujourd'hui le PIN et le QR enregistrent par défaut |
+| `PAIR-09` | **Confiance mutuelle** : les privilèges d'un appareil de confiance (P3) exigent que les deux listes contiennent l'autre, ce que chaque côté déclare à chaque session (`trusts_you`). Une entrée d'un seul côté ne donne rien ; oublier l'autre d'un seul côté retire les privilèges aux deux. | 📏 protocole prêt (WP-C.1) ; appliqué en WP-C.2 à WP-C.4 |
+| `PAIR-10` | **Demande de confiance** en trois messages dans une session déjà authentifiée (§6.5) ; aucune écriture sans le oui des deux ; 60 s sans réponse valent non ; le transfert en cours n'en dépend pas. | 📏 protocole prêt (WP-C.1) ; appliqué en WP-C.2 à WP-C.4 |
+| `PAIR-11` | **PIN à la demande** : l'appareil choisi dans une liste affiche un PIN, l'autre le tape (§6.2) ; une demande répétée reçoit le PIN encore valable. | 📏 protocole prêt (WP-C.1) ; appliqué en WP-C.2 à WP-C.4 |
+| `PAIR-12` | **Premier contact par P1 ou P2 seulement.** Aucun appareil inconnu n'est admis sur une comparaison d'empreintes à l'œil. | 📏 à faire (WP-C.2 à WP-C.4) : la « question de confiance » existe encore |
 
 **Risque résiduel accepté pour P2 :** un attaquant actif a 3 chances sur 10^6 par PIN affiché. La voie P1 (QR) est la voie « forte ». PIN configurable à 8 chiffres si besoin.
+
+### 6.5 Confiance mutuelle
+Une entrée de `trusted.json` ne prouve que la décision d'un côté : un appareil peut toujours garder la clé publique de l'autre sans lui demander. Ce qui protège A, c'est la liste de A ; la règle de `PAIR-09` rend en plus la confiance **bilatérale dans la durée**.
+
+**Demande de confiance** (`PAIR-10`), dans une session ouverte par P1 ou P2, ou entre appareils de confiance mutuelle :
+
+```
+A ──trust_offer──►  B     B demande à son utilisateur : « 'A' propose une confiance mutuelle. Accepter ? » (60 s, sans réponse : non)
+A ◄─trust_accept──  B     (ou trust_decline : rien n'est écrit, la session continue)
+A ──trust_commit──► B     A écrit l'empreinte de B en envoyant le commit ; B écrit celle de A en le recevant
+```
+
+- Un `trust_accept` sans offre en cours, ou un `trust_commit` sans oui de ce côté, est ignoré : l'autre ne peut pas forcer une écriture.
+- Si les deux proposent en même temps, chaque offre vaut le oui de l'autre.
+- Si le `trust_commit` se perd, l'entrée n'existe que chez A : `PAIR-09` la rend inerte, et elle est signalée à la session suivante.
+- Ces messages circulent dans un canal déjà authentifié par P1, P2 ou P3 ; ils ne changent rien à la cryptographie.
 
 ---
 

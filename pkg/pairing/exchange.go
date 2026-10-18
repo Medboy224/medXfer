@@ -225,6 +225,13 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 			return Result{}, err
 		}
 		r.Name = name
+	case TypePINWanted: // a device picked this one in a list: the PIN on screen answers it
+		name, err := AnswerPINWanted(ch, conn, func() (*PIN, error) { return o.PIN, nil }, o.Identity.Fingerprint)
+		if err != nil {
+			_, _ = reject()
+			return Result{}, err
+		}
+		r.Name = name
 	default:
 		return reject()
 	}

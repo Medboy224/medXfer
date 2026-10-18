@@ -12,15 +12,17 @@
 
 ## 1. Ce que fait le système
 
-medXfer transfère des fichiers entre appareils d'un même réseau local. Avant le premier transfert, deux appareils s'appairent. Chacun enregistre alors l'empreinte de la clé de l'autre, et les connexions suivantes l'épinglent.
+medXfer transfère des fichiers entre appareils d'un même réseau local. Avant le premier transfert, deux appareils s'appairent : cela ouvre une **session**. Ils ne gardent l'empreinte de la clé de l'autre que si les deux utilisateurs le demandent (confiance mutuelle, bible §6.5). Les connexions suivantes l'épinglent alors.
 
-Trois chemins d'appairage coexistent (bible §6) :
+Chemins d'appairage (bible §6) :
 
 | Chemin | Principe | Revue |
 |---|---|---|
 | P1, QR | Le QR porte l'empreinte du montreur et un secret de 128 bits. La caméra sert de canal authentifié. | Hors périmètre : pas de PAKE |
-| **P2, PIN** | Le répondant affiche un PIN de 6 chiffres, que l'initiateur saisit. Un PAKE lié au canal TLS prouve la connaissance commune du PIN. | **Objet de la revue** |
-| Comparaison d'empreintes | Les deux utilisateurs comparent visuellement les empreintes. | Hors périmètre |
+| **P2, PIN** | Le répondant affiche un PIN de 6 chiffres, que l'initiateur saisit. Un PAKE lié au canal TLS prouve la connaissance commune du PIN. Variante « PIN à la demande » : l'appareil choisi dans une liste affiche le PIN quand on le lui demande (§3.6). | **Objet de la revue** |
+| P3, confiance mutuelle | Les deux appareils ont déjà la clé de l'autre, et chacun le déclare dans le canal. | Hors périmètre : pas de PAKE |
+
+La **comparaison d'empreintes à l'œil**, qui existait aussi, est retirée (lot « Modèle de confiance », `PAIR-12`) : un premier contact passe toujours par P1 ou P2.
 
 ## 2. Modèle de menace
 
@@ -77,7 +79,7 @@ Tous circulent dans la session TLS, en état `UNAUTH` :
 
 Ensuite :
 - les deux côtés passent en état `AUTH` ;
-- chacun enregistre la clé de l'autre, sauf en mode « un seul envoi ».
+- la session est ouverte ; rien n'est enregistré (`PAIR-08`). Une confiance durable passe par la demande de confiance (§3.6).
 
 Les noms des appareils ne circulent qu'après la confirmation : A envoie le sien au message 3, B le sien au message 4.
 
@@ -99,6 +101,13 @@ Les noms des appareils ne circulent qu'après la confirmation : A envoie le sien
 Chaque essai porte sur un PIN tiré à neuf, avec une probabilité de succès de 10⁻⁶ pour 6 chiffres.
 
 Une attente du répondant (un `xfer pair --pin`, un `xfer send --pin`, ou un « Show a PIN ») admet au plus 2 séries × 3 PIN × 3 essais = **18 essais**, soit une probabilité de succès de **1,8 × 10⁻⁵ au plus**. Au-delà, l'attaquant a besoin que l'utilisateur relance l'appairage, ce que les messages d'arrêt découragent de faire sans réfléchir.
+
+### 3.6 PIN à la demande et confiance mutuelle (lot « Modèle de confiance »)
+
+Ces ajouts n'apportent **aucune cryptographie** : ce sont des messages dans un canal TLS déjà établi, avant ou après le PAKE inchangé.
+
+- **PIN à la demande** (`PAIR-11`) : A envoie `pair_pin_wanted` ; B affiche un PIN et répond `pair_pin_ready` ; l'échange P2 suit sur la **même** connexion, à partir de `pair_pin`. Tant que le PIN est valable, chaque nouvelle demande reçoit le même PIN, avec ses essais et ses délais : la borne du §3.5 ne change pas. Après les 2 séries de PIN détruits, aucune demande ne fait plus tirer de PIN tant que l'utilisateur ne relance pas.
+- **Confiance mutuelle** (`PAIR-09`, `PAIR-10`) : dans une session authentifiée par P1, P2 ou P3, `trust_offer` → `trust_accept` (ou `trust_decline`) → `trust_commit`. Chaque côté n'écrit la clé de l'autre qu'après son propre oui : l'offrant à l'envoi du commit, l'autre à sa réception. Un `trust_accept` ou un `trust_commit` non sollicité est ignoré. Le chemin P3 exige en plus que chaque côté déclare, à chaque session, avoir l'autre dans sa liste (`trusts_you`).
 
 ## 4. Correspondance avec le brouillon 21
 
@@ -149,6 +158,7 @@ Une attente du répondant (un `xfer pair --pin`, un `xfer send --pin`, ou un « 
 6. **Limitation des connexions non authentifiées (LIM-01)** : 16 simultanées, 5 nouvelles par minute et par IP. Question ouverte côté produit : issue #93.
 7. **Brouillon, pas encore RFC.** Le brouillon 21 attend l'éditeur RFC. Une révision des vecteurs à la publication serait vérifiée par les mêmes tests.
 8. **Bibliothèque de groupe.** `gtank/ristretto255` est épinglée dans `go.sum`. Sa revue est hors périmètre, mais **un avis sur ce choix est bienvenu**.
+9. **PIN à la demande** (§3.6). N'importe quel appareil du réseau peut faire afficher un PIN sur un appareil qui écoute. Il n'obtient pas d'essai de plus (même PIN tant qu'il est valable, borne du §3.5), mais il peut le faire apparaître à l'écran sans y avoir été invité. **Ce comportement, inspiré de l'association par saisie de code du Bluetooth, vous paraît-il acceptable ?**
 
 ## 7. Références
 
