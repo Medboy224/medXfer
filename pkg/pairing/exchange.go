@@ -525,17 +525,21 @@ func negotiate(ctx context.Context, ch *session.Channel, conn *securechan.Conn, 
 			return false
 		}
 	}
+	established := false
 	for {
 		m, err := ch.Read()
 		if err != nil || !IsTrustMessage(m.Type) {
-			return false
+			return established
 		}
 		reply, ev, err := talk.Handle(m)
 		if err != nil {
-			return false
+			return established
 		}
 		if reply != nil && ch.Send(*reply) != nil {
-			return false
+			return established
+		}
+		if established && !talk.AwaitsCommit() {
+			return true // the peer's commit came: both keep the same key
 		}
 		switch ev {
 		case TrustAsked:
@@ -550,7 +554,13 @@ func negotiate(ctx context.Context, ch *session.Channel, conn *securechan.Conn, 
 				return false
 			}
 		case TrustEstablished:
-			return true
+			// Both offered: our commit is sent, the peer's is on its way. Without it, each side
+			// could keep its own recognition key (DISC-11, #170).
+			if !talk.AwaitsCommit() {
+				return true
+			}
+			established = true
+			_ = conn.SetDeadline(time.Now().Add(replyTimeout))
 		case TrustDeclined:
 			return false
 		}

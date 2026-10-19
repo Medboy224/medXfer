@@ -176,6 +176,15 @@ func (t *TrustTalk) Handle(m session.Message) (*session.Message, TrustEvent, err
 	return nil, TrustNothing, nil
 }
 
+// AwaitsCommit reports whether this side said yes and still waits for the peer's trust_commit:
+// after a double offer, this side's own commit already established the trust, but the key
+// both keep may be the peer's (keepTagKey). Reading on until it comes keeps one key (#170).
+func (t *TrustTalk) AwaitsCommit() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.live(t.acceptedAt)
+}
+
 // establishedLocked reports the trust once, though both commits of a double offer write it.
 func (t *TrustTalk) establishedLocked() TrustEvent {
 	if t.established {
