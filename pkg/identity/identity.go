@@ -115,6 +115,9 @@ func loadCert(path string, key *ecdsa.PrivateKey) (*x509.Certificate, error) {
 	if time.Now().Add(30 * 24 * time.Hour).After(cert.NotAfter) {
 		return nil, errors.New("certificate expires soon")
 	}
+	if time.Now().Before(cert.NotBefore) { // the clock went back since it was issued (#156)
+		return nil, errors.New("certificate not valid yet")
+	}
 	return cert, nil
 }
 

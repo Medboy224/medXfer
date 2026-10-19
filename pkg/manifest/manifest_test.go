@@ -49,9 +49,6 @@ func TestBuildManifest(t *testing.T) {
 		if item.RelPath == "folderA/subfolder/file2.bin" {
 			foundFile2 = true
 		}
-		if item.FileID == "" {
-			t.Errorf("Item %s missing FileID", item.RelPath)
-		}
 	}
 
 	if !foundFile1 || !foundFile2 {

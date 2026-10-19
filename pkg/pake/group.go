@@ -5,7 +5,6 @@ package pake
 // J5 plan): another library, or one in Go itself some day, replaces it here alone.
 
 import (
-	"errors"
 	"io"
 
 	"github.com/gtank/ristretto255"
@@ -18,8 +17,6 @@ type (
 
 // elementLen is the size of an encoded element (draft §8.3: field_size_bytes).
 const elementLen = 32
-
-var errInvalidElement = errors.New("pake: invalid group element")
 
 // identityBytes is G.I: the encoding of the neutral element.
 var identityBytes = ristretto255.NewIdentityElement().Bytes()

@@ -12,7 +12,9 @@ import (
 )
 
 func TestBundleCommand(t *testing.T) {
+	prev := api.CustomConfigDir()
 	api.SetCustomConfigDir(t.TempDir())
+	t.Cleanup(func() { api.SetCustomConfigDir(prev) }) // the next tests keep theirs (#156)
 	out := filepath.Join(t.TempDir(), "b.zip")
 	var stdout bytes.Buffer
 	if err := runBundle([]string{"-o", out}, &stdout); err != nil {

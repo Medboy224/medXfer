@@ -220,19 +220,12 @@ func ResolvePairingCode(ctx context.Context, code string, timeout time.Duration)
 			if err != nil {
 				break
 			}
-			var p Peer
-			if err := json.Unmarshal(buf[:n], &p); err == nil && p.Version == AppVersion {
-				targetIP := p.HostIP
-				if targetIP == "" || targetIP == "127.0.0.1" {
-					targetIP = srcAddr.IP.String()
-				}
-				if !IsLocalNetworkIP(targetIP) {
-					go func(ip string) {
-						if probed := probePeerForCode(ctxTimeout, ip, normalized, 250*time.Millisecond); probed != nil {
-							foundPeer(probed)
-						}
-					}(targetIP)
-				}
+			if targetIP, ok := codeProbeTarget(buf[:n], srcAddr); ok && !IsLocalNetworkIP(targetIP) {
+				go func(ip string) {
+					if probed := probePeerForCode(ctxTimeout, ip, normalized, 250*time.Millisecond); probed != nil {
+						foundPeer(probed)
+					}
+				}(targetIP)
 			}
 		}
 	}()
@@ -286,6 +279,17 @@ func ResolvePairingCode(ctx context.Context, code string, timeout time.Duration)
 			return nil, fmt.Errorf("timed out searching for pairing code '%s' on local network", normalized)
 		}
 	}
+}
+
+// codeProbeTarget is the address to probe for a pairing code, from a packet heard on the
+// discovery port: the fallback beacon (DISC-04) of a device, which carries no address, so
+// the one it came from (audit 15a, #156: this layer read an older format and heard nothing).
+func codeProbeTarget(packet []byte, src *net.UDPAddr) (string, bool) {
+	var m beaconMsg
+	if json.Unmarshal(packet, &m) != nil || m.V != 1 || m.Name == "" || src == nil || src.IP.To4() == nil {
+		return "", false
+	}
+	return src.IP.To4().String(), true
 }
 
 // probePeerForCode connects to `ip:DiscoveryPort` via TCP and verifies pairing code

@@ -16,7 +16,7 @@ func TestSplitNameAndExt(t *testing.T) {
 		{"folder/sub/data.tar.bz2", "folder/sub", "data", ".tar.bz2"},
 		{"folder\\sub\\doc.pdf", "folder/sub", "doc", ".pdf"},
 		{"Dockerfile", "", "Dockerfile", ""},
-		{".gitignore", "", "", ".gitignore"},
+		{".gitignore", "", ".gitignore", ""}, // a hidden file has no extension (#156)
 		{"folder/notes.txt", "folder", "notes", ".txt"},
 	}
 

@@ -94,7 +94,10 @@ func (e *cliEvents) OnProgress(p transfer.Progress) {
 	}
 }
 
+// OnItem, as OnDiskFull, holds e.mu: its lines never cut the progress bar's (#156).
 func (e *cliEvents) OnItem(ev transfer.ItemEvent) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	switch ev.State {
 	case transfer.ItemFailed:
 		fmt.Printf("\n[-] '%s' failed: %v\n", ev.Path, ev.Err)
@@ -106,6 +109,8 @@ func (e *cliEvents) OnItem(ev transfer.ItemEvent) {
 // OnDiskFull: the receiver paused itself on a full disk, keeping its partial files (STO-07).
 // The user frees some space and presses Enter.
 func (e *cliEvents) OnDiskFull(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	fmt.Printf("\n[!] The disk is full (%v): transfer paused, what was received is kept.\n", err)
 	fmt.Println("[!] Free some space, then press Enter to resume. Ctrl+C stops; the transfer resumes later where it stopped.")
 	if e.resume != nil {

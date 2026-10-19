@@ -93,3 +93,11 @@ func TestPeerAddress(t *testing.T) {
 		t.Error("empty address accepted")
 	}
 }
+
+// Audit §3.4 (#156): the error quotes what the user typed, unit included.
+func TestParseSizeQuotesTheInput(t *testing.T) {
+	_, err := parseSize("12XM")
+	if err == nil || !strings.Contains(err.Error(), `"12XM"`) {
+		t.Fatalf("error %v, want it to quote \"12XM\"", err)
+	}
+}

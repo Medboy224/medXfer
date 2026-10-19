@@ -28,7 +28,6 @@ import (
 const (
 	netBenchMagic = "MXNB1"
 	netBenchPings = 20
-	netBenchIO    = 30 * time.Second // deadline for each step
 
 	// NetBenchMinSize and NetBenchMaxSize bound the bytes sent in each direction.
 	NetBenchMinSize = 1 << 20
@@ -50,6 +49,9 @@ type NetBenchResult struct {
 	Rating        string  `json:"rating"`
 	Encrypted     bool    `json:"encrypted"`
 }
+
+// netBenchIO is the deadline of each step; tests shorten it.
+var netBenchIO = 30 * time.Second
 
 // NewNetBenchCode returns a random single-session code, shown by the listening side.
 func NewNetBenchCode() string {
@@ -142,11 +144,16 @@ func RunNetBench(ctx context.Context, addr, code string, size int64) (*NetBenchR
 		return nil, err
 	}
 	defer conn.Close()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	} else {
-		_ = conn.SetDeadline(time.Now().Add(netBenchIO))
+	// The caller's deadline bounds the whole session; without one, each step gets netBenchIO,
+	// as on the server (§3.8, #156).
+	step := func() {
+		if deadline, ok := ctx.Deadline(); ok {
+			_ = conn.SetDeadline(deadline)
+		} else {
+			_ = conn.SetDeadline(time.Now().Add(netBenchIO))
+		}
 	}
+	step()
 
 	hdr := append([]byte(netBenchMagic), padCode(code)...)
 	hdr = binary.BigEndian.AppendUint64(hdr, uint64(size))
@@ -166,6 +173,7 @@ func RunNetBench(ctx context.Context, addr, code string, size int64) (*NetBenchR
 	}
 
 	// RTT.
+	step()
 	rtts := make([]float64, 0, netBenchPings)
 	ping, pong := make([]byte, 8), make([]byte, 8)
 	for i := 0; i < netBenchPings; i++ {
@@ -184,6 +192,7 @@ func RunNetBench(ctx context.Context, addr, code string, size int64) (*NetBenchR
 	}
 
 	// Upload, timed by the server.
+	step()
 	if err := sendRandom(conn, size); err != nil {
 		return nil, err
 	}
@@ -193,6 +202,7 @@ func RunNetBench(ctx context.Context, addr, code string, size int64) (*NetBenchR
 	}
 
 	// Download, timed here.
+	step()
 	down, err := receiveTimed(conn, size)
 	if err != nil {
 		return nil, err

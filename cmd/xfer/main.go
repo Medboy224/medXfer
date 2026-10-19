@@ -137,9 +137,9 @@ func main() {
 		printUsage()
 		os.Exit(0)
 	default:
-		fmt.Printf("[-] Commande inconnue : '%s'\n", args[0])
+		fmt.Printf("[-] Unknown command: '%s'\n", args[0])
 		if len(args) > 1 {
-			fmt.Printf("    Arguments reçus : %v\n", args[1:])
+			fmt.Printf("    Arguments given: %v\n", args[1:])
 		}
 		fmt.Println()
 		printUsage()

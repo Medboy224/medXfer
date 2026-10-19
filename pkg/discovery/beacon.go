@@ -90,10 +90,9 @@ func (b beaconDiscoverer) Browse(ctx context.Context, timeout time.Duration) ([]
 		deadline = d
 	}
 	_ = conn.SetReadDeadline(deadline)
-	go func() {
-		<-ctx.Done()
-		_ = conn.SetReadDeadline(time.Now())
-	}()
+	// A cancel ends the wait at once; the watch itself ends with Browse (§3.7, #156).
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Now()) })
+	defer stop()
 	var found []Found
 	buf := make([]byte, 2048)
 	for {

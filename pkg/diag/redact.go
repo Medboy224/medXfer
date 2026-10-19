@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Redactor masks secrets and personal data in diagnostic text (bible chapter 13, DEV-11):
@@ -50,13 +52,17 @@ func (r *Redactor) Add(label string, values ...string) {
 
 var (
 	// Paths reveal user names and file names: masked whole (chapter 13: paths only at debug level).
-	reWinPath  = regexp.MustCompile(`(?i)\b[a-z]:[\\/][^"'\r\n<>|]*`)
-	reUnixPath = regexp.MustCompile(`(?:/(?:home|Users|root|data|sdcard|storage|mnt|media|tmp|var|private)\b)[^\s"'<>|]*`)
-	reAuth     = regexp.MustCompile(`(?i)(authorization:?\s*)(bearer\s+)?\S+`)
-	reTokenKV  = regexp.MustCompile(`(?i)\b(token|pin|code|secret|password|key)(["']?\s*[=:]\s*["']?)[^\s"'&,;]+`)
-	reSubproto = regexp.MustCompile(`token\.[0-9a-fA-F]+`)
-	reLongHex  = regexp.MustCompile(`\b[0-9a-fA-F]{24,}\b`)
-	rePairing  = regexp.MustCompile(`\b\d{3}-\d{3}\b`)
+	// A Windows path: its folders may hold spaces (a separator ends them), its last part stops
+	// at a space or a punctuation mark, so the rest of the line stays (audit 13, #156). A quoted
+	// path is masked up to its quote: there, the file name may hold spaces too.
+	reWinQuoted = regexp.MustCompile(`(?i)"[a-z]:[\\/][^"\r\n]*"|'[a-z]:[\\/][^'\r\n]*'`)
+	reWinPath   = regexp.MustCompile(`(?i)\b[a-z]:(?:\\(?:[^\\/"'\r\n<>|:*?]*\\)*|/(?:[^\\/"'\r\n<>|:*?]*/)*)[^\\/\s"'<>|:*?,;]*`)
+	reUnixPath  = regexp.MustCompile(`(?:/(?:home|Users|root|data|sdcard|storage|mnt|media|tmp|var|private)\b)[^\s"'<>|]*`)
+	reAuth      = regexp.MustCompile(`(?i)(authorization:?\s*)(bearer\s+)?\S+`)
+	reTokenKV   = regexp.MustCompile(`(?i)\b(token|pin|code|secret|password|key)(["']?\s*[=:]\s*["']?)[^\s"'&,;]+`)
+	reSubproto  = regexp.MustCompile(`token\.[0-9a-fA-F]+`)
+	reLongHex   = regexp.MustCompile(`\b[0-9a-fA-F]{24,}\b`)
+	rePairing   = regexp.MustCompile(`\b\d{3}-\d{3}\b`)
 )
 
 // Redact returns s with every secret and personal datum masked.
@@ -73,6 +79,7 @@ func (r *Redactor) Redact(s string) string {
 		s = strings.ReplaceAll(s, v, "["+labels[v]+"]")
 	}
 
+	s = reWinQuoted.ReplaceAllStringFunc(s, func(q string) string { return q[:1] + "[PATH]" + q[:1] })
 	s = reWinPath.ReplaceAllString(s, "[PATH]")
 	s = reUnixPath.ReplaceAllString(s, "[PATH]")
 	s = reAuth.ReplaceAllString(s, "${1}[TOKEN]")
@@ -113,24 +120,39 @@ func identity() []string {
 	return identityVals
 }
 
-// replaceFold replaces every case-insensitive occurrence of old in s.
+// replaceFold replaces every case-insensitive occurrence of the word old in s: never inside
+// another word, as "ali" in "alignment" (audit 13, #156).
 func replaceFold(s, old, repl string) string {
 	if old == "" {
 		return s
 	}
 	lower, lowOld := strings.ToLower(s), strings.ToLower(old)
-	if len(lower) != len(s) { // non-ASCII case mapping changed lengths: fall back to exact case
-		return strings.ReplaceAll(s, old, repl)
+	if len(lower) != len(s) || len(lowOld) != len(old) { // non-ASCII case mapping changed lengths
+		lower, lowOld = s, old // exact case then
 	}
 	var b strings.Builder
-	for {
-		i := strings.Index(lower, lowOld)
+	at := 0 // s[:at] is written
+	for from := 0; ; {
+		i := strings.Index(lower[from:], lowOld)
 		if i < 0 {
-			b.WriteString(s)
+			b.WriteString(s[at:])
 			return b.String()
 		}
-		b.WriteString(s[:i])
+		i += from
+		end := i + len(old)
+		before, _ := utf8.DecodeLastRuneInString(s[:i])
+		after, _ := utf8.DecodeRuneInString(s[end:])
+		if isWordRune(before) || isWordRune(after) {
+			from = i + 1
+			continue
+		}
+		b.WriteString(s[at:i])
 		b.WriteString(repl)
-		s, lower = s[i+len(old):], lower[i+len(old):]
+		at, from = end, end
 	}
+}
+
+// isWordRune reports whether r continues a word; utf8.RuneError (no rune) does not.
+func isWordRune(r rune) bool {
+	return r != utf8.RuneError && (unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_')
 }
