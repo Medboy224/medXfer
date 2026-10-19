@@ -5,6 +5,8 @@
 >
 > **Critère de sortie :** un appareil de confiance mutuelle est reconnu dans les scans de la ligne de commande et du cœur, par une étiquette tournante et non par son adresse ; l'annonce ne contient ni nom, ni clé, ni identifiant stable ; les noms enregistrés ont un sens (plus de « localhost »). Vérifié par les tests et par des essais réels.
 >
+> **État :** terminé le 19 octobre 2026, voir [report-noms.md](report-noms.md).
+>
 > **Durée estimée :** 2 à 3 jours. Une PR par lot, CI verte sur les trois systèmes avant fusion.
 
 ## 0. État de départ (constaté sur `main` le 18 octobre 2026)

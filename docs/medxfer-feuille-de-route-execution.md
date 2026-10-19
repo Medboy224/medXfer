@@ -232,6 +232,8 @@ Ajouté le 18/10/2026 (#143). Premier contact par PIN ou QR seulement : la quest
 ### Lot « Noms des appareils de confiance » (avant J6b) · ≈ 2 à 3 jours
 Ajouté le 18/10/2026 (#150). Dans les scans, un appareil de confiance mutuelle apparaît sous son nom, reconnu par une étiquette tournante (HMAC d'une clé échangée à l'établissement de la confiance) et non plus par son adresse ; le nom ne circule jamais en clair. Vrais noms d'appareils (`xfer name`, modèle du téléphone sous Android), `xfer trust rename`. Plan : [medxfer-plan-noms.md](medxfer-plan-noms.md).
 
+**Résultat (19/10/2026) :** le lot est terminé (PR #151 à #154, et celle du rapport). Les scans affichent « Nom (trusted) » pour un appareil de confiance mutuelle, reconnu par une étiquette tournante ; un oubli d'un seul côté coupe la reconnaissance des deux côtés. Noms d'appareils réels, plus de « localhost ». Essais réels PC Windows ↔ téléphone ↔ Zorin. Détail dans [report-noms.md](report-noms.md).
+
 ### Lot « Audit » (avant J6b) · ≈ 2 à 3 jours
 Ajouté le 19/10/2026 (#156) après l'audit externe du 18 octobre. Retrait du point d'accès du cœur (la plateforme s'en charge ; schéma v3), corrections du canal sécurisé, de l'appairage, du cœur, de la frontière C et du moteur, chaque point vérifié par un test. Les constats sur Web Share deviennent des critères de sortie de J7 (#157). Plan : [medxfer-plan-audit.md](medxfer-plan-audit.md).
 
