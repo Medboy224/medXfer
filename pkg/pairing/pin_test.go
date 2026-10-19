@@ -487,3 +487,19 @@ func TestServeStopsAfterTooManyPINs(t *testing.T) {
 		t.Fatal("Serve did not stop")
 	}
 }
+
+// Audit 11 (#156): two displays that cross on their way to the screen do not leave the older
+// PIN there: each change is numbered under the PIN's lock, a stale one is dropped.
+func TestPINShowKeepsTheLatest(t *testing.T) {
+	var got []string
+	p := &PIN{cfg: PINConfig{Show: func(code string, _ time.Time) { got = append(got, code) }}}
+	p.mu.Lock()
+	older := p.nextShowLocked()
+	newer := p.nextShowLocked()
+	p.mu.Unlock()
+	p.show(newer, "222222", time.Time{})
+	p.show(older, "111111", time.Time{}) // arrives late
+	if len(got) != 1 || got[0] != "222222" {
+		t.Fatalf("shown %q, want only the newer PIN", got)
+	}
+}

@@ -26,12 +26,12 @@ func TestNodeCompletesAPagedOffer(t *testing.T) {
 		t.Fatalf("expected several pages, got %d", len(pages))
 	}
 	incoming := &session.Message{Type: "offer", Offer: &head}
-	if m, err := completeNodeOffer(&incoming, nil); m != nil || err != nil || incoming == nil {
+	if m, err := completeNodeOffer(&incoming, true, nil); m != nil || err != nil || incoming == nil {
 		t.Fatalf("the head alone was taken as the whole offer: %v %v", m, err)
 	}
 	var got *session.Message
 	for i, p := range pages {
-		m, err := completeNodeOffer(&incoming, p)
+		m, err := completeNodeOffer(&incoming, false, p)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -47,7 +47,7 @@ func TestNodeCompletesAPagedOffer(t *testing.T) {
 	// A page that repeats an item is refused and the offer dropped.
 	head, _ = offer.Split(50)
 	incoming = &session.Message{Type: "offer", Offer: &head}
-	if _, err := completeNodeOffer(&incoming, head.Items); err == nil || incoming != nil {
+	if _, err := completeNodeOffer(&incoming, false, head.Items); err == nil || incoming != nil {
 		t.Fatal("a repeated page was accepted")
 	}
 
@@ -55,7 +55,21 @@ func TestNodeCompletesAPagedOffer(t *testing.T) {
 	bad := nodeTestOffer(1)
 	bad.TotalBytes = 99
 	incoming = &session.Message{Type: "offer", Offer: &bad}
-	if m, err := completeNodeOffer(&incoming, nil); err == nil || m != nil {
+	if m, err := completeNodeOffer(&incoming, true, nil); err == nil || m != nil {
 		t.Fatal("an invalid offer was accepted")
+	}
+
+	// Audit 6 (#156): an empty page is refused, not ignored; so is a head announcing more
+	// items than allowed.
+	head, _ = offer.Split(50)
+	incoming = &session.Message{Type: "offer", Offer: &head}
+	if _, err := completeNodeOffer(&incoming, false, nil); err == nil || incoming != nil {
+		t.Fatal("an empty page was accepted")
+	}
+	head, _ = offer.Split(50)
+	head.Count = protocol.MaxOfferItems + 1
+	incoming = &session.Message{Type: "offer", Offer: &head}
+	if _, err := completeNodeOffer(&incoming, true, nil); err == nil || incoming != nil {
+		t.Fatal("a head announcing too many items was kept")
 	}
 }

@@ -226,6 +226,8 @@ func (s *DaemonServer) takeOffer(msg session.Message) {
 	var err error
 	if msg.Type == session.TypeOfferItems {
 		err = in.Offer.AddPage(msg.Items)
+	} else {
+		err = in.Offer.CheckHead() // audit 6: the count is checked on the first frame
 	}
 	if err == nil && !in.Offer.Complete() {
 		s.mu.Unlock()

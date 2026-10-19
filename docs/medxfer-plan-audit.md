@@ -38,7 +38,7 @@ Statuts de vérification :
 
 Aussi : bible (nouvelle exigence), schéma v3 et fichier « golden », tableau de bord (retrait des boutons), guide.
 
-### Lot A-2 — Canal sécurisé et appairage · M
+### Lot A-2 — Canal sécurisé et appairage · M · ✅
 
 | Audit | Constat | Vérification | Action |
 |---|---|---|---|

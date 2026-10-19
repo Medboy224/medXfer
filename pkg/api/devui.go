@@ -29,7 +29,10 @@ const DashboardAvailable = true
 func legacyStaging() string { return filepath.Join(os.TempDir(), "medxfer_staged") }
 
 func (s *DaemonServer) registerDevUIRoutes(mux *http.ServeMux) {
-	go func() { _ = os.RemoveAll(legacyStaging()) }()
+	// The folder is the one of the start, named now: a removal that read the temporary folder
+	// later could remove another one (#161). Only the removal, which may be long, runs apart.
+	old := legacyStaging()
+	go func() { _ = os.RemoveAll(old) }()
 	// Control surface (API-04): loopback + Host + Origin + control token on every route.
 	mux.HandleFunc("/status", s.control(s.handleHTTPStatus))
 	mux.HandleFunc("/ws", s.control(s.handleWebSocket))

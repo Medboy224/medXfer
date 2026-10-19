@@ -56,6 +56,7 @@ type PINConfig struct {
 type PIN struct {
 	cfg    PINConfig
 	showMu sync.Mutex
+	shown  uint64 // number of the last change shown; guarded by showMu
 
 	mu        sync.Mutex
 	code      []byte    // ASCII digits; nil while none is valid
@@ -68,6 +69,13 @@ type PIN struct {
 	paired    bool
 	closed    bool
 	stopped   chan struct{} // closed when MaxSeries series were destroyed (ErrTooManyPINs)
+	changes   uint64        // numbers the changes to show, in the order they happen
+}
+
+// nextShowLocked numbers a change to show; p.mu is held, so the numbers follow the changes.
+func (p *PIN) nextShowLocked() uint64 {
+	p.changes++
+	return p.changes
 }
 
 // NewPIN draws the first PIN and shows it.
@@ -99,12 +107,12 @@ func NewPIN(c PINConfig) (*PIN, error) {
 	p := &PIN{cfg: c, delay: c.Delay, stopped: make(chan struct{})}
 	p.mu.Lock()
 	err := p.drawLocked()
-	code, exp := string(p.code), p.expires
+	code, exp, n := string(p.code), p.expires, p.nextShowLocked()
 	p.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	p.show(code, exp)
+	p.show(n, code, exp)
 	return p, nil
 }
 
@@ -128,12 +136,18 @@ func (p *PIN) drawLocked() error {
 	return nil
 }
 
-func (p *PIN) show(code string, expires time.Time) {
+// show shows change n, unless a later one is already on screen: the changes are made under
+// p.mu but shown after it, so two of them may cross on their way (audit 11, #156).
+func (p *PIN) show(n uint64, code string, expires time.Time) {
 	if p.cfg.Show == nil {
 		return
 	}
 	p.showMu.Lock()
 	defer p.showMu.Unlock()
+	if n <= p.shown {
+		return
+	}
+	p.shown = n
 	p.cfg.Show(code, expires)
 }
 
@@ -179,18 +193,19 @@ func (p *PIN) end(paired bool) {
 	p.destroyed++
 	if p.destroyed%pinDestroyedIn != 0 {
 		err := p.drawLocked()
-		code, exp := string(p.code), p.expires
+		code, exp, n := string(p.code), p.expires, p.nextShowLocked()
 		p.mu.Unlock()
 		if err == nil {
-			p.show(code, exp)
+			p.show(n, code, exp)
 		}
 		return
 	}
 	if p.cfg.MaxSeries > 0 && p.destroyed/pinDestroyedIn >= p.cfg.MaxSeries {
 		p.closed = true
 		close(p.stopped)
+		n := p.nextShowLocked()
 		p.mu.Unlock()
-		p.show("", time.Time{})
+		p.show(n, "", time.Time{})
 		return
 	}
 	wait := p.delay
@@ -198,8 +213,9 @@ func (p *PIN) end(paired bool) {
 	p.expires = time.Now().Add(wait + p.cfg.TTL)
 	exp := time.Now().Add(wait)
 	p.redraw = time.AfterFunc(wait, p.redrawAfterDelay)
+	n := p.nextShowLocked()
 	p.mu.Unlock()
-	p.show("", exp)
+	p.show(n, "", exp)
 }
 
 func (p *PIN) redrawAfterDelay() {
@@ -209,10 +225,10 @@ func (p *PIN) redrawAfterDelay() {
 		return
 	}
 	err := p.drawLocked()
-	code, exp := string(p.code), p.expires
+	code, exp, n := string(p.code), p.expires, p.nextShowLocked()
 	p.mu.Unlock()
 	if err == nil {
-		p.show(code, exp)
+		p.show(n, code, exp)
 	}
 }
 

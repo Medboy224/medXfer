@@ -218,3 +218,33 @@ func TestServeAnswersADemandWithThePINShown(t *testing.T) {
 		t.Fatalf("responder: %+v, %v", s.r, s.err)
 	}
 }
+
+// Audit §3.5 (#156): a PIN that is no longer live (used, expired, closed) is not announced: the
+// device that asked is refused at once, without being told to type anything.
+func TestDemandForADeadPINIsRefused(t *testing.T) {
+	responder, initiator := device(t, "pc"), device(t, "phone")
+	pin, err := NewPIN(PINConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin.Close()
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	responder.PIN = pin
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _, _ = Serve(ctx, ln, nil, responder) }()
+	typed := false
+	_, err = JoinPINOnDemand(context.Background(), ln.Addr().String(), func() (string, error) {
+		typed = true
+		return "000000", nil
+	}, initiator)
+	if typed {
+		t.Fatal("the initiator was asked to type a PIN that is not live")
+	}
+	if !errors.Is(err, ErrRefused) {
+		t.Fatalf("JoinPINOnDemand = %v, want ErrRefused", err)
+	}
+}

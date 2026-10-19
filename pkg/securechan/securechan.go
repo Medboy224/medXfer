@@ -23,6 +23,9 @@ const (
 	DefaultHandshakeTimeout = 5 * time.Second  // LIM-02, CHAN-07
 	UnauthReadLimit         = 4 << 10          // LIM-03: bytes read in state Unauth
 	UnauthTimeout           = 30 * time.Second // CHAN-04: life of an Unauth connection
+	// UnauthPersonWait is the longest wait for a person an Unauth connection may add to its
+	// life (AwaitPerson): the life of a PIN (PAIR-02).
+	UnauthPersonWait = 2 * time.Minute
 )
 
 var (
@@ -81,6 +84,73 @@ type Conn struct {
 	release    func() // gives the Gate place back (LIM-01)
 	known      func() // tells the Gate that this address authenticated (#93)
 	pending    []byte // given back by Unread, read before the connection
+	// unauthUntil bounds every deadline while Unauth (CHAN-04): a caller can set an earlier
+	// one, never a later one, nor clear it (audit §3.5, #156). Only AwaitPerson moves it.
+	unauthUntil time.Time
+	// The deadlines the callers asked for, before the bound: WriteDeadline gives the write
+	// one back, so that session.Channel can restore it (audit 7).
+	readAt, writeAt time.Time
+}
+
+// boundLocked is the deadline t once the Unauth bound applies.
+func (c *Conn) boundLocked(t time.Time) time.Time {
+	if c.state != Unauth || c.unauthUntil.IsZero() {
+		return t
+	}
+	if t.IsZero() || t.After(c.unauthUntil) {
+		return c.unauthUntil
+	}
+	return t
+}
+
+// SetDeadline sets the read and write deadlines, within the Unauth bound.
+func (c *Conn) SetDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.readAt, c.writeAt = t, t
+	b := c.boundLocked(t)
+	c.mu.Unlock()
+	return c.Conn.SetDeadline(b)
+}
+
+// SetReadDeadline sets the read deadline, within the Unauth bound.
+func (c *Conn) SetReadDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.readAt = t
+	b := c.boundLocked(t)
+	c.mu.Unlock()
+	return c.Conn.SetReadDeadline(b)
+}
+
+// SetWriteDeadline sets the write deadline, within the Unauth bound.
+func (c *Conn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.writeAt = t
+	b := c.boundLocked(t)
+	c.mu.Unlock()
+	return c.Conn.SetWriteDeadline(b)
+}
+
+// WriteDeadline is the write deadline last asked for (zero: none), before the Unauth bound.
+func (c *Conn) WriteDeadline() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writeAt
+}
+
+// AwaitPerson lets an Unauth connection wait d for a person (the PIN on one screen typed on
+// the other), at most UnauthPersonWait, then UnauthTimeout more for the rest of the exchange.
+// The bound moves only later. It does nothing once the connection is authenticated.
+func (c *Conn) AwaitPerson(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state != Unauth {
+		return
+	}
+	if until := time.Now().Add(min(d, UnauthPersonWait) + unauthTimeout); until.After(c.unauthUntil) {
+		c.unauthUntil = until
+	}
+	_ = c.Conn.SetReadDeadline(c.boundLocked(c.readAt))
+	_ = c.Conn.SetWriteDeadline(c.boundLocked(c.writeAt))
 }
 
 // Unread gives bytes back to the connection: the next reads return them first. A reader
@@ -128,6 +198,9 @@ func (c *Conn) Authenticate() {
 	c.mu.Lock()
 	wasUnauth := c.state == Unauth
 	c.state = Auth
+	if wasUnauth {
+		c.readAt, c.writeAt = time.Time{}, time.Time{}
+	}
 	c.mu.Unlock()
 	if wasUnauth {
 		_ = c.Conn.SetDeadline(time.Time{})
@@ -200,6 +273,9 @@ func Dial(ctx context.Context, addr string, cfg Config) (*Conn, error) {
 	}
 	return Client(ctx, raw, cfg)
 }
+
+// unauthTimeout is UnauthTimeout; tests shorten it.
+var unauthTimeout = UnauthTimeout
 
 func (cfg Config) timeout() time.Duration {
 	if cfg.HandshakeTimeout > 0 {
@@ -279,7 +355,8 @@ func handshake(ctx context.Context, raw net.Conn, cfg Config, server bool) (*Con
 	c := &Conn{Conn: tconn, peer: peer, state: state, release: release, known: known}
 	if state == Unauth {
 		charge()
-		_ = tconn.SetDeadline(time.Now().Add(UnauthTimeout))
+		c.unauthUntil = time.Now().Add(unauthTimeout)
+		_ = tconn.SetDeadline(c.unauthUntil)
 	} else {
 		known()
 		c.releaseGate() // an authenticated peer neither holds a place nor uses the quota

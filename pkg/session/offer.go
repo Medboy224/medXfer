@@ -31,6 +31,9 @@ func ReadOffer(ch *Channel, first Message) (protocol.Offer, error) {
 		return protocol.Offer{}, fmt.Errorf("%w: no offer in %q", protocol.ErrBadOffer, first.Type)
 	}
 	offer := *first.Offer
+	if err := offer.CheckHead(); err != nil {
+		return protocol.Offer{}, err
+	}
 	for !offer.Complete() {
 		m, err := ch.Read()
 		if err != nil {

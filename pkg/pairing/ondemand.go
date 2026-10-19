@@ -136,7 +136,7 @@ func AnswerPINWanted(ch *session.Channel, conn *securechan.Conn, get func() (*PI
 // answerPINWanted is AnswerPINWanted returning the initiator's pair_pin_confirm.
 func answerPINWanted(ch *session.Channel, conn *securechan.Conn, get func() (*PIN, error), self identity.Fingerprint) (session.Message, error) {
 	p, err := get()
-	if err != nil || p == nil {
+	if err != nil || p == nil || !p.Live() { // a used, expired or closed PIN is not announced
 		return session.Message{}, ErrRefused
 	}
 	if err := ch.Send(session.Message{Type: TypePINReady}); err != nil {
@@ -144,6 +144,7 @@ func answerPINWanted(ch *session.Channel, conn *securechan.Conn, get func() (*PI
 	}
 	// The user reads the PIN on this screen and types it there: the Unauth deadline of the
 	// handshake would cut the connection meanwhile.
+	conn.AwaitPerson(typingTime)
 	_ = conn.SetDeadline(time.Now().Add(typingTime))
 	m, err := ch.Read()
 	if err != nil {
@@ -184,6 +185,7 @@ func JoinPINOnDemand(ctx context.Context, addr string, typed func() (string, err
 	if err := RequestPIN(ch, conn); err != nil {
 		return Result{}, err
 	}
+	conn.AwaitPerson(typingTime)
 	_ = conn.SetDeadline(time.Now().Add(typingTime))
 	pin, err := typed()
 	if err != nil {
@@ -192,5 +194,5 @@ func JoinPINOnDemand(ctx context.Context, addr string, typed func() (string, err
 	if err := initiatePIN(ch, conn, pin, o.Identity.Fingerprint, o.DeviceName, o.OfferTrust); err != nil {
 		return Result{}, err
 	}
-	return awaitAccept(ch, conn, conn.PeerFingerprint(), host, replyTimeout, o)
+	return awaitAccept(ctx, ch, conn, conn.PeerFingerprint(), host, replyTimeout, o)
 }

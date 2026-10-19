@@ -42,3 +42,38 @@ func TestDashboardNeverCopiesFiles(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// #161: the dashboard removes the folder of copies that existed when it started, never a
+// folder named later (another temporary folder, as tests set).
+func TestLegacyStagingIsNamedAtStart(t *testing.T) {
+	before, after := t.TempDir(), t.TempDir()
+	setTemp := func(dir string) {
+		t.Setenv("TMPDIR", dir)
+		t.Setenv("TMP", dir)
+		t.Setenv("TEMP", dir)
+	}
+	setTemp(before)
+	if err := os.MkdirAll(legacyStaging(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gone := legacyStaging()
+	(&DaemonServer{}).registerDevUIRoutes(http.NewServeMux())
+	setTemp(after)
+	kept := filepath.Join(legacyStaging(), "stage_1")
+	if err := os.MkdirAll(kept, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(gone); os.IsNotExist(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the folder of the start was not removed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := os.Stat(kept); err != nil {
+		t.Fatalf("a folder named after the start was removed: %v", err)
+	}
+}
