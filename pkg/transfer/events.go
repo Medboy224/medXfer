@@ -1,6 +1,9 @@
 package transfer
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // Progress is a snapshot of a transfer, for the interface. Bytes counts each chunk once,
 // whatever was sent again: it never goes past Total (#33).
@@ -16,6 +19,40 @@ type Progress struct {
 	// transfer is over (#33). Partial: some items were skipped or failed.
 	Finished bool
 	Partial  bool
+	// Active are the items in progress, by item number, MaxActive at most: several files go
+	// at once, on several connections (WP-B.0: a folder's file progress was the batch's).
+	Active []ItemProgress
+}
+
+// ItemProgress is how far one item is.
+type ItemProgress struct {
+	Item  int
+	Bytes int64
+	Size  int64
+}
+
+// MaxActive bounds Progress.Active: an interface shows a few files in progress, not all.
+const MaxActive = 32
+
+// activeOf returns the items of set in order, MaxActive at most, with their bytes.
+func activeOf(set map[int]struct{}, bytes func(i int) (done, size int64)) []ItemProgress {
+	if len(set) == 0 {
+		return nil
+	}
+	items := make([]int, 0, len(set))
+	for i := range set {
+		items = append(items, i)
+	}
+	slices.Sort(items)
+	if len(items) > MaxActive {
+		items = items[:MaxActive]
+	}
+	out := make([]ItemProgress, len(items))
+	for k, i := range items {
+		done, size := bytes(i)
+		out[k] = ItemProgress{Item: i, Bytes: min(max(done, 0), size), Size: size}
+	}
+	return out
 }
 
 // ItemState is where an item of an offer stands.

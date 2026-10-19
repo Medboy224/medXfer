@@ -30,10 +30,13 @@ type Sender struct {
 	stages StageEvents // nil: the stages are not measured (DEV-03)
 	src    io.ReaderAt // a bench offer's source, instead of the item's file (DEV-09)
 
-	mu     sync.Mutex
-	files  map[int]*openFile
-	served [][]uint64   // per item, the chunks already counted in bytes
-	hashes [][][32]byte // per item, the SHA-256 of the chunks served, for the digest
+	mu        sync.Mutex
+	files     map[int]*openFile
+	fixed     map[int]*os.File // files open already (NewSenderFiles): never opened, closed at the end
+	served    [][]uint64       // per item, the chunks already counted in bytes
+	hashes    [][][32]byte     // per item, the SHA-256 of the chunks served, for the digest
+	itemBytes map[int]int64    // per item, the bytes counted in served
+	active    map[int]struct{} // items served in part: the progress of each (WP-B.0)
 
 	bytes    atomic.Int64
 	wire     atomic.Int64 // bytes written to the data connections: the speed
@@ -59,7 +62,8 @@ func NewSender(offer protocol.Offer, paths []string) (*Sender, error) {
 	// The sender keeps its own items: the caller may reuse or change its offer afterwards.
 	offer.Items = append([]protocol.OfferItem(nil), offer.Items...)
 	return &Sender{offer: offer, paths: paths, files: map[int]*openFile{},
-		served: make([][]uint64, len(paths)), hashes: make([][][32]byte, len(paths))}, nil
+		served: make([][]uint64, len(paths)), hashes: make([][][32]byte, len(paths)),
+		itemBytes: map[int]int64{}, active: map[int]struct{}{}}, nil
 }
 
 // SetEvents sets who gets the progress events, and the stage times if it wants them.
@@ -78,8 +82,11 @@ func (s *Sender) stage(name string, start time.Time, bytes int64) {
 
 // Progress is the current progress: unique chunks served.
 func (s *Sender) Progress() Progress {
+	s.mu.Lock()
+	active := activeOf(s.active, func(i int) (int64, int64) { return s.itemBytes[i], s.offer.Items[i].Size })
+	s.mu.Unlock()
 	return Progress{Bytes: s.bytes.Load(), Total: s.offer.TotalBytes, Streams: int(s.streams.Load()), Items: len(s.paths),
-		Finished: s.finished.Load(), Partial: s.partial.Load()}
+		Finished: s.finished.Load(), Partial: s.partial.Load(), Active: active}
 }
 
 // Serve answers the receiver's CHUNK_REQ on every connection of ln (the transfer's listener on
@@ -348,6 +355,12 @@ func (s *Sender) markServed(item int, index uint32, n int64, sum [32]byte) {
 	if bits[w]&b == 0 {
 		bits[w] |= b
 		s.bytes.Add(n)
+		s.itemBytes[item] += n
+		if s.itemBytes[item] < s.offer.Items[item].Size {
+			s.active[item] = struct{}{}
+		} else {
+			delete(s.active, item) // all of it served
+		}
 	}
 	s.hashes[item][index] = sum
 }
@@ -368,6 +381,13 @@ func (s *Sender) servedHash(item int, index uint32) ([32]byte, bool) {
 // up the other connections. Files nobody reads are closed when more than maxOpenFiles are open.
 func (s *Sender) acquire(item int) (*os.File, error) {
 	s.mu.Lock()
+	if f, ok := s.fixed[item]; ok {
+		s.mu.Unlock()
+		if !s.unchanged(item, f) {
+			return nil, errSourceChanged
+		}
+		return f, nil
+	}
 	for {
 		of, ok := s.files[item]
 		if !ok {
@@ -429,5 +449,9 @@ func (s *Sender) closeFiles() {
 			of.f.Close()
 		}
 		delete(s.files, i)
+	}
+	for i, f := range s.fixed { // the transfer is over: its descriptors with it
+		f.Close()
+		delete(s.fixed, i)
 	}
 }

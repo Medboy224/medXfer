@@ -258,11 +258,14 @@ type run struct {
 	items []*item
 	low   int // first item that may still need requests (under r.mu)
 	ended int // items done, skipped or failed (under r.mu)
-	start time.Time
-	bytes atomic.Int64
-	conns atomic.Int32
-	evMu  sync.Mutex
-	speed *speedMeter
+	// active are the items started and not ended: their progress (WP-B.0).
+	activeMu sync.Mutex
+	active   map[int]struct{}
+	start    time.Time
+	bytes    atomic.Int64
+	conns    atomic.Int32
+	evMu     sync.Mutex
+	speed    *speedMeter
 	// received counts the bytes read from the data connections: the speed. bytes also counts
 	// what a resume finds on disk and the files already there, which arrive in no time.
 	received atomic.Int64
@@ -429,7 +432,7 @@ type item struct {
 }
 
 func newRun(r *Receiver, offer protocol.Offer) *run {
-	ru := &run{r: r, offer: offer, start: time.Now(), speed: newSpeedMeter(), chunks: offer.ChunkSize}
+	ru := &run{r: r, offer: offer, start: time.Now(), speed: newSpeedMeter(), chunks: offer.ChunkSize, active: map[int]struct{}{}}
 	ru.items = make([]*item, len(offer.Items))
 	for i, it := range offer.Items {
 		total := protocol.Chunks(it.Size, offer.ChunkSize)
@@ -591,6 +594,9 @@ func (ru *run) open(st *item) error {
 	st.saved = filepath.Join(r.OutDir, filepath.FromSlash(place.Name))
 	if !st.started { // once: an item set aside on a full disk is opened again
 		st.started = true
+		ru.activeMu.Lock()
+		ru.active[st.it.Item] = struct{}{} // in progress until it ends (WP-B.0)
+		ru.activeMu.Unlock()
 		ru.emitItem(ItemEvent{Item: st.it.Item, Path: st.it.Path, Size: st.it.Size, State: ItemStarted})
 	}
 	if place.Done { // PolicySkip: a file of that name is already there
@@ -1001,6 +1007,9 @@ func (ru *run) markEnded(i int, state ItemState, err error) {
 	}
 	st.state, st.err = state, err
 	ru.ended++
+	ru.activeMu.Lock()
+	delete(ru.active, i)
+	ru.activeMu.Unlock()
 	r.cond.Broadcast()
 	r.mu.Unlock()
 	ev := ItemEvent{Item: i, Path: st.it.Path, Size: st.it.Size, State: state, Err: err}
@@ -1059,8 +1068,11 @@ func (ru *run) emitProgress(speed float64) {
 	ru.r.mu.Lock()
 	ended := ru.ended
 	ru.r.mu.Unlock()
+	ru.activeMu.Lock()
+	active := activeOf(ru.active, func(i int) (int64, int64) { return ru.items[i].counted.Load(), ru.items[i].it.Size })
+	ru.activeMu.Unlock()
 	p := Progress{Bytes: ru.bytes.Load(), Total: ru.offer.TotalBytes, SpeedMBps: speed,
-		Streams: int(ru.conns.Load()), ItemsDone: ended, Items: len(ru.items)}
+		Streams: int(ru.conns.Load()), ItemsDone: ended, Items: len(ru.items), Active: active}
 	ru.evMu.Lock()
 	defer ru.evMu.Unlock()
 	ru.r.Events.OnProgress(p)

@@ -79,7 +79,7 @@ WP-B.7 évaluation du point d'accès (indépendant, avant WP-B.8)
 
 - **Progression par fichier** : `transfer_progress` donne, à côté des totaux du lot, l'avancement de chaque élément en cours. Plusieurs fichiers avancent en même temps, sur plusieurs connexions : il y a une liste, pas « le » fichier courant. Le test reproduit d'abord le défaut signalé (les deux barres au même pourcentage).
 - `send` accepte des **descripteurs** à la place de chemins : `items: [{fd, name, size, mtime}]`.
-  - Le cœur lit par `pread`, n'ouvre rien lui-même et ferme chaque descripteur à la fin de son élément.
+  - Le cœur lit par `pread` et n'ouvre rien lui-même. Les descripteurs restent ouverts jusqu'à la fin du transfert, car le receveur peut redemander un morceau (empreinte fausse, reprise) et un descripteur ne se rouvre pas ; le cœur les ferme ensuite, ou dès que l'offre est retirée, refusée ou que l'envoi échoue.
   - Un descripteur invalide fait échouer cet élément, pas les autres.
 - Actions `trust_list`, `trust_forget` et `trust_rename` ; `set_config` porte le nom de l'appareil (`CleanDeviceName`).
 - Action `export_bundle` : le paquet de diagnostic, déjà masqué, écrit dans un dossier choisi par l'appelant.
@@ -183,20 +183,20 @@ WP-B.7 évaluation du point d'accès (indépendant, avant WP-B.8)
 
 ## 5. Décisions
 
-Réponses de l'utilisateur du 19 octobre 2026. Les propositions sans objection sont notées « proposée » jusqu'à leur confirmation.
+Réponses de l'utilisateur du 19 octobre 2026. Les propositions J4, J5, J7, J8, J9 et J11 ont été acceptées le même jour, avec la méthode des maquettes (J12) et le rangement par type (J2).
 
 | # | Question | Décision | Conséquence ou autre choix |
 |---|---|---|---|
 | J1 | Où vit l'application ? | ✅ **Dans ce dépôt, dossier `app/`**. | Un seul dépôt, une seule CI : le cœur et l'interface changent ensemble (schéma v4). |
 | J2 | Version minimale d'Android ; où vont les fichiers reçus | ✅ **Android 11 (API 30)**. Les fichiers reçus vont dans un **dossier `medXfer/` à la racine du stockage**, rangé par type. | Écrire à la racine demande l'accès à tous les fichiers (WP-B.4), qu'il faut justifier lors d'une publication sur le Play Store (en J8). Le transfert d'un appareil à l'autre fait partie des usages admis, mais c'est à vérifier à la publication. Sans cet accès, repli dans `Download/medXfer/`. |
 | J3 | Identifiant de l'application Android | ✅ **`dev.medxfer.app`, provisoire.** Il sera remplacé par celui du nom définitif **avant toute publication**. | Après une publication, en changer donnerait une autre application pour les utilisateurs. |
-| J4 | Gestion de l'état | Proposée : **aucune bibliothèque** (`ChangeNotifier`, `ListenableBuilder`). | Riverpod, Bloc. |
-| J5 | Lecture des QR à la caméra (Android) | Proposée : **`flutter_zxing`** (zxing-cpp, libre), derrière l'interface `QrScanner`. | `mobile_scanner`, qui embarque ML Kit, un binaire Google non libre. |
+| J4 | Gestion de l'état | ✅ **aucune bibliothèque** (`ChangeNotifier`, `ListenableBuilder`). | Riverpod, Bloc. |
+| J5 | Lecture des QR à la caméra (Android) | ✅ **`flutter_zxing`** (zxing-cpp, libre), derrière l'interface `QrScanner`. | `mobile_scanner`, qui embarque ML Kit, un binaire Google non libre. |
 | J6 | Comment choisir ce qu'on envoie sous Android | ✅ **Dans l'application, par onglets de catégories** (WP-B.9), envoi par chemin. Le sélecteur du système reste le repli. | Remplace la question des dossiers par descripteurs : avec l'accès aux fichiers, un dossier s'envoie par son chemin. |
-| J7 | Langues de l'interface | Proposée : **français et anglais dès le départ**. | Anglais seulement pour le MVP. |
-| J8 | Historique | Proposée : **gardé par l'application** (100 derniers transferts). | Une action d'historique dans le cœur. |
-| J9 | Point d'accès local (`DISC-12`) | Proposée : **évaluer seulement** (WP-B.7), puis intégrer si c'est concluant. | L'intégrer d'office. |
+| J7 | Langues de l'interface | ✅ **français et anglais dès le départ**. | Anglais seulement pour le MVP. |
+| J8 | Historique | ✅ **gardé par l'application** (100 derniers transferts). | Une action d'historique dans le cœur. |
+| J9 | Point d'accès local (`DISC-12`) | ✅ **évaluer seulement** (WP-B.7), puis intégrer si c'est concluant. | L'intégrer d'office. |
 | J10 | Le panneau développeur | ✅ Critères de `DEV-19-R`, plus les remarques de l'utilisateur. Première remarque : la progression par fichier (WP-B.0). | D'autres remarques peuvent s'ajouter jusqu'à WP-B.5. |
-| J11 | Empaquetage du MVP | Proposée : Windows en dossier portable zippé, Linux en `tar.gz`, Android en APK de développement. | Installateurs dès J6b (prévus en J8). |
+| J11 | Empaquetage du MVP | ✅ Windows en dossier portable zippé, Linux en `tar.gz`, Android en APK de développement. | Installateurs dès J6b (prévus en J8). |
 | J12 | Maquettes avant le code | ✅ Oui. **Méthode à choisir** : une page de maquettes cliquables, puis le code Flutter lui-même, essayé sur le téléphone avec le cœur factice. | Le détail de la méthode est donné dans la discussion de la PR. |
 | J13 | Exigences de l'interface (§1.1) | ✅ **Fluide, animée, personnalisable, et capable de tourner sur des téléphones anciens.** | Vérifiées à chaque lot (UI-1 à UI-5). |
