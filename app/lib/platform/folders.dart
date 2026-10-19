@@ -17,6 +17,10 @@ abstract interface class Folders {
   Future<String> downloadDir();
 }
 
+/// The app's identifier (decision J3 of the J6b plan, provisional): its data folder's name on
+/// the desktop.
+const appId = 'dev.medxfer.app';
+
 /// The channel of the app's Kotlin (android/app/src/main/kotlin/dev/medxfer/app).
 const platformChannel = MethodChannel('dev.medxfer.app/platform');
 
@@ -28,11 +32,13 @@ class SystemFolders implements Folders {
     if (Platform.isAndroid) {
       return (await platformChannel.invokeMethod<String>('dataDir'))!;
     }
+    // Named after the app's identifier: never the folder of the xfer command line
+    // (%APPDATA%\medxfer, ~/.config/medxfer), whose identity and trusted devices are its own.
     if (Platform.isWindows) {
-      return p.join(Platform.environment['APPDATA'] ?? _home(), 'medXfer');
+      return p.join(Platform.environment['APPDATA'] ?? _home(), appId);
     }
     final xdg = Platform.environment['XDG_DATA_HOME'];
-    return p.join(xdg != null && xdg.isNotEmpty ? xdg : p.join(_home(), '.local', 'share'), 'medxfer');
+    return p.join(xdg != null && xdg.isNotEmpty ? xdg : p.join(_home(), '.local', 'share'), appId);
   }
 
   /// On the desktop, a medXfer folder in the user's downloads. On Android, until WP-B.4 sets
