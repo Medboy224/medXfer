@@ -69,6 +69,16 @@ func TestUnauthKeepsEarlierDeadline(t *testing.T) {
 
 // AwaitPerson lets an Unauth connection wait for a person (a PIN typed), then the normal
 // bound again: never without end.
+func TestAwaitPersonExtendsUnauth(t *testing.T) {
+	shortUnauth(t, 300*time.Millisecond)
+	_, s := unauthPair(t)
+	s.AwaitPerson(700 * time.Millisecond)
+	_ = s.SetDeadline(time.Time{})
+	d := readTimesOut(t, s, 4*time.Second)
+	if d < 600*time.Millisecond {
+		t.Fatalf("the wait for a person was cut after %v", d)
+	}
+}
 
 // Authenticate lifts the bound: a cleared deadline is then no deadline.
 func TestAuthenticateLiftsUnauthDeadline(t *testing.T) {
@@ -93,5 +103,18 @@ func TestAuthenticateLiftsUnauthDeadline(t *testing.T) {
 
 // WriteDeadline gives back the write deadline a caller asked for (session.Channel restores it
 // after its own, audit 7).
+func TestWriteDeadlineIsRemembered(t *testing.T) {
+	c, _ := unauthPair(t)
+	c.Authenticate()
+	at := time.Now().Add(time.Minute).Round(0)
+	_ = c.SetDeadline(at)
+	if got := c.WriteDeadline(); !got.Equal(at) {
+		t.Fatalf("WriteDeadline = %v, want %v", got, at)
+	}
+	_ = c.SetWriteDeadline(time.Time{})
+	if got := c.WriteDeadline(); !got.IsZero() {
+		t.Fatalf("WriteDeadline = %v after clearing, want zero", got)
+	}
+}
 
 var _ net.Conn = (*Conn)(nil)
