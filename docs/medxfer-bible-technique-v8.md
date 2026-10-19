@@ -645,11 +645,11 @@ Vérifié sur Windows, Linux et Android (`g2a-report.md`, §6).
 | B2 | Aucun pointeur Go ne traverse la frontière : les chaînes sont copiées. |
 | B3 | Messages en JSON UTF-8. |
 | B4 | `medxfer_start` est idempotente : un redémarrage à chaud de Flutter relance Dart, pas le processus. |
-| B5 | Chaque goroutine du cœur récupère ses paniques en événement `core_error` ; une panique dans `medxfer_call` devient une erreur JSON. |
+| B5 | Chaque goroutine du cœur récupère ses paniques en événement `core_error` ; une panique dans `medxfer_call` devient une erreur JSON. Aucune des cinq fonctions ne laisse passer une panique vers le C (#156). |
 | B6 | Les chemins viennent de l'appelant (`data_dir`, `download_dir`). |
-| B7 | Événements de progression limités à 10 par seconde et par transfert. |
+| B7 | Événements de progression limités à 10 par seconde et par transfert ; le dernier, à 100 %, passe toujours (#156). |
 | B8 | Le cœur ne garde aucun pointeur vers du code Dart : les événements passent par sa file, lue par `medxfer_next_event`. |
-| B9 | Le lecteur d'événements s'arrête de façon coordonnée : le cœur le réveille par une sentinelle. On ne tue jamais un isolat bloqué dans un appel natif (un événement perdu lors de la mise au point). |
+| B9 | Le lecteur d'événements s'arrête de façon coordonnée : le cœur le réveille par une sentinelle. On ne tue jamais un isolat bloqué dans un appel natif (un événement perdu lors de la mise au point). `medxfer_next_event` avec un délai négatif attend sans limite. `medxfer_stop` rend la main une fois le cœur arrêté : un `medxfer_start` pendant l'arrêt attend, deux cœurs ne tournent jamais ensemble (#156). |
 | B10 | Le lecteur transmet les événements par lots, jusqu'à 256 par message (lenteur de l'interface en rafale : 237 ms un par un, 3 à 5 ms par lots). |
 | B11 | La file du cœur est bornée (65 536) ; un événement sans place est compté (`drops`), le moteur n'attend jamais l'interface. |
 

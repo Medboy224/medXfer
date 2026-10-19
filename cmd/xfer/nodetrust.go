@@ -43,14 +43,10 @@ func announceTagsOf(ts *identity.TrustStore, self identity.Fingerprint) func() [
 // keyChanged implements ID-05: if ip is the last address of a trusted device and the key
 // presented now is another one, it returns that device.
 func keyChanged(ts *identity.TrustStore, ip string, fp identity.Fingerprint) (identity.Peer, bool) {
-	if ts == nil || ip == "" {
+	if ts == nil {
 		return identity.Peer{}, false
 	}
-	p, ok := ts.ByAddress(ip)
-	if !ok || p.Fingerprint == fp {
-		return identity.Peer{}, false
-	}
-	return p, true
+	return ts.KeyChangedAt(ip, fp)
 }
 
 // keyChangedAlert is the message shown when keyChanged reports a device.
@@ -61,8 +57,10 @@ func keyChangedAlert(known identity.Peer, ip string, fp identity.Fingerprint) st
 	}
 	return fmt.Sprintf("[!] REFUSED: %s is the address of '%s' (%s), but the device there presents\n"+
 		"    another key (%s). This is what an interception looks like.\n"+
+		"    If '%s' left the network, its address may now belong to another device:\n"+
+		"    pair that device by PIN or QR code.\n"+
 		"    If '%s' was really reinstalled, forget it first: xfer trust forget %s",
-		ip, name, known.Fingerprint.Short(), fp.Short(), name, known.Fingerprint.Short())
+		ip, name, known.Fingerprint.Short(), fp.Short(), name, name, known.Fingerprint.Short())
 }
 
 // touchPeer records where a trusted device was seen, and its name. It never adds a device:

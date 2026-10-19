@@ -106,7 +106,28 @@ func (t *TrustStore) ByAddress(addr string) (Peer, bool) {
 	return Peer{}, false
 }
 
-// Add trusts p (replacing an entry with the same fingerprint) and saves the list.
+// KeyChangedAt implements ID-05: it returns the trusted device last seen at addr when the
+// key fp shown there now is not trusted. A trusted key is no interception: two trusted
+// devices may swap addresses (DHCP, audit §3.5, #156).
+func (t *TrustStore) KeyChangedAt(addr string, fp Fingerprint) (Peer, bool) {
+	if addr == "" {
+		return Peer{}, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, trusted := t.peers[fp]; trusted {
+		return Peer{}, false
+	}
+	for _, p := range t.peers {
+		if p.LastAddress == addr {
+			return p, true
+		}
+	}
+	return Peer{}, false
+}
+
+// Add trusts p (replacing an entry with the same fingerprint) and saves the list. An address
+// belongs to the device last seen there only: another device that had it loses it (§3.5).
 func (t *TrustStore) Add(p Peer) error {
 	if p.Fingerprint.IsZero() {
 		return errors.New("trust: empty fingerprint")
@@ -116,14 +137,21 @@ func (t *TrustStore) Add(p Peer) error {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	old, had := t.peers[p.Fingerprint]
+	before := make(map[Fingerprint]Peer, len(t.peers))
+	for fp, q := range t.peers {
+		before[fp] = q
+	}
+	if p.LastAddress != "" {
+		for fp, q := range t.peers {
+			if fp != p.Fingerprint && q.LastAddress == p.LastAddress {
+				q.LastAddress = ""
+				t.peers[fp] = q
+			}
+		}
+	}
 	t.peers[p.Fingerprint] = p
 	if err := t.saveLocked(); err != nil {
-		if had {
-			t.peers[p.Fingerprint] = old
-		} else {
-			delete(t.peers, p.Fingerprint)
-		}
+		t.peers = before
 		return err
 	}
 	return nil
