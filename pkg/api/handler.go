@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/engine"
-	"github.com/Medboy224/medXfer/pkg/hotspot"
 	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/session"
 )
@@ -84,15 +82,6 @@ func (s *DaemonServer) dispatch(rs Responder, req RequestMessage) {
 	case "resume_file":
 		s.handleResumeFile(rs, req)
 
-	case "hotspot_start":
-		s.handleHotspotStart(rs, req)
-
-	case "hotspot_stop":
-		s.handleHotspotStop(rs, req)
-
-	case "hotspot_status":
-		s.handleHotspotStatus(rs, req)
-
 	case "share_web_files":
 		s.handleShareWebFiles(rs, req)
 
@@ -122,11 +111,6 @@ func (s *DaemonServer) dispatch(rs Responder, req RequestMessage) {
 
 	case "web_share_cancel":
 		s.CancelWebShareTransfer()
-
-	case "open_hotspot_settings":
-		go func() {
-			_ = exec.Command("cmd", "/c", "start", "ms-settings:network-mobilehotspot").Start()
-		}()
 
 	case "test_disk":
 		s.handleTestDisk(rs, req)
@@ -389,179 +373,6 @@ func (s *DaemonServer) handleResumeFile(rs Responder, req RequestMessage) {
 		return
 	}
 	s.itemAction(itemResume, payload.ItemIndex, false, req.ID)
-}
-
-type HotspotStartPayload struct {
-	Band     string `json:"band"`     // "5ghz", "2.4ghz", "auto"
-	SSID     string `json:"ssid"`     // optional custom SSID
-	Password string `json:"password"` // optional custom password
-}
-
-func (s *DaemonServer) handleHotspotStart(rs Responder, req RequestMessage) {
-	var payload HotspotStartPayload
-	if len(req.Payload) > 0 {
-		_ = json.Unmarshal(req.Payload, &payload)
-	}
-
-	band := hotspot.Band5GHz
-	lowerBand := strings.ToLower(payload.Band)
-	if lowerBand == "2.4ghz" || lowerBand == "2.4" {
-		band = hotspot.Band2GHz
-	} else if lowerBand == "auto" {
-		band = hotspot.BandAuto
-	}
-
-	s.hotspotMu.Lock()
-	if s.activeHotspot != nil {
-		netInfo := s.activeHotspot
-		s.hotspotMu.Unlock()
-
-		qrWifi, _ := GenerateWiFiQRDataURI(netInfo.SSID, netInfo.Password, 256)
-		localIP := netInfo.LocalIP.String()
-		if localIP == "" || localIP == "<nil>" {
-			localIP = "192.168.137.1"
-		}
-		port := s.currentHTTPPort()
-		if port <= 0 {
-			port = 18888
-		}
-		portalURL := fmt.Sprintf("http://%s:%d/share", localIP, port)
-		qrPortal, _ := GenerateURLQRDataURI(portalURL, 256)
-
-		rs.Reply(NewEvent("hotspot_started", map[string]interface{}{
-			"active":     true,
-			"ssid":       netInfo.SSID,
-			"password":   netInfo.Password,
-			"ip":         localIP,
-			"band":       netInfo.Band.String(),
-			"channel":    netInfo.Channel,
-			"portal_url": portalURL,
-			"qr_wifi":    qrWifi,
-			"qr_portal":  qrPortal,
-		}, req.ID))
-		return
-	}
-
-	if s.hotspotCtrl != nil {
-		s.hotspotMu.Unlock()
-		rs.Reply(NewEvent("action_error", map[string]string{"error": "Hotspot is already starting or running"}, req.ID))
-		return
-	}
-
-	ctrl := hotspot.New()
-	s.hotspotCtrl = ctrl
-	s.hotspotMu.Unlock()
-
-	ssid := payload.SSID
-	password := payload.Password
-	if ssid == "" || password == "" {
-		s, p := hotspot.GenerateCredentials()
-		if ssid == "" {
-			ssid = s
-		}
-		if password == "" {
-			password = p
-		}
-	}
-
-	go func() {
-		netInfo, err := ctrl.Start(hotspot.Config{
-			SSID:     ssid,
-			Password: password,
-			Band:     band,
-		})
-		if err != nil {
-			s.hotspotMu.Lock()
-			s.hotspotCtrl = nil
-			s.activeHotspot = nil
-			s.hotspotMu.Unlock()
-			s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("Failed to start hotspot: %v", err)}, req.ID))
-			return
-		}
-
-		s.hotspotMu.Lock()
-		s.activeHotspot = netInfo
-		s.hotspotMu.Unlock()
-
-		qrWifi, _ := GenerateWiFiQRDataURI(netInfo.SSID, netInfo.Password, 256)
-		localIP := netInfo.LocalIP.String()
-		if localIP == "" || localIP == "<nil>" {
-			localIP = "192.168.137.1"
-		}
-		port := s.currentHTTPPort()
-		if port <= 0 {
-			port = 18888
-		}
-		portalURL := fmt.Sprintf("http://%s:%d/share", localIP, port)
-		qrPortal, _ := GenerateURLQRDataURI(portalURL, 256)
-
-		infoMap := map[string]interface{}{
-			"active":     true,
-			"ssid":       netInfo.SSID,
-			"password":   netInfo.Password,
-			"ip":         localIP,
-			"band":       netInfo.Band.String(),
-			"channel":    netInfo.Channel,
-			"portal_url": portalURL,
-			"qr_wifi":    qrWifi,
-			"qr_portal":  qrPortal,
-			"warning":    netInfo.Warning,
-		}
-
-		s.Broadcast(NewEvent("hotspot_started", infoMap, req.ID))
-	}()
-}
-
-func (s *DaemonServer) handleHotspotStop(rs Responder, req RequestMessage) {
-	s.hotspotMu.Lock()
-	ctrl := s.hotspotCtrl
-	s.hotspotCtrl = nil
-	s.activeHotspot = nil
-	s.hotspotMu.Unlock()
-
-	if ctrl != nil {
-		_ = ctrl.Stop()
-	}
-
-	s.Broadcast(NewEvent("hotspot_stopped", map[string]string{"message": "Hotspot stopped"}, req.ID))
-}
-
-func (s *DaemonServer) handleHotspotStatus(rs Responder, req RequestMessage) {
-	s.hotspotMu.Lock()
-	netInfo := s.activeHotspot
-	s.hotspotMu.Unlock()
-
-	if netInfo == nil {
-		rs.Reply(NewEvent("hotspot_status", map[string]interface{}{
-			"active": false,
-		}, req.ID))
-		return
-	}
-
-	qrWifi, _ := GenerateWiFiQRDataURI(netInfo.SSID, netInfo.Password, 256)
-	localIP := netInfo.LocalIP.String()
-	if localIP == "" || localIP == "<nil>" {
-		localIP = "192.168.137.1"
-	}
-	port := s.currentHTTPPort()
-	if port <= 0 {
-		port = 18888
-	}
-	portalURL := fmt.Sprintf("http://%s:%d/share", localIP, port)
-	qrPortal, _ := GenerateURLQRDataURI(portalURL, 256)
-
-	rs.Reply(NewEvent("hotspot_status", map[string]interface{}{
-		"active":     true,
-		"ssid":       netInfo.SSID,
-		"password":   netInfo.Password,
-		"ip":         localIP,
-		"band":       netInfo.Band.String(),
-		"channel":    netInfo.Channel,
-		"portal_url": portalURL,
-		"qr_wifi":    qrWifi,
-		"qr_portal":  qrPortal,
-		"warning":    netInfo.Warning,
-	}, req.ID))
 }
 
 func (s *DaemonServer) handleShareWebFiles(rs Responder, req RequestMessage) {
