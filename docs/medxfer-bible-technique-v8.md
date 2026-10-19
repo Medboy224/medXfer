@@ -686,13 +686,13 @@ func randomPIN(digits int) string { // uniforme, sans biais, via crypto/rand
 | Id | Exigence | Statut |
 |---|---|---|
 | `WEB-01` | Le listener Web Share est distinct du contrôle (§10), lié à l'interface réseau choisie, et inexistant tant que le module est désactivé. | ✅ |
-| `WEB-02` | Jeton de 128 bits via `crypto/rand`, transmis par fragment d'URL puis en-tête `Authorization`. Aucun cookie d'authentification. | ✅ |
-| `WEB-03` | PIN de repli : `crypto/rand`, 5 essais par session, comparaison en temps constant. | ✅ |
+| `WEB-02` | Jeton de 128 bits via `crypto/rand`, transmis par fragment d'URL puis en-tête `Authorization`. Aucun cookie d'authentification. | 📏 J7 (#157) : le code de transition pose encore un cookie `medxfer_pin` sur `GET /share?pin=` (audit du 18/10) |
+| `WEB-03` | PIN de repli : `crypto/rand`, 5 essais par session, comparaison en temps constant. | 📏 J7 (#157) : `GET /share?pin=` compare avec `==`, sans verrouillage ni comptage (audit du 18/10) |
 | `WEB-04` | Ni le PIN, ni le jeton, ni un PIN tenté n'apparaissent dans les journaux, les événements ou l'URL. | ✅ |
 | `WEB-05` | En-têtes sur toutes les réponses : `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store` sur l'API. Cela impose de sortir le JavaScript et le CSS de la page en fichiers servis via `embed.FS`, au lieu du bloc inline actuel. | ✅ |
 | `WEB-06` | L'hôte approuve chaque dépôt d'invité (déjà fait) ; quotas : taille maximale par session, nombre de fichiers, espace disque libre ; un seul transfert actif. | ✅ |
 | `WEB-07` | Les téléchargements se désignent par **identifiant d'élément**, pas par nom de fichier fourni (le code actuel rapproche par `RelPath` ou `Base()`, ambigu). Les noms déposés passent par `SafeRelPath` puis ne gardent que le nom de base. | ✅ |
-| `WEB-08` | `ReadHeaderTimeout`, `MaxHeaderBytes`, `http.MaxBytesReader` sur toutes les routes. | ✅ |
+| `WEB-08` | `ReadHeaderTimeout`, `MaxHeaderBytes`, `http.MaxBytesReader` sur toutes les routes. | 📏 J7 (#157) : le serveur HTTP n'a ni `ReadHeaderTimeout` ni `MaxHeaderBytes` (audit du 18/10) |
 | `WEB-09` | Épinglage de l'IP de l'invité : optionnel, désactivé par défaut (une IP change et un NAT en partage une). | ✅ |
 
 ### 11.4 Pourquoi pas de chiffrement WebCrypto de bout en bout

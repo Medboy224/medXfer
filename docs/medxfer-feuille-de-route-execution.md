@@ -232,6 +232,9 @@ Ajouté le 18/10/2026 (#143). Premier contact par PIN ou QR seulement : la quest
 ### Lot « Noms des appareils de confiance » (avant J6b) · ≈ 2 à 3 jours
 Ajouté le 18/10/2026 (#150). Dans les scans, un appareil de confiance mutuelle apparaît sous son nom, reconnu par une étiquette tournante (HMAC d'une clé échangée à l'établissement de la confiance) et non plus par son adresse ; le nom ne circule jamais en clair. Vrais noms d'appareils (`xfer name`, modèle du téléphone sous Android), `xfer trust rename`. Plan : [medxfer-plan-noms.md](medxfer-plan-noms.md).
 
+### Lot « Audit » (avant J6b) · ≈ 2 à 3 jours
+Ajouté le 19/10/2026 (#156) après l'audit externe du 18 octobre. Retrait du point d'accès du cœur (la plateforme s'en charge ; schéma v3), corrections du canal sécurisé, de l'appairage, du cœur, de la frontière C et du moteur, chaque point vérifié par un test. Les constats sur Web Share deviennent des critères de sortie de J7 (#157). Plan : [medxfer-plan-audit.md](medxfer-plan-audit.md).
+
 ### J6b — Application Flutter MVP · ≈ 8 à 12 jours
 Écrans : liste des appareils, appairage par QR (caméra) et par PIN, envoi (choix de fichiers/dossiers), réception (acceptation avec taille et expéditeur), progression, historique minimal, panneau développeur (`DEV-13`). Android : service de premier plan, destination des fichiers (décision issue de G2A-10). Windows, Linux : empaquetage. **Critère de sortie :** les gates G2a et G7 évaluées ; scénario complet Android ↔ Windows/Linux au Wi-Fi réel.
 
