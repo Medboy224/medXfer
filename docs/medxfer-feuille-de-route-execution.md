@@ -234,6 +234,9 @@ Ajouté le 18/10/2026 (#150). Dans les scans, un appareil de confiance mutuelle 
 
 **Résultat (19/10/2026) :** le lot est terminé (PR #151 à #154, et celle du rapport). Les scans affichent « Nom (trusted) » pour un appareil de confiance mutuelle, reconnu par une étiquette tournante ; un oubli d'un seul côté coupe la reconnaissance des deux côtés. Noms d'appareils réels, plus de « localhost ». Essais réels PC Windows ↔ téléphone ↔ Zorin. Détail dans [report-noms.md](report-noms.md).
 
+### Lot « Audit » (avant J6b) · ≈ 2 à 3 jours
+Ajouté le 19/10/2026 (#156) après l'audit externe du 18 octobre. Retrait du point d'accès du cœur (la plateforme s'en charge ; schéma v3), corrections du canal sécurisé, de l'appairage, du cœur, de la frontière C et du moteur, chaque point vérifié par un test. Les constats sur Web Share deviennent des critères de sortie de J7 (#157). Plan : [medxfer-plan-audit.md](medxfer-plan-audit.md).
+
 ### J6b — Application Flutter MVP · ≈ 8 à 12 jours
 Écrans : liste des appareils, appairage par QR (caméra) et par PIN, envoi (choix de fichiers/dossiers), réception (acceptation avec taille et expéditeur), progression, historique minimal, panneau développeur (`DEV-13`). Android : service de premier plan, destination des fichiers (décision issue de G2A-10). Windows, Linux : empaquetage. **Critère de sortie :** les gates G2a et G7 évaluées ; scénario complet Android ↔ Windows/Linux au Wi-Fi réel.
 
