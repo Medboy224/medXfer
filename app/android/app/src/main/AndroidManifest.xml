@@ -1,6 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- The Flutter template grants it to debug and profile builds only (G2a §7). -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- The local access point and joining one (DISC-12, WP-B.7). From Android 13, nearby Wi-Fi
+         devices, without location; before, Android asks for location to start a local hotspot. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="32"/>
     <application
         android:label="medXfer"
         android:name="${applicationName}"
