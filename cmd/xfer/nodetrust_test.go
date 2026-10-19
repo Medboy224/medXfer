@@ -169,3 +169,32 @@ func TestRenameAndName(t *testing.T) {
 		t.Fatalf("device name %q", got)
 	}
 }
+
+// Audit §3.5 (#156): two trusted devices that swapped addresses (DHCP) are no interception: the
+// key shown is a trusted one. An address belongs only to the device last seen there, and the
+// alert speaks of an address that may have changed hands.
+func TestKeyChangedAfterAnAddressMoved(t *testing.T) {
+	ts, err := identity.OpenTrustStore(filepath.Join(t.TempDir(), identity.TrustFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b, stranger := newTestIdentity(t), newTestIdentity(t), newTestIdentity(t)
+	_ = ts.Add(identity.Peer{Fingerprint: a.Fingerprint, Alias: "pc", LastAddress: "192.168.1.5"})
+	_ = ts.Add(identity.Peer{Fingerprint: b.Fingerprint, Alias: "phone", LastAddress: "192.168.1.6"})
+	if _, bad := keyChanged(ts, "192.168.1.5", b.Fingerprint); bad {
+		t.Fatal("a trusted device seen at another trusted device's old address was refused")
+	}
+	if err := touchPeer(ts, b.Fingerprint, "phone", "192.168.1.5"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := ts.Get(a.Fingerprint); p.LastAddress != "" {
+		t.Fatalf("the address stays with the device seen there before: %q", p.LastAddress)
+	}
+	p, bad := keyChanged(ts, "192.168.1.5", stranger.Fingerprint)
+	if !bad || p.Fingerprint != b.Fingerprint {
+		t.Fatalf("an unknown key at the address of the last device seen there: %+v %v", p, bad)
+	}
+	if msg := keyChangedAlert(p, "192.168.1.5", stranger.Fingerprint); !strings.Contains(msg, "address") || !strings.Contains(msg, "another device") {
+		t.Fatalf("the alert does not mention an address that changed hands:\n%s", msg)
+	}
+}

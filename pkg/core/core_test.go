@@ -188,3 +188,22 @@ func TestCoresKeepTheirDataApart(t *testing.T) {
 		t.Fatal("two cores share a key")
 	}
 }
+
+// Audit §3.7 (#156): the limiter of B7 never drops the last progress event, at 100 %: the
+// interface would stay at 99 %.
+func TestFinalProgressPassesTheLimiter(t *testing.T) {
+	c, err := New(Config{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	progress := func(done, total int64) api.EventMessage {
+		return api.NewEvent("transfer_progress", api.TransferProgressData{BatchBytes: done, BatchTotalBytes: total,
+			BatchPercent: float64(done) * 100 / float64(total)})
+	}
+	c.push(progress(50, 100))
+	c.push(progress(100, 100)) // within progressGap of the previous one
+	if s := c.Stats(); s.Queued != 2 {
+		t.Fatalf("%d progress events queued, want 2: the final one was dropped", s.Queued)
+	}
+}

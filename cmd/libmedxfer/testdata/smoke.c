@@ -28,8 +28,37 @@ static void expect(int ok, const char *what, const char *got) {
 	}
 }
 
+// has reports whether s holds sub; a NULL s holds nothing (audit §3.3, #156).
+static int has(const char *s, const char *sub) { return s != NULL && strstr(s, sub) != NULL; }
+
+// json_string writes s into out as the body of a JSON string: a Windows path holds
+// backslashes, and nothing may break the config (audit §3.3, #156). 0 when out is too small.
+static int json_string(char *out, size_t size, const char *s) {
+	size_t n = 0;
+	for (; *s; s++) {
+		unsigned char c = (unsigned char)*s;
+		char esc[8];
+		if (c == '"' || c == '\\') {
+			snprintf(esc, sizeof esc, "\\%c", c);
+		} else if (c < 0x20) {
+			snprintf(esc, sizeof esc, "\\u%04x", c);
+		} else {
+			esc[0] = (char)c;
+			esc[1] = 0;
+		}
+		size_t l = strlen(esc);
+		if (n + l >= size) {
+			return 0;
+		}
+		memcpy(out + n, esc, l);
+		n += l;
+	}
+	out[n] = 0;
+	return 1;
+}
+
 static void *reader(void *arg) {
-	char *e = medxfer_next_event(60000); // blocks until an event or the stop
+	char *e = medxfer_next_event(-1); // no limit: blocks until an event or the stop
 	*(char **)arg = e;
 	return NULL;
 }
@@ -39,23 +68,27 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "usage: smoke DATA_DIR\n");
 		return 2;
 	}
-	char config[4096];
-	snprintf(config, sizeof config, "{\"data_dir\":\"%s\",\"device_name\":\"smoke\"}", argv[1]);
+	char dir[2048], config[4096];
+	if (!json_string(dir, sizeof dir, argv[1])) {
+		fprintf(stderr, "DATA_DIR too long\n");
+		return 2;
+	}
+	snprintf(config, sizeof config, "{\"data_dir\":\"%s\",\"device_name\":\"smoke\"}", dir);
 
 	char *r = medxfer_start(config);
-	expect(strstr(r, "\"ok\":true") && strstr(r, "\"already_started\":false"), "first start", r);
+	expect(has(r, "\"ok\":true") && has(r, "\"already_started\":false"), "first start", r);
 	medxfer_free(r);
 
 	r = medxfer_start(config);
-	expect(strstr(r, "\"already_started\":true") != NULL, "second start is idempotent (B4)", r);
+	expect(has(r, "\"already_started\":true"), "second start is idempotent (B4)", r);
 	medxfer_free(r);
 
 	r = medxfer_call("{\"id\":\"s\",\"action\":\"get_status\"}");
-	expect(strstr(r, "\"ok\":true") && strstr(r, "\"id\":\"s\"") && strstr(r, "\"status\""), "get_status", r);
+	expect(has(r, "\"ok\":true") && has(r, "\"id\":\"s\"") && has(r, "\"status\""), "get_status", r);
 	medxfer_free(r);
 
 	r = medxfer_call("{\"id\":\"u\",\"action\":\"no_such_action\"}");
-	expect(strstr(r, "\"ok\":false") != NULL, "unknown action is an error", r);
+	expect(has(r, "\"ok\":false"), "unknown action is an error", r);
 	medxfer_free(r);
 
 	char *e;
@@ -71,11 +104,11 @@ int main(int argc, char **argv) {
 	usleep(100 * 1000);
 	medxfer_stop();
 	pthread_join(t, NULL);
-	expect(got && strstr(got, "core_stopped"), "stop wakes the reader with the sentinel (B9)", got);
+	expect(has(got, "core_stopped"), "stop wakes a reader waiting without limit, with the sentinel (B9)", got);
 	medxfer_free(got);
 
 	r = medxfer_call("{\"id\":\"x\",\"action\":\"get_status\"}");
-	expect(strstr(r, "\"ok\":false") != NULL, "call after stop is refused", r);
+	expect(has(r, "\"ok\":false"), "call after stop is refused", r);
 	medxfer_free(r);
 
 	if (failures) {

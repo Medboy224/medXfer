@@ -43,11 +43,15 @@ func (s *DaemonServer) Discoverable() bool {
 
 // instance is the generic name this device announces (DISC-06): shown beside the PIN and the
 // QR code, so that the other device picks the right one in its list (DISC-07).
+// Called without s.mu held: the discovery server is read under it (§3.7, #156).
 func (s *DaemonServer) instance() string {
-	if s.discSrv == nil {
+	s.mu.RLock()
+	disc := s.discSrv
+	s.mu.RUnlock()
+	if disc == nil {
 		return ""
 	}
-	return s.discSrv.GetPeer().DeviceName
+	return disc.GetPeer().DeviceName
 }
 
 // SetDiscoverablePayload is the payload of set_discoverable.

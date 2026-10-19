@@ -62,19 +62,16 @@ func (s *DaemonServer) keyChanged(ip string, fp identity.Fingerprint) (identity.
 	s.mu.RLock()
 	ts := s.trust
 	s.mu.RUnlock()
-	if ts == nil || ip == "" {
+	if ts == nil {
 		return identity.Peer{}, false
 	}
-	p, ok := ts.ByAddress(ip)
-	if !ok || p.Fingerprint == fp {
-		return identity.Peer{}, false
-	}
-	return p, true
+	return ts.KeyChangedAt(ip, fp)
 }
 
 func keyChangedError(host string, known identity.Peer, fp identity.Fingerprint) error {
-	return fmt.Errorf("REFUSED: %s is the address of '%s' (%s), but the device there presents another key (%s)",
-		host, known.Alias, known.Fingerprint.Short(), fp.Short())
+	return fmt.Errorf("REFUSED: %s is the address of '%s' (%s), but the device there presents another key (%s); "+
+		"if '%s' left the network, its address may now belong to another device: pair that one by PIN or QR code",
+		host, known.Alias, known.Fingerprint.Short(), fp.Short(), known.Alias)
 }
 
 // touchTrust records the address and name of a device already trusted. It never adds one:
@@ -347,6 +344,9 @@ func (s *DaemonServer) startSession(ch *session.Channel, fp identity.Fingerprint
 	s.isReconnecting = false
 	if s.activeSession != nil && s.activeSession != ch {
 		s.activeSession.Close()
+		if s.trustPeer != fp { // another device: the old one's transfers end with it (§3.7, #156)
+			s.dropTransfers()
+		}
 	}
 	s.activeSession = ch
 	s.pairedDeviceName = name

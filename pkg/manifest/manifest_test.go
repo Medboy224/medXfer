@@ -58,3 +58,38 @@ func TestBuildManifest(t *testing.T) {
 		t.Errorf("Expected relative paths folderA/file1.txt and folderA/subfolder/file2.bin, items: %+v", m.Items)
 	}
 }
+
+// Audit §3.6 (#156): two paths of the same name (letter case aside) do not make the offer
+// fail: the second one is named as the receiver names a collision, "name (1).ext".
+func TestSameNamesAreNumbered(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel string) string {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		_ = os.WriteFile(p, []byte(rel), 0o644)
+		return p
+	}
+	a, b, c := write("a/doc.pdf"), write("b/doc.pdf"), write("c/DOC.pdf")
+	write("x/photos/1.jpg")
+	write("y/photos/2.jpg")
+	write("z/arch.tar.gz")
+	write("w/arch.tar.gz")
+	m, err := Build([]string{a, b, c, filepath.Join(dir, "x", "photos"), filepath.Join(dir, "y", "photos"),
+		filepath.Join(dir, "z", "arch.tar.gz"), filepath.Join(dir, "w", "arch.tar.gz")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range m.Items {
+		got = append(got, it.RelPath)
+	}
+	want := []string{"doc.pdf", "doc (1).pdf", "DOC (2).pdf", "photos/1.jpg", "photos (1)/2.jpg", "arch.tar.gz", "arch (1).tar.gz"}
+	if len(got) != len(want) {
+		t.Fatalf("paths %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("paths %q, want %q", got, want)
+		}
+	}
+}

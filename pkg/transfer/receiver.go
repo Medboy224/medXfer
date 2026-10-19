@@ -26,9 +26,9 @@ const (
 	// firewall that drops the packets would hold a connection attempt for minutes.
 	DefaultDialTimeout = 5 * time.Second
 	MaxWorkers         = 8
-	maxInFlight        = 2 // requests in flight per connection (bible §8.3)
-	maxChunkAttempts   = 3 // a chunk whose hash does not match is asked again at most 3 times (XFER-04)
-	maxReconnects      = 16
+	maxInFlight        = 2  // requests in flight per connection (bible §8.3)
+	maxChunkAttempts   = 3  // a chunk whose hash does not match is asked again at most 3 times (XFER-04)
+	maxReconnects      = 16 // connections in a row without a chunk received
 	chunkReadTimeout   = time.Minute
 )
 
@@ -1170,7 +1170,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 	var conn net.Conn
 	var stopClosing func() bool
 	var inflight []task
-	reconnects := 0
+	reconnects := 0 // in a row, without a chunk received in between (audit 14, #156)
 	drop := func() {
 		for _, t := range inflight {
 			ru.retry(t, false)
@@ -1279,6 +1279,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 			drop() // a peer that answers out of order is not trusted further on this connection
 			continue
 		}
+		reconnects = 0 // the connection carries data: a cut later is not a dead sender
 		writes <- received{t: t, buf: buf, data: data, sum: sum}
 	}
 }

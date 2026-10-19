@@ -64,9 +64,14 @@ func Call(request string) (out string) {
 	return string(c.CallJSON([]byte(request)))
 }
 
-// NextEvent returns the next event in JSON, or ok false after timeout (0: no wait). Once the
-// core is stopped it returns StoppedEvent to every reader, at once (B9).
+// NextEvent returns the next event in JSON, or ok false after timeout (0: no wait; negative:
+// no limit). Once the core is stopped it returns StoppedEvent to every reader, at once (B9).
 func NextEvent(timeout time.Duration) (event string, ok bool) {
+	defer func() {
+		if r := recover(); r != nil { // B5
+			event, ok = encode(map[string]any{"event": "core_error", "data": map[string]string{"error": fmt.Sprintf("panic: %v", r)}}), true
+		}
+	}()
 	c := current()
 	if c == nil {
 		return StoppedEvent, true
@@ -85,19 +90,27 @@ func NextEvent(timeout time.Duration) (event string, ok bool) {
 	return string(b), true
 }
 
-// Stop stops the core; a later Start starts a fresh one.
+// Stop stops the core; a later Start starts a fresh one. The lock is held until the core has
+// stopped: a Start meanwhile waits, so two cores never run at once (audit 12, #156). Readers
+// woken by the stop wait for it too, then get StoppedEvent.
 func Stop() {
+	defer func() { _ = recover() }() // B5: nothing crosses into C
 	lib.mu.Lock()
+	defer lib.mu.Unlock()
 	c := lib.core
 	lib.core = nil
-	lib.mu.Unlock()
 	if c != nil {
+		stopping()
 		c.Stop()
 	}
 }
 
+// stopping runs just before a core stops; tests slow it down.
+var stopping = func() {}
+
 // Stats is the event queue of the running core (B11), in JSON.
-func Stats() string {
+func Stats() (out string) {
+	defer recoverJSON(&out)
 	c := current()
 	if c == nil {
 		return encode(core.Stats{})

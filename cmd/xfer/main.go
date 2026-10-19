@@ -244,9 +244,27 @@ func handleNode() {
 	fmt.Println("   exit              - Shutdown node")
 	fmt.Println("--------------------------------------------------")
 
+	// The main loop alone writes the session's state (audit 8, #156); the other goroutines
+	// (incoming pairings, transfers, timers, the PIN screen) read the atomic copies below.
 	var activeSession *session.Channel
-	var incomingOffer *session.Message // an offer whose pages are still arriving (D2)
-	var pendingOffer *session.Message  // a complete offer waiting for the user's answer
+	var incomingOffer *session.Message          // an offer whose pages are still arriving (D2)
+	var pendingOffer *session.Message           // a complete offer waiting for the user's answer
+	var current atomic.Pointer[session.Channel] // activeSession, for the other goroutines
+	var pendingAsk atomic.Pointer[string]       // the summary of pendingOffer, for the prompt
+	var askingTrust atomic.Bool                 // the other device's trust offer waits for an answer
+	setSession := func(ch *session.Channel) {
+		activeSession = ch
+		current.Store(ch)
+	}
+	setPending := func(m *session.Message) {
+		pendingOffer = m
+		if m == nil {
+			pendingAsk.Store(nil)
+			return
+		}
+		summary := offerSummary(*m.Offer)
+		pendingAsk.Store(&summary)
+	}
 	var lastScannedPeers []discovery.Peer
 	var lastOffered *nodeOffer // what this node offered last, until the peer answers
 	var transferCancel context.CancelFunc
@@ -255,8 +273,14 @@ func handleNode() {
 	// Global gracefully shutdown trap for Ctrl+C
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	quit := make(chan struct{})
 	go func() {
 		<-sigChan
+		close(quit) // the main loop tells the peer and stops
+		time.Sleep(3 * time.Second)
+		os.Exit(0) // the main loop was busy (a pairing waiting for its peer)
+	}()
+	shutdown := func() {
 		fmt.Println("\n[*] Shutting down safely...")
 		if transferCancel != nil {
 			if activeSession != nil {
@@ -269,23 +293,36 @@ func handleNode() {
 			activeSession.Close()
 		}
 		os.Exit(0)
-	}()
+	}
 
+	// The messages and the end of a session carry it: one that comes from a session already
+	// replaced is dropped, never taken for the active one's (audit 8, #156).
+	type sessionMsg struct {
+		ch  *session.Channel
+		msg session.Message
+	}
+	// A pairing accepted by the listener: the main loop makes it the active session.
+	type incomingPairing struct {
+		ch            *session.Channel
+		fp            identity.Fingerprint
+		name, ip      string
+		mutual, offer bool
+	}
 	inputChan := make(chan string)
-	msgChan := make(chan session.Message)
-	disconnectChan := make(chan bool)
+	msgChan := make(chan sessionMsg)
+	disconnectChan := make(chan *session.Channel)
+	incomingChan := make(chan incomingPairing)
 
 	// The trust negotiation of the active session (PAIR-10): the other device's offer waits for
 	// the next line typed; an offer of ours is over when answered, or after TrustAnswerTime.
 	var talk atomic.Pointer[pairing.TrustTalk]
 	var talkGen atomic.Int64 // bumped when an offer of ours is answered, or the session ends
 	var sessionMutual atomic.Bool
-	pendingTrustAsk := false
 	endTalk := func() {
 		talk.Store(nil)
 		talkGen.Add(1)
 		sessionMutual.Store(false)
-		pendingTrustAsk = false
+		askingTrust.Store(false)
 	}
 	offerTrust := func() {
 		t := talk.Load()
@@ -317,7 +354,7 @@ func handleNode() {
 			fmt.Printf("\n[-] Could not save the trusted device: %v\n", err)
 		}
 		ch.Authenticate()
-		activeSession = ch
+		setSession(ch)
 		talk.Store(pairing.NewTrustTalk(nodeTrust, nodeID.Fingerprint, identity.Peer{Fingerprint: fp, Alias: name, LastAddress: ip}))
 		talkGen.Add(1)
 		sessionMutual.Store(mutual)
@@ -334,10 +371,10 @@ func handleNode() {
 			for {
 				m, err := c.Read()
 				if err != nil {
-					disconnectChan <- true
+					disconnectChan <- c
 					return
 				}
-				msgChan <- m
+				msgChan <- sessionMsg{c, m}
 			}
 		}(ch)
 		if offer && !mutual {
@@ -381,7 +418,7 @@ func handleNode() {
 
 			ch := session.NewChannel(conn)
 
-			if activeSession != nil {
+			if current.Load() != nil {
 				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "node already paired with another device"})
 				ch.Close()
 				continue
@@ -487,19 +524,19 @@ func handleNode() {
 			if devLabel == "" {
 				devLabel = "Remote Node"
 			}
-			startSession(ch, peerFP, devLabel, peerIP, mutual, offer, true)
+			incomingChan <- incomingPairing{ch: ch, fp: peerFP, name: devLabel, ip: peerIP, mutual: mutual, offer: offer}
 		}
 	}()
 
 	printPrompt = func() {
-		if pendingTrustAsk {
+		if askingTrust.Load() {
 			fmt.Print("\n[?] Accept mutual trust? [y/N]: ")
 			return
 		}
-		if pendingOffer != nil {
-			fmt.Printf("\n[?] Accept %s? [Y/n]: ", offerSummary(*pendingOffer.Offer))
-		} else if activeSession != nil {
-			fmt.Printf("\n[Paired: %s] > ", activeSession.RemoteIP())
+		if summary, sess := pendingAsk.Load(), current.Load(); summary != nil {
+			fmt.Printf("\n[?] Accept %s? [Y/n]: ", *summary)
+		} else if sess != nil {
+			fmt.Printf("\n[Paired: %s] > ", sess.RemoteIP())
 		} else {
 			fmt.Print("\nmedXfer > ")
 		}
@@ -511,6 +548,7 @@ func handleNode() {
 	takeNodeOffer := func(head bool, page []protocol.OfferItem) *session.Message {
 		tid := incomingOffer.Offer.TransferID
 		m, err := completeNodeOffer(&incomingOffer, head, page)
+		setPending(m)
 		if err != nil {
 			fmt.Printf("\n[-] Refused the peer's offer: %v\n", err)
 			if activeSession != nil {
@@ -525,16 +563,27 @@ func handleNode() {
 
 	for {
 		select {
+		case <-quit:
+			shutdown()
+
+		case in := <-incomingChan:
+			if activeSession != nil { // another device paired first, meanwhile
+				_ = in.ch.Send(session.Message{Type: "disconnect"})
+				in.ch.Close()
+				break
+			}
+			startSession(in.ch, in.fp, in.name, in.ip, in.mutual, in.offer, true)
+
 		case text := <-inputChan:
 			text = strings.TrimSpace(text)
-			if resume := takeDiskResume(); resume != nil && !pendingTrustAsk && pendingOffer == nil {
+			if resume := takeDiskResume(); resume != nil && !askingTrust.Load() && pendingOffer == nil {
 				fmt.Println("[*] Resuming...")
 				resume()
 				printPrompt()
 				continue
 			}
-			if pendingTrustAsk { // the other device's offer of mutual trust (PAIR-10)
-				pendingTrustAsk = false
+			if askingTrust.Load() { // the other device's offer of mutual trust (PAIR-10)
+				askingTrust.Store(false)
 				a := strings.ToLower(text)
 				yes := a == "y" || a == "yes" || a == "o" || a == "oui"
 				if t := talk.Load(); t != nil && activeSession != nil {
@@ -552,7 +601,7 @@ func handleNode() {
 			}
 			if pendingOffer != nil {
 				m := pendingOffer
-				pendingOffer = nil
+				setPending(nil)
 				if activeSession == nil {
 					printPrompt()
 					continue
@@ -795,6 +844,9 @@ func handleNode() {
 					var typed string
 					select {
 					case typed = <-inputChan:
+					case <-quit:
+						ch.Close()
+						shutdown()
 					case <-time.After(pairing.TTL):
 						fmt.Println()
 					}
@@ -837,9 +889,10 @@ func handleNode() {
 				if activeSession != nil {
 					activeSession.Send(session.Message{Type: "disconnect"})
 					activeSession.Close()
-					activeSession = nil
+					setSession(nil)
 					lastOffered.close() // its data connections end with the session
-					lastOffered, incomingOffer, pendingOffer = nil, nil, nil
+					lastOffered, incomingOffer = nil, nil
+					setPending(nil)
 					endTalk()
 					fmt.Println("[*] Disconnected.")
 				}
@@ -914,15 +967,20 @@ func handleNode() {
 			}
 			printPrompt()
 
-		case msg := <-msgChan:
+		case sm := <-msgChan:
+			if sm.ch != activeSession {
+				break // from a session already ended or replaced
+			}
+			msg := sm.msg
 			switch msg.Type {
 			case "disconnect":
 				fmt.Println("\n[*] Peer disconnected.")
 				if activeSession != nil {
 					activeSession.Close()
-					activeSession = nil
+					setSession(nil)
 					lastOffered.close() // its data connections end with the session
-					lastOffered, incomingOffer, pendingOffer = nil, nil, nil
+					lastOffered, incomingOffer = nil, nil
+					setPending(nil)
 					endTalk()
 				}
 				if transferCancel != nil {
@@ -936,7 +994,8 @@ func handleNode() {
 					transferCancel()
 					transferCancel = nil
 				}
-				incomingOffer, pendingOffer = nil, nil
+				incomingOffer = nil
+				setPending(nil)
 				if msg.Offer == nil {
 					fmt.Println("\n[-] The peer sent an offer without its items.")
 					printPrompt()
@@ -944,13 +1003,13 @@ func handleNode() {
 				}
 				m := msg
 				incomingOffer = &m
-				pendingOffer = takeNodeOffer(true, nil)
+				takeNodeOffer(true, nil)
 
 			case session.TypeOfferItems: // the next page of a paged offer (D2)
 				if incomingOffer == nil || msg.TransferID != incomingOffer.Offer.TransferID {
 					break
 				}
-				pendingOffer = takeNodeOffer(false, msg.Items)
+				takeNodeOffer(false, msg.Items)
 
 			case "reject":
 				lastOffered.close() // nobody may join a refused offer
@@ -1009,7 +1068,7 @@ func handleNode() {
 				}
 				switch ev {
 				case pairing.TrustAsked:
-					pendingTrustAsk = true
+					askingTrust.Store(true)
 					fmt.Println("\n\n[?] The paired device offers mutual trust: both devices would then reconnect without a PIN.")
 					printPrompt()
 				case pairing.TrustEstablished:
@@ -1033,13 +1092,14 @@ func handleNode() {
 				}
 			}
 
-		case <-disconnectChan:
-			if activeSession != nil {
+		case ended := <-disconnectChan:
+			if ended == activeSession && activeSession != nil { // not one already replaced
 				fmt.Println("\n[*] Connection lost.")
 				activeSession.Close()
-				activeSession = nil
+				setSession(nil)
 				lastOffered.close() // its data connections end with the session
-				lastOffered, incomingOffer, pendingOffer = nil, nil, nil
+				lastOffered, incomingOffer = nil, nil
+				setPending(nil)
 				endTalk()
 				if transferCancel != nil {
 					transferCancel()
@@ -1391,9 +1451,10 @@ func typePIN(who string) func() (string, error) {
 }
 
 // readLine is the next line typed on the terminal, or "" without one.
-func readLine() string {
-	l, _ := <-stdinLines()
-	return l
+// readLine reads a line of the standard input; ok is false once it is closed.
+func readLine() (line string, ok bool) {
+	line, ok = <-stdinLines()
+	return line, ok
 }
 
 // recvFromURI receives a one-shot send from its QR code: the sender's key comes from it, so
@@ -1478,7 +1539,8 @@ func receiveAccepted(r pairing.Result, host, keyNote string, outDir string, work
 		return
 	}
 	fmt.Print("[?] Confirm download? [Y/n]: ")
-	ans := strings.TrimSpace(strings.ToLower(readLine()))
+	ans, _ := readLine() // a closed input takes the default
+	ans = strings.TrimSpace(strings.ToLower(ans))
 	if ans != "" && ans != "y" && ans != "yes" && ans != "o" && ans != "oui" {
 		fmt.Println("[-] Download cancelled by user.")
 		return
@@ -1606,11 +1668,14 @@ func fetchPeer(hostIP string) *discovery.Peer {
 	return &p
 }
 
+// discoverPeers finds the devices that announce themselves; tests replace it.
+var discoverPeers = discovery.DiscoverPeers
+
 func selectOneShotSender() *discovery.Peer {
 	_, trust, _ := loadIdentity(configDir()) // to recognize trusted devices in the list
 	for {
 		fmt.Println("\n[*] Searching local network for medXfer senders...")
-		peers, err := discovery.DiscoverPeers(2 * time.Second)
+		peers, err := discoverPeers(2 * time.Second)
 		if err != nil {
 			fmt.Printf("[-] Discovery error: %v\n", err)
 		}
@@ -1631,7 +1696,12 @@ func selectOneShotSender() *discovery.Peer {
 			}
 		}
 		fmt.Print("Select an option or enter pairing code [r to refresh, q to quit]: ")
-		input := strings.TrimSpace(readLine())
+		line, ok := readLine()
+		if !ok { // a closed input answers nothing more: stop (§3.4, #156)
+			fmt.Println("\n[-] No more input: stopped.")
+			return nil
+		}
+		input := strings.TrimSpace(line)
 		if strings.EqualFold(input, "q") {
 			return nil
 		}

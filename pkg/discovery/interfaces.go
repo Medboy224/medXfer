@@ -3,12 +3,14 @@ package discovery
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"net"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -376,6 +378,53 @@ func prioritizeARP(targets []NetworkTarget) []NetworkTarget {
 	return targets
 }
 
+// `arp -a` is bounded in time, and its neighbours are kept arpCacheFor: status and the scans
+// ask for them often, and a stuck arp must not hold them (audit 9, #156).
+const (
+	arpTimeout  = 2 * time.Second
+	arpCacheFor = 5 * time.Second
+)
+
+// arpCommand runs `arp -a`; tests replace it.
+var arpCommand = func(ctx context.Context) ([]byte, error) {
+	return exec.CommandContext(ctx, "arp", "-a").Output()
+}
+
+var arpCache struct {
+	mu  sync.Mutex // also lets one arp run at a time
+	at  time.Time
+	ips []string
+}
+
+func resetARPCache() {
+	arpCache.mu.Lock()
+	arpCache.at, arpCache.ips = time.Time{}, nil
+	arpCache.mu.Unlock()
+}
+
+func hasProcARP() bool { _, err := os.Stat("/proc/net/arp"); return err == nil }
+
+// runARP runs arpCommand for arpTimeout at most.
+func runARP() ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), arpTimeout)
+	defer cancel()
+	type result struct {
+		out []byte
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := arpCommand(ctx)
+		done <- result{out, err}
+	}()
+	select {
+	case r := <-done:
+		return r.out, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // GetARPTableIPs harvests active neighbor IPv4 addresses from the OS ARP / neighbor table
 func GetARPTableIPs() []string {
 	var ips []string
@@ -412,8 +461,14 @@ func GetARPTableIPs() []string {
 		}
 	}
 
-	// 2. Windows / macOS / fallback: Run `arp -a`
-	out, err := exec.Command("arp", "-a").Output()
+	// 2. Windows / macOS / fallback: Run `arp -a`, or read what it said a moment ago
+	arpCache.mu.Lock()
+	defer arpCache.mu.Unlock()
+	if !arpCache.at.IsZero() && time.Since(arpCache.at) < arpCacheFor {
+		return append([]string(nil), arpCache.ips...)
+	}
+	defer func() { arpCache.at, arpCache.ips = time.Now(), append([]string(nil), ips...) }()
+	out, err := runARP()
 	if err != nil {
 		return ips
 	}

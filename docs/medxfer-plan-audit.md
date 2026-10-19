@@ -52,7 +52,7 @@ Aussi : bible (nouvelle exigence), schéma v3 et fichier « golden », tableau d
 | §3.5 `ondemand.go` | `answerPINWanted` ne vérifie pas `Live()` | 🔎 | Vérifier, sinon refus neutre |
 | §3.6 `session.go` | `SetMaxControl` sans synchronisation | 🔎 | Atomique |
 
-### Lot A-3 — Cœur, frontière C, moteur · M
+### Lot A-3 — Cœur, frontière C, moteur · M · ✅
 
 | Audit | Constat | Vérification | Action |
 |---|---|---|---|
@@ -62,7 +62,7 @@ Aussi : bible (nouvelle exigence), schéma v3 et fichier « golden », tableau d
 | §3.7 `core.go` | Le limiteur de 100 ms jette l'événement final à 100 % | ✅ | Laisser passer l'événement final |
 | Top 14 | `reconnects` jamais remis à zéro : après 16 micro-coupures sur un long transfert, le flux s'arrête | 🔎 | Remettre à zéro après des morceaux reçus |
 | §3.6 `store.go` | `verify()` alloue un morceau entier avant de savoir s'il y a quelque chose à vérifier ; `Suspend()` lit `f.journal` sans `commitMu` | 🔎 | Retour anticipé ; verrou |
-| §3.6 `manifest.go` | Deux chemins de même nom (`/a/doc.pdf`, `/b/doc.pdf`) font échouer l'offre (`duplicate path`) | 🔎 | Nommer le second (`doc (2).pdf`), comme à la réception |
+| §3.6 `manifest.go` | Deux chemins de même nom (`/a/doc.pdf`, `/b/doc.pdf`) font échouer l'offre (`duplicate path`) | 🔎 | Nommer le second (`doc (1).pdf`), comme à la réception |
 | Top 9 | `getStatus()` lance `arp -a`, sans délai, sous `s.mu.RLock()` | 🔎 | Délai et cache pour `arp -a` ; rien de lent sous le verrou |
 | §3.7 `server.go` | `sessionGraceTimer` non arrêté dans `Stop()` ; serveur HTTP sans `ReadHeaderTimeout` | ✅ (`ReadHeaderTimeout`) ; 🔎 (minuteur) | Arrêter le minuteur ; délais du serveur (la partie Web Share est J7) |
 | §3.7 `trust.go` | Remplacer la session active n'arrête pas ses transferts | 🔎 | `dropTransfers` |
