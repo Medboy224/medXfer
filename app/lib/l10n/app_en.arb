@@ -1,0 +1,21 @@
+{
+  "@@locale": "en",
+  "appTitle": "medXfer",
+  "tabHistory": "History",
+  "tabApps": "Apps",
+  "tabPhotos": "Photos",
+  "tabVideos": "Videos",
+  "tabMusic": "Music",
+  "tabFiles": "Files",
+  "onThisDevice": "On this device",
+  "selectAll": "Select all",
+  "connect": "Connect",
+  "scanQr": "Scan a QR code to join",
+  "settings": "Settings",
+  "comingSoon": "Coming in the next steps of the app.",
+  "coreStarting": "Starting…",
+  "coreReady": "Ready · {device}",
+  "@coreReady": {"placeholders": {"device": {"type": "String"}}},
+  "coreFailed": "The core did not start: {error}",
+  "@coreFailed": {"placeholders": {"error": {"type": "String"}}}
+}

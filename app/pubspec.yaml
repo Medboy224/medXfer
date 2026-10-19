@@ -1,0 +1,33 @@
+name: medxfer
+description: "medXfer: local, encrypted file transfer."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.5
+
+# Every package here is behind one of the app's interfaces (lib/core, lib/platform): one
+# library, one adapter.
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  ffi: ^2.2.0           # the core's C library (lib/core/ffi_core.dart)
+  intl: any             # the version flutter_localizations pins
+  path: any             # the version Flutter pins
+  path_provider: ^2.1.5 # the app's data and download folders (lib/platform/folders.dart)
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  generate: true
+  fonts:
+    # Figtree, SIL Open Font License 1.1 (assets/fonts/OFL.txt): the app's own type (J15).
+    - family: Figtree
+      fonts:
+        - asset: assets/fonts/Figtree.ttf
