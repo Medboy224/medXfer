@@ -209,6 +209,7 @@ func handleNode() {
 		fmt.Fprintf(os.Stderr, "[-] %v\n", err)
 		return
 	}
+	discServer.SetTags(announceTagsOf(nodeTrust, nodeID.Fingerprint)) // devices of mutual trust recognize this one (DISC-11)
 	// Control connections: unknown keys start UNAUTH. The pairing code only finds this node on
 	// the network: a device pairs by a PIN or a QR code, or as a device of mutual trust (bible
 	// chapter 6, PAIR-09, PAIR-12).
@@ -631,7 +632,7 @@ func handleNode() {
 						if p.PairingCode != "" {
 							codeStr = fmt.Sprintf(" [Code: %s]", p.PairingCode)
 						}
-						fmt.Printf("  [%d] %s (%s:%d)%s%s\n", i+1, p.DeviceName, p.HostIP, p.Port, codeStr, trustedAt(nodeTrust, p.HostIP))
+						fmt.Printf("  [%d] %s (%s:%d)%s\n", i+1, listedName(nodeTrust, p), p.HostIP, p.Port, codeStr)
 					}
 				}
 			case "pair":
@@ -1228,6 +1229,7 @@ func runOneShotSend(offer protocol.Offer, files []string, port int, anyPort bool
 	public := &discovery.TransferOffer{FileName: offer.Root, FileSize: offer.TotalBytes, IsBatch: len(offer.Items) > 1}
 	pCode, _, _ := discovery.GeneratePairingCode(getLocalIP())
 	discServer := discovery.NewDiscoveryServer("sender", port, public)
+	discServer.SetTags(announceTagsOf(trust, localID.Fingerprint)) // devices of mutual trust recognize this one (DISC-11)
 	discServer.SetPairingCode(pCode)
 	discServer.Start(ctx)
 
@@ -1637,7 +1639,7 @@ func selectOneShotSender() *discovery.Peer {
 		} else {
 			// What is sent is shown only once both devices have accepted each other.
 			for i, s := range senders {
-				fmt.Printf("  [%d] %s (%s) - transfer waiting%s\n", i+1, s.DeviceName, s.HostIP, trustedAt(trust, s.HostIP))
+				fmt.Printf("  [%d] %s (%s) - transfer waiting\n", i+1, listedName(trust, s), s.HostIP)
 			}
 		}
 		fmt.Print("Select an option or enter pairing code [r to refresh, q to quit]: ")

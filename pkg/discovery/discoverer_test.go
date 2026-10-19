@@ -92,12 +92,13 @@ func (f fixedDiscoverer) Browse(context.Context, time.Duration) ([]Found, error)
 	return f, nil
 }
 
-// One entry per device, mDNS first; this device and incomplete entries are left out.
+// One entry per device, mDNS first, with the tags of every sighting (an mDNS answer may lag
+// behind the beacon after the tags changed); this device and incomplete entries are left out.
 func TestBrowseAllMerges(t *testing.T) {
 	remote := net.IPv4(192, 0, 2, 7) // TEST-NET-1: never a local address
-	mdnsSeen := fixedDiscoverer{{Instance: "medXfer-aa01", IP: remote, Port: 18888, Role: "node", Via: "mdns"}}
+	mdnsSeen := fixedDiscoverer{{Instance: "medXfer-aa01", IP: remote, Port: 18888, Role: "node", Via: "mdns", Tags: []string{"aaaaaaaaaaaaa"}}}
 	beaconSeen := fixedDiscoverer{
-		{Instance: "medXfer-aa01", IP: remote, Port: 18888, Role: "node", Via: "beacon"},
+		{Instance: "medXfer-aa01", IP: remote, Port: 18888, Role: "node", Via: "beacon", Tags: []string{"aaaaaaaaaaaaa", "bbbbbbbbbbbbb"}},
 		{Instance: "medXfer-bb02", IP: net.IPv4(192, 0, 2, 8), Port: 18888, Role: "sender", Via: "beacon"},
 		{Instance: "self", IP: net.IPv4(127, 0, 0, 1), Port: 18888, Via: "beacon"},
 		{Instance: "noport", IP: net.IPv4(192, 0, 2, 9), Via: "beacon"},
@@ -108,8 +109,9 @@ func TestBrowseAllMerges(t *testing.T) {
 			t.Fatalf("merged %+v, want 2 devices", got)
 		}
 		for _, f := range got {
-			if f.IP.Equal(remote) && f.Via != "mdns" {
-				t.Fatalf("the mDNS entry lost to the beacon's: %+v", f)
+			if f.IP.Equal(remote) && (f.Via != "mdns" || !slices.Equal(f.Tags, []string{"aaaaaaaaaaaaa", "bbbbbbbbbbbbb"}) &&
+				!slices.Equal(f.Tags, []string{"bbbbbbbbbbbbb", "aaaaaaaaaaaaa"})) {
+				t.Fatalf("merged as %+v: want the mDNS entry with both tags, once each", f)
 			}
 		}
 	}

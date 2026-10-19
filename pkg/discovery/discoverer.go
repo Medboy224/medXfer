@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,17 @@ const (
 	maxTags   = 16
 	maxTagLen = 32
 )
+
+// dedupTags drops repeated tags, keeping their order.
+func dedupTags(in []string) []string {
+	var out []string
+	for _, t := range in {
+		if !slices.Contains(out, t) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
 
 // cleanTags keeps at most maxTags tags of a sane length and alphabet.
 func cleanTags(in []string) []string {
@@ -115,9 +127,14 @@ func browseAll(ctx context.Context, ds []Discoverer, timeout time.Duration) []Fo
 			byName[f.Instance] = f
 			continue
 		}
+		// The tags of every sighting count: an mDNS answer may lag behind the beacon after the
+		// tags changed (a trust just established, DISC-11).
+		tags := cleanTags(dedupTags(append(append([]string(nil), old.Tags...), f.Tags...)))
 		if better(f, old) {
-			byName[f.Instance] = f
+			old = f
 		}
+		old.Tags = tags
+		byName[f.Instance] = old
 	}
 	out := make([]Found, 0, len(order))
 	for _, name := range order {
