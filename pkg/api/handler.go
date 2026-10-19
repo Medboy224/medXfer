@@ -240,10 +240,7 @@ func (s *DaemonServer) handleSend(rs Responder, req RequestMessage) {
 		return
 	}
 
-	cleanTarget := payload.TargetIP
-	if strings.Contains(cleanTarget, ":") {
-		cleanTarget = strings.Split(cleanTarget, ":")[0]
-	}
+	cleanTarget := targetHost(payload.TargetIP)
 
 	s.mu.RLock()
 	sess := s.activeSession
@@ -579,6 +576,33 @@ func (s *DaemonServer) handleTestDisk(rs Responder, req RequestMessage) {
 	}()
 }
 
+// targetHost is the host of a target given as "host" or "host:port", IPv6 included
+// ("[fe80::1]:18887", "fe80::1"), never cut at its first colon (§3.7, #156).
+func targetHost(target string) string {
+	if host, _, err := net.SplitHostPort(target); err == nil {
+		return host
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(target, "["), "]")
+}
+
+// awaitPong waits up to timeout for the answer to the ping sent at ts, and returns the round
+// trip in milliseconds. A pong of another ping (one that came after its own timeout, in an
+// earlier measurement) is dropped (§3.7, #156).
+func awaitPong(pongs <-chan session.Message, ts int64, timeout time.Duration) (float64, bool) {
+	expired := time.After(timeout)
+	for {
+		select {
+		case pong := <-pongs:
+			if pong.BenchPingTS != ts {
+				continue
+			}
+			return float64(time.Now().UnixNano()-ts) / 1e6, true
+		case <-expired:
+			return 0, false
+		}
+	}
+}
+
 func (s *DaemonServer) handleTestNetwork(rs Responder, req RequestMessage) {
 	s.mu.RLock()
 	sess := s.activeSession
@@ -617,12 +641,8 @@ func (s *DaemonServer) handleTestNetwork(rs Responder, req RequestMessage) {
 				BenchPingTS: t0.UnixNano(),
 			})
 
-			select {
-			case pong := <-s.benchPongChan:
-				rttMs := float64(time.Now().UnixNano()-pong.BenchPingTS) / 1e6
+			if rttMs, ok := awaitPong(s.benchPongChan, t0.UnixNano(), time.Second); ok {
 				rtts = append(rtts, rttMs)
-			case <-time.After(1 * time.Second):
-				// timeout on ping
 			}
 			time.Sleep(20 * time.Millisecond)
 		}

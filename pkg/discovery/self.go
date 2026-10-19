@@ -12,6 +12,10 @@ import (
 // It is recognized by the names it announces, and by the addresses of its network targets
 // (ifconfig under Termux, set_network_info in the app).
 
+// own holds the instance names of this process, for the whole process: a process is one
+// device (the core, a node, a sender). Two devices run in one process (tests) take each other
+// for themselves; they would anyway, by their shared loopback address. A name is drawn at each
+// launch and never reused, so the set only grows by one per discovery server (#156).
 var own struct {
 	mu    sync.RWMutex
 	names map[string]bool

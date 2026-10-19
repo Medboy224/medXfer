@@ -66,8 +66,10 @@ func Parse(s string, now time.Time) (URI, error) {
 	if u.Fingerprint, err = identity.ParseFingerprint(q.Get("fp")); err != nil {
 		return u, fmt.Errorf("%w: %v", ErrNotPairingURI, err)
 	}
-	if ip := net.ParseIP(q.Get("a")); ip == nil {
-		return u, fmt.Errorf("%w: address %q is not an IP address", ErrNotPairingURI, q.Get("a"))
+	// IPv4 only, as every connection of medXfer (tcp4): an IPv6 address would fail only when
+	// dialled (§3.5, #156).
+	if ip := net.ParseIP(q.Get("a")); ip == nil || ip.To4() == nil {
+		return u, fmt.Errorf("%w: address %q is not an IPv4 address", ErrNotPairingURI, q.Get("a"))
 	}
 	u.Host = q.Get("a")
 	if u.Port, err = strconv.Atoi(q.Get("p")); err != nil || u.Port < 1 || u.Port > 65535 {

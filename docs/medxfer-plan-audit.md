@@ -72,7 +72,7 @@ Aussi : bible (nouvelle exigence), schéma v3 et fichier « golden », tableau d
 | §3.4 `main.go` | `selectOneShotSender` boucle sans fin si l'entrée standard est fermée | 🔎 | Fin sur EOF |
 | §3.5 `trust.go` (identity) | `ByAddress` peut rendre au hasard l'un de deux appareils qui ont eu la même adresse (DHCP) : fausse alerte `REFUSED` possible (ID-05) | 🔎 | Une adresse n'appartient qu'au dernier vu ; message qui évoque un changement d'adresse |
 
-### Lot A-4 — Le reste · S
+### Lot A-4 — Le reste · S · ✅
 
 | Audit | Constat | Vérification | Action |
 |---|---|---|---|
@@ -81,10 +81,10 @@ Aussi : bible (nouvelle exigence), schéma v3 et fichier « golden », tableau d
 | §3.6 `collision.go` | `.gitignore` devient `" (1).gitignore"` | 🔎 | Fichiers cachés : `.gitignore (1)` |
 | §3.6 `safepath.go` | Caractère DEL (0x7f) accepté | 🔎 | Refuser |
 | §3.6 `manifest.go` | `GenerateFileIDFromInfo` (MD5) inutilisé | 🔎 | Retirer |
-| §3.6 `diagnostics.go` | `BenchmarkDisk` chronomètre aussi le tirage aléatoire | 🔎 | Sortir de la boucle chronométrée |
+| §3.6 `diagnostics.go` | `BenchmarkDisk` chronomètre aussi le tirage aléatoire | ❎ déjà hors de la boucle (WP-2.6) | Rien |
 | §3.7 `beacon.go` | Goroutine qui attend `ctx` après la fin normale de `Browse` | 🔎 | Arrêt à la fin |
 | §3.7 `self.go` | Noms propres globaux au processus | 🔎 | Documenter ou rattacher au serveur |
-| §3.7 `qr.go` | QR Wi-Fi sans échappement de `;` `:` `\` `,` | 🔎 | Échapper |
+| §3.7 `qr.go` | QR Wi-Fi sans échappement de `;` `:` `\` `,` | ❎ fonction retirée (A-1) | Rien |
 | §3.7 `handler.go` | `handleSend` coupe une IPv6 au premier `:` ; `handleTestNetwork` ne vide pas le canal des réponses | 🔎 | `net.SplitHostPort` ; vider |
 | §3.7 `ui/progress.go` | Pourcentage non borné | 🔎 | Borner à [0, 100] |
 | §3.4 `offer.go` (CLI) | `OnItem` et `OnDiskFull` écrivent sans `e.mu` | 🔎 | Verrou |

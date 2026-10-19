@@ -28,6 +28,9 @@ func SplitNameAndExt(relPath string) (dir, base, ext string) {
 
 	ext = path.Ext(fileName)
 	base = strings.TrimSuffix(fileName, ext)
+	if base == "" { // a hidden file (".gitignore") has no extension: ".gitignore (1)" (#156)
+		base, ext = fileName, ""
+	}
 	return dir, base, ext
 }
 

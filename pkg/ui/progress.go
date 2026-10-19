@@ -17,9 +17,16 @@ func NewProgressBar() *ProgressBar {
 }
 
 func (p *ProgressBar) Render(current, total int64, speedMBps float64) {
+	fmt.Print(p.line(current, total, speedMBps))
+}
+
+// line is the bar's line for current of total bytes.
+func (p *ProgressBar) line(current, total int64, speedMBps float64) string {
 	percent := 0.0
 	if total > 0 {
-		percent = float64(current) / float64(total) * 100
+		// Within [0, 100] whatever the counts say (a resume, a size that changed): a
+		// negative share would make the bar panic (§3.7, #156).
+		percent = min(max(float64(current)/float64(total)*100, 0), 100)
 	}
 
 	elapsed := time.Since(p.startTime).Seconds()
@@ -45,7 +52,7 @@ func (p *ProgressBar) Render(current, total int64, speedMBps float64) {
 	bar := strings.Repeat("█", completed) + strings.Repeat("░", barWidth-completed)
 
 	// \r returns cursor to start, \033[K strictly clears the rest of the line
-	fmt.Printf("\r\033[K[%s] %5.1f%% | %5.1f MB/s | %s", bar, percent, speedMBps, timeStr)
+	return fmt.Sprintf("\r\033[K[%s] %5.1f%% | %5.1f MB/s | %s", bar, percent, speedMBps, timeStr)
 }
 
 func (p *ProgressBar) Finish() {

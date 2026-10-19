@@ -61,6 +61,14 @@ func SetCustomConfigDir(dir string) {
 	customConfigDir = dir
 }
 
+// CustomConfigDir is the folder SetCustomConfigDir set ("" for none): a caller that sets
+// its own puts this one back (#156).
+func CustomConfigDir() string {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	return customConfigDir
+}
+
 // GetConfigFilePath returns the absolute path to config.json
 func GetConfigFilePath() string {
 	configMu.RLock()

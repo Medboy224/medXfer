@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 // writeFileAtomic replaces path with data so that a crash leaves either the old or the new
@@ -38,13 +39,27 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(name, path); err != nil {
+	// On Windows an antivirus or an indexer may hold the file a moment: try again, as
+	// pkg/store does (bible §9.6, #156).
+	for _, wait := range renameTries {
+		time.Sleep(wait)
+		if err = renameFile(name, path); err == nil {
+			break
+		}
+	}
+	if err != nil {
 		return err
 	}
 	ok = true
 	syncDir(dir)
 	return nil
 }
+
+// renameFile renames; tests replace it.
+var renameFile = os.Rename
+
+// renameTries are the waits before each attempt to replace the file.
+var renameTries = []time.Duration{0, 100 * time.Millisecond, 100 * time.Millisecond, 100 * time.Millisecond}
 
 // syncDir makes a rename durable on Unix. Windows cannot open a directory for fsync; NTFS
 // journals the rename itself.

@@ -1,7 +1,6 @@
 package manifest
 
 import (
-	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -13,21 +12,10 @@ import (
 	"github.com/Medboy224/medXfer/pkg/engine"
 )
 
-// GenerateFileIDFromInfo generates a unique hash from os.FileInfo metadata
-func GenerateFileIDFromInfo(info os.FileInfo) string {
-	if info == nil {
-		return ""
-	}
-	h := md5.New()
-	_, _ = fmt.Fprintf(h, "%s-%d-%d", info.Name(), info.Size(), info.ModTime().UnixNano())
-	return fmt.Sprintf("%x", h.Sum(nil))
-}
-
 // Item represents a single file entry in the batch manifest
 type Item struct {
 	RelPath  string `json:"rel_path"` // Normalized relative path using forward slashes (e.g., "docs/notes.txt")
 	Size     int64  `json:"size"`     // Size in bytes
-	FileID   string `json:"file_id"`  // Unique content hash
 	MTime    int64  `json:"mtime"`    // modification time, unix nanoseconds: a changed source is detected (XFER-07)
 	FullPath string `json:"-"`        // Local absolute source path (never serialized to network)
 }
@@ -93,12 +81,10 @@ func Build(paths []string) (*Manifest, error) {
 				}
 
 				normRelPath := name + filepath.ToSlash(relPath)[len(top):]
-				fileID := GenerateFileIDFromInfo(fileInfo)
 
 				items = append(items, Item{
 					RelPath:  normRelPath,
 					Size:     fileInfo.Size(),
-					FileID:   fileID,
 					MTime:    fileInfo.ModTime().UnixNano(),
 					FullPath: path,
 				})
@@ -110,12 +96,10 @@ func Build(paths []string) (*Manifest, error) {
 			}
 		} else if info.Mode().IsRegular() {
 			normRelPath := name
-			fileID := GenerateFileIDFromInfo(info)
 
 			items = append(items, Item{
 				RelPath:  normRelPath,
 				Size:     info.Size(),
-				FileID:   fileID,
 				MTime:    info.ModTime().UnixNano(),
 				FullPath: cleanPath,
 			})

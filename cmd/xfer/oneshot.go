@@ -177,13 +177,17 @@ func startOneShotPairing(ctx context.Context, send *oneShotSend, port int, data 
 			}
 			first = false
 			printReceiveCommand(os.Stdout, u)
+			readyOnce.Do(func() { close(ready) }) // the QR code comes after the PIN
 		}
 	}
 	addr := net.JoinHostPort(getLocalIP(), strconv.Itoa(port))
 	screen := pinScreen(os.Stdout, fmt.Sprintf("xfer recv, then pick this device; or: xfer recv --pin %s", addr))
+	// Ready once both are on screen: the PIN is drawn first, then the QR code (#156).
 	pin := func(code string, expires time.Time) {
 		screen(code, expires)
-		readyOnce.Do(func() { close(ready) })
+		if usePIN {
+			readyOnce.Do(func() { close(ready) })
+		}
 	}
 	p := oneShotPairing{hub: send.hub, id: localID, trust: trust, host: getLocalIP(), port: port, ttl: sendQRTTL,
 		offer: data, follow: follow, before: send.register, shown: shown, pin: pin,

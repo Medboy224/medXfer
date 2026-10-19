@@ -239,13 +239,13 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 	var diagnosisText string
 	switch primaryBottleneck {
 	case "STORAGE":
-		diagnosisText = fmt.Sprintf("⚠️ Goulot d'étranglement Stockage : Latence disque élevée (~%.1f ms). Typique d'un disque dur externe (HDD) ou tampon saturé.", avgDiskLatency)
+		diagnosisText = fmt.Sprintf("⚠️ Storage bottleneck: high disk latency (~%.1f ms), typical of an external hard disk (HDD) or a full write buffer.", avgDiskLatency)
 	case "CPU":
-		diagnosisText = "⚙️ Goulot d'étranglement Processeur : le calcul des SHA-256 limite le débit (appareil lent ou sans accélération matérielle)."
+		diagnosisText = "⚙️ CPU bottleneck: computing the SHA-256 hashes limits the speed (a slow device, or no hardware acceleration)."
 	case "NETWORK":
-		diagnosisText = fmt.Sprintf("⚡ Goulot d'étranglement Réseau : Vitesse limitée par le lien réseau (latence ~%.1f ms). L'écriture disque est rapide et fluide (%.1f ms).", avgNetLatency, avgDiskLatency)
+		diagnosisText = fmt.Sprintf("⚡ Network bottleneck: the network link limits the speed (latency ~%.1f ms); disk writes keep up (%.1f ms).", avgNetLatency, avgDiskLatency)
 	default:
-		diagnosisText = fmt.Sprintf("✓ Transfert optimal et équilibré : Écriture séquentielle continue (latence disque %.1f ms, latence réseau %.1f ms).", avgDiskLatency, avgNetLatency)
+		diagnosisText = fmt.Sprintf("✓ Balanced transfer: continuous sequential writes (disk latency %.1f ms, network latency %.1f ms).", avgDiskLatency, avgNetLatency)
 	}
 
 	r := newReportHeader()

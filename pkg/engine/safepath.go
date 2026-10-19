@@ -58,7 +58,7 @@ func safeRelPath(p string, windowsRules bool) (string, error) {
 
 func hasControlChar(s string) bool {
 	for i := 0; i < len(s); i++ {
-		if s[i] < 0x20 {
+		if s[i] < 0x20 || s[i] == 0x7f { // DEL is a control character too (#156)
 			return true
 		}
 	}

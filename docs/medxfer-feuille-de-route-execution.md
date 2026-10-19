@@ -237,6 +237,8 @@ Ajouté le 18/10/2026 (#150). Dans les scans, un appareil de confiance mutuelle 
 ### Lot « Audit » (avant J6b) · ≈ 2 à 3 jours
 Ajouté le 19/10/2026 (#156) après l'audit externe du 18 octobre. Retrait du point d'accès du cœur (la plateforme s'en charge ; schéma v3), corrections du canal sécurisé, de l'appairage, du cœur, de la frontière C et du moteur, chaque point vérifié par un test. Les constats sur Web Share deviennent des critères de sortie de J7 (#157). Plan : [medxfer-plan-audit.md](medxfer-plan-audit.md).
 
+**Résultat (19/10/2026) :** le lot est terminé (PR #158 à #162, et celle du rapport). Les deux failles critiques ont disparu avec le point d'accès ; 47 constats corrigés, dont 45 par un test qui échouait avant (2 corrections préventives) ; 9 reportés à J6b, J7, J8 ou G4 ; un test instable trouvé et rendu déterministe (#161). Détail dans [report-audit.md](report-audit.md).
+
 ### J6b — Application Flutter MVP · ≈ 8 à 12 jours
 Écrans : liste des appareils, appairage par QR (caméra) et par PIN, envoi (choix de fichiers/dossiers), réception (acceptation avec taille et expéditeur), progression, historique minimal, panneau développeur (`DEV-13`). Android : service de premier plan, destination des fichiers (décision issue de G2A-10), évaluation du point d'accès `LocalOnlyHotspot` quand aucun réseau n'est disponible (`DISC-12`). Windows, Linux : empaquetage. **Critère de sortie :** les gates G2a et G7 évaluées ; scénario complet Android ↔ Windows/Linux au Wi-Fi réel.
 

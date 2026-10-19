@@ -93,7 +93,9 @@ func runCtl(args []string, stdin io.Reader, stdout io.Writer) error {
 			*dir = tmp
 		}
 	}
+	prevConfig := api.CustomConfigDir() // put back: the temporary folder goes when ctl ends (#156)
 	api.SetCustomConfigDir(*configDir)
+	defer api.SetCustomConfigDir(prevConfig)
 
 	srv := api.NewDaemonServer(0, *outDir, *name)
 	ln, err := srv.Listen(0) // the HTTP server, for the Web Share portal

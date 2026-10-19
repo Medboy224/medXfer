@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"github.com/Medboy224/medXfer/pkg/api"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,4 +108,18 @@ func assertNDJSONEvents(t *testing.T, out []byte) []map[string]any {
 		t.Fatal("no event printed")
 	}
 	return events
+}
+
+// Audit §3.4 (#156): xfer ctl puts the process's config folder back: its own temporary one is
+// removed when it ends, and nothing may point there afterwards.
+func TestCtlRestoresTheConfigFolder(t *testing.T) {
+	before := api.CustomConfigDir()
+	script := filepath.Join(t.TempDir(), "status.jsonl")
+	_ = os.WriteFile(script, []byte(`{"expect": {"event": "status"}}`+"\n"), 0o644)
+	if err := runCtl([]string{"--script", script, "--linger", "0s", "--quiet"}, nil, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if after := api.CustomConfigDir(); after != before {
+		t.Fatalf("config folder %q after xfer ctl, was %q", after, before)
+	}
 }

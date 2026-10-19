@@ -277,8 +277,8 @@ func benchNetPeer(stdout io.Writer, addr, code string, size int64, asJSON bool) 
 }
 
 // parseSize reads a byte count with an optional K, M or G suffix (powers of 1024).
-func parseSize(s string) (int64, error) {
-	s = strings.TrimSpace(strings.ToUpper(s))
+func parseSize(input string) (int64, error) {
+	s := strings.TrimSpace(strings.ToUpper(input))
 	s = strings.TrimSuffix(strings.TrimSuffix(s, "IB"), "B")
 	mult := int64(1)
 	if n := len(s); n > 0 {
@@ -293,7 +293,7 @@ func parseSize(s string) (int64, error) {
 	}
 	v, err := strconv.ParseInt(s, 10, 64)
 	if err != nil || v <= 0 || v > (1<<40)/mult {
-		return 0, fmt.Errorf("invalid size %q (examples: 4M, 512K, 1G)", s)
+		return 0, fmt.Errorf("invalid size %q (examples: 4M, 512K, 1G)", input) // as typed (#156)
 	}
 	return v * mult, nil
 }

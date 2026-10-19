@@ -73,4 +73,3 @@ set GOARCH=
 echo.
 echo [-] Build failed. Please check Go compiler output above.
 exit /b 1
-)

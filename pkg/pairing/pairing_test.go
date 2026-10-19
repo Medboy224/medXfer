@@ -408,3 +408,17 @@ func TestJoinCancelEndsTheTrustQuestion(t *testing.T) {
 	}
 	<-done
 }
+
+// Audit §3.5 (#156): the address of a QR code is IPv4, as every connection of medXfer: an IPv6
+// one is refused when read, not left to fail when dialled.
+func TestParseRefusesIPv6(t *testing.T) {
+	inv, err := NewInvitation(TTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shower := device(t, "pc")
+	u := inv.URI(shower.Identity.Fingerprint, "fe80::1", 18887)
+	if _, err := Parse(u.String(), time.Now()); !errors.Is(err, ErrNotPairingURI) {
+		t.Fatalf("Parse of an IPv6 address = %v, want ErrNotPairingURI", err)
+	}
+}
