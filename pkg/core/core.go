@@ -25,8 +25,11 @@ import (
 // trust_answer, pin_needed, pin_requested, trust_offered, trust_established, trust_declined,
 // trust_incomplete; "once" becomes "trust" in the pairing actions. 3: the core no longer
 // creates a hotspot, the platform does (lot « Audit », A1): no more hotspot_start,
-// hotspot_status, hotspot_stop, open_hotspot_settings, hotspot_started, hotspot_stopped.
-const SchemaVersion = 3
+// hotspot_status, hotspot_stop, open_hotspot_settings, hotspot_started, hotspot_stopped. 4: what
+// the application needs (J6b, WP-B.0): trust_list, trust_forget, trust_rename, export_bundle,
+// trusted_devices, bundle_exported; send takes descriptors (items); transfer_progress lists the
+// files in progress (items).
+const SchemaVersion = 4
 
 // DefaultQueueSize bounds the event queue (B11): past it, an event is dropped and counted, and
 // the engine never waits for the interface.

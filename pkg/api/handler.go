@@ -49,6 +49,18 @@ func (s *DaemonServer) dispatch(rs Responder, req RequestMessage) {
 	case "set_network_info":
 		s.handleSetNetworkInfo(rs, req)
 
+	case "trust_list":
+		s.handleTrustList(rs, req)
+
+	case "trust_forget":
+		s.handleTrustForget(rs, req)
+
+	case "trust_rename":
+		s.handleTrustRename(rs, req)
+
+	case "export_bundle":
+		s.handleExportBundle(rs, req)
+
 	case "trust_offer":
 		s.handleTrustOffer(rs, req)
 
@@ -235,8 +247,13 @@ func (s *DaemonServer) handleDisconnect(rs Responder, req RequestMessage) {
 
 func (s *DaemonServer) handleSend(rs Responder, req RequestMessage) {
 	var payload SendPayload
-	if err := json.Unmarshal(req.Payload, &payload); err != nil || len(payload.Paths) == 0 {
+	if err := json.Unmarshal(req.Payload, &payload); err != nil {
 		rs.Reply(NewEvent("action_error", map[string]string{"error": "missing or invalid paths"}, req.ID))
+		return
+	}
+	src, err := sourceOf(payload)
+	if err != nil {
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 		return
 	}
 
@@ -248,35 +265,42 @@ func (s *DaemonServer) handleSend(rs Responder, req RequestMessage) {
 
 	// If a specific target IP was provided and we have no session or session is with someone else:
 	if payload.TargetIP != "" && (sess == nil || sess.RemoteIP() != cleanTarget) {
-		go s.connectAndSend(payload.TargetIP, payload.Paths, req.ID)
+		go s.connectAndSend(payload.TargetIP, src, req.ID)
 		return
 	}
 
 	// If we have an active session, send over it
 	if sess != nil {
 		go func() {
-			err := s.sendOverSession(payload.Paths, req.ID)
+			err := s.sendOverSession(src, req.ID)
 			if err != nil && payload.TargetIP != "" {
 				// Old session failed (stale/broken connection), immediately reconnect and retry!
-				s.connectAndSend(payload.TargetIP, payload.Paths, req.ID)
+				s.connectAndSend(payload.TargetIP, src, req.ID)
 			} else if err != nil {
+				src.close()
 				rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 			}
 		}()
 		return
 	}
 
+	src.close()
 	rs.Reply(NewEvent("action_error", map[string]string{"error": "not paired with any device and no target_ip specified"}, req.ID))
 }
 
-func (s *DaemonServer) connectAndSend(targetIP string, paths []string, id string) {
+// connectAndSend pairs with targetIP, then offers src. On any failure src's descriptors are
+// closed: a new send, with new descriptors, tries again.
+func (s *DaemonServer) connectAndSend(targetIP string, src sendSource, id string) {
 	if _, err := s.pairWith(targetIP, nil, false, id); err != nil {
+		src.close()
 		if !errors.Is(err, errPINNeeded) { // pin_needed: send again once paired by PIN
 			s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", targetIP, err)}, id))
 		}
 		return
 	}
-	_ = s.sendOverSession(paths, id)
+	if err := s.sendOverSession(src, id); err != nil {
+		src.close()
+	}
 }
 
 func (s *DaemonServer) handleRespondOffer(rs Responder, req RequestMessage) {

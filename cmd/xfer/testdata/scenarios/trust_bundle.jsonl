@@ -1,0 +1,8 @@
+{"comment": "Golden scenario (DEV-17, WP-B.0): the trusted devices and the diagnostic bundle, as the application manages them."}
+{"expect": {"event": "status"}}
+{"id": "tl", "action": "trust_list"}
+{"expect": {"id": "tl", "event": "trusted_devices", "data": {"devices": []}}}
+{"id": "tf", "action": "trust_forget", "payload": {"fingerprint": "AAAA"}}
+{"expect": {"id": "tf", "event": "action_error"}}
+{"id": "bx", "action": "export_bundle", "payload": {"dir": "${outdir}"}}
+{"expect": {"id": "bx", "event": "bundle_exported", "data": {"path": "*"}}}

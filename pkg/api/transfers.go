@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -29,14 +30,72 @@ var errBusy = errors.New("a transfer is already in progress with this device")
 type outgoingOffer struct {
 	offer protocol.Offer
 	files []string
+	open  []*os.File         // files open already (descriptors), instead of files: closed with the offer
 	l     *transfer.Listener // the offer's data connections, joinable by the peer only (CHAN-06)
 }
 
-// close withdraws the offer: nobody may join it any more.
+// close withdraws the offer: nobody may join it any more, and its descriptors are closed.
 func (o *outgoingOffer) close() {
-	if o != nil && o.l != nil {
+	if o == nil {
+		return
+	}
+	if o.l != nil {
 		o.l.Close()
 	}
+	for _, f := range o.open {
+		_ = f.Close()
+	}
+}
+
+// sendSource is what a send offers: paths, or files open already (STO-16, WP-B.0).
+type sendSource struct {
+	paths []string
+	files []*os.File
+	names []string
+}
+
+// sourceOf reads a send payload. Descriptors become files at once: the core owns them.
+func sourceOf(p SendPayload) (sendSource, error) {
+	if len(p.Items) > 0 && len(p.Paths) > 0 {
+		for _, it := range p.Items {
+			if it.FD >= 0 {
+				_ = os.NewFile(uintptr(it.FD), it.Name).Close()
+			}
+		}
+		return sendSource{}, errors.New("send: paths or items, not both")
+	}
+	if len(p.Items) == 0 {
+		if len(p.Paths) == 0 {
+			return sendSource{}, errors.New("missing or invalid paths")
+		}
+		return sendSource{paths: p.Paths}, nil
+	}
+	var src sendSource
+	for _, it := range p.Items {
+		if it.FD < 0 {
+			src.close()
+			return sendSource{}, fmt.Errorf("send: invalid descriptor %d", it.FD)
+		}
+		src.files = append(src.files, os.NewFile(uintptr(it.FD), it.Name))
+		src.names = append(src.names, it.Name)
+	}
+	return src, nil
+}
+
+// close closes the source's descriptors: the send did not go through.
+func (src sendSource) close() {
+	for _, f := range src.files {
+		_ = f.Close()
+	}
+}
+
+// offer describes the source as one offer.
+func (src sendSource) offer(chunk uint32) (protocol.Offer, []string, error) {
+	if src.files != nil {
+		offer, err := transfer.BuildOfferFiles(src.files, src.names, chunk)
+		return offer, nil, err
+	}
+	return transfer.BuildOffer(src.paths, chunk)
 }
 
 // offerName is how the dashboard names an offer.
@@ -137,10 +196,11 @@ func (s *DaemonServer) dropTransfers() {
 	s.lastOffered, s.pendingOffer, s.incomingOffer = nil, nil, nil
 }
 
-// sendOverSession offers paths to the paired device: one offer, joinable from now on by
+// sendOverSession offers src to the paired device: one offer, joinable from now on by
 // that device only (CHAN-06). A new offer replaces the previous one; none is made while a
-// transfer is active (LIM-08).
-func (s *DaemonServer) sendOverSession(paths []string, reqID string) error {
+// transfer is active (LIM-08). Once the offer is made, it owns src's descriptors; on an error,
+// the caller still does (it may try again on a new session).
+func (s *DaemonServer) sendOverSession(src sendSource, reqID string) error {
 	s.mu.RLock()
 	sess := s.activeSession
 	devName := s.config.DeviceName
@@ -158,7 +218,7 @@ func (s *DaemonServer) sendOverSession(paths []string, reqID string) error {
 		return fail(errBusy)
 	}
 
-	offer, files, err := transfer.BuildOffer(paths, chunk)
+	offer, files, err := src.offer(chunk)
 	if err != nil {
 		return fail(err)
 	}
@@ -167,7 +227,7 @@ func (s *DaemonServer) sendOverSession(paths []string, reqID string) error {
 		return fail(err)
 	}
 	offer.TransferID = tid.String()
-	o := &outgoingOffer{offer: offer, files: files, l: tl}
+	o := &outgoingOffer{offer: offer, files: files, open: src.files, l: tl}
 
 	s.mu.Lock()
 	s.lastOffered.close()
@@ -185,7 +245,7 @@ func (s *DaemonServer) sendOverSession(paths []string, reqID string) error {
 				s.lastOffered = nil
 			}
 			s.mu.Unlock()
-			o.close()
+			o.l.Close() // withdrawn; its descriptors stay with the caller, which may try again
 			return fail(fmt.Errorf("failed sending offer: %w", err))
 		}
 	}
@@ -423,7 +483,13 @@ func (s *DaemonServer) serveAccepted(msg session.Message) {
 	go func() {
 		defer o.close()
 		defer s.endTransfer(o.offer.TransferID)
-		sender, err := transfer.NewSender(o.offer, o.files)
+		var sender *transfer.Sender
+		var err error
+		if o.open != nil {
+			sender, err = transfer.NewSenderFiles(o.offer, o.open)
+		} else {
+			sender, err = transfer.NewSender(o.offer, o.files)
+		}
 		if err != nil {
 			s.Broadcast(NewEvent("transfer_error", map[string]string{"file": offerName(o.offer), "error": err.Error()}))
 			return
@@ -650,6 +716,17 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 	if current >= 0 && current < len(e.offer.Items) {
 		name = e.offer.Items[current].Path
 	}
+	file := fileProgress(e.offer, p, current, percent)
+	if file.Path != "" {
+		name = file.Path
+	}
+	var items []ItemProgressData
+	for _, a := range p.Active {
+		if a.Item >= 0 && a.Item < len(e.offer.Items) {
+			items = append(items, ItemProgressData{Index: a.Item, Path: e.offer.Items[a.Item].Path,
+				Bytes: a.Bytes, Size: a.Size, Percent: share(a.Bytes, a.Size)})
+		}
+	}
 
 	s.RecordTransferSample(engine.TransferStats{
 		BytesTransferred: p.Bytes, TotalBytes: p.Total, SpeedMBps: p.SpeedMBps,
@@ -658,18 +735,53 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 
 	s.Broadcast(NewEvent("transfer_progress", TransferProgressData{
 		CurrentFile:     name,
-		FileIndex:       min(p.ItemsDone+1, p.Items),
+		FileIndex:       file.Index + 1,
 		TotalFiles:      p.Items,
-		FileBytes:       p.Bytes,
-		FileTotalBytes:  p.Total,
+		FileBytes:       file.Bytes,
+		FileTotalBytes:  file.Size,
 		BatchBytes:      p.Bytes,
 		BatchTotalBytes: p.Total,
 		SpeedMBps:       speed,
-		FilePercent:     percent,
+		FilePercent:     file.Percent,
 		BatchPercent:    percent,
 		EtaSeconds:      eta,
 		IsPaused:        paused,
+		Items:           items,
 	}))
+}
+
+// share is done of size in percent; an empty file is whole.
+func share(done, size int64) float64 {
+	if size <= 0 {
+		return 100
+	}
+	return min(float64(done)/float64(size)*100, 100)
+}
+
+// fileProgress is the file the progress shows (WP-B.0): the first item in progress, not the
+// batch, which made both bars show the same percentage. A single file is the batch. Between
+// two files, the item the transfer is at, empty or, at the end, whole.
+func fileProgress(offer protocol.Offer, p transfer.Progress, current int, batchPercent float64) ItemProgressData {
+	if len(p.Active) > 0 {
+		a := p.Active[0]
+		if a.Item >= 0 && a.Item < len(offer.Items) {
+			return ItemProgressData{Index: a.Item, Path: offer.Items[a.Item].Path, Bytes: a.Bytes, Size: a.Size,
+				Percent: share(a.Bytes, a.Size)}
+		}
+	}
+	if len(offer.Items) == 1 {
+		return ItemProgressData{Path: offer.Items[0].Path, Bytes: p.Bytes, Size: p.Total, Percent: batchPercent}
+	}
+	i := min(max(current, 0), max(len(offer.Items)-1, 0))
+	if i >= len(offer.Items) {
+		return ItemProgressData{}
+	}
+	size := offer.Items[i].Size
+	done := int64(0)
+	if p.Total > 0 && p.Bytes >= p.Total {
+		done = size
+	}
+	return ItemProgressData{Index: i, Path: offer.Items[i].Path, Bytes: done, Size: size, Percent: share(done, size)}
 }
 
 func (e *daemonEvents) OnItem(ev transfer.ItemEvent) {

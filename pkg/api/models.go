@@ -239,9 +239,19 @@ type PairPayload struct {
 
 // SendPayload parameters for "send" action
 type SendPayload struct {
-	Paths    []string `json:"paths"`
-	TargetIP string   `json:"target_ip,omitempty"` // For one-shot send without pairing
-	Code     string   `json:"code,omitempty"`      // ignored since WP-3.6b: trust comes from the key
+	Paths []string `json:"paths"`
+	// Items are files already open, by descriptor: what an Android system picker gives
+	// (STO-16, WP-B.0). The core owns them from the call on: it closes them once the offer is
+	// withdrawn or refused, the transfer over, or the send failed. paths or items, not both.
+	Items    []SendItem `json:"items,omitempty"`
+	TargetIP string     `json:"target_ip,omitempty"` // For one-shot send without pairing
+	Code     string     `json:"code,omitempty"`      // ignored since WP-3.6b: trust comes from the key
+}
+
+// SendItem is one file to send, open already: its descriptor, and the name the user sees.
+type SendItem struct {
+	FD   int64  `json:"fd"`
+	Name string `json:"name"`
 }
 
 // RespondOfferPayload parameters for "respond_offer" action
@@ -285,6 +295,18 @@ type TransferProgressData struct {
 	NetReadLatencyMs   float64 `json:"net_read_latency_ms"`
 	Bottleneck         string  `json:"bottleneck,omitempty"`
 	BottleneckReason   string  `json:"bottleneck_reason,omitempty"`
+	// Items are the files in progress, by index (32 at most): several go at once. The file_*
+	// fields above describe the first of them (WP-B.0).
+	Items []ItemProgressData `json:"items,omitempty"`
+}
+
+// ItemProgressData is how far one file of the transfer is.
+type ItemProgressData struct {
+	Index   int     `json:"index"`
+	Path    string  `json:"path"`
+	Bytes   int64   `json:"bytes"`
+	Size    int64   `json:"size"`
+	Percent float64 `json:"percent"`
 }
 
 // IncomingOfferData payload sent when a remote peer wants to send a file/batch
