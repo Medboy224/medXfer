@@ -1,0 +1,19 @@
+{
+  "@@locale": "fr",
+  "appTitle": "medXfer",
+  "tabHistory": "Historique",
+  "tabApps": "Apps",
+  "tabPhotos": "Photos",
+  "tabVideos": "Vidéos",
+  "tabMusic": "Musique",
+  "tabFiles": "Fichiers",
+  "onThisDevice": "Sur cet appareil",
+  "selectAll": "Tout sélectionner",
+  "connect": "Connecter",
+  "scanQr": "Scanner un QR pour rejoindre",
+  "settings": "Réglages",
+  "comingSoon": "Arrive dans les prochaines étapes de l'application.",
+  "coreStarting": "Démarrage…",
+  "coreReady": "Prêt · {device}",
+  "coreFailed": "Le cœur n'a pas démarré : {error}"
+}
