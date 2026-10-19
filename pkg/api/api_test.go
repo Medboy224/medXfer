@@ -298,14 +298,6 @@ func TestFolderGranularBatchTransfer(t *testing.T) {
 }
 
 func TestQRGeneration(t *testing.T) {
-	wifiQR, err := GenerateWiFiQRDataURI("medXfer-Test", "secret1234", 128)
-	if err != nil {
-		t.Fatalf("Failed to generate WiFi QR: %v", err)
-	}
-	if !strings.HasPrefix(wifiQR, "data:image/png;base64,") {
-		t.Fatalf("Expected data-uri prefix, got: %s", wifiQR[:30])
-	}
-
 	urlQR, err := GenerateURLQRDataURI("http://192.168.137.1:18888/share", 128)
 	if err != nil {
 		t.Fatalf("Failed to generate URL QR: %v", err)

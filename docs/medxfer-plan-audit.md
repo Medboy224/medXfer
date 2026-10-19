@@ -28,7 +28,7 @@ Statuts de vérification :
 
 ## 2. Les lots
 
-### Lot A-1 — Retrait du point d'accès du cœur · S
+### Lot A-1 — Retrait du point d'accès du cœur · S · ✅
 
 | Audit | Constat | Vérification | Action |
 |---|---|---|---|
@@ -124,7 +124,7 @@ Aussi : bible (nouvelle exigence), schéma v3 et fichier « golden », tableau d
 ## 3. Bible
 
 - `WEB-02` (pas de cookie), `WEB-03` (comparaison en temps constant, 5 essais) et `WEB-08` (`ReadHeaderTimeout`) étaient marquées ✅, alors que le code de transition ne les tient pas : elles repassent à 📏 J7 (fait avec ce plan).
-- Nouvelle exigence pour le point d'accès (A1).
+- Nouvelle exigence pour le point d'accès : `DISC-12` (A1, fait avec A-1).
 - Le dossier G4 reçoit les remarques sur `pkg/pake` (A3).
 
 ## 4. Hors périmètre

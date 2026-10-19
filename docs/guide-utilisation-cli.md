@@ -4,7 +4,7 @@
 
 ## 1. L'essentiel en 30 secondes
 
-Les deux appareils doivent être sur le **même réseau** (même Wi-Fi, ou le point d'accès de l'un des deux).
+Les deux appareils doivent être sur le **même réseau** (même Wi-Fi, ou le point d'accès de l'un des deux). `xfer` ne crée pas ce point d'accès : activez-le dans les réglages du téléphone ou du PC.
 
 | Je veux… | Sur l'appareil qui envoie | Sur l'appareil qui reçoit |
 |---|---|---|

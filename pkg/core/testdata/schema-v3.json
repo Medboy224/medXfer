@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "actions": [
     "accept_web_upload",
     "cancel",
@@ -7,10 +7,6 @@
     "disconnect",
     "get_status",
     "get_transfer_summary",
-    "hotspot_start",
-    "hotspot_status",
-    "hotspot_stop",
-    "open_hotspot_settings",
     "pair",
     "pair_pin",
     "pair_pin_show",
@@ -54,9 +50,6 @@
     "file_paused",
     "file_resumed",
     "file_skipped",
-    "hotspot_started",
-    "hotspot_status",
-    "hotspot_stopped",
     "incoming_offer",
     "item_completed",
     "item_failed",

@@ -213,54 +213,6 @@ const IndexHTML = `<!DOCTYPE html>
             </div>
           </div>
         </div>
-
-        <!-- Offline Hotspot & Zero-Install Web Share Card -->
-        <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <label style="margin: 0; font-weight: 600;">📡 Offline Direct AP Hotspot</label>
-            <span id="hotspotBadge" style="font-size: 11px; background: #334155; padding: 2px 8px; border-radius: 10px;">OFFLINE</span>
-          </div>
-
-          <div id="hotspotInactiveBox">
-            <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
-              <select id="hotspotBandSelect" style="padding: 6px 10px; font-size: 12px; width: 45%;">
-                <option value="5ghz">5 GHz (Preferred)</option>
-                <option value="2.4ghz">2.4 GHz (Legacy)</option>
-              </select>
-              <button id="startHotspotBtn" class="btn btn-secondary" style="width: 55%; font-size: 12px; padding: 6px 10px;" onclick="toggleHotspot(true)">⚡ Start Hotspot</button>
-            </div>
-            <button class="btn btn-secondary" style="width: 100%; font-size: 11px; padding: 6px; margin-bottom: 8px;" onclick="sendCmd('open_hotspot_settings')">⚙️ Open Windows 5 GHz Mobile Hotspot Settings</button>
-            <div style="font-size: 11px; color: var(--muted);">Direct P2P hotspot for phone-to-PC file transfer when no Wi-Fi router is available.</div>
-          </div>
-
-          <div id="hotspotActiveBox" style="display: none; background: #0b1120; border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-              <div>
-                <div style="font-size: 13px; font-weight: 600; color: #60a5fa;" id="hotspotSSIDDisplay">SSID: medXfer-XXXX</div>
-                <div style="font-size: 12px; color: var(--muted);" id="hotspotPassDisplay">Pass: XXXXXXXX</div>
-              </div>
-              <button class="btn btn-danger" style="width: auto; padding: 4px 10px; font-size: 12px;" onclick="toggleHotspot(false)">Stop Hotspot</button>
-            </div>
-
-            <!-- Dual QR Codes: Wi-Fi + Web Portal -->
-            <div style="display: flex; gap: 12px; justify-content: center; margin-top: 10px; text-align: center;">
-              <div>
-                <img id="wifiQRCodeImg" style="width: 105px; height: 105px; border-radius: 6px; background: white; padding: 4px;" alt="Wi-Fi QR">
-                <div style="font-size: 10px; color: var(--muted); margin-top: 4px;">1. Scan to Connect</div>
-              </div>
-              <div>
-                <img id="portalQRCodeImg" style="width: 105px; height: 105px; border-radius: 6px; background: white; padding: 4px;" alt="Portal QR">
-                <div style="font-size: 10px; color: var(--muted); margin-top: 4px;">2. Scan to Open Web</div>
-              </div>
-            </div>
-            <div style="text-align: center; margin-top: 8px;">
-              <a id="hotspotPortalLink" href="/share" target="_blank" style="font-size: 11px; color: #60a5fa; text-decoration: none;">🔗 Open Mobile Share Portal</a>
-            </div>
-
-            <!-- Warning Banner when locked to 2.4GHz by connected router -->
-            <div id="hotspotWarningBanner" style="display: none; background: #451a03; border: 1px solid #d97706; border-radius: 6px; padding: 8px; font-size: 11px; color: #fbbf24; margin-top: 10px;"></div>
-          </div>
-        </div>
       </div>
 
       <!-- Network Discovery & Transfer Card -->
@@ -642,7 +594,6 @@ const IndexHTML = `<!DOCTYPE html>
         document.getElementById("connectionStatus").className = "badge badge-online";
         document.getElementById("connectionStatus").innerText = "CONNECTED";
         log("SYSTEM", "WebSocket connected to " + url);
-        sendCmd("hotspot_status");
       };
 
       ws.onclose = () => {
@@ -1040,42 +991,6 @@ const IndexHTML = `<!DOCTYPE html>
           const errMsg = msg.data && msg.data.error ? msg.data.error : "Unknown error";
           alert("Transfer Error: " + errMsg);
           break;
-        case "hotspot_started":
-        case "hotspot_status":
-          const startBtn = document.getElementById("startHotspotBtn");
-          if (startBtn) { startBtn.innerText = "⚡ Start Hotspot"; startBtn.disabled = false; }
-          if (msg.data && msg.data.active) {
-            document.getElementById("hotspotBadge").innerText = "ONLINE (" + (msg.data.band || "5 GHz") + ")";
-            document.getElementById("hotspotBadge").style.background = "var(--success)";
-            document.getElementById("hotspotInactiveBox").style.display = "none";
-            document.getElementById("hotspotActiveBox").style.display = "block";
-            document.getElementById("hotspotSSIDDisplay").innerText = "SSID: " + msg.data.ssid;
-            document.getElementById("hotspotPassDisplay").innerText = "Pass: " + msg.data.password;
-            if (msg.data.qr_wifi) document.getElementById("wifiQRCodeImg").src = msg.data.qr_wifi;
-            if (msg.data.qr_portal) document.getElementById("portalQRCodeImg").src = msg.data.qr_portal;
-            if (msg.data.portal_url) document.getElementById("hotspotPortalLink").href = msg.data.portal_url;
-
-            if (msg.data.warning) {
-              document.getElementById("hotspotWarningBanner").style.display = "block";
-              document.getElementById("hotspotWarningBanner").innerText = "⚠️ " + msg.data.warning;
-            } else {
-              document.getElementById("hotspotWarningBanner").style.display = "none";
-            }
-          } else {
-            document.getElementById("hotspotBadge").innerText = "OFFLINE";
-            document.getElementById("hotspotBadge").style.background = "#334155";
-            document.getElementById("hotspotInactiveBox").style.display = "block";
-            document.getElementById("hotspotActiveBox").style.display = "none";
-            document.getElementById("hotspotWarningBanner").style.display = "none";
-          }
-          break;
-        case "hotspot_stopped":
-          document.getElementById("hotspotBadge").innerText = "OFFLINE";
-          document.getElementById("hotspotBadge").style.background = "#334155";
-          document.getElementById("hotspotInactiveBox").style.display = "block";
-          document.getElementById("hotspotActiveBox").style.display = "none";
-          document.getElementById("hotspotWarningBanner").style.display = "none";
-          break;
         case "web_files_shared":
           document.getElementById("webSharedFilesSummary").style.display = "block";
           document.getElementById("webSharedFilesCount").innerText = msg.data.count + " item(s) (" + formatMB(msg.data.total_bytes || msg.data.size) + ")";
@@ -1372,17 +1287,6 @@ const IndexHTML = `<!DOCTYPE html>
           isSharingWeb = false;
           if (btn) btn.innerText = origText;
         }, 800);
-      }
-    }
-
-    function toggleHotspot(start) {
-      if (start) {
-        const band = document.getElementById("hotspotBandSelect").value;
-        const btn = document.getElementById("startHotspotBtn");
-        if (btn) { btn.innerText = "Starting..."; btn.disabled = true; }
-        sendCmd("hotspot_start", { band: band });
-      } else {
-        sendCmd("hotspot_stop");
       }
     }
 

@@ -23,7 +23,6 @@ import (
 	"github.com/Medboy224/medXfer/pkg/diag"
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/engine"
-	"github.com/Medboy224/medXfer/pkg/hotspot"
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/pairing"
@@ -72,9 +71,6 @@ type DaemonServer struct {
 	currentBatchItems  []BatchFileInfo // the queue the dashboard shows
 	sessionGraceTimer  *time.Timer
 	isReconnecting     bool
-	hotspotCtrl        hotspot.Controller
-	activeHotspot      *hotspot.NetworkInfo
-	hotspotMu          sync.Mutex
 	httpPort           int
 
 	authFailMu   sync.Mutex
@@ -619,13 +615,6 @@ func (s *DaemonServer) Stop() {
 	if httpSrv != nil {
 		_ = httpSrv.Close()
 	}
-	s.hotspotMu.Lock()
-	if s.hotspotCtrl != nil {
-		_ = s.hotspotCtrl.Stop()
-		s.hotspotCtrl = nil
-		s.activeHotspot = nil
-	}
-	s.hotspotMu.Unlock()
 }
 
 // isLoopbackRequest checks whether an incoming HTTP request originated from localhost

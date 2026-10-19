@@ -14,8 +14,3 @@ func PrintTerminalQR(content string) {
 	}
 	fmt.Println(qr.ToSmallString(false))
 }
-
-func PrintHotspotQR(ssid, password string) {
-	wifiPayload := fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", ssid, password)
-	PrintTerminalQR(wifiPayload)
-}

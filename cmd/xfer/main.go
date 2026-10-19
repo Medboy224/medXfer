@@ -23,7 +23,6 @@ import (
 	"github.com/Medboy224/medXfer/pkg/diag"
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/engine"
-	"github.com/Medboy224/medXfer/pkg/hotspot"
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/protocol"
@@ -1125,7 +1124,6 @@ func handleSend(args []string) {
 	sendCmd := flag.NewFlagSet("send", flag.ExitOnError)
 	portFlag := sendCmd.Int("port", defaultPort, "TCP port of this device (pairing and data); if the default one is taken, a free one")
 	chunkSizeMB := sendCmd.Int("chunk", protocol.DefaultChunkSize>>20, "Chunk size in MB (1 to 8)")
-	createNetwork := sendCmd.Bool("create-network", false, "Create a dedicated Wi-Fi Direct network")
 	pinFlag := sendCmd.Bool("pin", false, "show only the PIN, without the QR code")
 	trustFlag := sendCmd.Bool("trust", false, "offer mutual trust to the receiver (both must accept)")
 	var interactive bool
@@ -1157,26 +1155,13 @@ func handleSend(args []string) {
 	}
 	portSet := false
 	sendCmd.Visit(func(f *flag.Flag) { portSet = portSet || f.Name == "port" })
-	runOneShotSend(offer, files, *portFlag, !portSet, *createNetwork, interactive, *pinFlag, *trustFlag, trust)
+	runOneShotSend(offer, files, *portFlag, !portSet, interactive, *pinFlag, *trustFlag, trust)
 }
 
 // runOneShotSend offers files on the device's single port: the receiver pairs on it (QR code,
 // or both users' confirmation), then pulls the whole offer on its data connections.
 // anyPort lets it take a free port when port is taken (another medXfer on this device).
-func runOneShotSend(offer protocol.Offer, files []string, port int, anyPort bool, createHotspot bool, interactive bool, usePIN, offerTrust bool, trust *identity.TrustStore) {
-	var hs hotspot.Controller
-	if createHotspot {
-		hs = hotspot.New()
-		ssid, pass := hotspot.GenerateCredentials()
-		fmt.Println("[*] Creating dedicated Wi-Fi Direct network...")
-		if netInfo, err := hs.Start(hotspot.Config{SSID: ssid, Password: pass, Band: hotspot.Band5GHz}); err == nil {
-			defer func() { fmt.Println("\n[*] Tearing down Wi-Fi Direct network..."); _ = hs.Stop() }()
-			fmt.Printf(" [NETWORK READY] %s (%s, Channel %d)\n Password: %s\n", netInfo.SSID, netInfo.Band, netInfo.Channel, netInfo.Password)
-		} else {
-			fmt.Printf("[-] Network Creation Failed: %v\n", err)
-		}
-	}
-
+func runOneShotSend(offer protocol.Offer, files []string, port int, anyPort bool, interactive bool, usePIN, offerTrust bool, trust *identity.TrustStore) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
