@@ -16,6 +16,7 @@ dependencies:
   ffi: ^2.2.0           # the core's C library (lib/core/ffi_core.dart)
   intl: any             # the version flutter_localizations pins
   path: any             # the version Flutter pins
+  qr: ^4.0.0
 
 dev_dependencies:
   flutter_test:

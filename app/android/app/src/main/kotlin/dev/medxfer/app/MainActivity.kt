@@ -15,6 +15,7 @@ import org.json.JSONObject
 class MainActivity : FlutterActivity() {
     private val hotspot by lazy { LocalHotspot(this) }
     private val join by lazy { WifiJoin(this) }
+    private val network by lazy { Network(this) }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -27,6 +28,9 @@ class MainActivity : FlutterActivity() {
                     "downloadDir" -> result.success(
                         File(getExternalFilesDir(null) ?: filesDir, "medXfer").absolutePath
                     )
+                    // The interfaces the core cannot list by itself (DISC-10), the multicast lock (DISC-03).
+                    "networkInterfaces" -> result.success(network.interfaces())
+                    "multicast" -> { network.multicast(call.argument<Boolean>("on") == true); result.success(null) }
                     // The local access point (DISC-12, WP-B.7).
                     "hotspotStart" -> hotspot.start { info, err ->
                         if (err != null) result.error("hotspot", err, null) else result.success(info)

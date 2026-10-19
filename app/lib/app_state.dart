@@ -6,16 +6,22 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'connection/connection.dart';
 import 'core/core.dart';
 import 'platform/folders.dart';
+import 'platform/network.dart';
 
 enum CoreStatus { starting, ready, failed }
 
 class AppState extends ChangeNotifier {
-  AppState({required this.core, required this.folders});
+  AppState({required this.core, required this.folders, NetworkInfo network = const NoNetworkInfo()})
+      : connection = Connection(core, network: network);
 
   final Core core;
   final Folders folders;
+
+  /// The other device: pairing, session, trust (WP-B.2). Listens to the core from the start.
+  final Connection connection;
 
   CoreStatus _status = CoreStatus.starting;
   String _deviceName = '';
@@ -39,6 +45,7 @@ class AppState extends ChangeNotifier {
       if (started.schema != coreSchema) {
         return _fail('schema ${started.schema}, this interface speaks $coreSchema');
       }
+      await connection.pushNetwork(); // before the status: its address comes from it (DISC-10)
       final reply = await core.call('get_status');
       final status = reply.first('status');
       if (status != null) _takeStatus(status);
@@ -70,6 +77,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _events?.cancel();
+    connection.dispose();
     super.dispose();
   }
 }

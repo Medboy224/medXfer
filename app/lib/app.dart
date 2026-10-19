@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app_state.dart';
+import 'features/connect/connection_prompts.dart';
 import 'features/home/home_screen.dart';
 import 'l10n/app_localizations.dart';
 import 'settings.dart';
@@ -17,17 +18,32 @@ class AppScope extends InheritedWidget {
   final AppState state;
   final AppSettings settings;
 
-  static AppScope of(BuildContext context) => context.dependOnInheritedWidgetOfExactType<AppScope>()!;
+  /// listen: false in initState, or where a change of scope must not rebuild.
+  static AppScope of(BuildContext context, {bool listen = true}) => listen
+      ? context.dependOnInheritedWidgetOfExactType<AppScope>()!
+      : context.getInheritedWidgetOfExactType<AppScope>()!;
 
   @override
   bool updateShouldNotify(AppScope old) => state != old.state || settings != old.settings;
 }
 
-class MedxferApp extends StatelessWidget {
+class MedxferApp extends StatefulWidget {
   const MedxferApp({super.key, required this.state, required this.settings});
 
   final AppState state;
   final AppSettings settings;
+
+  @override
+  State<MedxferApp> createState() => _MedxferAppState();
+}
+
+class _MedxferAppState extends State<MedxferApp> {
+  // What the other device asks of this user opens above any screen (ConnectionPrompts).
+  final _navigator = GlobalKey<NavigatorState>();
+  final _messenger = GlobalKey<ScaffoldMessengerState>();
+
+  AppState get state => widget.state;
+  AppSettings get settings => widget.settings;
 
   @override
   Widget build(BuildContext context) {
@@ -56,6 +72,14 @@ class MedxferApp extends StatelessWidget {
               GlobalCupertinoLocalizations.delegate,
             ],
             supportedLocales: AppLocalizations.supportedLocales,
+            navigatorKey: _navigator,
+            scaffoldMessengerKey: _messenger,
+            builder: (context, child) => ConnectionPrompts(
+              connection: state.connection,
+              navigator: _navigator,
+              messenger: _messenger,
+              child: child ?? const SizedBox.shrink(),
+            ),
             home: const HomeScreen(),
           );
         },

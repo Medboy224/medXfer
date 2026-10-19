@@ -132,6 +132,10 @@ La sonde du point d'accès passe tôt : certains fabricants restreignent cette f
 - **Écran « Appareils de confiance »** : renommer, oublier.
 - Alerte ID-05 (`REFUSED`) affichée en clair.
 
+**Découpage** (19 octobre) : deux PR.
+- **WP-B.2a**, livré : le modèle `Connection` et tout ce qui précède, sauf la caméra et le point d'accès. Sous Android, l'écran « Connecter » ne marche pas sans les interfaces données au cœur : `set_network_info` et `MulticastLock` sont avancés de WP-B.4 (`lib/platform/network.dart`), envoyés au démarrage et à chaque ouverture de l'écran.
+- **WP-B.2b** : le scan du QR à la caméra (`QrScanner`, décision J5), et l'intégration du point d'accès (WP-B.7) : le QR porte le réseau, le parcours PIN en trois étapes.
+
 ### WP-B.3 — Envoi, réception, historique · M
 
 - **Envoi** :
@@ -145,8 +149,8 @@ La sonde du point d'accès passe tôt : certains fabricants restreignent cette f
 ### WP-B.4 — Android · M
 
 - **Service de premier plan** (`API-08`) pendant l'écoute et les transferts, avec sa notification.
-- **`MulticastLock`** pendant la découverte (`DISC-03`).
-- **`set_network_info`** depuis `ConnectivityManager` (`DISC-10`), renvoyé à chaque changement de réseau.
+- **`MulticastLock`** pendant la découverte (`DISC-03`) : fait en WP-B.2a.
+- **`set_network_info`** (`DISC-10`) : envoyé depuis WP-B.2a au démarrage et à l'ouverture de « Connecter » ; reste à le renvoyer à chaque changement de réseau (`ConnectivityManager`).
 - **Réception** dans `Download/medXfer/` par chemin (`STO-15`).
 - **Stockage** (décision J2) :
   - réception dans `medXfer/` à la racine du stockage partagé, rangée par type (`Apps`, `Photos`, `Vidéos`, `Musique`, `Fichiers`) ;
