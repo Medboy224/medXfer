@@ -15,6 +15,8 @@ Les deux appareils doivent être sur le **même réseau** (même Wi-Fi, ou le po
 
 `xfer send` affiche **à la fois** le QR code et le PIN. `ADRESSE` est affichée par l'émetteur, par exemple `10.86.69.174:18887`. Tous les modes de medXfer utilisent ce même port, 18887.
 
+Dans la liste, un appareil inconnu apparaît sous un nom générique (`medXfer-3fa2`), un appareil de confiance mutuelle sous **son nom** : `[1] PC de Naruto (trusted)` (§3).
+
 Pour recevoir dans un autre dossier : `xfer recv … --out DOSSIER`.
 
 ## 2. Pourquoi parfois un PIN, parfois rien ?
@@ -47,6 +49,8 @@ Deux appareils qui se servent souvent l'un de l'autre peuvent se faire confiance
 
 Si les deux acceptent, chacun enregistre l'autre (`xfer trust list`). Sinon, rien n'est enregistré, et le transfert a lieu quand même.
 
+Ensuite, dans les listes (`xfer recv`, `scan` de `xfer node`), chacun voit l'autre **sous son nom**, suivi de « (trusted) ». Ce nom ne passe jamais sur le réseau : les autres appareils ne voient que `medXfer-xxxx`. Chaque appareil reconnaît l'autre grâce à une étiquette secrète qui change toutes les 10 minutes, jamais grâce à son adresse, qu'un autre appareil pourrait prendre.
+
 La confiance reste **mutuelle** : si l'un des deux oublie l'autre (`xfer trust forget`), elle cesse **pour les deux**, et l'autre est prévenu (« … no longer trusts … ») avant de repasser par le PIN.
 
 Si un appareil connu se présente un jour avec une **autre** empreinte, medXfer refuse et affiche `REFUSED` : c'est le signe d'une possible interception.
@@ -68,13 +72,16 @@ Si l'autre côté refuse, la commande le dit, et rien n'est enregistré.
 |---|---|
 | `xfer id` | L'empreinte de cet appareil |
 | `xfer trust list` | Les appareils de confiance |
-| `xfer trust forget EMPREINTE` | Oublier un appareil : la confiance cesse pour les deux, il faudra de nouveau le QR ou le PIN |
+| `xfer trust forget EMPREINTE` | Oublier un appareil : la confiance cesse pour les deux, il faudra de nouveau le QR ou le PIN, et il ne s'affiche plus sous son nom |
+| `xfer trust rename EMPREINTE NOM` | Renommer un appareil de confiance, **chez vous seulement** ; le nom qu'il envoie ne le remplacera plus |
+| `xfer name [NOM]` | Afficher ou choisir le nom de cet appareil, celui que les autres verront une fois la confiance établie. Par défaut : le nom de la machine, ou le modèle du téléphone sous Android |
 
 ## 6. Mode interactif : `xfer node`
 
 `xfer node` garde une session ouverte, pratique pour plusieurs envois de suite au même appareil. Ses commandes :
 
-- `scan`, puis `pair <n>` : appairer l'appareil n° n de la liste. L'autre appareil affiche un PIN (« it must type this PIN »), que vous tapez ici. `pair <ip>`, `pair <ip:port>` et `pair <code>` marchent aussi. Avec un appareil de confiance mutuelle, pas de PIN ;
+- `scan` : la liste des appareils, les appareils de confiance mutuelle sous leur nom ;
+- `pair <n>` : appairer l'appareil n° n de la liste. L'autre appareil affiche un PIN (« it must type this PIN »), que vous tapez ici. `pair <ip>`, `pair <ip:port>` et `pair <code>` marchent aussi. Avec un appareil de confiance mutuelle, pas de PIN ;
 - `pair --show` : afficher un QR code pour l'autre appareil ; `pair --pin` : afficher un PIN à l'avance ;
 - `trust` : proposer la confiance mutuelle à l'appareil appairé ; `--trust` sur `pair` fait de même dès l'appairage ;
 - `send <fichier>`, `stop`, `disconnect`, `exit`.
