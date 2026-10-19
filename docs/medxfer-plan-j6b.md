@@ -7,6 +7,8 @@
 >
 > L'interface est **fluide, animée et personnalisable**, et tourne aussi sur des téléphones anciens (§1.1).
 >
+> **On se connecte d'abord, puis on envoie, dans les deux sens** (§1.2). Quand aucun réseau n'est disponible, le téléphone crée lui-même un **point d'accès** depuis l'application, que l'autre appareil rejoint par QR ou par PIN.
+>
 > **Critère de sortie :** scénario complet Android ↔ Windows et Android ↔ Linux au Wi-Fi réel, depuis l'application :
 > - appairage par QR et par PIN ;
 > - confiance mutuelle ;
@@ -64,14 +66,36 @@ L'explorateur Android (WP-B.9) passe par l'interface `Library` (`lib/platform/li
 
 Ces exigences sont vérifiées à la fin de chaque lot sur le téléphone de test et, pour UI-1 et UI-2, sur l'appareil le plus ancien disponible.
 
+### 1.2 Le parcours (maquettes validées le 19 octobre 2026)
+
+Une page de maquettes cliquables (dix écrans) a fixé le parcours avant le code :
+
+- **Accueil** :
+  - onglets en haut : Historique, Apps, Photos, Vidéos, Musique, Fichiers ;
+  - une ligne « Sur cet appareil » avec un cercle « tout sélectionner » ;
+  - applications et photos en grille ;
+  - un panier en bas (nombre et taille), et un grand bouton **Connecter**.
+- **Se connecter d'abord** :
+  - choisir des fichiers ne demande pas d'être connecté, mais l'envoi, si ;
+  - une fois connectés, les deux appareils envoient et reçoivent autant qu'ils veulent, et un bandeau rappelle à qui l'on est connecté.
+  - Le cœur le permet déjà : la session reste ouverte après l'appairage.
+- **Connecter** :
+  - **créer un point d'accès** : ce téléphone crée son réseau et affiche un QR, qui porte le réseau et l'appairage. Pour un appareil sans caméra, il affiche plutôt trois étapes : rejoindre le Wi-Fi (nom et mot de passe affichés), revenir dans medXfer, taper le PIN ;
+  - **rejoindre** : scanner le QR de l'autre, ou taper son PIN ;
+  - les appareils **déjà sur le même Wi-Fi**, ceux de confiance sous leur nom.
+- **Transfert** : la barre du lot et celle de chaque fichier, avec **pause et « passer » par fichier** et pour tout le lot.
+- **Identité visuelle propre à medXfer** (décision J15) : thème clair par défaut, accent bleu, police Figtree ; sombre, noir et trois autres accents dans les réglages.
+
 ## 2. Ordre d'exécution
 
 ```
-WP-B.0 cœur, schéma v4 ──► WP-B.1 squelette et frontière ──► WP-B.2 appareils et appairage ──► WP-B.3 envoi, réception, historique
+WP-B.0 cœur, schéma v4 ──► WP-B.1 squelette et frontière ──► WP-B.7 sonde du point d'accès (tôt, sur le téléphone)
+                                                         ──► WP-B.2 connexion et appairage ──► WP-B.3 envoi, réception, historique
                                                          └─► WP-B.4 Android ──► WP-B.9 explorateur par catégories
 WP-B.3 ──► WP-B.5 panneau développeur, gate G7 ──► WP-B.6 empaquetage ──► WP-B.8 essais réels, guide, rapport
-WP-B.7 évaluation du point d'accès (indépendant, avant WP-B.8)
 ```
+
+La sonde du point d'accès passe tôt : certains fabricants restreignent cette fonction, et le parcours de connexion en dépend.
 
 ## 3. Les lots
 
@@ -96,8 +120,10 @@ WP-B.7 évaluation du point d'accès (indépendant, avant WP-B.8)
 - Construction : `scripts/build-lib.*` produit la bibliothèque ; Gradle (`jniLibs`) et CMake (Windows, Linux) l'embarquent.
 - **CI** : nouveau travail Flutter sous Ubuntu, avec `flutter analyze` et `flutter test` contre `FakeCore`.
 
-### WP-B.2 — Appareils et appairage · M
+### WP-B.2 — Connexion et appairage · M
 
+- **Écran « Connecter »** (§1.2) : créer un point d'accès (WP-B.7), rejoindre, ou choisir un appareil du même Wi-Fi.
+- **Session** : bandeau « Connecté à … », déconnexion ; l'envoi et la réception restent possibles dans les deux sens tant que la session est ouverte.
 - **Liste des appareils** (`scan`) : un appareil de confiance mutuelle apparaît sous son nom, un inconnu sous `medXfer-xxxx`.
 - **Appairage**, dans les deux rôles pour chaque méthode :
   - PIN montré et PIN tapé ;
@@ -113,7 +139,7 @@ WP-B.7 évaluation du point d'accès (indépendant, avant WP-B.8)
   - sous Android, par descripteur (WP-B.4) ;
   - glisser-déposer sur le bureau.
 - **Réception** : une carte « X veut vous envoyer N fichiers (taille) » avec Accepter et Refuser ; l'espace disque manquant est signalé avant d'accepter.
-- **Progression** : vitesse, temps restant ; pause, reprise et annulation par élément et pour tout le transfert ; reconnexion.
+- **Progression** : vitesse, temps restant ; pause, reprise et « passer » **par fichier** (`pause_file`, `resume_file`, `skip_file`) et pour tout le transfert ; reconnexion.
 - **Historique minimal** : les 100 derniers transferts (date, appareil, nombre de fichiers, taille, résultat), gardés par l'application dans son dossier de données. Le bouton « Ouvrir le dossier » ne figure que dans le rôle de réception.
 
 ### WP-B.4 — Android · M
@@ -157,14 +183,21 @@ WP-B.7 évaluation du point d'accès (indépendant, avant WP-B.8)
 - **Android** : APK signé avec une clé de développement. La clé de publication et le Play Store relèvent de J8.
 - Les règles du pare-feu Windows restent pour l'installateur de J8 ; d'ici là, le guide explique comment les poser.
 
-### WP-B.7 — Évaluation du point d'accès local (`DISC-12`) · S
+### WP-B.7 — Point d'accès local (`DISC-12`) : sonde, puis intégration · M
 
-- Prototype Kotlin `WifiManager.startLocalOnlyHotspot`, derrière l'interface `Hotspot`.
+**La sonde**, tôt, sur le téléphone de test :
+- Adaptateur Kotlin `WifiManager.startLocalOnlyHotspot`, derrière l'interface `Hotspot`. Android choisit le nom et le mot de passe du réseau ; l'application les affiche, sans pouvoir les fixer. Ce réseau ne donne pas accès à Internet.
 - Questions à trancher :
-  - un PC ou un autre téléphone peut-il s'y joindre avec le nom et le mot de passe affichés en QR Wi-Fi ?
+  - un autre téléphone le rejoint-il depuis l'application, après le scan du QR (`WifiNetworkSpecifier`, avec l'accord de l'utilisateur demandé une fois par Android) ?
+  - un PC le rejoint-il par ses réglages Wi-Fi ?
   - le transfert y passe-t-il, et à quel débit (bande 2,4 ou 5 GHz, choisie par le système) ?
   - la découverte y fonctionne-t-elle ?
-- Le résultat va dans le rapport de J6b. L'intégration à l'interface ne se fait que si l'évaluation est concluante (décision J9).
+  - le réseau tient-il pendant un long transfert, écran éteint ?
+
+**L'intégration**, si la sonde est concluante :
+- L'URI d'appairage porte en option le nom et le mot de passe du réseau, pour que le QR fasse tout d'un coup. Ces champs sont des secrets du point d'accès : jamais journalisés (chapitre 13).
+- Le parcours en trois étapes pour un appareil sans caméra.
+- Si un téléphone refuse le point d'accès local : un message clair, et l'usage du point d'accès du système, réglé à la main.
 
 ### WP-B.8 — Essais réels, guide, rapport · S
 
@@ -195,8 +228,10 @@ Réponses de l'utilisateur du 19 octobre 2026. Les propositions J4, J5, J7, J8, 
 | J6 | Comment choisir ce qu'on envoie sous Android | ✅ **Dans l'application, par onglets de catégories** (WP-B.9), envoi par chemin. Le sélecteur du système reste le repli. | Remplace la question des dossiers par descripteurs : avec l'accès aux fichiers, un dossier s'envoie par son chemin. |
 | J7 | Langues de l'interface | ✅ **français et anglais dès le départ**. | Anglais seulement pour le MVP. |
 | J8 | Historique | ✅ **gardé par l'application** (100 derniers transferts). | Une action d'historique dans le cœur. |
-| J9 | Point d'accès local (`DISC-12`) | ✅ **évaluer seulement** (WP-B.7), puis intégrer si c'est concluant. | L'intégrer d'office. |
+| J9 | Point d'accès local (`DISC-12`) | ✅ **Au cœur du parcours** (maquettes v2, 19 octobre) : créé depuis l'application, rejoint par QR ou par PIN. Une sonde passe tôt (WP-B.7), avant les écrans. | Si un téléphone le refuse : le point d'accès du système, réglé à la main. |
 | J10 | Le panneau développeur | ✅ Critères de `DEV-19-R`, plus les remarques de l'utilisateur. Première remarque : la progression par fichier (WP-B.0). | D'autres remarques peuvent s'ajouter jusqu'à WP-B.5. |
 | J11 | Empaquetage du MVP | ✅ Windows en dossier portable zippé, Linux en `tar.gz`, Android en APK de développement. | Installateurs dès J6b (prévus en J8). |
-| J12 | Maquettes avant le code | ✅ Oui. **Méthode à choisir** : une page de maquettes cliquables, puis le code Flutter lui-même, essayé sur le téléphone avec le cœur factice. | Le détail de la méthode est donné dans la discussion de la PR. |
+| J12 | Maquettes avant le code | ✅ Une page de maquettes cliquables (deux versions, validée le 19 octobre), puis le code Flutter lui-même, essayé sur le téléphone avec le cœur factice. | — |
 | J13 | Exigences de l'interface (§1.1) | ✅ **Fluide, animée, personnalisable, et capable de tourner sur des téléphones anciens.** | Vérifiées à chaque lot (UI-1 à UI-5). |
+| J14 | Connexion et envoi | ✅ **Se connecter d'abord**, puis envoyer dans les deux sens (§1.2). | Choisir les fichiers, puis l'appareil (la première maquette). |
+| J15 | Identité visuelle | ✅ **Propre à medXfer** : thème clair, accent bleu, Figtree. D'une application prise en référence, on reprend le parcours et la disposition, jamais les couleurs ni l'apparence. | — |
