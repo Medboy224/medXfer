@@ -347,6 +347,9 @@ func (s *DaemonServer) startSession(ch *session.Channel, fp identity.Fingerprint
 	s.isReconnecting = false
 	if s.activeSession != nil && s.activeSession != ch {
 		s.activeSession.Close()
+		if s.trustPeer != fp { // another device: the old one's transfers end with it (§3.7, #156)
+			s.dropTransfers()
+		}
 	}
 	s.activeSession = ch
 	s.pairedDeviceName = name

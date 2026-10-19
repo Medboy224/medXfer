@@ -347,7 +347,10 @@ func (f *File) verify() error {
 			check = append(check, i)
 		}
 	}
-	buf := make([]byte, f.p.ChunkSize)
+	var buf []byte // only when there is something to check (audit §3.6, #156)
+	if len(check) > 0 {
+		buf = make([]byte, f.p.ChunkSize)
+	}
 	for _, i := range check {
 		n := f.chunkLen(i)
 		if _, err := f.part.ReadAt(buf[:n], int64(i)*int64(f.p.ChunkSize)); err != nil || sha256.Sum256(buf[:n]) != f.hashes[i] {
@@ -522,7 +525,10 @@ func (f *File) Close() error {
 // not read as this transfer's, and this transfer made it in this session (STO-09).
 func (f *File) Suspend() error {
 	err := f.Close()
-	if f.journal == nil {
+	f.commitMu.Lock() // a commit in progress may be creating the journal (audit §3.6, #156)
+	noJournal := f.journal == nil
+	f.commitMu.Unlock()
+	if noJournal {
 		if rerr := f.root.Remove(f.osName(PartSuffix)); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
 			err = errors.Join(err, rerr)
 		}
@@ -539,6 +545,8 @@ func (f *File) markClosed() bool {
 }
 
 func (f *File) closeFiles() error {
+	f.commitMu.Lock() // not while a commit writes the journal
+	defer f.commitMu.Unlock()
 	var err error
 	for _, h := range []handle{f.part, f.journal} {
 		if h != nil {

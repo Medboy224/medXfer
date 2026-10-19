@@ -8,8 +8,9 @@
 //
 //	char* medxfer_start(const char* config)    starts the core; idempotent (B4)
 //	char* medxfer_call(const char* request)    {id, action, payload} -> {id, ok, ...}
-//	char* medxfer_next_event(int timeout_ms)   an event, NULL after timeout_ms (0: no wait),
-//	                                           {"event":"core_stopped"} once stopped (B9)
+//	char* medxfer_next_event(int timeout_ms)   an event, NULL after timeout_ms (0: no wait,
+//	                                           negative: no limit), {"event":"core_stopped"}
+//	                                           once stopped (B9)
 //	void  medxfer_stop(void)
 //	void  medxfer_free(char* p)                frees every char* returned here (B1)
 //

@@ -165,23 +165,27 @@ func (c *Core) CallJSON(request []byte) []byte {
 	return out
 }
 
-// NextEvent returns the next event, or false after timeout (0: do not wait) or once Stop has
-// woken every reader (B9).
+// NextEvent returns the next event, or false after timeout (0: do not wait; negative: no
+// limit) or once Stop has woken every reader (B9).
 func (c *Core) NextEvent(timeout time.Duration) (api.EventMessage, bool) {
 	select {
 	case e := <-c.events:
 		return e, true
 	default:
 	}
-	if timeout <= 0 {
+	if timeout == 0 {
 		return api.EventMessage{}, false
 	}
-	t := time.NewTimer(timeout)
-	defer t.Stop()
+	var expired <-chan time.Time // nil with a negative timeout: no limit (§3.3, #156)
+	if timeout > 0 {
+		t := time.NewTimer(timeout)
+		defer t.Stop()
+		expired = t.C
+	}
 	select {
 	case e := <-c.events:
 		return e, true
-	case <-t.C:
+	case <-expired:
 	case <-c.stopCh:
 	}
 	return api.EventMessage{}, false
@@ -212,11 +216,12 @@ func (c *Core) Fingerprint() string { return c.srv.Fingerprint() }
 
 // push queues an event without ever blocking the engine: a full queue drops and counts (B11);
 // progress events closer than progressGap are dropped too, the next one carries the news (B7).
+// The last one, at 100 %, always passes: no other comes after it (audit §3.7, #156).
 func (c *Core) push(e api.EventMessage) {
 	if e.Event == "transfer_progress" {
 		c.mu.Lock()
 		now := time.Now()
-		if now.Sub(c.lastProgress) < progressGap {
+		if now.Sub(c.lastProgress) < progressGap && !finalProgress(e) {
 			c.mu.Unlock()
 			return
 		}
@@ -228,6 +233,12 @@ func (c *Core) push(e api.EventMessage) {
 	default:
 		c.drops.Add(1)
 	}
+}
+
+// finalProgress reports whether e is the progress event of a finished transfer.
+func finalProgress(e api.EventMessage) bool {
+	d, ok := e.Data.(api.TransferProgressData)
+	return ok && (d.BatchPercent >= 100 || (d.BatchTotalBytes > 0 && d.BatchBytes >= d.BatchTotalBytes))
 }
 
 // callResponder gathers the replies a handler gives while Call runs. A reply that comes later

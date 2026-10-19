@@ -86,9 +86,10 @@ func isLocalNetworkIP(ipStr string) bool {
 
 // DiscoveryServer handles incoming discovery queries and emits periodic beacons
 type DiscoveryServer struct {
-	mu   sync.RWMutex
-	peer Peer
-	tags func() []string // the recognition tags to announce (DISC-11)
+	mu     sync.RWMutex
+	peer   Peer
+	tags   func() []string // the recognition tags to announce (DISC-11)
+	probes chan struct{}   // closed once the probe responder has let its port go
 }
 
 // instanceName is the name a device announces: "medXfer-" and 4 hex digits drawn at each
@@ -200,48 +201,7 @@ func (s *DiscoveryServer) beacon(ip string) Peer {
 // Start launches the UDP beacon broadcaster and TCP ingress-reflective responder
 func (s *DiscoveryServer) Start(ctx context.Context) {
 	// 1. TCP Ingress-Reflective Responder
-	go func() {
-		listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", DiscoveryPort))
-		if err != nil {
-			return
-		}
-		defer listener.Close()
-
-		go func() {
-			<-ctx.Done()
-			listener.Close()
-		}()
-
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-
-			go func(c net.Conn) {
-				defer c.Close()
-
-				// Ingress Reflection: Resolve the exact interface IP used by the client
-				localTCPAddr, ok := c.LocalAddr().(*net.TCPAddr)
-				activeIP := ""
-				if ok {
-					activeIP = localTCPAddr.IP.String()
-				}
-
-				// Read optional client query with pairing code
-				var query DiscoveryQuery
-				_ = c.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
-				_ = json.NewDecoder(c).Decode(&query)
-
-				respPeer := s.answer(query, activeIP)
-				data, err := json.Marshal(respPeer)
-				if err == nil {
-					_ = c.SetWriteDeadline(time.Now().Add(1 * time.Second))
-					_, _ = c.Write(data)
-				}
-			}(conn)
-		}
-	}()
+	s.startProbes(ctx, fmt.Sprintf("0.0.0.0:%d", DiscoveryPort))
 
 	// 2. Announce: mDNS on every local interface (DISC-01; Wi-Fi and the phone's own hotspot
 	// alike, #132), and the broadcast beacon on every subnet as fallback (DISC-04). One
@@ -258,6 +218,67 @@ func (s *DiscoveryServer) Start(ctx context.Context) {
 		_ = mdnsDiscoverer{}.Announce(ctx, a)
 	}
 	_ = beaconDiscoverer{port: DiscoveryPort}.Announce(ctx, base)
+}
+
+// startProbes answers the discovery probes on addr (TCP) until ctx ends: each gets this
+// device's answer, with the address the probe came in by. It first waits for the previous
+// responder to let the port go: visibility turned off then on again at once would find it
+// still held, and answer nothing (audit 15b, #156).
+func (s *DiscoveryServer) startProbes(ctx context.Context, addr string) {
+	s.mu.Lock()
+	prev := s.probes
+	s.mu.Unlock()
+	if prev != nil {
+		select {
+		case <-prev:
+		case <-time.After(2 * time.Second): // still serving: its context was not ended
+		}
+	}
+	listener, err := net.Listen("tcp4", addr)
+	if err != nil {
+		return
+	}
+	done := make(chan struct{})
+	s.mu.Lock()
+	s.probes = done
+	s.mu.Unlock()
+	stop := context.AfterFunc(ctx, func() { listener.Close() })
+	go func() {
+		defer close(done)
+		defer stop()
+		defer listener.Close()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go s.answerProbe(conn)
+		}
+	}()
+}
+
+// answerProbe answers one probe and closes its connection.
+func (s *DiscoveryServer) answerProbe(c net.Conn) {
+	defer c.Close()
+
+	// Ingress Reflection: Resolve the exact interface IP used by the client
+	localTCPAddr, ok := c.LocalAddr().(*net.TCPAddr)
+	activeIP := ""
+	if ok {
+		activeIP = localTCPAddr.IP.String()
+	}
+
+	// Read optional client query with pairing code
+	var query DiscoveryQuery
+	_ = c.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+	_ = json.NewDecoder(c).Decode(&query)
+
+	respPeer := s.answer(query, activeIP)
+	data, err := json.Marshal(respPeer)
+	if err == nil {
+		_ = c.SetWriteDeadline(time.Now().Add(1 * time.Second))
+		_, _ = c.Write(data)
+	}
 }
 
 // multicastInterface is the interface that carries this device's announced address, so that

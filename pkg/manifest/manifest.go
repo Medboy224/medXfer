@@ -8,6 +8,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/Medboy224/medXfer/pkg/engine"
 )
 
 // GenerateFileIDFromInfo generates a unique hash from os.FileInfo metadata
@@ -55,12 +58,15 @@ func Build(paths []string) (*Manifest, error) {
 		rootName = fmt.Sprintf("batch_%d_files", len(paths))
 	}
 
+	used := map[string]bool{} // top-level names already given, lower case
 	for _, p := range paths {
 		cleanPath := filepath.Clean(p)
 		info, err := os.Stat(cleanPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to access '%s': %w", p, err)
 		}
+		top := filepath.Base(cleanPath)
+		name := uniqueTop(top, info.IsDir(), used)
 
 		if info.IsDir() {
 			baseDir := filepath.Dir(cleanPath)
@@ -86,7 +92,7 @@ func Build(paths []string) (*Manifest, error) {
 					return err
 				}
 
-				normRelPath := filepath.ToSlash(relPath)
+				normRelPath := name + filepath.ToSlash(relPath)[len(top):]
 				fileID := GenerateFileIDFromInfo(fileInfo)
 
 				items = append(items, Item{
@@ -103,7 +109,7 @@ func Build(paths []string) (*Manifest, error) {
 				return nil, fmt.Errorf("failed scanning directory '%s': %w", p, err)
 			}
 		} else if info.Mode().IsRegular() {
-			normRelPath := filepath.ToSlash(filepath.Base(cleanPath))
+			normRelPath := name
 			fileID := GenerateFileIDFromInfo(info)
 
 			items = append(items, Item{
@@ -132,6 +138,23 @@ func Build(paths []string) (*Manifest, error) {
 		TotalBytes: totalBytes,
 		Items:      items,
 	}, nil
+}
+
+// uniqueTop is the name the path top gets in the offer: top itself, or, when an earlier path
+// already has this name (letter case aside), "top (1)", "top (2)"... as the receiver names a
+// collision (audit §3.6, #156). A file keeps its extension last: "doc (1).pdf".
+func uniqueTop(top string, dir bool, used map[string]bool) string {
+	base, ext := top, ""
+	if !dir {
+		_, base, ext = engine.SplitNameAndExt(top)
+	}
+	for n := 0; ; n++ {
+		name := engine.FormatCandidateName("", base, n, ext)
+		if key := strings.ToLower(name); !used[key] {
+			used[key] = true
+			return name
+		}
+	}
 }
 
 // SummaryString returns a readable summary of the manifest

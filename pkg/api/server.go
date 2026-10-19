@@ -570,15 +570,20 @@ func (s *DaemonServer) serveHTTP(httpLn net.Listener) error {
 	mux.HandleFunc("/api/share/resume", shareHeaders(s.handleShareResume, false))
 	mux.HandleFunc("/api/share/cancel", shareHeaders(s.handleShareCancel, false))
 
-	httpSrv := &http.Server{
-		Handler: mux,
-	}
+	httpSrv := newHTTPServer(mux)
 	s.mu.Lock()
 	s.httpSrv = httpSrv
 	s.mu.Unlock()
 
 	log.Printf("[*] medXfer Headless Daemon started on http://%s (ws://%s/ws)", httpLn.Addr().String(), httpLn.Addr().String())
 	return httpSrv.Serve(httpLn)
+}
+
+// newHTTPServer is the server of the dashboard and the portal. The headers of a request and an
+// idle connection are bounded: a slow client holds nothing open (§3.7, #156). Reads and writes
+// are not, for the WebSocket and the uploads; the portal's own limits come with J7.
+func newHTTPServer(h http.Handler) *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 }
 
 // Start boots the daemon, node listener, discovery server, and HTTP/WebSocket server
@@ -599,6 +604,11 @@ func (s *DaemonServer) Stop() {
 	}
 	sess := s.activeSession
 	s.activeSession = nil
+	if s.sessionGraceTimer != nil { // it would fire on a stopped server (§3.7, #156)
+		s.sessionGraceTimer.Stop()
+		s.sessionGraceTimer = nil
+	}
+	s.isReconnecting = false
 	nodeLn, httpSrv, control := s.nodeLn, s.httpSrv, s.hubControl
 	s.mu.Unlock()
 	if control != nil {
@@ -756,26 +766,9 @@ func (s *DaemonServer) GetStatus() DaemonStatus {
 	return s.getStatus()
 }
 
-func (s *DaemonServer) getStatus() DaemonStatus {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	status := "idle"
-	paired := s.activeSession != nil
-	pairedIP := ""
-	pairedDevice := ""
-	if paired {
-		status = "paired"
-		pairedIP = s.activeSession.RemoteIP()
-		pairedDevice = s.pairedDeviceName
-	}
-	if s.transferCancel != nil {
-		status = "transferring"
-		if s.isPaused {
-			status = "paused"
-		}
-	}
-
+// statusAddress is the address status shows: it may enumerate the interfaces and read the
+// ARP table (slow). Tests replace it.
+var statusAddress = func() string {
 	localIP := discovery.GetPrimaryLocalIP()
 	if localIP == "" || localIP == "127.0.0.1" {
 		targets := discovery.GetActiveNetworkTargets()
@@ -786,46 +779,60 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 			}
 		}
 	}
-	port := s.httpPort
-	if port <= 0 {
-		port = 19999
-	}
-	portalURL := ""
-	portalQR := ""
-	if localIP != "" {
-		if s.webShareToken != "" && s.webSharePIN != "" {
-			portalURL = fmt.Sprintf("http://%s:%d/share?token=%s&pin=%s", localIP, port, s.webShareToken, s.webSharePIN)
-		} else if s.webSharePIN != "" {
-			portalURL = fmt.Sprintf("http://%s:%d/share?pin=%s", localIP, port, s.webSharePIN)
-		} else {
-			portalURL = fmt.Sprintf("http://%s:%d/share", localIP, port)
-		}
-		portalQR, _ = GenerateURLQRDataURI(portalURL, 220)
-	}
+	return localIP
+}
 
-	return DaemonStatus{
-		Status:             status,
+func (s *DaemonServer) getStatus() DaemonStatus {
+	// What the server holds is read under its lock; the slow part (interfaces, ARP table, QR
+	// code) runs outside it, or every other action would wait meanwhile (audit 9, #156).
+	s.mu.RLock()
+	st := DaemonStatus{
+		Status:             "idle",
 		DeviceName:         s.config.DeviceName,
 		DownloadDir:        s.config.DownloadDir,
 		CollisionPolicy:    s.config.CollisionPolicy,
-		Paired:             paired,
-		PairedIP:           pairedIP,
-		PairedDevice:       pairedDevice,
+		Paired:             s.activeSession != nil,
 		ActiveTransfer:     s.transferCancel != nil,
 		IsPaused:           s.isPaused,
 		Version:            "1.0.0",
-		LocalIP:            localIP,
-		LocalPort:          port,
-		PortalURL:          portalURL,
-		PortalQR:           portalQR,
+		LocalPort:          s.httpPort,
 		WebShareEnabled:    s.webShareEnabled,
 		WebSharePIN:        s.webSharePIN,
 		WebShareToken:      s.webShareToken,
 		WebShareAutoAccept: s.webShareAutoAccept,
 		PairingCode:        s.pairingCode,
 		Discoverable:       s.discCancel != nil,
-		Instance:           s.instance(),
 	}
+	if st.Paired {
+		st.Status = "paired"
+		st.PairedIP = s.activeSession.RemoteIP()
+		st.PairedDevice = s.pairedDeviceName
+	}
+	if st.ActiveTransfer {
+		st.Status = "transferring"
+		if st.IsPaused {
+			st.Status = "paused"
+		}
+	}
+	s.mu.RUnlock()
+
+	if st.LocalPort <= 0 {
+		st.LocalPort = 19999
+	}
+	st.LocalIP = statusAddress()
+	if st.LocalIP != "" {
+		switch {
+		case st.WebShareToken != "" && st.WebSharePIN != "":
+			st.PortalURL = fmt.Sprintf("http://%s:%d/share?token=%s&pin=%s", st.LocalIP, st.LocalPort, st.WebShareToken, st.WebSharePIN)
+		case st.WebSharePIN != "":
+			st.PortalURL = fmt.Sprintf("http://%s:%d/share?pin=%s", st.LocalIP, st.LocalPort, st.WebSharePIN)
+		default:
+			st.PortalURL = fmt.Sprintf("http://%s:%d/share", st.LocalIP, st.LocalPort)
+		}
+		st.PortalQR, _ = GenerateURLQRDataURI(st.PortalURL, 220)
+	}
+	st.Instance = s.instance()
+	return st
 }
 
 // ControlToken returns the secret required on control routes. Never log it.
