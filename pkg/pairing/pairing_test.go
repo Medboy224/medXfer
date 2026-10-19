@@ -339,6 +339,14 @@ func TestOneShotTrustNegotiation(t *testing.T) {
 			if c.scannerOffers && c.showerOff && (askedShower || askedScanner) {
 				t.Fatal("a user was asked although both offered")
 			}
+			// Both offered: both commit their own key, and both must end with the same one, or
+			// neither recognizes the other's announcements (DISC-11, #170).
+			if c.want {
+				ka, kb := keyOf(t, shower, scanner.Identity.Fingerprint), keyOf(t, scanner, shower.Identity.Fingerprint)
+				if len(ka) != tagKeySize || string(ka) != string(kb) {
+					t.Fatal("the two sides keep different recognition keys")
+				}
+			}
 			if c.scannerOffers && !c.showerOff && !askedShower {
 				t.Fatal("the shower's user was not asked")
 			}
