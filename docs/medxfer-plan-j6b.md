@@ -194,6 +194,24 @@ La sonde du point d'accès passe tôt : certains fabricants restreignent cette f
   - la découverte y fonctionne-t-elle ?
   - le réseau tient-il pendant un long transfert, écran éteint ?
 
+**Résultats de la sonde** (19 octobre, Galaxy A57 sous Android 16, PC Zorin client ; essais par adb) :
+
+| Question | Résultat |
+|---|---|
+| Création depuis l'application | ✅ `startLocalOnlyHotspot` réussit avec `NEARBY_WIFI_DEVICES`. Le Wi-Fi du téléphone reste connecté (interface `swlan0`, 10.46.56.232/24), adb aussi. |
+| Nom et mot de passe | Tirés au hasard par Android **à chaque démarrage** (`AndroidShare_1732`, puis `AndroidShare_9672`), sécurité WPA2/WPA3 mixte. Le QR les porte donc à chaque fois ; l'adresse du téléphone, elle, est restée la même. |
+| Premier plan | Android ne démarre le point d'accès que pour une application au premier plan : appelé avant la reprise de l'activité (`onNewIntent`), il refuse (`ERROR_INCOMPATIBLE_MODE`). Depuis l'activité reprise, trois redémarrages de suite réussissent, moins d'une seconde après l'arrêt. L'adaptateur réessaie quand même pendant 20 s ; ce code veut aussi dire « point d'accès du système allumé ». |
+| Un PC le rejoint | ✅ Par NetworkManager, en 1,1 s ; ping moyen 3 ms. |
+| Bande | **2,4 GHz, canal 1** (802.11n, 130 Mbit/s). La puce n'a qu'une radio (`mIsDbs: false`) : le point d'accès prend le canal du Wi-Fi auquel le téléphone est connecté (ici, un réseau à 2,4 GHz ; il démarre sur le canal 11, puis passe au canal 1 en moins d'une seconde). Connecté à un réseau à 5 GHz, ou Wi-Fi coupé, il devrait passer à 5 GHz : à vérifier à la main. |
+| Débit | `xfer bench net`, 11 essais : envoi du PC 4,2 à 9,8 MB/s, réception 4,9 à 6,1 MB/s. Le même PC passait par un autre point d'accès à 2,4 GHz : 2,0 MB/s. Transfert réel chiffré de 256 Mo par QR : 47,2 s (5,7 MB/s), empreinte identique. |
+| Écran éteint | ✅ Huit essais à la suite sur 2 min 30, téléphone en veille et application en arrière-plan : aucun échec. Les durées plus longues relèvent du service de premier plan (WP-B.4). |
+| Découverte | Les balises UDP arrivent bien par le point d'accès. **Mais** l'annonce mDNS et l'URI du QR portent l'adresse du Wi-Fi du téléphone (192.168.119.123), pas celle du point d'accès. Le transfert est passé quand même : le PC sortait par le téléphone, qui accepte toutes ses adresses. Un appareil qui sort ailleurs (câble, autre réseau) échouerait. |
+| Un téléphone le rejoint par QR | À faire avec un second téléphone (`WifiJoin`, prêt). |
+
+**Conséquences pour l'intégration** :
+- Quand le point d'accès tourne, l'application donne au cœur l'interface `swlan0` par `set_network_info` (`DISC-10`), pour que le QR, le PIN et l'annonce portent l'adresse du point d'accès.
+- Le débit dépend du canal du Wi-Fi du téléphone. Quand ce Wi-Fi est à 2,4 GHz, l'écran de connexion peut proposer de le couper le temps du transfert, si l'essai à la main le confirme.
+
 **L'intégration**, si la sonde est concluante :
 - L'URI d'appairage porte en option le nom et le mot de passe du réseau, pour que le QR fasse tout d'un coup. Ces champs sont des secrets du point d'accès : jamais journalisés (chapitre 13).
 - Le parcours en trois étapes pour un appareil sans caméra.
