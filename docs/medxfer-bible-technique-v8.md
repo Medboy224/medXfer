@@ -325,7 +325,7 @@ A ──trust_commit──► B     A écrit l'empreinte de B en envoyant le com
 | `CHAN-01` | Chaque appareil expose **un seul** listener TCP (défaut 18887 ; si occupé, port éphémère annoncé par la découverte). Il parle TLS dès le premier octet. On NE DOIT PAS « deviner » le protocole en lisant le premier octet. | Supprime le chemin « texte clair accepté » de `UpgradeToTLSIfClientHello`. ✅ |
 | `CHAN-02` | TLS 1.3 minimum ; ALPN `medxfer/1` obligatoire (refus sinon) ; tickets de session désactivés (`SessionTicketsDisabled: true`) donc ni reprise ni 0-RTT. | Pas de rejeu possible. ✅ |
 | `CHAN-03` | Authentification mutuelle : `ClientAuth: tls.RequireAnyClientCert`. La confiance est décidée par `VerifyConnection` (code ci-dessous), appelée des deux côtés. | ✅ |
-| `CHAN-04` | Deux états. `UNAUTH` : empreinte inconnue ; seules les trames `pair_*` sont acceptées, délai 30 s, 4 Kio max. `AUTH` : empreinte de confiance ou appairage réussi. Toute autre trame en `UNAUTH` ferme la connexion. | ✅ |
+| `CHAN-04` | Deux états. `UNAUTH` : empreinte inconnue ; seules les trames `pair_*` sont acceptées, délai 30 s, 4 Kio max. Ce délai borne tout délai posé ensuite par l'appelant, qui ne peut ni le lever ni le repousser (#156) ; seule exception, l'attente d'une personne qui tape le PIN lu sur l'autre écran (`AwaitPerson`) : au plus la vie d'un PIN, 2 min, puis 30 s pour la fin de l'échange. `AUTH` : empreinte de confiance ou appairage réussi. Toute autre trame en `UNAUTH` ferme la connexion. | ✅ |
 | `CHAN-05` | Aucun repli. Handshake raté ou empreinte invalide = connexion fermée avec erreur. Le `return DialPeer(target)` de `DialTLSPeer` est supprimé. | ✅ |
 | `CHAN-06` | Une connexion de **données** DOIT s'ouvrir par `DATA_JOIN{transfer_id}` et n'est acceptée que si l'empreinte du pair est celle de la session de contrôle qui a créé ce transfert. Sans `DATA_JOIN` valide dans les 5 s : fermeture. | Remplace les ports 18888+N sans authentification. ✅ |
 | `CHAN-07` | Délais : handshake 5 s ; lectures avec échéance ; keep-alive TCP 15 s. | 📏 |
@@ -707,7 +707,7 @@ Valeurs par défaut ; toutes sont des paramètres (règle R4).
 
 | Id | Limite | Défaut |
 |---|---|---|
-| `LIM-01` | Connexions non authentifiées simultanées | 16 ; au plus 5 nouvelles par minute et par IP, 60 pour une IP qui s'est authentifiée (clé connue ou appairage) dans les 10 dernières minutes (#93) |
+| `LIM-01` | Connexions non authentifiées simultanées | 16 ; au plus 5 nouvelles par minute et par IP, poignées de main en cours comprises (#156), 60 pour une IP qui s'est authentifiée (clé connue ou appairage) dans les 10 dernières minutes (#93) |
 | `LIM-02` | Durée du handshake TLS | 5 s |
 | `LIM-03` | Taille cumulée lue en état `UNAUTH` | 4 Kio |
 | `LIM-04` | Charge `CONTROL` | 1 Mio |

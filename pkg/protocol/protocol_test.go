@@ -270,3 +270,26 @@ func FuzzOfferValidate(f *testing.F) {
 		}
 	})
 }
+
+// Audit 6 (#156): a page without items is refused: a peer cannot keep the offer open with
+// empty pages.
+func TestAddPageRefusesEmptyPage(t *testing.T) {
+	o := Offer{Count: 3, Items: []OfferItem{{Item: 0, Path: "a"}}}
+	if err := o.AddPage(nil); !errors.Is(err, ErrBadOffer) {
+		t.Fatalf("AddPage(empty) = %v, want ErrBadOffer", err)
+	}
+}
+
+// Audit 6 (#156): the announced count is checked on the first frame, before any page.
+func TestCheckHead(t *testing.T) {
+	two := []OfferItem{{Item: 0, Path: "a"}, {Item: 1, Path: "b"}}
+	for _, c := range []struct {
+		count int
+		ok    bool
+	}{{0, true}, {5, true}, {2, true}, {1, false}, {-1, false}, {MaxOfferItems + 1, false}} {
+		o := Offer{Count: c.count, Items: two}
+		if err := o.CheckHead(); (err == nil) != c.ok || (err != nil && !errors.Is(err, ErrBadOffer)) {
+			t.Errorf("Count %d: CheckHead = %v, want ok=%v", c.count, err, c.ok)
+		}
+	}
+}

@@ -348,3 +348,63 @@ func TestOneShotTrustNegotiation(t *testing.T) {
 		})
 	}
 }
+
+// Audit 10 (#156): once pair_accept is sent, the QR code expiring does not cut the trust
+// question: the user keeps the time to answer, and Serve returns the pairing.
+func TestTrustQuestionOutlivesTheQRCode(t *testing.T) {
+	shower, scanner := device(t, "pc"), device(t, "phone")
+	scanner.OfferTrust = true
+	cut := make(chan bool, 1)
+	shower.AskTrust = func(ctx context.Context, _ Result) bool {
+		select {
+		case <-ctx.Done(): // the question was cut
+			cut <- true
+			return false
+		case <-time.After(900 * time.Millisecond): // answered after the QR code expired
+			cut <- false
+			return true
+		}
+	}
+	ln, inv, u := listen(t, shower, 400*time.Millisecond)
+	done := serve(ln, inv, shower)
+	r, err := Join(context.Background(), u, scanner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := <-done
+	if <-cut {
+		t.Fatal("the QR code expiring cut the user's answer")
+	}
+	if s.err != nil {
+		t.Fatalf("Serve = %v after a pairing accepted", s.err)
+	}
+	if !r.Trusted || !s.r.Trusted {
+		t.Fatalf("trusted: scanner %v, shower %v; want both", r.Trusted, s.r.Trusted)
+	}
+}
+
+// Audit 10 (#156): cancelling Join also ends its trust question.
+func TestJoinCancelEndsTheTrustQuestion(t *testing.T) {
+	shower, scanner := device(t, "pc"), device(t, "phone")
+	shower.OfferTrust = true
+	scanner.AskTrust = func(ctx context.Context, _ Result) bool {
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+		}
+		return false
+	}
+	ln, inv, u := listen(t, shower, TTL)
+	done := serve(ln, inv, shower)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	start := time.Now()
+	r, err := Join(ctx, u, scanner)
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("Join ended %v after its context, want at once", d)
+	}
+	if err == nil && r.Trusted {
+		t.Fatal("trust established without an answer")
+	}
+	<-done
+}

@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/identity"
@@ -99,8 +100,8 @@ type Channel struct {
 	conn       net.Conn
 	sendMu     sync.Mutex
 	closed     bool
-	maxControl uint32
-	rbuf       []byte // reused for small messages; read by one goroutine at a time
+	maxControl atomic.Uint32 // may change while another goroutine sends (audit §3.6)
+	rbuf       []byte        // reused for small messages; read by one goroutine at a time
 }
 
 func NewChannel(conn net.Conn) *Channel {
@@ -109,19 +110,30 @@ func NewChannel(conn net.Conn) *Channel {
 		_ = tcpConn.SetKeepAlive(true)
 		_ = tcpConn.SetKeepAlivePeriod(2 * time.Second)
 	}
-	return &Channel{conn: conn, maxControl: protocol.MaxControl}
+	c := &Channel{conn: conn}
+	c.maxControl.Store(protocol.MaxControl)
+	return c
 }
 
 // SetMaxControl changes the largest control message accepted and sent (LIM-04 is a
 // parameter, rule R4).
-func (c *Channel) SetMaxControl(n uint32) { c.maxControl = n }
+func (c *Channel) SetMaxControl(n uint32) { c.maxControl.Store(n) }
+
+// sendTimeout bounds the write of one control message.
+const sendTimeout = 5 * time.Second
+
+// writeDeadlined is a connection that tells the write deadline its caller asked for
+// (securechan.Conn).
+type writeDeadlined interface {
+	WriteDeadline() time.Time
+}
 
 func (c *Channel) Send(msg Message) error {
 	payload, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
-	if uint32(len(payload)) > c.maxControl {
+	if uint32(len(payload)) > c.maxControl.Load() {
 		return fmt.Errorf("%w: %q message of %d bytes", protocol.ErrFrameTooLarge, msg.Type, len(payload))
 	}
 	frame := protocol.AppendFrame(make([]byte, 0, protocol.FrameHeaderSize+len(payload)), protocol.TypeControl, payload)
@@ -130,16 +142,26 @@ func (c *Channel) Send(msg Message) error {
 	if c.closed || c.conn == nil {
 		return net.ErrClosed
 	}
-	_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	// The write is bounded, and the caller's own write deadline comes back after it: an
+	// earlier one still bounds it (audit 7, #156).
+	var prev time.Time
+	if wd, ok := c.conn.(writeDeadlined); ok {
+		prev = wd.WriteDeadline()
+	}
+	at := time.Now().Add(sendTimeout)
+	if !prev.IsZero() && prev.Before(at) {
+		at = prev
+	}
+	_ = c.conn.SetWriteDeadline(at)
 	_, err = c.conn.Write(frame)
-	_ = c.conn.SetWriteDeadline(time.Time{})
+	_ = c.conn.SetWriteDeadline(prev)
 	return err
 }
 
 // Read returns the next control message. A frame that is not CONTROL, or larger than the
 // limit, or not valid JSON, is an error: the caller closes the channel.
 func (c *Channel) Read() (Message, error) {
-	_, payload, err := protocol.ReadFrame(c.conn, protocol.Limits{protocol.TypeControl: c.maxControl}, c.rbuf)
+	_, payload, err := protocol.ReadFrame(c.conn, protocol.Limits{protocol.TypeControl: c.maxControl.Load()}, c.rbuf)
 	if err != nil {
 		return Message{}, err
 	}

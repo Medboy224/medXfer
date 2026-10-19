@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Medboy224/medXfer/pkg/protocol"
 )
@@ -158,5 +159,26 @@ func TestPagedOfferRefusesBadPages(t *testing.T) {
 	m, _ := cb.Read()
 	if _, err := ReadOffer(cb, m); !errors.Is(err, protocol.ErrBadOffer) {
 		t.Fatalf("ReadOffer = %v, want ErrBadOffer", err)
+	}
+}
+
+// Audit 6 (#156): an offer announcing more items than allowed is refused on its first frame,
+// without waiting for pages.
+func TestReadOfferChecksCountAtOnce(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	head := protocol.Offer{TransferID: "t1", Count: protocol.MaxOfferItems + 1,
+		Items: []protocol.OfferItem{{Item: 0, Path: "a"}}}
+	done := make(chan error, 1)
+	go func() { _, err := ReadOffer(NewChannel(b), Message{Type: "offer", Offer: &head}); done <- err }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, protocol.ErrBadOffer) {
+			t.Fatalf("ReadOffer = %v, want ErrBadOffer", err)
+		}
+	case <-time.After(3 * time.Second):
+		b.Close()
+		t.Fatal("ReadOffer waits for pages of an offer it must refuse")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/identity"
@@ -108,6 +109,33 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 	if o.PIN != nil {
 		stopped = o.PIN.stopped
 	}
+	// The first device accepted claims the pairing: from then on nothing expires and nobody
+	// else is accepted, so the trust question keeps its time (audit 10, #156).
+	var claimMu sync.Mutex
+	claimed := make(chan struct{})
+	claim := func() bool {
+		claimMu.Lock()
+		defer claimMu.Unlock()
+		select {
+		case <-claimed:
+			return false
+		default:
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+		close(claimed)
+		return true
+	}
+	end := func(cause error) { // unless claimed
+		claimMu.Lock()
+		defer claimMu.Unlock()
+		select {
+		case <-claimed:
+		default:
+			cancel(cause)
+		}
+	}
 	go func() {
 		defer ln.Close()
 		for {
@@ -116,14 +144,17 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 			case <-ctx.Done():
 				t.Stop()
 				return
+			case <-claimed: // stop accepting
+				t.Stop()
+				return
 			case <-stopped: // a guesser at work: stop waiting, QR code included (#105)
 				t.Stop()
-				cancel(ErrTooManyPINs)
+				end(ErrTooManyPINs)
 				return
 			case <-t.C:
 				// A PIN destroyed and drawn again moves the deadline (PAIR-04).
 				if !time.Now().Before(serveDeadline(inv, o.PIN)) {
-					cancel(ErrExpired)
+					end(ErrExpired)
 					return
 				}
 			}
@@ -131,13 +162,14 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 	}()
 
 	gate := securechan.NewGate()
-	results := make(chan Result, 1)
+	outcome := make(chan claimOutcome, 1) // of the pairing that claimed
 	for {
 		raw, err := ln.Accept()
 		if err != nil {
 			select {
-			case r := <-results:
-				return r, nil
+			case <-claimed:
+				out := <-outcome
+				return out.r, out.err
 			default:
 			}
 			if errors.Is(context.Cause(ctx), ErrTooManyPINs) {
@@ -152,16 +184,19 @@ func Serve(ctx context.Context, ln net.Listener, inv *Invitation, o Options) (Re
 			return Result{}, err
 		}
 		go func() {
-			r, err := serveOne(ctx, raw, inv, o, gate)
-			if err == nil {
-				select {
-				case results <- r:
-					cancel(nil) // stop accepting: the invitation is used
-				default:
-				}
+			won := false
+			r, err := serveOne(ctx, raw, inv, o, gate, func() bool { won = claim(); return won })
+			if won {
+				outcome <- claimOutcome{r, err}
 			}
 		}()
 	}
+}
+
+// claimOutcome is the outcome of the pairing that claimed Serve.
+type claimOutcome struct {
+	r   Result
+	err error
 }
 
 // serveDeadline is when everything served has expired.
@@ -178,7 +213,9 @@ func serveDeadline(inv *Invitation, pin *PIN) time.Time {
 	return d
 }
 
-func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gate *securechan.Gate) (Result, error) {
+// serveOne serves one connection. claim, once the device is accepted, reports whether it is
+// the one that pairs: false when another device came first or the wait ended.
+func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gate *securechan.Gate, claim func() bool) (Result, error) {
 	// A connection routed by the device's single port (pkg/transfer.Hub) is already secure.
 	conn, ok := raw.(*securechan.Conn)
 	if !ok {
@@ -234,6 +271,9 @@ func serveOne(ctx context.Context, raw net.Conn, inv *Invitation, o Options, gat
 		return reject()
 	}
 	conn.Authenticate() // also lifts the Unauth deadline, which the user's answer may have passed
+	if !claim() {
+		return reject()
+	}
 	if o.BeforeAccept != nil {
 		if err := o.BeforeAccept(r); err != nil {
 			_, _ = reject()
@@ -331,7 +371,7 @@ func JoinPIN(ctx context.Context, addr, pin string, o Options) (Result, error) {
 	if err := initiatePIN(ch, conn, pin, o.Identity.Fingerprint, o.DeviceName, o.OfferTrust); err != nil {
 		return Result{}, err
 	}
-	return awaitAccept(ch, conn, conn.PeerFingerprint(), host, replyTimeout, o)
+	return awaitAccept(ctx, ch, conn, conn.PeerFingerprint(), host, replyTimeout, o)
 }
 
 // InitiatePIN is the initiator's side of the PIN path on an open connection, up to its own
@@ -392,7 +432,7 @@ func Join(ctx context.Context, u URI, o Options) (Result, error) {
 	if err := ch.Send(msg); err != nil {
 		return Result{}, err
 	}
-	return awaitAccept(ch, conn, u.Fingerprint, host, replyTimeout, o)
+	return awaitAccept(ctx, ch, conn, u.Fingerprint, host, replyTimeout, o)
 }
 
 // JoinTrusted reaches the device at addr without a code, as a device of mutual trust (P3):
@@ -412,7 +452,7 @@ func JoinTrusted(ctx context.Context, addr string, o Options) (Result, error) {
 	if err := ch.Send(session.Message{Type: TypeHello, DeviceName: o.DeviceName, TrustsYou: true}); err != nil {
 		return Result{}, err
 	}
-	r, err := awaitAccept(ch, conn, fp, host, replyTimeout, Options{Identity: o.Identity, Trust: o.Trust})
+	r, err := awaitAccept(ctx, ch, conn, fp, host, replyTimeout, Options{Identity: o.Identity, Trust: o.Trust})
 	if errors.Is(err, ErrPINRequired) {
 		r.Fingerprint, r.Address = fp, host
 	}
@@ -440,7 +480,7 @@ func dial(ctx context.Context, addr string, cfg securechan.Config) (*securechan.
 
 // awaitAccept waits up to wait for pair_accept and its offer; then, if either side offers
 // mutual trust, the negotiation runs on the same connection.
-func awaitAccept(ch *session.Channel, conn *securechan.Conn, fp identity.Fingerprint, host string, wait time.Duration, o Options) (Result, error) {
+func awaitAccept(ctx context.Context, ch *session.Channel, conn *securechan.Conn, fp identity.Fingerprint, host string, wait time.Duration, o Options) (Result, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(wait))
 	resp, err := ch.Read()
 	if err != nil {
@@ -461,7 +501,7 @@ func awaitAccept(ch *session.Channel, conn *securechan.Conn, fp identity.Fingerp
 	}
 	r := Result{Fingerprint: fp, Name: resp.DeviceName, Address: host, Offer: resp}
 	if o.OfferTrust || resp.TrustOffer {
-		r.Trusted = negotiate(context.Background(), ch, conn, o, r)
+		r.Trusted = negotiate(ctx, ch, conn, o, r)
 	}
 	return r, nil
 }
@@ -477,6 +517,9 @@ func negotiate(ctx context.Context, ch *session.Channel, conn *securechan.Conn, 
 	talk := NewTrustTalk(o.Trust, o.Identity.Fingerprint, identity.Peer{Fingerprint: r.Fingerprint, Alias: r.Name, LastAddress: r.Address})
 	_ = conn.SetDeadline(time.Now().Add(TrustAnswerTime + replyTimeout))
 	defer func() { _ = conn.SetDeadline(time.Time{}) }()
+	// The caller giving up ends the negotiation at once, the wait for the peer included.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
 	if o.OfferTrust {
 		if err := ch.Send(talk.Offer()); err != nil {
 			return false

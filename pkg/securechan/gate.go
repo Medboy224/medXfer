@@ -36,6 +36,9 @@ var (
 // whose handshakes fail (Wi-Fi cut mid-handshake, app killed and restarted) would use up the
 // quota of its address and be refused for up to a minute. So an address that authenticated
 // recently gets KnownPerIPOneMinute instead (#93). MaxUnauth still bounds everyone.
+//
+// A handshake still running counts in its address's quota too: otherwise one address could
+// take every place before any of its connections is charged (audit 5a, #156).
 type Gate struct {
 	MaxUnauth           int
 	PerIPOneMinute      int
@@ -43,10 +46,12 @@ type Gate struct {
 	KnownFor            time.Duration
 	now                 func() time.Time // tests
 
-	mu     sync.Mutex
-	active int
-	recent map[string][]time.Time
-	known  map[string]time.Time // address -> its last authentication
+	mu         sync.Mutex
+	active     int
+	recent     map[string][]time.Time
+	handshakes map[string]int       // address -> its handshakes still running, not charged yet
+	known      map[string]time.Time // address -> its last authentication
+	swept      time.Time            // last sweep of the tables (sweepLocked)
 }
 
 // NewGate returns a gate with the default limits.
@@ -61,6 +66,7 @@ type Admission struct {
 	ip      string
 	once    sync.Once
 	charged sync.Once
+	running bool // counted in g.handshakes; guarded by g.mu
 }
 
 func (g *Gate) clock() time.Time {
@@ -81,8 +87,40 @@ func (g *Gate) recentLocked(ip string, t time.Time) []time.Time {
 			kept = append(kept, at)
 		}
 	}
+	if len(kept) == 0 {
+		delete(g.recent, ip) // audit 5b (#156): an address does not stay once its minute is over
+		return nil
+	}
 	g.recent[ip] = kept
 	return kept
+}
+
+// sweepLocked drops, once a minute, the addresses that no longer count: those that never come
+// back would otherwise stay in the tables for good (audit 5b, #156).
+func (g *Gate) sweepLocked(t time.Time) {
+	if t.Sub(g.swept) < time.Minute {
+		return
+	}
+	g.swept = t
+	for ip := range g.recent {
+		g.recentLocked(ip, t)
+	}
+	for ip, at := range g.known {
+		if t.Sub(at) >= g.KnownFor {
+			delete(g.known, ip)
+		}
+	}
+}
+
+// endHandshakeLocked takes a's handshake out of its address's running ones.
+func (a *Admission) endHandshakeLocked() {
+	if !a.running {
+		return
+	}
+	a.running = false
+	if a.g.handshakes[a.ip]--; a.g.handshakes[a.ip] <= 0 {
+		delete(a.g.handshakes, a.ip)
+	}
 }
 
 // quotaLocked is the number of unauthenticated connections ip may open per minute: the
@@ -100,9 +138,10 @@ func (g *Gate) quotaLocked(ip string, t time.Time) int {
 }
 
 // Admit reserves a place for a connection from addr, before its handshake. It is refused if
-// the address has used up its quota of unauthenticated connections this minute, or if too
-// many connections are already waiting. The quota itself is only charged by Charge, once the
-// handshake has shown the connection to be unauthenticated.
+// the address has used up its quota of unauthenticated connections this minute, counting its
+// handshakes still running, or if too many connections are already waiting. The quota itself
+// is only charged by Charge, once the handshake has shown the connection to be
+// unauthenticated; a handshake that authenticates a key gives its share back (Release).
 func (g *Gate) Admit(addr net.Addr) (*Admission, error) {
 	ip := addr.String()
 	if host, _, err := net.SplitHostPort(ip); err == nil {
@@ -111,14 +150,19 @@ func (g *Gate) Admit(addr net.Addr) (*Admission, error) {
 	t := g.clock()
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if q := g.quotaLocked(ip, t); q > 0 && len(g.recentLocked(ip, t)) >= q {
+	g.sweepLocked(t)
+	if q := g.quotaLocked(ip, t); q > 0 && len(g.recentLocked(ip, t))+g.handshakes[ip] >= q {
 		return nil, ErrRateLimited
 	}
 	if g.MaxUnauth > 0 && g.active >= g.MaxUnauth {
 		return nil, ErrTooManyUnauth
 	}
 	g.active++
-	return &Admission{g: g, ip: ip}, nil
+	if g.handshakes == nil {
+		g.handshakes = map[string]int{}
+	}
+	g.handshakes[ip]++
+	return &Admission{g: g, ip: ip, running: true}, nil
 }
 
 // Charge counts the connection in its address's quota for the minute. Calling it more than
@@ -127,6 +171,10 @@ func (a *Admission) Charge() {
 	a.charged.Do(func() {
 		t := a.g.clock()
 		a.g.mu.Lock()
+		a.endHandshakeLocked()
+		if a.g.recent == nil {
+			a.g.recent = map[string][]time.Time{}
+		}
 		a.g.recent[a.ip] = append(a.g.recentLocked(a.ip, t), t)
 		a.g.mu.Unlock()
 	})
@@ -150,6 +198,7 @@ func (a *Admission) Release() {
 	a.once.Do(func() {
 		a.g.mu.Lock()
 		a.g.active--
+		a.endHandshakeLocked()
 		a.g.mu.Unlock()
 	})
 }

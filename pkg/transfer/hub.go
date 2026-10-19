@@ -15,7 +15,7 @@ import (
 
 // DefaultJoinTimeout bounds the wait for the first frame of an authenticated connection: a
 // data connection must name its transfer within 5 s (CHAN-06). Unauthenticated connections
-// are already bounded by securechan.UnauthTimeout.
+// are already bounded by securechan.UnauthTimeout, which no deadline set here can lift.
 const DefaultJoinTimeout = 5 * time.Second
 
 var ErrDuplicateTransfer = errors.New("transfer: a transfer with this id is already registered")

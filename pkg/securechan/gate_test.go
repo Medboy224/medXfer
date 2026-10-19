@@ -3,6 +3,7 @@ package securechan
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -301,5 +302,61 @@ func TestServerGateRemembersPairedAddress(t *testing.T) {
 	defer c2.Close()
 	if r := wait(t, results); r.err != nil {
 		t.Fatalf("the paired device is locked out: %v", r.err)
+	}
+}
+
+// Audit 5a (#156): handshakes still running count in their address's quota, or one address
+// could take every place of the gate before any of them is charged.
+func TestGateCountsHandshakesInProgress(t *testing.T) {
+	g := &Gate{MaxUnauth: 16, PerIPOneMinute: 5}
+	var held []*Admission
+	for i := 0; i < 5; i++ {
+		adm, err := g.Admit(fakeAddr("10.0.0.1:4000"))
+		if err != nil {
+			t.Fatalf("handshake %d refused: %v", i+1, err)
+		}
+		held = append(held, adm)
+	}
+	if _, err := g.Admit(fakeAddr("10.0.0.1:4001")); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("6th handshake at the same time from one address: %v, want ErrRateLimited", err)
+	}
+	if _, err := g.Admit(fakeAddr("10.0.0.2:4000")); err != nil {
+		t.Fatalf("another address found no place: %v", err)
+	}
+	// An authenticated handshake gives its place back without using the quota.
+	held[0].Release()
+	if _, err := g.Admit(fakeAddr("10.0.0.1:4002")); err != nil {
+		t.Fatalf("place of an authenticated handshake not given back: %v", err)
+	}
+	// A charged handshake moves from "in progress" to the minute's count: no double count.
+	held[1].Charge()
+	held[1].Release()
+	if _, err := g.Admit(fakeAddr("10.0.0.1:4003")); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("charged handshake: %v, want ErrRateLimited (4 in progress + 1 this minute)", err)
+	}
+}
+
+// Audit 5b (#156): an address whose minute is over leaves the gate's tables.
+func TestGateForgetsQuietAddresses(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	g := &Gate{MaxUnauth: 100, PerIPOneMinute: 5, now: func() time.Time { return now }}
+	for i := 0; i < 3; i++ {
+		adm, err := g.Admit(fakeAddr(fmt.Sprintf("10.0.0.%d:4000", i+1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		adm.Charge()
+		adm.Release()
+	}
+	now = now.Add(61 * time.Second)
+	adm, err := g.Admit(fakeAddr("10.0.0.9:4000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adm.Release()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.recent) != 0 || len(g.handshakes) != 0 {
+		t.Fatalf("tables still hold %d and %d addresses", len(g.recent), len(g.handshakes))
 	}
 }

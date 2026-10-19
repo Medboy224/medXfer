@@ -308,12 +308,24 @@ func (o Offer) Split(maxBytes int) (Offer, [][]OfferItem) {
 	return head, pages[1:]
 }
 
+// CheckHead checks the first frame of an offer: the count it announces must be within
+// MaxOfferItems and not below the items already there (audit 6, #156). 0: not paged.
+func (o *Offer) CheckHead() error {
+	if o.Count < 0 || o.Count > MaxOfferItems || (o.Count > 0 && len(o.Items) > o.Count) {
+		return fmt.Errorf("%w: %d items announced, %d in the first frame", ErrBadOffer, o.Count, len(o.Items))
+	}
+	return nil
+}
+
 // Complete reports whether every item of a paged offer has arrived.
 func (o *Offer) Complete() bool { return o.Count == 0 || len(o.Items) >= o.Count }
 
 // AddPage appends a page of items received after the head: the numbering must go on, and the
-// offer may not grow past Count or MaxOfferItems (LIM-05).
+// offer may not grow past Count or MaxOfferItems (LIM-05). An empty page is refused (audit 6).
 func (o *Offer) AddPage(items []OfferItem) error {
+	if len(items) == 0 {
+		return fmt.Errorf("%w: a page without items", ErrBadOffer)
+	}
 	if o.Count <= 0 || o.Count > MaxOfferItems || len(o.Items)+len(items) > o.Count {
 		return fmt.Errorf("%w: more items than announced (%d)", ErrBadOffer, o.Count)
 	}

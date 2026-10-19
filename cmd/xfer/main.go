@@ -506,11 +506,11 @@ func handleNode() {
 	}
 	printPrompt()
 
-	// takeNodeOffer adds a page to the offer being received; once it is complete and valid,
-	// it asks the user. A bad offer is refused.
-	takeNodeOffer := func(page []protocol.OfferItem) *session.Message {
+	// takeNodeOffer takes the offer's head, or adds a page to it; once it is complete and
+	// valid, it asks the user. A bad offer is refused.
+	takeNodeOffer := func(head bool, page []protocol.OfferItem) *session.Message {
 		tid := incomingOffer.Offer.TransferID
-		m, err := completeNodeOffer(&incomingOffer, page)
+		m, err := completeNodeOffer(&incomingOffer, head, page)
 		if err != nil {
 			fmt.Printf("\n[-] Refused the peer's offer: %v\n", err)
 			if activeSession != nil {
@@ -789,6 +789,7 @@ func handleNode() {
 						break
 					}
 					// Typed here, never an argument: the PIN stays out of any history.
+					conn.AwaitPerson(pairing.TTL)
 					_ = conn.SetDeadline(time.Now().Add(pairing.TTL))
 					fmt.Print("PIN shown on the other device: ")
 					var typed string
@@ -943,13 +944,13 @@ func handleNode() {
 				}
 				m := msg
 				incomingOffer = &m
-				pendingOffer = takeNodeOffer(nil)
+				pendingOffer = takeNodeOffer(true, nil)
 
 			case session.TypeOfferItems: // the next page of a paged offer (D2)
 				if incomingOffer == nil || msg.TransferID != incomingOffer.Offer.TransferID {
 					break
 				}
-				pendingOffer = takeNodeOffer(msg.Items)
+				pendingOffer = takeNodeOffer(false, msg.Items)
 
 			case "reject":
 				lastOffered.close() // nobody may join a refused offer
@@ -1081,13 +1082,15 @@ func (o *nodeOffer) close() {
 
 // completeNodeOffer adds page to the offer being received and returns it once all its items
 // are there and it is valid (LIM-05). A bad offer is dropped, with the error to report.
-func completeNodeOffer(incoming **session.Message, page []protocol.OfferItem) (*session.Message, error) {
+func completeNodeOffer(incoming **session.Message, head bool, page []protocol.OfferItem) (*session.Message, error) {
 	m := *incoming
-	if page != nil {
-		if err := m.Offer.AddPage(page); err != nil {
-			*incoming = nil
-			return nil, err
-		}
+	err := m.Offer.CheckHead() // audit 6: the count is checked on the first frame
+	if !head {
+		err = m.Offer.AddPage(page) // an empty page is refused
+	}
+	if err != nil {
+		*incoming = nil
+		return nil, err
 	}
 	if !m.Offer.Complete() {
 		return nil, nil
