@@ -66,9 +66,12 @@ class HomeScreen extends StatelessWidget {
         ),
         bottomNavigationBar: SafeArea(
           child: Container(
+            key: const Key('bottom-bar'),
             decoration: BoxDecoration(color: c.surface, border: Border(top: BorderSide(color: c.border))),
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            child: Center(
+            // heightFactor 1: centered, never stretched to the height the Scaffold offers.
+            child: Align(
+              heightFactor: 1,
               child: FilledButton.icon(
                 style: FilledButton.styleFrom(
                   minimumSize: const Size(0, 52),

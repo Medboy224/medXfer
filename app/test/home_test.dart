@@ -43,6 +43,13 @@ void main() {
     expect(core.calls.map((c) => c.action), ['get_status']);
   });
 
+  testWidgets('the bottom bar keeps to its button: the tabs stay visible', (tester) async {
+    await _app(tester);
+    final bar = tester.getSize(find.byKey(const Key('bottom-bar')));
+    expect(bar.height, lessThan(120), reason: 'the bottom bar covers the screen');
+    expect(tester.getRect(find.text('Apps')).top, lessThan(tester.getRect(find.byKey(const Key('bottom-bar'))).top));
+  });
+
   testWidgets('English, by the system language', (tester) async {
     await _app(tester, locale: const Locale('en'));
     expect(find.text('Connect'), findsOneWidget);
