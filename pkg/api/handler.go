@@ -40,6 +40,9 @@ func (s *DaemonServer) dispatch(rs Responder, req RequestMessage) {
 	case "pair_pin_show":
 		s.handlePairPINShow(rs, req)
 
+	case "pin_refuse":
+		s.handlePINRefuse(rs, req)
+
 	case "pair_pin":
 		s.handlePairPIN(rs, req)
 

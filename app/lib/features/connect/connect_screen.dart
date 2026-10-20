@@ -1,7 +1,9 @@
-/// The Connect screen (§1.2 of the J6b plan): this device's QR code and PIN, its own access
-/// point when there is no common Wi-Fi (Android, WP-B.7), the ways to join another device
-/// (camera, link, PIN), and the devices on the same Wi-Fi. Once paired, the screen closes: the
-/// banner of the home screen takes over.
+/// The Connect screen (§1.2 of the J6b plan, mockup « Connecter »): three ways, in the order of
+/// the mockup. Create an access point (Android, WP-B.7): its QR code carries the network, so
+/// scanning it works wherever the devices are. Join a device that created one: scan its QR code
+/// or type its PIN. Or pick a device already on the same Wi-Fi. No QR code of the shared network
+/// here: one scanned elsewhere would fail. A device missing from the list is reached by its
+/// address and PIN. Once paired, the screen closes: the banner of the home screen takes over.
 library;
 
 import 'dart:async';
@@ -13,8 +15,8 @@ import '../../app.dart';
 import '../../connection/connection.dart';
 import '../../l10n/app_localizations.dart';
 import '../../theme.dart';
-import '../../widgets/qr_view.dart';
 import 'dialogs.dart';
+import 'hotspot_screen.dart';
 
 class ConnectScreen extends StatefulWidget {
   const ConnectScreen({super.key});
@@ -82,92 +84,82 @@ class _ConnectScreenState extends State<ConnectScreen> {
     if (link != null && mounted) await joinByLink(context, link);
   }
 
+  void _openHotspot() => unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const HotspotScreen())));
+
+  void _openManual() => unawaited(
+    showModalBottomSheet<void>(context: context, isScrollControlled: true, showDragHandle: true, builder: (_) => _ManualSheet(connection: _c)),
+  );
+
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
+    final scanner = AppScope.of(context).state.qrScanner;
     return Scaffold(
       appBar: AppBar(title: Text(l.connectTitle)),
       body: ListenableBuilder(
         listenable: _c,
-        builder: (context, _) {
-          final code = _CodeCard(connection: _c);
-          final scanner = AppScope.of(context).state.qrScanner;
-          final join = _JoinCard(onScan: scanner.supported ? () => scanAndJoin(context) : null, onPaste: _pasteLink, onPin: () => _askPin(null));
-          final hotspot = _c.hotspot.supported ? _HotspotCard(connection: _c) : null;
-          final nearby = _NearbyCard(
-            connection: _c,
-            onPick: (d) {
-              _pinFor = d.name;
-              unawaited(_c.pairWith(d));
-            },
-          );
-          final remember = SwitchListTile(
-            key: const Key('remember'),
-            value: _c.remember,
-            onChanged: (v) => unawaited(_c.setRemember(v)),
-            title: Text(l.rememberDevice),
-            subtitle: Text(l.rememberHint),
-          );
-          return LayoutBuilder(
-            builder: (context, box) {
-              if (box.maxWidth >= 760) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      width: 360,
-                      child: ListView(padding: const EdgeInsets.all(16), children: [code, ?hotspot, remember]),
-                    ),
-                    Expanded(
-                      child: ListView(padding: const EdgeInsets.all(16), children: [join, const SizedBox(height: 16), nearby]),
-                    ),
-                  ],
-                );
-              }
-              return ListView(
-                padding: const EdgeInsets.all(16),
-                children: [code, if (hotspot != null) ...[const SizedBox(height: 12), hotspot], remember, const SizedBox(height: 8), join, const SizedBox(height: 16), nearby],
-              );
-            },
-          );
-        },
+        builder: (context, _) => Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                if (_c.hotspot.supported) ...[_HotspotCard(busy: _c.hotspotBusy, onOpen: _openHotspot), const SizedBox(height: 14)],
+                _JoinCard(
+                  onScan: scanner.supported ? () => scanAndJoin(context) : null,
+                  // Without a camera (a desktop), the link copied on the other device.
+                  onPaste: scanner.supported ? null : _pasteLink,
+                  onPin: () => _askPin(null),
+                ),
+                const SizedBox(height: 20),
+                _Nearby(
+                  connection: _c,
+                  onPick: (d) {
+                    _pinFor = d.name;
+                    unawaited(_c.pairWith(d));
+                  },
+                  onNotListed: _openManual,
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  key: const Key('remember'),
+                  value: _c.remember,
+                  onChanged: (v) => unawaited(_c.setRemember(v)),
+                  title: Text(l.rememberDevice),
+                  subtitle: Text(l.rememberHint),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
+/// A card of the screen, with its title.
 class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.child, this.trailing});
+  const _Section({required this.title, required this.child});
 
   final String title;
   final Widget child;
-  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    // A Material, not a coloured box: the list tiles inside paint their ink on it.
+    // A Material, not a coloured box: the buttons inside paint their ink on it.
     return Material(
       color: c.surface,
-      shape: RoundedRectangleBorder(
-        side: BorderSide(color: c.border),
-        borderRadius: BorderRadius.circular(16),
-      ),
+      shape: RoundedRectangleBorder(side: BorderSide(color: c.border), borderRadius: BorderRadius.circular(22)),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-                ),
-                ?trailing,
-              ],
-            ),
-            const SizedBox(height: 8),
-            Padding(padding: const EdgeInsets.only(right: 8), child: child),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+            const SizedBox(height: 4),
+            child,
           ],
         ),
       ),
@@ -175,66 +167,85 @@ class _Section extends StatelessWidget {
   }
 }
 
-/// This device's QR code and PIN, renewed when they expire.
-class _CodeCard extends StatelessWidget {
-  const _CodeCard({required this.connection});
+/// Create an access point: the first way of the mockup, in the accent colour.
+class _HotspotCard extends StatelessWidget {
+  const _HotspotCard({required this.busy, required this.onOpen});
 
-  final Connection connection;
+  final bool busy;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final accent = Theme.of(context).colorScheme.primary;
+    return Material(
+      color: accent,
+      borderRadius: BorderRadius.circular(22),
+      child: InkWell(
+        key: const Key('hotspot-start'),
+        borderRadius: BorderRadius.circular(22),
+        onTap: busy ? null : onOpen,
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 24,
+                    backgroundColor: Colors.white.withValues(alpha: 0.18),
+                    child: const Icon(Icons.wifi_tethering_rounded, color: Colors.white, size: 26),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(l.hotspotStart, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(l.hotspotCardHint, style: TextStyle(color: Colors.white.withValues(alpha: 0.92), fontSize: 14, height: 1.4)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Join a device that created an access point: its QR code, or its Wi-Fi then its PIN.
+class _JoinCard extends StatelessWidget {
+  const _JoinCard({required this.onPin, this.onScan, this.onPaste});
+
+  final VoidCallback? onScan;
+  final VoidCallback? onPaste;
+  final VoidCallback onPin;
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final c = context.colors;
-    final inv = connection.invitation;
-    final pin = connection.pin;
     return _Section(
-      title: l.showMyCode,
+      title: l.joinTitle,
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            l.showMyCodeHint,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: c.muted),
-          ),
+          Text(l.joinHint, style: TextStyle(color: c.muted, height: 1.4)),
           const SizedBox(height: 12),
-          SizedBox(
-            height: 220,
-            child: inv == null || inv.uri.isEmpty ? const Center(child: CircularProgressIndicator()) : QrView(key: const Key('my-qr'), data: connection.qrData ?? inv.uri),
-          ),
-          const SizedBox(height: 12),
-          if (pin != null && pin.pin.isNotEmpty)
-            SelectableText(
-              pin.pin,
-              key: const Key('my-pin'),
-              style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, letterSpacing: 6),
-            ),
-          // With the PIN, a device that does not see this one in its list types this address.
-          if (pin != null && pin.pin.isNotEmpty && pin.address.isNotEmpty)
-            SelectableText(l.pinAddress(pin.address), key: const Key('my-address'), style: TextStyle(color: c.muted)),
-          if (pin != null && pin.stopped)
-            Text(
-              l.pinStopped,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: c.danger),
-            ),
-          if (inv != null && inv.instance.isNotEmpty) Text(l.appearsAs(inv.instance), style: TextStyle(color: c.muted)),
-          if (inv != null) _Countdown(until: inv.expires, onExpired: () => unawaited(connection.showCode())),
-          Wrap(
-            alignment: WrapAlignment.center,
+          Row(
             children: [
-              TextButton.icon(onPressed: () => unawaited(connection.showCode()), icon: const Icon(Icons.refresh_rounded), label: Text(l.newCode)),
-              if (inv != null && inv.uri.isNotEmpty)
-                TextButton.icon(
-                  onPressed: () async {
-                    await Clipboard.setData(ClipboardData(text: inv.uri));
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context)
-                      ..clearSnackBars()
-                      ..showSnackBar(SnackBar(content: Text(l.linkCopied)));
-                  },
-                  icon: const Icon(Icons.copy_rounded),
-                  label: Text(l.copyLink),
+              if (onScan != null)
+                Expanded(
+                  child: FilledButton.tonalIcon(key: const Key('scan-qr'), onPressed: onScan, icon: const Icon(Icons.qr_code_scanner_rounded), label: Text(l.scanQrShort)),
                 ),
+              if (onPaste != null)
+                Expanded(
+                  child: FilledButton.tonalIcon(key: const Key('paste-link'), onPressed: onPaste, icon: const Icon(Icons.link_rounded), label: Text(l.pasteLink)),
+                ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton.tonalIcon(key: const Key('type-pin'), onPressed: onPin, icon: const Icon(Icons.pin_outlined), label: Text(l.typePin)),
+              ),
             ],
           ),
         ],
@@ -243,19 +254,212 @@ class _CodeCard extends StatelessWidget {
   }
 }
 
-/// "Valid for n s", then [onExpired] once. Its own widget: the QR code is not redrawn each
-/// second.
-class _Countdown extends StatefulWidget {
-  const _Countdown({required this.until, required this.onExpired});
+/// The devices already on the same Wi-Fi, under the name this one appears as.
+class _Nearby extends StatelessWidget {
+  const _Nearby({required this.connection, required this.onPick, required this.onNotListed});
+
+  final Connection connection;
+  final ValueChanged<NearbyDevice> onPick;
+  final VoidCallback onNotListed;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    final accent = Theme.of(context).colorScheme.primary;
+    final devices = connection.nearby;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: Text(
+                  l.nearbyTitle.toUpperCase(),
+                  style: TextStyle(color: c.muted, fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: 0.8),
+                ),
+              ),
+            ),
+            connection.scanning
+                ? const Padding(padding: EdgeInsets.all(12), child: SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)))
+                : IconButton(tooltip: l.refresh, icon: const Icon(Icons.refresh_rounded), onPressed: () => unawaited(connection.scan())),
+          ],
+        ),
+        // The name the other user looks for in their list (DISC-07): a device not yet trusted
+        // never sees this one's real name.
+        if (connection.instance.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+            child: Text(l.youAppearAs(connection.instance), key: const Key('my-instance'), style: const TextStyle(fontWeight: FontWeight.w600)),
+          ),
+        if (devices.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+            child: Text(connection.scanning ? l.searching : l.nearbyEmpty, style: TextStyle(color: c.muted)),
+          ),
+        for (final d in devices)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Material(
+              color: c.surface,
+              shape: RoundedRectangleBorder(side: BorderSide(color: c.border), borderRadius: BorderRadius.circular(16)),
+              child: InkWell(
+                key: ValueKey('nearby-${d.ip}'),
+                borderRadius: BorderRadius.circular(16),
+                onTap: () => onPick(d),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 22,
+                        backgroundColor: c.chip,
+                        child: Icon(d.trusted ? Icons.verified_user_rounded : Icons.devices_rounded, color: d.trusted ? accent : c.muted),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(d.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                            const SizedBox(height: 2),
+                            Text(d.trusted ? l.nearbyTrusted : l.nearbyAsksPin, style: TextStyle(color: c.muted, fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                      d.trusted
+                          ? Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(14)),
+                              child: Text(l.connect, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
+                            )
+                          : Icon(Icons.chevron_right_rounded, color: c.muted),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(key: const Key('not-listed'), onPressed: onNotListed, child: Text(l.notListed)),
+        ),
+      ],
+    );
+  }
+}
+
+/// A device that does not see this one in its list (discovery blocked by the Wi-Fi or a
+/// firewall) types this address and PIN. No QR code: the two must share the network.
+class _ManualSheet extends StatefulWidget {
+  const _ManualSheet({required this.connection});
+
+  final Connection connection;
+
+  @override
+  State<_ManualSheet> createState() => _ManualSheetState();
+}
+
+class _ManualSheetState extends State<_ManualSheet> {
+  Connection get _c => widget.connection;
+
+  @override
+  void initState() {
+    super.initState();
+    _c.addListener(_changed);
+    unawaited(_c.openCode());
+  }
+
+  @override
+  void dispose() {
+    _c.removeListener(_changed);
+    scheduleMicrotask(_c.closeCode);
+    super.dispose();
+  }
+
+  void _changed() {
+    if (mounted && _c.session != null) Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+        child: ListenableBuilder(
+          listenable: _c,
+          builder: (context, _) {
+            final pin = _c.pin;
+            final inv = _c.invitation;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(l.manualTitle, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 8),
+                Text(l.manualBody, style: TextStyle(color: c.muted, height: 1.4)),
+                const SizedBox(height: 16),
+                if (pin == null)
+                  const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()))
+                else if (pin.stopped)
+                  Text(l.pinStopped, textAlign: TextAlign.center, style: TextStyle(color: c.danger))
+                else ...[
+                  SelectableText(pin.address, key: const Key('my-address'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  SelectableText(
+                    pin.pin,
+                    key: const Key('my-pin'),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, letterSpacing: 6),
+                  ),
+                  Center(child: CodeCountdown(until: pin.expires, onExpired: () => unawaited(_c.showCode()))),
+                ],
+                const SizedBox(height: 8),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  children: [
+                    TextButton.icon(onPressed: () => unawaited(_c.showCode()), icon: const Icon(Icons.refresh_rounded), label: Text(l.newCode)),
+                    // On a desktop, the link pasted on the other one (same network).
+                    if (inv != null && inv.uri.isNotEmpty)
+                      TextButton.icon(
+                        onPressed: () async {
+                          await Clipboard.setData(ClipboardData(text: inv.uri));
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context)
+                            ..clearSnackBars()
+                            ..showSnackBar(SnackBar(content: Text(l.linkCopied)));
+                        },
+                        icon: const Icon(Icons.copy_rounded),
+                        label: Text(l.copyLink),
+                      ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// "Valid for n s", then [onExpired] once: a new code is drawn. Its own widget: the QR code is
+/// not redrawn each second.
+class CodeCountdown extends StatefulWidget {
+  const CodeCountdown({super.key, required this.until, required this.onExpired});
 
   final DateTime until;
   final VoidCallback onExpired;
 
   @override
-  State<_Countdown> createState() => _CountdownState();
+  State<CodeCountdown> createState() => _CodeCountdownState();
 }
 
-class _CountdownState extends State<_Countdown> {
+class _CodeCountdownState extends State<CodeCountdown> {
   Timer? _tick;
   bool _fired = false;
 
@@ -266,7 +470,7 @@ class _CountdownState extends State<_Countdown> {
   }
 
   @override
-  void didUpdateWidget(_Countdown old) {
+  void didUpdateWidget(CodeCountdown old) {
     super.didUpdateWidget(old);
     if (old.until != widget.until) _fired = false;
   }
@@ -290,128 +494,5 @@ class _CountdownState extends State<_Countdown> {
   Widget build(BuildContext context) {
     final left = widget.until.difference(DateTime.now()).inSeconds.clamp(0, 9999);
     return Text(AppLocalizations.of(context).validFor('$left'), style: TextStyle(color: context.colors.muted, fontSize: 13));
-  }
-}
-
-class _JoinCard extends StatelessWidget {
-  const _JoinCard({required this.onPaste, required this.onPin, this.onScan});
-
-  final VoidCallback? onScan;
-  final VoidCallback onPaste;
-  final VoidCallback onPin;
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    return _Section(
-      title: l.joinTitle,
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          if (onScan != null) FilledButton.tonalIcon(onPressed: onScan, icon: const Icon(Icons.qr_code_scanner_rounded), label: Text(l.scanQr)),
-          FilledButton.tonalIcon(key: const Key('paste-link'), onPressed: onPaste, icon: const Icon(Icons.link_rounded), label: Text(l.pasteLink)),
-          FilledButton.tonalIcon(key: const Key('type-pin'), onPressed: onPin, icon: const Icon(Icons.pin_outlined), label: Text(l.typePin)),
-        ],
-      ),
-    );
-  }
-}
-
-class _NearbyCard extends StatelessWidget {
-  const _NearbyCard({required this.connection, required this.onPick});
-
-  final Connection connection;
-  final ValueChanged<NearbyDevice> onPick;
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    final c = context.colors;
-    final devices = connection.nearby;
-    return _Section(
-      title: l.nearbyTitle,
-      trailing: connection.scanning
-          ? const Padding(
-              padding: EdgeInsets.all(12),
-              child: SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2)),
-            )
-          : IconButton(tooltip: l.refresh, icon: const Icon(Icons.refresh_rounded), onPressed: () => unawaited(connection.scan())),
-      child: devices.isEmpty
-          ? Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Text(connection.scanning ? l.searching : l.nearbyEmpty, style: TextStyle(color: c.muted)),
-            )
-          : Column(
-              children: [
-                for (final d in devices)
-                  ListTile(
-                    key: ValueKey('nearby-${d.ip}'),
-                    contentPadding: EdgeInsets.zero,
-                    leading: CircleAvatar(
-                      backgroundColor: c.chip,
-                      child: Icon(d.trusted ? Icons.verified_user_rounded : Icons.devices_rounded, color: Theme.of(context).colorScheme.primary),
-                    ),
-                    title: Text(d.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-                    subtitle: Text(d.trusted ? '${l.trustedBadge} · ${d.ip}' : d.ip),
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    onTap: () => onPick(d),
-                  ),
-              ],
-            ),
-    );
-  }
-}
-
-/// This device's own access point (Android, DISC-12): created on demand, its name and password
-/// shown for a device without a camera, which then types the PIN (three steps, §1.2).
-class _HotspotCard extends StatelessWidget {
-  const _HotspotCard({required this.connection});
-
-  final Connection connection;
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    final c = context.colors;
-    final h = connection.myHotspot;
-    final busy = connection.hotspotBusy;
-    return _Section(
-      title: l.hotspotTitle,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (h == null) ...[
-            Text(l.hotspotHint, style: TextStyle(color: c.muted)),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: FilledButton.tonalIcon(
-                key: const Key('hotspot-start'),
-                onPressed: busy ? null : () => unawaited(connection.startHotspot()),
-                icon: busy ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.wifi_tethering_rounded),
-                label: Text(busy ? l.hotspotBusy : l.hotspotStart),
-              ),
-            ),
-          ] else ...[
-            Text(l.hotspotOn, style: const TextStyle(fontWeight: FontWeight.w700)),
-            const SizedBox(height: 6),
-            SelectableText(l.hotspotNetwork(h.ssid ?? ''), key: const Key('hotspot-ssid')),
-            SelectableText(l.hotspotPassword(h.passphrase ?? ''), key: const Key('hotspot-password')),
-            const SizedBox(height: 6),
-            Text(l.hotspotSteps, style: TextStyle(color: c.muted, fontSize: 13)),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                key: const Key('hotspot-stop'),
-                onPressed: () => unawaited(connection.stopHotspot()),
-                icon: const Icon(Icons.portable_wifi_off_rounded),
-                label: Text(l.hotspotStop),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
   }
 }

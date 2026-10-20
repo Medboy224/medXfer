@@ -112,7 +112,10 @@ class AppState extends ChangeNotifier {
       await connection.pushNetwork(); // before the status: its address comes from it (DISC-10)
       final reply = await core.call('get_status');
       final status = reply.first('status');
-      if (status != null) _takeStatus(status);
+      if (status != null) {
+        _takeStatus(status);
+        connection.takeStatus(status); // this device's generic name (DISC-07)
+      }
       unawaited(transfers.loadHistory()); // the screens need not wait for it
       _status = CoreStatus.ready;
       notifyListeners();

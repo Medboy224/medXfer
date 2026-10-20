@@ -28,7 +28,9 @@ import (
 // hotspot_status, hotspot_stop, open_hotspot_settings, hotspot_started, hotspot_stopped. 4: what
 // the application needs (J6b, WP-B.0): trust_list, trust_forget, trust_rename, export_bundle,
 // trusted_devices, bundle_exported; send takes descriptors (items); transfer_progress lists the
-// files in progress (items).
+// files in progress (items). Added since, without a break: transfer_progress's stages
+// (stage_ms, bottleneck_confidence, WP-B.5); pin_refuse and pin_refused (the refusal of a PIN
+// asked for).
 const SchemaVersion = 4
 
 // DefaultQueueSize bounds the event queue (B11): past it, an event is dropped and counted, and
