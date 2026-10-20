@@ -132,5 +132,8 @@
   "unitGB": "{n} Go",
   "durationSeconds": "{s} s",
   "durationMinutes": "{m} min {s} s",
-  "durationHours": "{h} h {m} min"
+  "durationHours": "{h} h {m} min",
+  "storageHint": "Ces fichiers iront dans Download/medXfer. Pour les ranger par type dans medXfer/ à la racine du téléphone (Photos, Vidéos…), Android demande l'accès à tous les fichiers.",
+  "storageAllow": "Autoriser l'accès",
+  "storageWhere": "Ils iront dans {folder}."
 }

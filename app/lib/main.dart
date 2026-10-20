@@ -8,6 +8,7 @@ import 'platform/folders.dart';
 import 'platform/hotspot.dart';
 import 'platform/network.dart';
 import 'platform/open_folder.dart';
+import 'platform/storage.dart';
 import 'platform/zxing_qr_scanner.dart';
 import 'settings.dart';
 
@@ -20,7 +21,8 @@ void main() {
     hotspot: systemHotspot(),
     qrScanner: systemQrScanner(),
     filePicker: systemFilePicker(),
-    folderOpener: const SystemFolderOpener(),
+    folderOpener: systemFolderOpener(),
+    storage: systemReceiveStorage(),
   );
   state.start();
   runApp(MedxferApp(state: state, settings: AppSettings()));

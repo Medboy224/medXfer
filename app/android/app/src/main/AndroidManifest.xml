@@ -15,6 +15,9 @@
          declares RECORD_AUDIO for videos, the image picker READ_EXTERNAL_STORAGE for a gallery:
          neither is used. Storage comes with WP-B.4. -->
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Received files in medXfer/ at the root of the shared storage, sorted by type (decision
+         J2); asked with an explanation, never at the first start. Without it: Download/medXfer/. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/>

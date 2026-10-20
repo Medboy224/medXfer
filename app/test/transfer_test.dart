@@ -8,6 +8,7 @@ import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/platform/folders.dart';
+import 'package:medxfer/platform/storage.dart';
 import 'package:medxfer/settings.dart';
 import 'package:medxfer/transfer/history.dart';
 
@@ -25,16 +26,41 @@ class _Picker implements FilePicker {
   @override
   bool get supported => true;
   @override
-  Future<List<String>> files() async => paths;
+  bool get folders => true;
+  @override
+  Future<Picked> files() async => Picked(paths: paths);
   @override
   Future<String?> folder() async => null;
 }
 
+/// Android without the access to all files, until it is asked.
+class _Storage implements ReceiveStorage {
+  bool granted = false;
+  int asked = 0;
+  @override
+  bool get supported => true;
+  @override
+  Future<bool> allFiles() async => granted;
+  @override
+  Future<bool> askAllFiles() async {
+    asked++;
+    return granted = true;
+  }
+
+  @override
+  Future<String> root() async => '/storage/emulated/0/medXfer';
+}
+
 Map<String, Object?> _q(int i, String path, int size, String status) => {'index': i, 'rel_path': path, 'size': size, 'status': status};
 
-Future<(FakeCore, AppState)> _app(WidgetTester tester, FakeCore core, {FilePicker picker = const NoFilePicker()}) async {
+Future<(FakeCore, AppState)> _app(
+  WidgetTester tester,
+  FakeCore core, {
+  FilePicker picker = const NoFilePicker(),
+  ReceiveStorage storage = const NoReceiveStorage(),
+}) async {
   core.on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy A57'})]));
-  final state = AppState(core: core, folders: const _TestFolders(), filePicker: picker, history: MemoryHistoryStore());
+  final state = AppState(core: core, folders: const _TestFolders(), filePicker: picker, storage: storage, history: MemoryHistoryStore());
   tester.platformDispatcher.localesTestValue = [const Locale('fr')];
   addTearDown(tester.platformDispatcher.clearLocalesTestValue);
   tester.view.physicalSize = const Size(1080, 2400);
@@ -159,5 +185,28 @@ void main() {
     await tester.tap(find.byKey(const Key('see-transfer')));
     await tester.pumpAndSettle();
     expect(find.text('Envoi à Galaxy'), findsOneWidget);
+  });
+
+  testWidgets('Android without the access to all files: said in the offer, allowed there, then sorted', (tester) async {
+    final core = FakeCore()..on('respond_offer', (_) => const FakeAnswer());
+    final storage = _Storage();
+    await _app(tester, core, storage: storage);
+    core.emit(CoreEvent('incoming_offer', data: {
+      'device_name': 'PC',
+      'file_name': 'Vacances',
+      'file_size': 2,
+      'total_files': 2,
+      'enough_space': true,
+      'items': [_q(0, 'Vacances/a.jpg', 1, 'pending'), _q(1, 'Vacances/b.jpg', 1, 'pending')],
+    }));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('storage-hint')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('storage-allow')));
+    await tester.pumpAndSettle();
+    expect(storage.asked, 1);
+    expect(find.byKey(const Key('storage-hint')), findsNothing);
+    await tester.tap(find.byKey(const Key('offer-accept')));
+    await tester.pumpAndSettle();
+    expect(core.calls.last.payload, {'accept': true, 'save_dir': '/storage/emulated/0/medXfer/Photos'});
   });
 }

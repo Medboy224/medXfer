@@ -15,6 +15,7 @@ import 'platform/hotspot.dart';
 import 'platform/network.dart';
 import 'platform/open_folder.dart';
 import 'platform/qr_scanner.dart';
+import 'platform/storage.dart';
 import 'transfer/history.dart';
 import 'transfer/transfers.dart';
 
@@ -29,6 +30,7 @@ class AppState extends ChangeNotifier {
     this.qrScanner = const NoQrScanner(),
     this.filePicker = const NoFilePicker(),
     this.folderOpener = const NoFolderOpener(),
+    this.storage = const NoReceiveStorage(),
     HistoryStore? history,
   }) : connection = Connection(core, network: network, hotspot: hotspot) {
     // Created now, not on first use: they listen to the core from its first event.
@@ -37,6 +39,10 @@ class AppState extends ChangeNotifier {
       history: history ?? FileHistoryStore(folders.dataDir),
       peerName: () => connection.session?.name ?? '',
       downloadDir: folders.downloadDir,
+      // Android: each offer in medXfer/<type>/ (decision J2), whole.
+      placeFor: storage.supported
+          ? (o) async => '${await storage.root()}/${typeFolderFor(o.items.isEmpty ? [o.name] : [for (final i in o.items) i.path])}'
+          : null,
     );
   }
 
@@ -55,6 +61,9 @@ class AppState extends ChangeNotifier {
   /// Files and folders chosen on a desktop; the received folder opened.
   final FilePicker filePicker;
   final FolderOpener folderOpener;
+
+  /// Where received files go on Android, and the access to all files (WP-B.4).
+  final ReceiveStorage storage;
 
   CoreStatus _status = CoreStatus.starting;
   String _deviceName = '';

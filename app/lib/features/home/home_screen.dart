@@ -139,24 +139,26 @@ class HomeScreen extends StatelessWidget {
                         FilledButton.icon(
                           key: const Key('send-files'),
                           style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
-                          onPressed: () async => state.transfers.send(await state.filePicker.files()),
+                          onPressed: () async => state.transfers.sendPicked(await state.filePicker.files()),
                           icon: const Icon(Icons.upload_file_rounded),
                           label: Text(l.sendFiles),
                         ),
-                        OutlinedButton.icon(
-                          key: const Key('send-folder'),
-                          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
-                          onPressed: () async {
-                            final folder = await state.filePicker.folder();
-                            if (folder != null) await state.transfers.send([folder]);
-                          },
-                          icon: const Icon(Icons.drive_folder_upload_rounded),
-                          label: Text(l.sendFolder),
-                        ),
+                        // A whole folder: the desktops (Android: with the explorer of WP-B.9).
+                        if (state.filePicker.folders)
+                          OutlinedButton.icon(
+                            key: const Key('send-folder'),
+                            style: OutlinedButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
+                            onPressed: () async {
+                              final folder = await state.filePicker.folder();
+                              if (folder != null) await state.transfers.send([folder]);
+                            },
+                            icon: const Icon(Icons.drive_folder_upload_rounded),
+                            label: Text(l.sendFolder),
+                          ),
                       ],
                     );
                   }
-                  // Android sends from the explorer of WP-B.9; until then, the session's end.
+                  // Without a picker: the session's end.
                   if (connection.session != null) {
                     return OutlinedButton.icon(
                       key: const Key('disconnect'),

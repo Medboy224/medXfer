@@ -172,5 +172,9 @@
   "durationMinutes": "{m} min {s} s",
   "@durationMinutes": {"placeholders": {"m": {"type": "String"}, "s": {"type": "String"}}},
   "durationHours": "{h} h {m} min",
-  "@durationHours": {"placeholders": {"h": {"type": "String"}, "m": {"type": "String"}}}
+  "@durationHours": {"placeholders": {"h": {"type": "String"}, "m": {"type": "String"}}},
+  "storageHint": "These files will go to Download/medXfer. To sort them by type in medXfer/ at the root of the phone (Photos, Videos…), Android asks for the access to all files.",
+  "storageAllow": "Allow the access",
+  "storageWhere": "They will go to {folder}.",
+  "@storageWhere": {"placeholders": {"folder": {"type": "String"}}}
 }
