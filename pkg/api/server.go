@@ -12,7 +12,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,11 +29,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/Medboy224/medXfer/pkg/store"
 	"github.com/Medboy224/medXfer/pkg/transfer"
-	"github.com/gorilla/websocket"
 )
-
-// controlTokenPlaceholder is replaced by the real control token when the dashboard is served.
-const controlTokenPlaceholder = "__MEDXFER_CONTROL_TOKEN__"
 
 // IPAuthRecord tracks failed PIN authentication attempts for brute-force defense
 type IPAuthRecord struct {
@@ -45,12 +40,8 @@ type IPAuthRecord struct {
 
 // DaemonServer manages the headless background engine and WebSocket connections
 type DaemonServer struct {
-	controlToken       string // 256-bit secret required on every control route (API-04)
-	controlDisabled    bool   // share-only mode: no dashboard, /ws, /status or /api/fs/*
 	mu                 sync.RWMutex
 	config             Config
-	clients            map[*websocket.Conn]bool
-	clientsMu          sync.Mutex
 	activeSession      *session.Channel
 	pairedDeviceName   string
 	pendingOffer       *session.Message // a complete offer waiting for respond_offer
@@ -158,22 +149,12 @@ func NewDaemonServerAt(dataDir string, port int, defaultOutDir, deviceName strin
 		panic("medxfer: crypto/rand unavailable: " + err.Error())
 	}
 
-	// Control token (API-04, decision D0-2): MEDXFER_CONTROL_TOKEN if long enough, else random.
-	controlToken := os.Getenv("MEDXFER_CONTROL_TOKEN")
-	if len(controlToken) < 32 {
-		if controlToken, err = randomHex(32); err != nil {
-			panic("medxfer: crypto/rand unavailable: " + err.Error())
-		}
-	}
-
 	pCode, _, _ := discovery.GeneratePairingCode("")
-	registerSecrets(pin, token, controlToken, pCode)
+	registerSecrets(pin, token, pCode)
 
 	srv := &DaemonServer{
 		gate:               securechan.NewGate(),
-		controlToken:       controlToken,
 		config:             cfg,
-		clients:            make(map[*websocket.Conn]bool),
 		webSharePIN:        pin,
 		webShareToken:      token,
 		webShareEnabled:    false,
@@ -292,7 +273,7 @@ func (s *DaemonServer) regeneratePINInternal(digits int) {
 		log.Printf("[Security] Web Share credential rotation failed: %v", err)
 		return
 	}
-	registerSecrets(pin, token, "", "")
+	registerSecrets(pin, token, "")
 	s.mu.Lock()
 	s.webSharePIN = pin
 	s.webShareToken = token
@@ -548,18 +529,13 @@ func (s *DaemonServer) startNode() error {
 	return nil
 }
 
-// serveHTTP serves the dashboard and its control WebSocket (devui) and the Web Share portal.
+// serveHTTP serves the Web Share portal and the health probe.
 func (s *DaemonServer) serveHTTP(httpLn net.Listener) error {
 	s.SetDiscoverable(true) // the dashboard's daemon is up for discovery while it serves
 	// 3. Start HTTP/WebSocket Router
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/health", s.handleHealth)
-	if !s.controlDisabled {
-		// The control surface (/status, /ws, the dashboard's routes) exists in devui builds only
-		// (API-01, API-04, WP-6.6): the published binary has no control socket.
-		s.registerDevUIRoutes(mux)
-	}
 	mux.HandleFunc("/share", shareHeaders(s.handleSharePortal, true))
 	mux.HandleFunc("/api/share/list", shareHeaders(s.handleShareList, true))
 	mux.HandleFunc("/api/share/download", shareHeaders(s.handleShareDownload, false))
@@ -575,7 +551,7 @@ func (s *DaemonServer) serveHTTP(httpLn net.Listener) error {
 	s.httpSrv = httpSrv
 	s.mu.Unlock()
 
-	log.Printf("[*] medXfer Headless Daemon started on http://%s (ws://%s/ws)", httpLn.Addr().String(), httpLn.Addr().String())
+	log.Printf("[*] medXfer Headless Daemon started on http://%s", httpLn.Addr().String())
 	return httpSrv.Serve(httpLn)
 }
 
@@ -648,25 +624,12 @@ func (s *DaemonServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-
-	// Security check: External network devices MUST NOT access the full host dashboard!
-	// Redirect any non-loopback device (or everyone in share-only mode) to the Web Share portal.
-	if s.controlDisabled || !isLoopbackRequest(r) {
-		redirectURL := "/share"
-		if r.URL.RawQuery != "" {
-			redirectURL += "?" + r.URL.RawQuery
-		}
-		http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
-		return
+	// The web dashboard was removed at gate G7 (DEV-19-R): "/" leads to the Web Share portal.
+	redirectURL := "/share"
+	if r.URL.RawQuery != "" {
+		redirectURL += "?" + r.URL.RawQuery
 	}
-	// The page receives the control token: never serve it under a foreign Host (DNS rebinding).
-	// No token is required here, it is the page that obtains it (API-04, control 7).
-	if !s.hostAllowed(r.Host) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-
-	s.serveDashboard(w) // devui builds only (DEV-19); a 404 that says so otherwise
+	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 }
 
 func (s *DaemonServer) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -687,28 +650,6 @@ func (s *DaemonServer) Broadcast(evt EventMessage) {
 		fn(evt) // must not block (pkg/core: a bounded queue that drops, B11)
 	}
 	s.sinkMu.RUnlock()
-	s.clientsMu.Lock()
-	defer s.clientsMu.Unlock()
-	for client := range s.clients {
-		_ = client.SetWriteDeadline(time.Now().Add(2 * time.Second))
-		err := client.WriteJSON(evt)
-		_ = client.SetWriteDeadline(time.Time{})
-		if err != nil {
-			_ = client.Close()
-			delete(s.clients, client)
-		}
-	}
-}
-
-// SendTo sends a JSON event to a specific client connection.
-// gorilla/websocket allows one concurrent writer per connection: every write,
-// here and in Broadcast, holds clientsMu.
-func (s *DaemonServer) sendTo(conn *websocket.Conn, evt EventMessage) {
-	s.clientsMu.Lock()
-	defer s.clientsMu.Unlock()
-	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-	_ = conn.WriteJSON(evt)
-	_ = conn.SetWriteDeadline(time.Time{})
 }
 
 // SharePaths configures files or directories to be immediately available on the Web Share portal
@@ -740,7 +681,7 @@ func (s *DaemonServer) SharePaths(paths []string) error {
 
 // SetPIN configures the 4-digit security PIN for Web Share
 func (s *DaemonServer) SetPIN(pin string) {
-	registerSecrets(pin, "", "", "")
+	registerSecrets(pin, "", "")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.webSharePIN = pin
@@ -835,34 +776,6 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 	return st
 }
 
-// ControlToken returns the secret required on control routes. Never log it.
-func (s *DaemonServer) ControlToken() string { return s.controlToken }
-
-// DisableControlSurface turns the server into a Web Share portal only (xfer share):
-// no dashboard, /ws, /status or /api/* control routes. Call before Serve.
-func (s *DaemonServer) DisableControlSurface() { s.controlDisabled = true }
-
-// control guards a control route (API-04). In order: loopback peer, Host header naming this
-// listener (DNS rebinding), Origin if present (cross-site WebSocket hijacking), then the
-// control token, compared in constant time.
-func (s *DaemonServer) control(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopbackRequest(r) || !s.hostAllowed(r.Host) {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		if o := r.Header.Get("Origin"); o != "" && !s.originAllowed(o) {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		if !secureEq(extractControlToken(r), s.controlToken) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
-}
-
 // hostAllowed accepts 127.0.0.1, localhost or [::1] with this listener's port.
 func (s *DaemonServer) hostAllowed(h string) bool {
 	host, port, err := net.SplitHostPort(h)
@@ -870,26 +783,6 @@ func (s *DaemonServer) hostAllowed(h string) bool {
 		return false
 	}
 	return host == "127.0.0.1" || host == "localhost" || host == "::1"
-}
-
-// originAllowed accepts only the dashboard's own origin.
-func (s *DaemonServer) originAllowed(o string) bool {
-	u, err := url.Parse(o)
-	return err == nil && u.Scheme == "http" && u.Path == "" && s.hostAllowed(u.Host)
-}
-
-// extractControlToken reads "Authorization: Bearer <token>" (native clients) or the WebSocket
-// subprotocol "token.<token>" (browsers cannot set headers on a WebSocket). Never the URL.
-func extractControlToken(r *http.Request) string {
-	if a := r.Header.Get("Authorization"); strings.HasPrefix(a, "Bearer ") {
-		return strings.TrimPrefix(a, "Bearer ")
-	}
-	for _, p := range websocket.Subprotocols(r) {
-		if strings.HasPrefix(p, "token.") {
-			return strings.TrimPrefix(p, "token.")
-		}
-	}
-	return ""
 }
 
 // currentHTTPPort reads the HTTP port set by Listen/Serve. Callers must not hold s.mu.

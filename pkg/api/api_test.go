@@ -71,35 +71,14 @@ func TestDaemonHTTPEndpoints(t *testing.T) {
 		t.Fatalf("Invalid /health payload: %s", string(body))
 	}
 
-	// 2. Test /status: the control surface of devui builds; absent from the published binary
-	// (API-01, WP-6.6).
-	statusResp, err := controlGet(fmt.Sprintf("http://127.0.0.1:%d/status", port))
+	// 2. No control surface (API-01): the web dashboard went at gate G7 (DEV-19-R).
+	statusResp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/status", port))
 	if err != nil {
 		t.Fatalf("Failed to GET /status: %v", err)
 	}
 	defer statusResp.Body.Close()
-	if !DashboardAvailable {
-		if statusResp.StatusCode != http.StatusNotFound {
-			t.Fatalf("GET /status = %d; want 404 without devui", statusResp.StatusCode)
-		}
-	} else {
-		var st DaemonStatus
-		if err := json.NewDecoder(statusResp.Body).Decode(&st); err != nil {
-			t.Fatalf("Failed decoding /status: %v", err)
-		}
-		if st.DeviceName != "TestDevice" {
-			t.Fatalf("Expected DeviceName 'TestDevice', got %q", st.DeviceName)
-		}
-	}
-
-	// 3. Test / : the dashboard in devui builds, an explicit 404 otherwise (DEV-19)
-	uiResp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/", port))
-	if err != nil {
-		t.Fatalf("Failed to GET /: %v", err)
-	}
-	defer uiResp.Body.Close()
-	if want := map[bool]int{true: http.StatusOK, false: http.StatusNotFound}[DashboardAvailable]; uiResp.StatusCode != want {
-		t.Fatalf("GET / = %d; want %d (DashboardAvailable=%v)", uiResp.StatusCode, want, DashboardAvailable)
+	if statusResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /status = %d; want 404", statusResp.StatusCode)
 	}
 }
 

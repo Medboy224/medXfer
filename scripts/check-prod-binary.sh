@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Checks that the production binary carries no diagnostic or development code
-# (DEV-10, DEV-12, DEV-19): faultconn, faultfs, the engine fault hooks, testkit and the
-# testing package, pprof, the web dashboard (devui), and its control surface (/ws, /status:
-# API-01, WP-6.6).
+# (DEV-10, DEV-12): faultconn, faultfs, the engine fault hooks, testkit and the testing
+# package, pprof. The web dashboard and its control surface were removed at gate G7
+# (DEV-19-R): their symbols and text stay forbidden, in case they came back.
 # Usage: scripts/check-prod-binary.sh [extra go build flags]
-# Self-tests: "-tags diag" and "-tags devui" must both fail.
+# Self-test: "-tags diag" must fail.
 set -euo pipefail
 
 forbidden='pkg/diag/faultconn|pkg/diag/faultfs|pkg/testkit|net/http/pprof|^testing$'
@@ -25,7 +25,7 @@ if bad=$(go tool nm "$tmp/xfer.bin" | grep -E "$forbidden_symbols" | head -20); 
   echo "Symboles interdits dans le binaire de production :"; echo "$bad"; status=1
 fi
 if grep -qa "$forbidden_text" "$tmp/xfer.bin"; then
-  echo "Le tableau de bord web (devui) est dans le binaire de production."; status=1
+  echo "Le tableau de bord web est revenu dans le binaire de production."; status=1
 fi
 
 if [ "$status" -eq 0 ]; then echo "Binaire de production propre."; fi

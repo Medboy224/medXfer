@@ -47,7 +47,7 @@ func listenNodePort(bind string) (net.Listener, error) {
 	if l, err = net.Listen("tcp4", net.JoinHostPort(bind, "0")); err != nil {
 		return nil, err
 	}
-	fmt.Printf("[!] Port %d is taken (another medXfer on this device: xfer dev-ui, daemon or node?): using port %d.\n",
+	fmt.Printf("[!] Port %d is taken (another medXfer on this device: xfer node or share?): using port %d.\n",
 		defaultPort, l.Addr().(*net.TCPAddr).Port)
 	fmt.Println("    On Windows, the firewall must let this port in, or the other device cannot download from here.")
 	return l, nil
@@ -98,17 +98,6 @@ func main() {
 	}
 	cmd := normalizeCommand(args[0])
 	switch cmd {
-	case "daemon", "d", "server", "srv", "dev-ui", "devui":
-		// The daemon and its control WebSocket serve the web dashboard only: a development tool
-		// (WP-6.6, decision D7 of the J6a plan). The app embeds the core (cmd/libmedxfer) and
-		// the commands below call it in-process.
-		if !api.DashboardAvailable {
-			fmt.Fprintln(os.Stderr, "[-] xfer "+cmd+": the daemon serves the web dashboard, a development tool not part of this build.\n"+
-				"    Build with: go build -tags devui -o xfer ./cmd/xfer   (build.bat does)\n"+
-				"    To send or receive, use xfer send, xfer recv, xfer pair or xfer node.")
-			os.Exit(1)
-		}
-		handleDaemon(args[1:])
 	case "share", "web":
 		handleShare(args[1:])
 	case "send", "s":
@@ -1728,99 +1717,6 @@ func selectOneShotSender() *discovery.Peer {
 	}
 }
 
-func handleDaemon(args []string) {
-	daemonCmd := flag.NewFlagSet("daemon", flag.ExitOnError)
-	portFlag := daemonCmd.Int("port", 19999, "Port for Headless API (HTTP & WebSocket)")
-	outDirFlag := daemonCmd.String("out", "", "Default directory to save incoming files")
-	nameFlag := daemonCmd.String("name", "", "Custom device name for discovery")
-	webShareFlag := daemonCmd.Bool("web-share", false, "Open the Web Share guest portal to the LAN at startup")
-
-	_ = daemonCmd.Parse(reorderArgs(daemonCmd, args))
-	defer startJournal()()
-
-	srv := api.NewDaemonServer(*portFlag, *outDirFlag, *nameFlag)
-	// Web Share is an optional module, disabled by default (bible ch. 11, rule R3): until it is
-	// enabled (--web-share, or later from the dashboard), no LAN device can try the PIN on /share.
-	srv.SetWebShareEnabled(*webShareFlag)
-
-	ln, err := srv.Listen(*portFlag)
-	if err != nil {
-		fmt.Printf("[-] Failed to start Daemon listener: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Scripts read the control token from this file (decision D0-2). Print its path, never its value.
-	tokenPath, err := writeControlToken(srv.ControlToken())
-	if err != nil {
-		fmt.Printf("[-] Failed to write control token: %v\n", err)
-		os.Exit(1)
-	}
-
-	st := srv.GetStatus()
-	localIP := st.LocalIP
-	if localIP == "" || localIP == "127.0.0.1" {
-		localIP = getLocalIP()
-	}
-	if localIP == "" {
-		localIP = "127.0.0.1"
-	}
-	localURL := fmt.Sprintf("http://localhost:%d", st.LocalPort)
-	remoteURL := fmt.Sprintf("http://%s:%d", localIP, st.LocalPort)
-
-	fmt.Println("==================================================")
-	fmt.Println("             medXfer Daemon & Server              ")
-	fmt.Println("==================================================")
-	fmt.Printf(" Device Name  : %s\n", st.DeviceName)
-	fmt.Printf(" Local IP     : %s\n", localIP)
-	fmt.Printf(" Port         : %d\n", st.LocalPort)
-	fmt.Printf(" Pairing Code : %s\n", st.PairingCode)
-	fmt.Println("--------------------------------------------------")
-	fmt.Println(" Web Dashboard (development build, this device only):") // devui builds only (WP-6.6)
-	fmt.Printf("   👉 %s/\n", localURL)
-	fmt.Printf(" Control token file: %s\n", tokenPath)
-	fmt.Println("--------------------------------------------------")
-	if *webShareFlag {
-		fmt.Printf(" Web Share PIN: %s\n", st.WebSharePIN)
-		fmt.Println(" Web Share portal (other devices):")
-		fmt.Printf("   👉 %s/share\n", remoteURL)
-		fmt.Println(" Scan QR code to connect from phone / PC:")
-		discovery.PrintTerminalQR(remoteURL + "/share")
-	} else {
-		fmt.Println(" Web Share    : disabled (start with --web-share, or enable it from the dashboard)")
-	}
-	fmt.Println("--------------------------------------------------")
-	fmt.Println(" Daemon is running. Press Ctrl+C to stop.")
-
-	// Listen for OS signals to stop cleanly
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		fmt.Println("\n[*] Stopping Daemon...")
-		srv.Stop()
-		os.Exit(0)
-	}()
-
-	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		fmt.Printf("[-] Server error: %v\n", err)
-	}
-}
-
-// writeControlToken stores the control token in <config dir>/control.token, readable only by
-// the user (0600 on Unix; on Windows the file lives in the user's profile).
-func writeControlToken(token string) (string, error) {
-	dir := filepath.Dir(api.GetConfigFilePath())
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	p := filepath.Join(dir, "control.token")
-	if err := os.WriteFile(p, []byte(token+"\n"), 0o600); err != nil {
-		return "", err
-	}
-	_ = os.Chmod(p, 0o600) // WriteFile keeps the mode of an existing file
-	return p, nil
-}
-
 func handleShare(args []string) {
 	shareCmd := flag.NewFlagSet("share", flag.ExitOnError)
 	portFlag := shareCmd.Int("port", 19999, "Port for Web Share HTTP portal")
@@ -1834,7 +1730,6 @@ func handleShare(args []string) {
 	rawPaths := shareCmd.Args()
 
 	srv := api.NewDaemonServer(*portFlag, *outDirFlag, *nameFlag)
-	srv.DisableControlSurface() // portal only: no dashboard, /ws or /status in share mode
 	srv.SetWebShareEnabled(true)
 	if *pinFlag != "" {
 		srv.SetPIN(*pinFlag)
@@ -1902,7 +1797,6 @@ func printUsage() {
 		"               medXfer - Fast P2P Transfer        \n" +
 		"==================================================\n" +
 		"Usage:\n" +
-		"  xfer daemon | dev-ui [--port 19999] [--web-share]  (Web dashboard daemon; devui builds only)\n" +
 		"  xfer node                                      (Persistent interactive CLI: QR code or fingerprints)\n" +
 		"  xfer share <file_or_folder...>                 (Instant Web Share with QR code & PIN)\n" +
 		"  xfer send [-i] <file_or_folder> [more...]      (Direct transfer: shows a QR code; -i prompts)\n" +

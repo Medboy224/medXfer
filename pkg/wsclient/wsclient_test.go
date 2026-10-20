@@ -3,58 +3,40 @@ package wsclient
 import (
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
-// fakeDaemon answers each request with an "ack" event carrying the request, after sending
-// two unrelated events, and rejects connections without the right token.
-func fakeDaemon(t *testing.T) string {
+// fakeDaemon answers each request with two unrelated events, then an "ack" carrying the
+// request; a "status" event comes first, as a daemon sends on connection.
+func fakeDaemon(t *testing.T) *Client {
 	t.Helper()
-	up := websocket.Upgrader{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer secret" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		ws, err := up.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer ws.Close()
-		_ = ws.WriteJSON(map[string]any{"event": "status"})
-		for {
-			var req map[string]any
-			if err := ws.ReadJSON(&req); err != nil {
-				return
-			}
-			_ = ws.WriteJSON(map[string]any{"event": "noise"})
-			_ = ws.WriteJSON(map[string]any{"event": "noise"})
-			_ = ws.WriteJSON(map[string]any{"event": "ack", "id": req["id"], "data": req})
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return strings.TrimPrefix(srv.URL, "http://")
+	var subs []func([]byte)
+	c := Local(func(raw []byte, reply func([]byte)) {
+		var req map[string]any
+		_ = json.Unmarshal(raw, &req)
+		noise, _ := json.Marshal(map[string]any{"event": "noise"})
+		ack, _ := json.Marshal(map[string]any{"event": "ack", "id": req["id"], "data": req})
+		reply(noise)
+		reply(noise)
+		reply(ack)
+	}, func(fn func([]byte)) func() {
+		subs = append(subs, fn)
+		return func() {}
+	})
+	t.Cleanup(func() { _ = c.Close() })
+	status, _ := json.Marshal(map[string]any{"event": "status"})
+	for _, fn := range subs {
+		fn(status)
+	}
+	return c
 }
 
 func TestClient(t *testing.T) {
-	addr := fakeDaemon(t)
+	c := fakeDaemon(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	if _, err := Dial(ctx, addr, "wrong"); err == nil || !strings.Contains(err.Error(), "401") {
-		t.Fatalf("Dial with a wrong token = %v; want an HTTP 401 error", err)
-	}
-	c, err := Dial(ctx, addr, "secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 
 	if e, err := c.Next(ctx); err != nil || e.Event != "status" {
 		t.Fatalf("first event = %+v, %v; want status", e, err)
@@ -100,14 +82,9 @@ func TestClient(t *testing.T) {
 
 // Watch replays the events already received, then delivers new ones, in order, once each.
 func TestWatch(t *testing.T) {
-	addr := fakeDaemon(t)
+	c := fakeDaemon(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, err := Dial(ctx, addr, "secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
 	if _, err := c.Next(ctx); err != nil { // "status" is now in the past
 		t.Fatal(err)
 	}
