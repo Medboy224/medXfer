@@ -68,3 +68,9 @@ jobs:
       - run: flutter test
       - run: flutter build linux --release
       - run: test -f build/linux/x64/release/bundle/lib/libmedxfer.so
+      # WP-B.6: the Linux package, then on a fresh Ubuntu 24.04 with only the packages its
+      # DEPENDANCES.txt lists (G2A-08, reserve 2 of G2a).
+      - run: MEDXFER_SKIP_BUILD=1 bash scripts/package-linux.sh dist
+        working-directory: .
+      - run: bash scripts/test-fresh-linux.sh dist/medxfer-*-linux-x64.tar.gz
+        working-directory: .

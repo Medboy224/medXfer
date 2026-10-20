@@ -124,7 +124,7 @@ Dans l'application, ces outils sont dans le panneau développeur : Réglages, pu
 
 **Cause :** le pare-feu de Windows bloque ce qui arrive vers medXfer :
 
-- les recherches de la découverte (mDNS, port UDP 5353) ;
+- les recherches de la découverte (mDNS, port UDP 5353, et la balise de medXfer, port UDP 19998) ;
 - le port de medXfer, TCP 18887, où l'autre appareil se connecte pour s'appairer **et pour télécharger** : c'est toujours le receveur qui se connecte à l'émetteur.
 
 Le problème se pose surtout quand le Wi-Fi est en profil « Privé » et que medXfer n'a été autorisé que pour le profil « Public », ou l'inverse.
@@ -133,6 +133,7 @@ Le problème se pose surtout quand le Wi-Fi est en profil « Privé » et que me
 
 ```powershell
 New-NetFirewallRule -DisplayName "medXfer mDNS" -Direction Inbound -Protocol UDP -LocalPort 5353 -Action Allow -Profile Private,Public
+New-NetFirewallRule -DisplayName "medXfer découverte" -Direction Inbound -Protocol UDP -LocalPort 19998 -Action Allow -Profile Private,Public
 New-NetFirewallRule -DisplayName "medXfer" -Direction Inbound -Protocol TCP -LocalPort 18887 -Action Allow -Profile Private,Public
 ```
 

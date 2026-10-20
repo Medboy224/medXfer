@@ -231,6 +231,22 @@ Le sélecteur natif, le dépôt temporaire et la navigation de fichiers du table
 - **Android** : APK signé avec une clé de développement. La clé de publication et le Play Store relèvent de J8. Les bibliothèques natives sont compressées dans l'APK (WP-B.2b) : 14,0 Mo en arm64 avec le lecteur de QR, contre 30,1 Mo sans compression (UI-5).
 - Les règles du pare-feu Windows restent pour l'installateur de J8 ; d'ici là, le guide explique comment les poser.
 
+**Fait** (20 octobre) : trois scripts, un paquet par système, dans `dist/`. Installation et pare-feu : [guide-utilisation-app.md](guide-utilisation-app.md).
+
+| Paquet | Script | Taille | Vérifié |
+|---|---|---|---|
+| Windows : dossier portable zippé | `package-windows.ps1` | 17,1 Mo | Le cœur, `msvcp140`, `vcruntime140` et `vcruntime140_1` présents ; lancé décompressé hors de l'arbre, toutes ces DLL chargées depuis son dossier |
+| Linux : `tar.gz` et `DEPENDANCES.txt` | `package-linux.sh` | — | Dans la CI, sur une Ubuntu 24.04 neuve avec les seuls paquets listés : toutes les bibliothèques trouvées, l'application tourne 15 s (Xvfb) |
+| Android : APK arm64 | `package-android.ps1` | 20,4 Mo | Signé avec la clé de développement ; un APK signé avec la clé de débogage est refusé |
+
+Ce que l'essai sur une distribution neuve a trouvé : Flutter charge OpenGL au lancement (`libEGL.so.1`, par `libepoxy`), ce que `ldd` ne voit pas. Sans lui, l'application s'arrête aussitôt. `DEPENDANCES.txt` liste maintenant `libegl1`, `libgl1`, `libgles2` et `libgl1-mesa-dri`. La réserve 2 de G2a (G2A-08 sous Linux) est levée.
+
+La clé de développement : `scripts/android-dev-key.ps1` la crée hors du dépôt (`%USERPROFILE%\.medxfer\medxfer-dev.jks`) et écrit `app/android/key.properties`, jamais versionné. Sans ce fichier, la construction de version reste signée avec la clé de débogage, pour `flutter run --release`.
+
+L'APK pèse 20,4 Mo contre 14,0 Mo à WP-B.2b : l'explorateur et ses bibliothèques s'y sont ajoutés. Il reste sous les 25 Mo d'UI-5.
+
+Le guide signalait les ports TCP 18887 et UDP 5353 ; il manquait le port UDP 19998 de la balise de découverte, ajouté aux deux guides.
+
 ### WP-B.7 — Point d'accès local (`DISC-12`) : sonde, puis intégration · M
 
 **La sonde**, tôt, sur le téléphone de test :
