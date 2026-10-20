@@ -153,5 +153,13 @@
   "appSplit": "En plusieurs parties : peut ne pas s'installer",
   "mixedNotice": "Envoyez les applications à part des dossiers.",
   "desktopTabs": "Sur un ordinateur, envoyez avec « Envoyer des fichiers » une fois connecté, ou déposez des fichiers sur la fenêtre.",
-  "upFolder": "Dossier parent"
+  "upFolder": "Dossier parent",
+  "catFolders": "Dossiers",
+  "catDocuments": "Documents",
+  "catEbooks": "E-books",
+  "catApks": "Fichiers APK",
+  "catArchives": "Archives",
+  "catLarge": "Gros fichiers",
+  "splitApp": "Cette application est installée en plusieurs parties : l'autre téléphone pourrait ne pas pouvoir l'installer avec ce seul fichier.",
+  "sizing": "calcul…"
 }

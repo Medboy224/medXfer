@@ -197,5 +197,13 @@
   "appSplit": "In several parts: may not install",
   "mixedNotice": "Send the apps apart from the folders.",
   "desktopTabs": "On a computer, send with \"Send files\" once connected, or drop files on the window.",
-  "upFolder": "Up"
+  "upFolder": "Up",
+  "catFolders": "Folders",
+  "catDocuments": "Documents",
+  "catEbooks": "E-books",
+  "catApks": "APK files",
+  "catArchives": "Archives",
+  "catLarge": "Large files",
+  "splitApp": "This app is installed in several parts: the other phone may not be able to install it from this file alone.",
+  "sizing": "measuring…"
 }

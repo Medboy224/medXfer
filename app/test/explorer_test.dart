@@ -68,6 +68,17 @@ class _Library implements Library {
   @override
   Future<List<FileEntry>> listDir(String path) async => const [];
   @override
+  Future<Uint8List?> fileThumbnail(String path, int px) async => null;
+  @override
+  Future<int> dirSize(String path) async => 7 << 20;
+  @override
+  Future<List<FileEntry>> files(FileCategory category, {int offset = 0, int limit = 200}) async => offset > 0
+      ? const []
+      : switch (category) {
+          FileCategory.documents => const [FileEntry(name: 'rapport.pdf', path: '/storage/emulated/0/Documents/rapport.pdf', dir: false, size: 2 << 20)],
+          _ => const [],
+        };
+  @override
   Future<List<OpenFile>> open(List<({String path, String name})> files) async {
     opened.add(files);
     return [for (var i = 0; i < files.length; i++) OpenFile(fd: 100 + i, name: files[i].name)];

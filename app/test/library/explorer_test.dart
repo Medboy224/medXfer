@@ -3,7 +3,10 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'dart:async';
+
 import 'package:medxfer/library/explorer.dart';
+import 'package:medxfer/library/selection.dart';
 import 'package:medxfer/platform/library.dart';
 
 void main() {
@@ -40,4 +43,53 @@ void main() {
     expect(await e.image('x', () async => throw StateError('gone')), isNull);
     expect(await e.image('x', () async => Uint8List(2)), hasLength(2));
   });
+
+  test('at most a few loads at once, the last asked first; a tile gone is not loaded', () async {
+    final e = Explorer(const NoLibrary());
+    final started = <String>[];
+    final gates = <String, Completer<Uint8List?>>{};
+    Future<Uint8List?> Function() load(String k) => () {
+      started.add(k);
+      return (gates[k] = Completer<Uint8List?>()).future;
+    };
+    for (var i = 0; i < Explorer.parallel + 3; i++) {
+      e.image('k$i', load('k$i'));
+    }
+    // The first ones start at once, while there is room.
+    expect(started, [for (var i = 0; i < Explorer.parallel; i++) 'k$i']);
+    e.forget('k${Explorer.parallel}'); // scrolled away while waiting
+    gates['k0']!.complete(Uint8List(1));
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    // The last asked of those waiting goes next; the forgotten one never.
+    expect(started.last, 'k${Explorer.parallel + 2}');
+    expect(started, isNot(contains('k${Explorer.parallel}')));
+  });
+
+  test('a picked folder gets its size once walked', () async {
+    final e = Explorer(_Sizes());
+    final s = Selection()..toggle(const Pick(path: '/Docs', name: 'Docs', size: 0, kind: PickKind.folder));
+    e.sizeFolders(s);
+    await Future<void>.delayed(Duration.zero);
+    expect(s.bytes, 42);
+  });
+
+  test('a category of files, in pages', () async {
+    final e = Explorer(_Sizes());
+    e.showCategory(FileCategory.documents);
+    await Future<void>.delayed(Duration.zero);
+    expect(e.files(FileCategory.documents).items.single.name, 'a.pdf');
+    expect(e.picksOf(5).single.path, '/a.pdf');
+    e.showCategory(null);
+    expect(e.category, isNull);
+  });
+}
+
+class _Sizes extends NoLibrary {
+  const _Sizes();
+  @override
+  Future<int> dirSize(String path) async => 42;
+  @override
+  Future<List<FileEntry>> files(FileCategory category, {int offset = 0, int limit = 200}) async =>
+      offset > 0 ? const [] : const [FileEntry(name: 'a.pdf', path: '/a.pdf', dir: false, size: 1)];
 }

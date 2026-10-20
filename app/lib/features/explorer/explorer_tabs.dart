@@ -18,12 +18,16 @@ import '../../widgets/format.dart';
 
 /// A thumbnail or an icon from the explorer's cache, decoded at its displayed size.
 class LibraryImage extends StatefulWidget {
-  const LibraryImage({super.key, required this.cacheKey, required this.load, required this.size, this.fit = BoxFit.cover});
+  const LibraryImage({super.key, required this.cacheKey, required this.load, this.fit = BoxFit.cover, this.placeholder});
 
   final String cacheKey;
-  final Future<Uint8List?> Function() load;
-  final double size;
+
+  /// Loads the image at the size it is shown, in pixels: sharp, never stretched.
+  final Future<Uint8List?> Function(int px) load;
   final BoxFit fit;
+
+  /// Shown until the image comes, and instead of it if there is none: a plain tile otherwise.
+  final Widget? placeholder;
 
   @override
   State<LibraryImage> createState() => _LibraryImageState();
@@ -32,42 +36,49 @@ class LibraryImage extends StatefulWidget {
 class _LibraryImageState extends State<LibraryImage> {
   Uint8List? _bytes;
   String? _asked;
+  late Explorer _explorer;
 
-  // Asked once per key; a cached one is there at once, without a frame of placeholder.
-  void _fetch() {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _explorer = AppScope.of(context, listen: false).state.explorer;
+  }
+
+  void _fetch(int px) {
     final key = widget.cacheKey;
     if (_asked == key) return;
     _asked = key;
     _bytes = null;
-    final explorer = AppScope.of(context, listen: false).state.explorer;
+    final explorer = _explorer;
     final cached = explorer.cached(key);
     if (cached != null) {
-      _bytes = cached;
+      _bytes = cached; // there at once, without a frame of placeholder
       return;
     }
-    explorer.image(key, widget.load).then((bytes) {
+    explorer.image(key, () => widget.load(px)).then((bytes) {
       if (mounted && _asked == key && bytes != null) setState(() => _bytes = bytes);
     });
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _fetch();
-  }
-
-  @override
-  void didUpdateWidget(LibraryImage old) {
-    super.didUpdateWidget(old);
-    if (old.cacheKey != widget.cacheKey) _fetch();
+  void dispose() {
+    // Scrolled away before its turn: not loaded at all.
+    if (_bytes == null && _asked != null) _explorer.forget(_asked!);
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final bytes = _bytes;
-    if (bytes == null) return ColoredBox(color: context.colors.chip);
-    final px = (widget.size * MediaQuery.devicePixelRatioOf(context)).round();
-    return Image.memory(bytes, fit: widget.fit, cacheWidth: px, gaplessPlayback: true, filterQuality: FilterQuality.low);
+    return LayoutBuilder(
+      builder: (context, box) {
+        final dpr = MediaQuery.devicePixelRatioOf(context);
+        final px = (box.biggest.shortestSide * dpr).round().clamp(32, 1024);
+        _fetch(px);
+        final bytes = _bytes;
+        if (bytes == null) return widget.placeholder ?? ColoredBox(color: context.colors.chip);
+        return Image.memory(bytes, fit: widget.fit, cacheWidth: px, gaplessPlayback: true, filterQuality: FilterQuality.medium);
+      },
+    );
   }
 }
 
@@ -163,7 +174,15 @@ class _AppsTabState extends State<AppsTab> with AutomaticKeepAliveClientMixin {
             return InkWell(
               key: ValueKey('app-${a.package}'),
               borderRadius: BorderRadius.circular(12),
-              onTap: () => state.selection.toggle(pick),
+              onTap: () {
+                state.selection.toggle(pick);
+                // Installed in parts (Play's splits): said when picked, in words.
+                if (a.split && state.selection.contains(pick.path)) {
+                  ScaffoldMessenger.of(context)
+                    ..clearSnackBars()
+                    ..showSnackBar(SnackBar(content: Text(l.splitApp)));
+                }
+              },
               child: Padding(
                 padding: const EdgeInsets.all(6),
                 child: Column(
@@ -172,12 +191,7 @@ class _AppsTabState extends State<AppsTab> with AutomaticKeepAliveClientMixin {
                       children: [
                         SizedBox.square(
                           dimension: 52,
-                          child: LibraryImage(
-                            cacheKey: 'app:${a.package}',
-                            size: 52,
-                            fit: BoxFit.contain,
-                            load: () => state.library.appIcon(a.package, (52 * MediaQuery.devicePixelRatioOf(context)).round()),
-                          ),
+                          child: LibraryImage(cacheKey: 'app:${a.package}', fit: BoxFit.contain, load: (px) => state.library.appIcon(a.package, px)),
                         ),
                         Positioned(right: -2, top: -2, child: _Picked(on: on)),
                       ],
@@ -189,10 +203,7 @@ class _AppsTabState extends State<AppsTab> with AutomaticKeepAliveClientMixin {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                     ),
-                    Text(
-                      a.split ? '${formatBytes(context, a.size)} ⚠' : formatBytes(context, a.size),
-                      style: TextStyle(color: context.colors.muted, fontSize: 11),
-                    ),
+                    Text(formatBytes(context, a.size), style: TextStyle(color: context.colors.muted, fontSize: 11)),
                   ],
                 ),
               ),
@@ -326,7 +337,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          LibraryImage(cacheKey: '${widget.kind.name}:${m.id}', size: 128, load: () => state.library.thumbnail(widget.kind, m.id, 256)),
+                          LibraryImage(cacheKey: '${widget.kind.name}:${m.id}', load: (px) => state.library.thumbnail(widget.kind, m.id, px)),
                           if (on) ColoredBox(color: Colors.black.withValues(alpha: 0.25)),
                           if (widget.kind == MediaKind.video)
                             Positioned(
@@ -437,6 +448,49 @@ class FilesTab extends StatefulWidget {
   State<FilesTab> createState() => _FilesTabState();
 }
 
+/// The kinds of file with a thumbnail of their own (Library.kt's fileThumbnail).
+const _thumbed = {
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'heic',
+  'heif',
+  'bmp',
+  'avif',
+  'mp4',
+  'mkv',
+  'mov',
+  'avi',
+  'webm',
+  '3gp',
+  'm4v',
+  'ts',
+  'wmv',
+  'pdf',
+  'apk',
+};
+
+String _ext(String name) {
+  final dot = name.lastIndexOf('.');
+  return dot < 0 ? '' : name.substring(dot + 1).toLowerCase();
+}
+
+IconData _iconOf(FileEntry e) {
+  if (e.dir) return Icons.folder_rounded;
+  return switch (_ext(e.name)) {
+    'mp3' || 'm4a' || 'aac' || 'flac' || 'wav' || 'ogg' || 'opus' => Icons.music_note_rounded,
+    'zip' || 'rar' || '7z' || 'tar' || 'gz' || 'tgz' || 'bz2' || 'xz' => Icons.folder_zip_rounded,
+    'epub' || 'mobi' || 'azw' || 'azw3' || 'fb2' || 'djvu' || 'cbz' || 'cbr' => Icons.menu_book_rounded,
+    'doc' || 'docx' || 'odt' || 'rtf' || 'txt' || 'md' => Icons.description_rounded,
+    'xls' || 'xlsx' || 'ods' || 'csv' => Icons.table_chart_rounded,
+    'ppt' || 'pptx' || 'odp' => Icons.slideshow_rounded,
+    'apks' || 'xapk' || 'apkm' => Icons.android_rounded,
+    _ => Icons.insert_drive_file_outlined,
+  };
+}
+
 class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin {
   bool? _allFiles;
 
@@ -462,7 +516,6 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
     super.build(context);
     final state = AppScope.of(context).state;
     final l = AppLocalizations.of(context);
-    final c = context.colors;
     if (_allFiles == null) return const Center(child: CircularProgressIndicator());
     if (_allFiles == false) {
       return _Message(
@@ -485,60 +538,166 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
         ),
       );
     }
+    final labels = {
+      null: l.catFolders,
+      FileCategory.documents: l.catDocuments,
+      FileCategory.ebooks: l.catEbooks,
+      FileCategory.apks: l.catApks,
+      FileCategory.archives: l.catArchives,
+      FileCategory.large: l.catLarge,
+    };
     return ListenableBuilder(
       listenable: Listenable.merge([state.explorer, state.selection]),
       builder: (context, _) {
         final ex = state.explorer;
-        final entries = ex.entries;
-        final parent = ex.parent;
-        final shown = ex.dir.replaceFirst(state.library.storageRoot, '').replaceAll('/', ' › ');
+        final cat = ex.category;
         return Column(
           children: [
-            ListTile(
-              dense: true,
-              leading: IconButton(
-                tooltip: l.upFolder,
-                icon: const Icon(Icons.arrow_upward_rounded),
-                onPressed: parent == null ? null : () => unawaited(ex.open(parent)),
-              ),
-              title: Text(
-                shown.isEmpty ? '/' : shown,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: c.muted),
-              ),
-            ),
-            Expanded(
-              child: entries == null
-                  ? const Center(child: CircularProgressIndicator())
-                  : entries.isEmpty
-                  ? _Message(text: ex.dirError ?? l.nothingHere)
-                  : ListView.builder(
-                      key: const Key('files-list'),
-                      itemCount: entries.length,
-                      itemExtent: 60,
-                      itemBuilder: (context, i) {
-                        final e = entries[i];
-                        final pick = Explorer.pickFile(e);
-                        final on = state.selection.contains(pick.path);
-                        return ListTile(
-                          key: ValueKey('file-${e.name}'),
-                          leading: Icon(
-                            e.dir ? Icons.folder_rounded : Icons.insert_drive_file_outlined,
-                            color: e.dir ? Theme.of(context).colorScheme.primary : c.muted,
-                          ),
-                          title: Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                          subtitle: e.dir ? null : Text(formatBytes(context, e.size), style: TextStyle(color: c.muted, fontSize: 12)),
-                          trailing: Checkbox(value: on, onChanged: (_) => state.selection.toggle(pick)),
-                          // A folder opens; a file is picked. The box picks a folder whole.
-                          onTap: () => e.dir ? unawaited(ex.open(e.path)) : state.selection.toggle(pick),
-                        );
-                      },
+            SizedBox(
+              height: 48,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                children: [
+                  for (final e in labels.entries)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        key: ValueKey('cat-${e.key?.name ?? 'folders'}'),
+                        label: Text(e.value),
+                        selected: cat == e.key,
+                        onSelected: (_) => ex.showCategory(e.key),
+                      ),
                     ),
+                ],
+              ),
             ),
+            Expanded(child: cat == null ? _folders(context, ex) : _category(context, ex, cat)),
           ],
         );
       },
+    );
+  }
+
+  Widget _folders(BuildContext context, Explorer ex) {
+    final state = AppScope.of(context).state;
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    final entries = ex.entries;
+    final parent = ex.parent;
+    final shown = ex.dir.replaceFirst(state.library.storageRoot, '').replaceAll('/', ' › ');
+    return Column(
+      children: [
+        ListTile(
+          dense: true,
+          leading: IconButton(
+            tooltip: l.upFolder,
+            icon: const Icon(Icons.arrow_upward_rounded),
+            onPressed: parent == null ? null : () => unawaited(ex.open(parent)),
+          ),
+          title: Text(
+            shown.isEmpty ? '/' : shown,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: c.muted),
+          ),
+        ),
+        Expanded(
+          child: entries == null
+              ? const Center(child: CircularProgressIndicator())
+              : entries.isEmpty
+              ? _Message(text: ex.dirError ?? l.nothingHere)
+              : ListView.builder(
+                  key: ValueKey('files-list:${ex.dir}'), // a new folder opens at its top
+                  itemCount: entries.length,
+                  itemExtent: 64,
+                  itemBuilder: (context, i) => _FileRow(entry: entries[i], onOpen: () => unawaited(ex.open(entries[i].path))),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _category(BuildContext context, Explorer ex, FileCategory cat) {
+    final l = AppLocalizations.of(context);
+    final list = ex.files(cat);
+    if (list.items.isEmpty) {
+      return list.loading || !list.done ? const Center(child: CircularProgressIndicator()) : _Message(text: list.error ?? l.nothingHere);
+    }
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        if (n.metrics.extentAfter < 1500) unawaited(ex.moreFiles(cat));
+        return false;
+      },
+      child: ListView.builder(
+        key: ValueKey('files-${cat.name}'),
+        itemCount: list.items.length,
+        itemExtent: 64,
+        itemBuilder: (context, i) => _FileRow(entry: list.items[i], showFolder: true),
+      ),
+    );
+  }
+}
+
+/// One file or folder: its thumbnail or icon, name, size; a box to pick it.
+class _FileRow extends StatelessWidget {
+  const _FileRow({required this.entry, this.onOpen, this.showFolder = false});
+
+  final FileEntry entry;
+  final VoidCallback? onOpen;
+
+  /// In a category, where the file is.
+  final bool showFolder;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context).state;
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    final e = entry;
+    final pick = Explorer.pickFile(e);
+    final picked = state.selection.items.where((p) => p.path == e.path).firstOrNull;
+    void toggle() {
+      state.selection.toggle(pick);
+      state.explorer.sizeFolders(state.selection);
+    }
+
+    final String? sub;
+    if (e.dir) {
+      sub = picked == null ? null : (picked.size == 0 ? l.sizing : formatBytes(context, picked.size));
+    } else {
+      final where = showFolder ? e.path.substring(0, e.path.lastIndexOf('/')).replaceFirst(state.library.storageRoot, '') : '';
+      sub = [formatBytes(context, e.size), if (where.isNotEmpty) where].join(' · ');
+    }
+    final thumbed = !e.dir && _thumbed.contains(_ext(e.name));
+    final icon = Icon(_iconOf(e), size: 32, color: e.dir ? Theme.of(context).colorScheme.primary : c.muted);
+    return ListTile(
+      key: ValueKey('file-${e.name}'),
+      leading: SizedBox.square(
+        dimension: 44,
+        child: thumbed
+            ? ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LibraryImage(
+                  cacheKey: 'file:${e.path}',
+                  load: (px) => state.library.fileThumbnail(e.path, px),
+                  placeholder: Center(child: icon),
+                ),
+              )
+            : icon,
+      ),
+      title: Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: sub == null
+          ? null
+          : Text(
+              sub,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: c.muted, fontSize: 12),
+            ),
+      trailing: Checkbox(value: picked != null, onChanged: (_) => toggle()),
+      // A folder opens; a file is picked. The box picks a folder whole.
+      onTap: e.dir && onOpen != null ? onOpen : toggle,
     );
   }
 }
