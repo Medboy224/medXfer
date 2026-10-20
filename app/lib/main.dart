@@ -6,6 +6,7 @@ import 'core/ffi_core.dart';
 import 'platform/background.dart';
 import 'platform/file_picker.dart';
 import 'platform/folders.dart';
+import 'platform/library.dart';
 import 'platform/hotspot.dart';
 import 'platform/network.dart';
 import 'platform/open_folder.dart';
@@ -25,6 +26,7 @@ void main() {
     folderOpener: systemFolderOpener(),
     storage: systemReceiveStorage(),
     background: systemBackground(),
+    library: systemLibrary(),
   );
   state.start();
   runApp(MedxferApp(state: state, settings: AppSettings()));

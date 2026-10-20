@@ -9,10 +9,13 @@ import 'package:flutter/foundation.dart';
 
 import 'connection/connection.dart';
 import 'background_keeper.dart';
+import 'library/explorer.dart';
+import 'library/selection.dart';
 import 'platform/background.dart';
 import 'core/core.dart';
 import 'platform/file_picker.dart';
 import 'platform/folders.dart';
+import 'platform/library.dart';
 import 'platform/hotspot.dart';
 import 'platform/network.dart';
 import 'platform/open_folder.dart';
@@ -34,6 +37,7 @@ class AppState extends ChangeNotifier {
     this.folderOpener = const NoFolderOpener(),
     this.storage = const NoReceiveStorage(),
     Background background = const NoBackground(),
+    this.library = const NoLibrary(),
     HistoryStore? history,
   }) : connection = Connection(core, network: network, hotspot: hotspot) {
     // Created now, not on first use: they listen to the core from its first event.
@@ -47,8 +51,14 @@ class AppState extends ChangeNotifier {
           ? (o) async => '${await storage.root()}/${typeFolderFor(o.items.isEmpty ? [o.name] : [for (final i in o.items) i.path])}'
           : null,
     );
+    explorer = Explorer(library);
     keeper = BackgroundKeeper(background: background, connection: connection, transfers: transfers);
   }
+
+  /// What the phone holds, the explorer's lists, and what the user picked (WP-B.9).
+  final Library library;
+  late final Explorer explorer;
+  final selection = Selection();
 
   /// The foreground service while something runs (API-08).
   late final BackgroundKeeper keeper;
@@ -129,6 +139,8 @@ class AppState extends ChangeNotifier {
     _events?.cancel();
     connection.dispose();
     keeper.dispose();
+    explorer.dispose();
+    selection.dispose();
     transfers.dispose();
     super.dispose();
   }

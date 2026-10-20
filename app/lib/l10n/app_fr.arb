@@ -140,5 +140,18 @@
   "notifSession": "Ouvrez medXfer pour envoyer ou recevoir.",
   "notifHotspot": "Point d'accès allumé",
   "notifOffer": "{device} veut vous envoyer des fichiers",
-  "notifProgress": "{percent} % · {speed}/s"
+  "notifProgress": "{percent} % · {speed}/s",
+  "basketLine": "{count, plural, =1{1 élément} other{{count} éléments}} · {size}",
+  "sendSelection": "Envoyer",
+  "clearSelection": "Vider la sélection",
+  "mediaHint": "Pour afficher ici vos photos, vidéos et musiques, autorisez medXfer à les lire.",
+  "mediaAllow": "Autoriser",
+  "filesHint": "Pour parcourir les dossiers du téléphone, Android demande l'accès à tous les fichiers. Vous pouvez aussi choisir des fichiers avec le sélecteur du système.",
+  "systemPicker": "Sélecteur du système",
+  "nothingHere": "Rien ici.",
+  "allAlbums": "Tout",
+  "appSplit": "En plusieurs parties : peut ne pas s'installer",
+  "mixedNotice": "Envoyez les applications à part des dossiers.",
+  "desktopTabs": "Sur un ordinateur, envoyez avec « Envoyer des fichiers » une fois connecté, ou déposez des fichiers sur la fenêtre.",
+  "upFolder": "Dossier parent"
 }

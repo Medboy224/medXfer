@@ -19,6 +19,7 @@ class MainActivity : FlutterActivity() {
     private val join by lazy { WifiJoin(this) }
     private val network by lazy { Network(this) }
     private val storage by lazy { Storage(this) }
+    private val library by lazy { Library(this) }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -58,12 +59,37 @@ class MainActivity : FlutterActivity() {
                         call.argument<Int>("security") ?: 1,
                     ) { info, err -> if (err != null) result.error("join", err, null) else result.success(info) }
                     "hotspotLeave" -> { join.leave(); result.success(null) }
+                    // The explorer by categories (WP-B.9).
+                    "libApps" -> library.apps { v, e -> reply(result, v, e) }
+                    "libAppIcon" -> library.appIcon(call.argument<String>("package") ?: "", call.argument<Int>("size") ?: 96) { v, e -> reply(result, v, e) }
+                    "libMedia" -> library.media(call.argument<String>("kind") ?: "images", call.argument<Int>("offset") ?: 0, call.argument<Int>("limit") ?: 200) { v, e -> reply(result, v, e) }
+                    "libThumbnail" -> library.thumbnail(call.argument<String>("kind") ?: "images", (call.argument<Number>("id") ?: 0).toLong(), call.argument<Int>("size") ?: 256) { v, e -> reply(result, v, e) }
+                    "libListDir" -> library.listDir(call.argument<String>("path") ?: "") { v, e -> reply(result, v, e) }
+                    "libOpen" -> library.open(call.argument<List<Map<String, Any?>>>("files") ?: emptyList()) { v, e -> reply(result, v, e) }
+                    "mediaAllowed" -> result.success(library.mediaAllowed())
+                    "askMedia" -> askAll(
+                        if (Build.VERSION.SDK_INT >= 33) Library.MEDIA_PERMISSIONS else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
+                    ) { result.success(library.mediaAllowed()) }
                     else -> result.notImplemented()
                 }
             }
     }
 
     private var permissionAnswer: ((Boolean) -> Unit)? = null
+
+    private fun <T> reply(result: MethodChannel.Result, value: T?, error: String?) {
+        if (error != null) result.error("library", error, null) else result.success(value)
+    }
+
+    // Several permissions at once (the media of Android 13 on); done once answered, whatever
+    // the answer: the caller checks what it got.
+    private fun askAll(permissions: Array<String>, done: (Boolean) -> Unit) {
+        val missing = permissions.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) return done(true)
+        permissionAnswer?.invoke(false)
+        permissionAnswer = done
+        requestPermissions(missing.toTypedArray(), PERMISSION_REQUEST)
+    }
 
     // NEARBY_WIFI_DEVICES (Android 13 on, neverForLocation), the location before: what both the
     // local hotspot and the joining of another device's need. done gets whether it is granted.

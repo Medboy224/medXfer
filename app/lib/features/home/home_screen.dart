@@ -10,12 +10,16 @@ import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../app_state.dart';
 import '../../l10n/app_localizations.dart';
+import '../../library/selection.dart';
+import '../../platform/file_picker.dart' as fp;
+import '../../platform/library.dart';
 import '../../theme.dart';
 import '../../transfer/transfers.dart';
 import '../../widgets/drop_zone.dart';
 import '../../widgets/format.dart';
 import '../connect/connect_screen.dart';
 import '../connect/dialogs.dart';
+import '../explorer/explorer_tabs.dart';
 import '../history/history_tab.dart';
 import '../transfer/transfer_screen.dart';
 import '../trusted/trusted_screen.dart';
@@ -71,11 +75,7 @@ class HomeScreen extends StatelessWidget {
                         style: TextStyle(color: c.muted, fontWeight: FontWeight.w600),
                       ),
                     ),
-                    IconButton(
-                      tooltip: l.selectAll,
-                      icon: Icon(Icons.radio_button_unchecked_rounded, color: c.muted),
-                      onPressed: () => _soon(context),
-                    ),
+                    const _SelectAll(),
                   ],
                 ),
               ),
@@ -83,17 +83,24 @@ class HomeScreen extends StatelessWidget {
                 child: TabBarView(
                   children: [
                     const HistoryTab(),
-                    for (final _ in tabs.skip(1))
-                      Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(32),
-                          child: Text(
-                            l.comingSoon,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: c.muted),
+                    if (AppScope.of(context).state.library.supported) ...[
+                      const AppsTab(),
+                      const MediaGridTab(kind: MediaKind.images),
+                      const MediaGridTab(kind: MediaKind.video),
+                      const MusicTab(),
+                      FilesTab(onSystemPicker: () => unawaited(_sendPicked(context))),
+                    ] else
+                      for (final _ in tabs.skip(1))
+                        Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(32),
+                            child: Text(
+                              l.desktopTabs,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: c.muted),
+                            ),
                           ),
                         ),
-                      ),
                   ],
                 ),
               ),
@@ -112,7 +119,11 @@ class HomeScreen extends StatelessWidget {
             child: Align(
               heightFactor: 1,
               child: ListenableBuilder(
-                listenable: Listenable.merge([AppScope.of(context).state.connection, AppScope.of(context).state.transfers]),
+                listenable: Listenable.merge([
+                  AppScope.of(context).state.connection,
+                  AppScope.of(context).state.transfers,
+                  AppScope.of(context).state.selection,
+                ]),
                 builder: (context, _) {
                   final state = AppScope.of(context).state;
                   final connection = state.connection;
@@ -130,6 +141,8 @@ class HomeScreen extends StatelessWidget {
                       ),
                     );
                   }
+                  // Something picked in the explorer: the basket, and send (or connect first).
+                  if (!state.selection.isEmpty) return _Basket(connected: connection.session != null);
                   if (connection.session != null && state.filePicker.supported) {
                     return Wrap(
                       alignment: WrapAlignment.center,
@@ -187,6 +200,13 @@ class HomeScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// The system's picker, then send (the Files tab without the access to all files).
+  static Future<void> _sendPicked(BuildContext context) async {
+    final state = AppScope.of(context, listen: false).state;
+    if (state.connection.session == null) return _open(context, const ConnectScreen());
+    await state.transfers.sendPicked(await state.filePicker.files());
   }
 
   static void _open(BuildContext context, Widget screen) {
@@ -305,6 +325,86 @@ class _SessionBanner extends StatelessWidget {
                 ),
         );
       },
+    );
+  }
+}
+
+/// The circle of "On this device": picks every item of the tab on screen, or unpicks them.
+class _SelectAll extends StatelessWidget {
+  const _SelectAll();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context).state;
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    final tabs = DefaultTabController.of(context);
+    return ListenableBuilder(
+      listenable: Listenable.merge([tabs, state.selection, state.explorer]),
+      builder: (context, _) {
+        final picks = state.library.supported ? state.explorer.picksOf(tabs.index) : const <Pick>[];
+        final all = state.selection.allOf(picks);
+        return IconButton(
+          key: const Key('select-all'),
+          tooltip: l.selectAll,
+          icon: Icon(all ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded, color: all ? Theme.of(context).colorScheme.primary : c.muted),
+          onPressed: picks.isEmpty ? null : () => state.selection.toggleAll(picks),
+        );
+      },
+    );
+  }
+}
+
+/// The basket (§1.2): how many items, how large; then send, or connect first.
+class _Basket extends StatelessWidget {
+  const _Basket({required this.connected});
+
+  final bool connected;
+
+  Future<void> _send(BuildContext context) async {
+    final state = AppScope.of(context, listen: false).state;
+    final l = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    switch (state.selection.plan()) {
+      case Mixed():
+        messenger
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(content: Text(l.mixedNotice)));
+        return;
+      case ByPath(:final paths):
+        await state.transfers.send(paths);
+      case ByDescriptor(:final files):
+        final open = await state.library.open(files);
+        await state.transfers.sendPicked(fp.Picked(files: open));
+    }
+    state.selection.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context).state;
+    final l = AppLocalizations.of(context);
+    final sel = state.selection;
+    return Row(
+      key: const Key('basket'),
+      children: [
+        IconButton(tooltip: l.clearSelection, icon: const Icon(Icons.close_rounded), onPressed: sel.clear),
+        Expanded(
+          child: Text(
+            l.basketLine(sel.count, formatBytes(context, sel.bytes)),
+            key: const Key('basket-line'),
+            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+          ),
+        ),
+        FilledButton.icon(
+          key: const Key('basket-send'),
+          style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
+          onPressed: () =>
+              connected ? unawaited(_send(context)) : unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const ConnectScreen()))),
+          icon: Icon(connected ? Icons.send_rounded : Icons.link_rounded),
+          label: Text(connected ? l.sendSelection : l.connect),
+        ),
+      ],
     );
   }
 }
