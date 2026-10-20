@@ -48,11 +48,11 @@ class HomeScreen extends StatelessWidget {
               key: const Key('home-menu'),
               tooltip: l.menu,
               icon: const Icon(Icons.menu_rounded),
-              onSelected: (v) => _open(context, switch (v) {
-                'trusted' => const TrustedScreen(),
-                'dev' => const DevPanel(),
-                _ => const SettingsScreen(),
-              }),
+              onSelected: (v) => switch (v) {
+                'trusted' => _open(context, const TrustedScreen()),
+                'dev' => DevPanel.open(Navigator.of(context)),
+                _ => _open(context, const SettingsScreen()),
+              },
               itemBuilder: (_) => [
                 PopupMenuItem(value: 'trusted', child: Text(l.trustedDevices)),
                 PopupMenuItem(value: 'settings', child: Text(l.settings)),

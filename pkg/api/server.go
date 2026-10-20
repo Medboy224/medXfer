@@ -1427,8 +1427,24 @@ func (s *DaemonServer) FinishTransferTracker() *TransferSummaryReport {
 // GetLastSummaryReport returns the latest completed transfer report
 func (s *DaemonServer) GetLastSummaryReport() *TransferSummaryReport {
 	s.trackerMu.Lock()
-	defer s.trackerMu.Unlock()
-	return s.lastSummaryReport
+	last := s.lastSummaryReport
+	s.trackerMu.Unlock()
+	if last != nil {
+		return last
+	}
+	// None since the start: the newest one saved (the developer panel after a restart).
+	files, _ := diag.ListReports(filepath.Join(s.dataDir, "reports"))
+	if len(files) == 0 {
+		return nil
+	}
+	rep, err := diag.LoadReport(files[len(files)-1])
+	if err != nil {
+		return nil
+	}
+	if rep.FormattedReport == "" {
+		rep.FormattedReport = diag.FormatText(rep)
+	}
+	return rep
 }
 
 // broadcastTransferComplete completes telemetry tracker and broadcasts transfer_complete with report

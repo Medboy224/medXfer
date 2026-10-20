@@ -40,6 +40,19 @@ String _mbps(BuildContext context, double mbps) => formatBytes(context, mbps * 1
 class DevPanel extends StatelessWidget {
   const DevPanel({super.key});
 
+  static const routeName = 'dev-panel';
+
+  /// Opens the panel, unless it is already the screen shown (the banner stays under it).
+  static void open(NavigatorState navigator) {
+    var shown = false;
+    navigator.popUntil((route) {
+      shown = route.settings.name == routeName;
+      return true; // reads the top route, pops nothing
+    });
+    if (shown) return;
+    unawaited(navigator.push(MaterialPageRoute<void>(settings: const RouteSettings(name: routeName), builder: (_) => const DevPanel())));
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context).state;

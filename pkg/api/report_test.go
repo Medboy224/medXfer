@@ -36,3 +36,26 @@ func TestDaemonSavesReportWithoutFileName(t *testing.T) {
 		t.Fatalf("dashboard text contains the file name:\n%s", rep.FormattedReport)
 	}
 }
+
+// WP-B.5: after a restart, the last report is the newest one saved, for the developer panel.
+func TestLastReportSurvivesARestart(t *testing.T) {
+	configMu.RLock()
+	previous := customConfigDir
+	configMu.RUnlock()
+	SetCustomConfigDir(t.TempDir())
+	t.Cleanup(func() { SetCustomConfigDir(previous) })
+
+	if rep := NewDaemonServer(0, t.TempDir(), "Fresh").GetLastSummaryReport(); rep != nil {
+		t.Fatalf("no report saved yet, got %+v", rep)
+	}
+	s := NewDaemonServer(0, t.TempDir(), "Before")
+	s.StartTransferTracker("a.bin", 1, 4096)
+	s.RecordTransferRetry()
+	s.RecordTransferRetry()
+	s.FinishTransferTracker()
+
+	rep := NewDaemonServer(0, t.TempDir(), "After").GetLastSummaryReport()
+	if rep == nil || rep.Retries != 2 || rep.FormattedReport == "" {
+		t.Fatalf("after a restart: %+v; want the saved report, 2 retries, with its text", rep)
+	}
+}

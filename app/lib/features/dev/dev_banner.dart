@@ -2,8 +2,6 @@
 /// mode is on; a tap opens the developer panel.
 library;
 
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import '../../l10n/app_localizations.dart';
@@ -35,7 +33,10 @@ class DevBanner extends StatelessWidget {
               color: color,
               child: InkWell(
                 key: const Key('dev-banner'),
-                onTap: () => unawaited(navigator.currentState?.push(MaterialPageRoute<void>(builder: (_) => const DevPanel()))),
+                onTap: () {
+                  final nav = navigator.currentState;
+                  if (nav != null) DevPanel.open(nav);
+                },
                 child: SafeArea(
                   top: false,
                   child: SizedBox(

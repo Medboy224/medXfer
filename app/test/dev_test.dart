@@ -9,6 +9,7 @@ import 'package:medxfer/app_state.dart';
 import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/dev/dev_tools.dart';
+import 'package:medxfer/features/dev/dev_panel.dart';
 import 'package:medxfer/platform/folders.dart';
 import 'package:medxfer/settings.dart';
 import 'package:medxfer/theme.dart';
@@ -159,5 +160,9 @@ void main() {
     expect(find.text('Étape limitante : écriture disque (nette)'), findsOneWidget);
     // No device: the network benchmark says to connect one, and cannot run.
     expect(find.text("Connectez d'abord un appareil."), findsOneWidget);
+    // The banner again, over the panel: still one panel.
+    await tester.tap(find.byKey(const Key('dev-banner')));
+    await tester.pumpAndSettle();
+    expect(find.byType(DevPanel, skipOffstage: false), findsOneWidget);
   });
 }
