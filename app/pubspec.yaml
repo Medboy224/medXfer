@@ -18,6 +18,8 @@ dependencies:
   path: any             # the version Flutter pins
   qr: ^4.0.0
   flutter_zxing: ^3.1.0
+  file_selector: ^1.1.0
+  desktop_drop: ^0.8.4
 
 dev_dependencies:
   flutter_test:

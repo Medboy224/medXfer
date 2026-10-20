@@ -9,6 +9,7 @@ import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/platform/folders.dart';
 import 'package:medxfer/settings.dart';
 import 'package:medxfer/theme.dart';
+import 'package:medxfer/transfer/history.dart';
 
 class _TestFolders implements Folders {
   const _TestFolders();
@@ -21,7 +22,7 @@ class _TestFolders implements Folders {
 Future<(FakeCore, AppState)> _app(WidgetTester tester, {Locale locale = const Locale('fr'), AppSettings? settings}) async {
   final core = FakeCore()
     ..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy A57'})]));
-  final state = AppState(core: core, folders: const _TestFolders());
+  final state = AppState(core: core, folders: const _TestFolders(), history: MemoryHistoryStore());
   tester.platformDispatcher.localesTestValue = [locale];
   addTearDown(tester.platformDispatcher.clearLocalesTestValue);
   await tester.pumpWidget(MedxferApp(state: state, settings: settings ?? AppSettings()));
@@ -58,7 +59,7 @@ void main() {
 
   testWidgets('a core of another schema is refused, and said', (tester) async {
     final core = _OldCore();
-    final state = AppState(core: core, folders: const _TestFolders());
+    final state = AppState(core: core, folders: const _TestFolders(), history: MemoryHistoryStore());
     await tester.pumpWidget(MedxferApp(state: state, settings: AppSettings()));
     await state.start();
     await tester.pumpAndSettle();

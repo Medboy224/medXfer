@@ -119,7 +119,9 @@ mixin _ClosesWhenGone<T extends StatefulWidget> on State<T> {
   void close() {
     if (_closed || !mounted) return;
     _closed = true;
-    Navigator.of(context).pop();
+    // Its own route, not the top one: a screen may have opened over it meanwhile.
+    final route = ModalRoute.of(context);
+    if (route != null && route.isActive) Navigator.of(context).removeRoute(route);
   }
 }
 

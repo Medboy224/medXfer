@@ -146,6 +146,8 @@ La sonde du point d'accès passe tôt : certains fabricants restreignent cette f
 - **Progression** : vitesse, temps restant ; pause, reprise et « passer » **par fichier** (`pause_file`, `resume_file`, `skip_file`) et pour tout le transfert ; reconnexion.
 - **Historique minimal** : les 100 derniers transferts (date, appareil, nombre de fichiers, taille, résultat), gardés par l'application dans son dossier de données. Le bouton « Ouvrir le dossier » ne figure que dans le rôle de réception.
 
+**Fait** (20 octobre) : modèle `Transfers`, offre entrante, écran de transfert, historique (`history.json`, 100 entrées), envoi sur le bureau par `file_selector` (fichiers, dossier) et par dépôt (`desktop_drop`), chacun derrière son interface. Sous Android, la réception marche déjà ; l'envoi attend WP-B.4 (descripteurs) et WP-B.9 (explorateur). Essai réel : un dossier de 5 fichiers reçu de Zorin, offre et progression par fichier correctes ; « passer » pendant la réception bloquait le cœur (#174, corrigé par #175).
+
 ### WP-B.4 — Android · M
 
 - **Service de premier plan** (`API-08`) pendant l'écoute et les transferts, avec sa notification.

@@ -1,4 +1,5 @@
-/// The state the screens share, over the core: is it started, what is this device called.
+/// The state the screens share, over the core: is it started, what is this device called, and
+/// the models of the connection (WP-B.2) and of the transfers (WP-B.3).
 /// Plain ChangeNotifier (decision J4: no state library).
 library;
 
@@ -8,16 +9,36 @@ import 'package:flutter/foundation.dart';
 
 import 'connection/connection.dart';
 import 'core/core.dart';
+import 'platform/file_picker.dart';
 import 'platform/folders.dart';
 import 'platform/hotspot.dart';
 import 'platform/network.dart';
+import 'platform/open_folder.dart';
 import 'platform/qr_scanner.dart';
+import 'transfer/history.dart';
+import 'transfer/transfers.dart';
 
 enum CoreStatus { starting, ready, failed }
 
 class AppState extends ChangeNotifier {
-  AppState({required this.core, required this.folders, NetworkInfo network = const NoNetworkInfo(), Hotspot hotspot = const NoHotspot(), this.qrScanner = const NoQrScanner()})
-      : connection = Connection(core, network: network, hotspot: hotspot);
+  AppState({
+    required this.core,
+    required this.folders,
+    NetworkInfo network = const NoNetworkInfo(),
+    Hotspot hotspot = const NoHotspot(),
+    this.qrScanner = const NoQrScanner(),
+    this.filePicker = const NoFilePicker(),
+    this.folderOpener = const NoFolderOpener(),
+    HistoryStore? history,
+  }) : connection = Connection(core, network: network, hotspot: hotspot) {
+    // Created now, not on first use: they listen to the core from its first event.
+    transfers = Transfers(
+      core,
+      history: history ?? FileHistoryStore(folders.dataDir),
+      peerName: () => connection.session?.name ?? '',
+      downloadDir: folders.downloadDir,
+    );
+  }
 
   final Core core;
   final Folders folders;
@@ -27,6 +48,13 @@ class AppState extends ChangeNotifier {
 
   /// The camera that reads QR codes (decision J5); none on the desktops.
   final QrScanner qrScanner;
+
+  /// Sending and receiving, and their history (WP-B.3).
+  late final Transfers transfers;
+
+  /// Files and folders chosen on a desktop; the received folder opened.
+  final FilePicker filePicker;
+  final FolderOpener folderOpener;
 
   CoreStatus _status = CoreStatus.starting;
   String _deviceName = '';
@@ -54,6 +82,7 @@ class AppState extends ChangeNotifier {
       final reply = await core.call('get_status');
       final status = reply.first('status');
       if (status != null) _takeStatus(status);
+      unawaited(transfers.loadHistory()); // the screens need not wait for it
       _status = CoreStatus.ready;
       notifyListeners();
     } catch (e) {
@@ -83,6 +112,7 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _events?.cancel();
     connection.dispose();
+    transfers.dispose();
     super.dispose();
   }
 }

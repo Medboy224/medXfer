@@ -12,6 +12,7 @@ import 'package:medxfer/platform/folders.dart';
 import 'package:medxfer/platform/hotspot.dart';
 import 'package:medxfer/platform/qr_scanner.dart';
 import 'package:medxfer/settings.dart';
+import 'package:medxfer/transfer/history.dart';
 
 const _expires = 1900000000;
 
@@ -74,7 +75,7 @@ class _Scanner implements QrScanner {
 }
 
 Future<(FakeCore, AppState)> _app(WidgetTester tester, FakeCore core, {Hotspot hotspot = const NoHotspot(), QrScanner scanner = const NoQrScanner()}) async {
-  final state = AppState(core: core, folders: const _TestFolders(), hotspot: hotspot, qrScanner: scanner);
+  final state = AppState(core: core, folders: const _TestFolders(), hotspot: hotspot, qrScanner: scanner, history: MemoryHistoryStore());
   tester.platformDispatcher.localesTestValue = [const Locale('fr')];
   addTearDown(tester.platformDispatcher.clearLocalesTestValue);
   tester.view.physicalSize = const Size(1080, 2400);
