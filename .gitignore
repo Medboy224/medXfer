@@ -18,3 +18,5 @@ Thumbs.db
 *.swp
 # Libraries built by scripts/build-lib.* (WP-6.4)
 /build/
+# Packages built by scripts/package-* (WP-B.6)
+/dist/
