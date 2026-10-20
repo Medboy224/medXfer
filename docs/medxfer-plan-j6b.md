@@ -161,6 +161,8 @@ La sonde du point d'accès passe tôt : certains fabricants restreignent cette f
   - une sonde refait d'abord sur le téléphone, à la racine, les gestes du récepteur (`.part`, `fsync`, renommage), comme G2A-10 l'a fait pour `Download`.
 - **Manifeste** : `INTERNET`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS`, `CHANGE_WIFI_MULTICAST_STATE`, `MANAGE_EXTERNAL_STORAGE`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`, `READ_MEDIA_AUDIO` (et `READ_EXTERNAL_STORAGE` jusqu'à Android 12). Version du NDK fixée.
 
+**Fait** (20 octobre) : réception dans `medXfer/<type>/` ou `Download/medXfer/`, accès à tous les fichiers demandé dans la fenêtre de l'offre, envoi par le sélecteur du système avec des descripteurs, service de premier plan de type `connectedDevice` (et non `dataSync`, limité à 6 h par jour depuis Android 15), réseau redonné au cœur à chaque changement. La sonde du stockage à la racine (`.part`, `fsync`, renommage) est faite par l'essai réel : réception complète dans `medXfer/Photos/`, empreintes identiques. Reste : « Ouvrir le dossier » à vérifier sur le téléphone.
+
 ### WP-B.9 — Explorateur par catégories (Android) · M
 
 - Des onglets **Apps**, **Photos**, **Vidéos**, **Musique** et **Fichiers**, avec une sélection multiple qui survit au changement d'onglet et un panier visible (« 12 éléments, 1,4 Go ») avant d'envoyer.
