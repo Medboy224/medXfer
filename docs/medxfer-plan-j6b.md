@@ -172,6 +172,8 @@ La sonde du point d'accès passe tôt : certains fabricants restreignent cette f
 - **Envoi par chemin** : avec ces accès, les fichiers sont lisibles là où ils sont (`STO-16`), sans copie ni descripteur.
 - Les exigences UI-1 et UI-5 sont vérifiées sur une bibliothèque de plusieurs milliers de photos.
 
+**Fait** (20 octobre) : onglets Apps, Photos, Vidéos, Musique et Fichiers ; sélection qui survit au changement d'onglet, « tout sélectionner » pour l'onglet affiché, panier (nombre, taille) puis « Envoyer » ou « Connecter ». Envoi : sans dossier, chaque fichier ouvert par l'application et remis par descripteur sous son nom (une application devient « Nom.apk ») ; avec des dossiers, tout par chemin ; applications et dossiers ensemble, à envoyer à part (le cœur prend des chemins ou des descripteurs, pas les deux). Essai réel : deux images choisies dans la grille, reçues sur Zorin avec des empreintes identiques. **Reste** : UI-1 mesurée en version profile (le panneau développeur de WP-B.5 le permettra) ; l'onglet Apps et Fichiers essayés sur le téléphone sans contenu personnel à l'écran.
+
 ### WP-B.5 — Panneau développeur et gate G7 · M
 
 - Le mode développeur (`DEV-13`) est un réglage persistant, désactivé par défaut, avec une bannière visible.

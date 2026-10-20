@@ -183,5 +183,19 @@
   "notifOffer": "{device} wants to send you files",
   "@notifOffer": {"placeholders": {"device": {"type": "String"}}},
   "notifProgress": "{percent} % · {speed}/s",
-  "@notifProgress": {"placeholders": {"percent": {"type": "String"}, "speed": {"type": "String"}}}
+  "@notifProgress": {"placeholders": {"percent": {"type": "String"}, "speed": {"type": "String"}}},
+  "basketLine": "{count, plural, =1{1 item} other{{count} items}} · {size}",
+  "@basketLine": {"placeholders": {"count": {"type": "int"}, "size": {"type": "String"}}},
+  "sendSelection": "Send",
+  "clearSelection": "Clear the selection",
+  "mediaHint": "To show your photos, videos and music here, allow medXfer to read them.",
+  "mediaAllow": "Allow",
+  "filesHint": "To browse the phone's folders, Android asks for the access to all files. You can also pick files with the system's picker.",
+  "systemPicker": "System picker",
+  "nothingHere": "Nothing here.",
+  "allAlbums": "All",
+  "appSplit": "In several parts: may not install",
+  "mixedNotice": "Send the apps apart from the folders.",
+  "desktopTabs": "On a computer, send with \"Send files\" once connected, or drop files on the window.",
+  "upFolder": "Up"
 }
