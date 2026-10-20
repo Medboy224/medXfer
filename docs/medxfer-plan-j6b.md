@@ -188,6 +188,35 @@ Après le premier essai : vignettes demandées à la taille de la case (elles é
 - Les remarques de l'utilisateur sur le tableau de bord web (décision J10) y trouvent leur place. La première, la progression du fichier identique à celle du lot, est corrigée dans le cœur (WP-B.0).
 - Fin du lot : **gate G7** évaluée. Si les critères sont remplis, une PR séparée retire le tableau de bord web (`devui`).
 
+**Fait** (20 octobre) : écran Réglages (thème, accent, mode développeur), enregistré dans `settings.json` derrière `SettingsStore`. Mode développeur désactivé par défaut ; quand il est actif, un bandeau en bas de chaque écran ouvre le panneau. Le panneau montre le transfert en direct (vitesse, courbe, temps par étape et par connexion, étape limitante et sa netteté), lance les bancs disque et réseau, affiche et copie le rapport du dernier transfert, crée le paquet de diagnostic. Pour la vue en direct, `transfer_progress` donne maintenant les étapes mesurées (`stage_ms`) et l'étape limitante (`bottleneck`, `bottleneck_confidence`) ; jusque-là, elles n'existaient que dans le rapport de fin.
+
+Corrigé en chemin, dans le cœur :
+- `xfer node` ne répondait pas au banc réseau, qui affichait alors « 0 o/s, 0 ms » comme une mesure. Les deux partagent maintenant `AnswerBench`, et un banc sans réponse rend une erreur.
+- L'aller-retour était mesuré sur l'horloge murale, dont les pas atteignent la milliseconde sous Windows. Il passe sur l'horloge monotone.
+- Un transfert arrêté ou en échec laissait ses mesures ouvertes : le transfert suivant repartait de ses étapes, dans la vue en direct comme dans le rapport. Elles sont maintenant fermées, avec un rapport.
+- Après un redémarrage, « dernier rapport » relit le plus récent enregistré.
+
+Essai réel (Galaxy A57 et Zorin, Wi-Fi) :
+- banc disque : écriture 393 Mo/s ;
+- banc réseau : 5,1 Mo/s, aller-retour 4,7 ms ; contre l'ancien `xfer node`, l'erreur claire s'affiche ;
+- réception d'un fichier de 800 Mo : courbe et étapes en direct, étape limitante « attente du réseau », nette ;
+- paquet de diagnostic : configuration sans secret, rapports sans nom de fichier ;
+- réglages relus après un redémarrage.
+
+**Gate G7 : critères remplis** (`DEV-19-R`).
+
+| Critère | Où |
+|---|---|
+| Télémétrie en direct | Panneau, transfert en direct |
+| Lancer les bancs d'essai | Panneau, bancs disque et réseau ; `xfer bench` pour l'échelle complète |
+| Exporter rapports et paquet de diagnostic | Panneau ; `xfer report`, `xfer bundle` |
+| Appairage, envoi, réception | L'application (WP-B.2, WP-B.3, WP-B.9) |
+| Scripts sans écran | `xfer ctl` (`DEV-16`) |
+
+Le sélecteur natif, le dépôt temporaire et la navigation de fichiers du tableau de bord (`DEV-19` e) partent avec lui : l'application a ses propres sélecteurs et son explorateur. Le retrait de `devui` fait l'objet d'une PR séparée.
+
+**Reste**, hors des critères de G7 : le diagnostic à distance (`DEV-14`, `diag_request`) n'existe pas encore dans le cœur ; le mode développeur n'active pas encore les traces (`DEV-12`).
+
 ### WP-B.6 — Empaquetage · S
 
 - **Windows** : un dossier portable zippé, avec le runtime Visual C++ à côté de l'exécutable, comme pour G2a ; sans installation ni droits administrateur.

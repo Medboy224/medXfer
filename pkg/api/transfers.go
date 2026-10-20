@@ -425,6 +425,8 @@ func (s *DaemonServer) receive(sess *session.Channel, m *session.Message, saveDi
 		canceled := ctx.Err() != nil
 		s.endTransfer(offer.TransferID)
 		if err != nil {
+			// Its measures end with it: the next transfer starts its own (WP-B.5).
+			s.FinishTransferTracker()
 			if !canceled {
 				s.Broadcast(NewEvent("transfer_error", map[string]string{"file": offerName(offer), "error": err.Error()}))
 			}
@@ -498,6 +500,9 @@ func (s *DaemonServer) serveAccepted(msg session.Message) {
 		sender.SetEvents(ev)
 		err = sender.Serve(ctx, o.l)
 		ev.done()
+		// Its measures end with it, stopped, failed or done (then the receiver's "complete"
+		// finds the report made): the next transfer starts its own.
+		s.FinishTransferTracker()
 		if err != nil && ctx.Err() == nil {
 			s.Broadcast(NewEvent("transfer_error", map[string]string{"file": offerName(o.offer), "error": err.Error()}))
 		}
@@ -738,6 +743,7 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 		BytesTransferred: p.Bytes, TotalBytes: p.Total, SpeedMBps: p.SpeedMBps,
 		ActiveStreams: p.Streams, ProgressPercent: percent,
 	}, percent, offerName(e.offer), len(e.offer.Items), e.offer.TotalBytes)
+	loads, neck := s.liveStages()
 
 	s.Broadcast(NewEvent("transfer_progress", TransferProgressData{
 		CurrentFile:     name,
@@ -753,6 +759,10 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 		EtaSeconds:      eta,
 		IsPaused:        paused,
 		Items:           items,
+
+		StageMs:              loads,
+		Bottleneck:           neck.Stage,
+		BottleneckConfidence: neck.Confidence,
 	}))
 }
 

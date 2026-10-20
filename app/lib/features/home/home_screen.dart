@@ -19,8 +19,10 @@ import '../../widgets/drop_zone.dart';
 import '../../widgets/format.dart';
 import '../connect/connect_screen.dart';
 import '../connect/dialogs.dart';
+import '../dev/dev_panel.dart';
 import '../explorer/explorer_tabs.dart';
 import '../history/history_tab.dart';
+import '../settings/settings_screen.dart';
 import '../transfer/transfer_screen.dart';
 import '../trusted/trusted_screen.dart';
 
@@ -46,8 +48,16 @@ class HomeScreen extends StatelessWidget {
               key: const Key('home-menu'),
               tooltip: l.menu,
               icon: const Icon(Icons.menu_rounded),
-              onSelected: (v) => v == 'trusted' ? _open(context, const TrustedScreen()) : _soon(context),
-              itemBuilder: (_) => [PopupMenuItem(value: 'trusted', child: Text(l.trustedDevices)), PopupMenuItem(value: 'settings', child: Text(l.settings))],
+              onSelected: (v) => switch (v) {
+                'trusted' => _open(context, const TrustedScreen()),
+                'dev' => DevPanel.open(Navigator.of(context)),
+                _ => _open(context, const SettingsScreen()),
+              },
+              itemBuilder: (_) => [
+                PopupMenuItem(value: 'trusted', child: Text(l.trustedDevices)),
+                PopupMenuItem(value: 'settings', child: Text(l.settings)),
+                if (AppScope.of(context, listen: false).settings.devMode) PopupMenuItem(value: 'dev', child: Text(l.devPanel)),
+              ],
             ),
           ],
           bottom: TabBar(isScrollable: true, tabs: [for (final t in tabs) Tab(text: t)]),
@@ -218,12 +228,6 @@ class HomeScreen extends StatelessWidget {
     if (AppScope.of(context, listen: false).state.qrScanner.supported) return scanAndJoin(context);
     final link = await askLink(context);
     if (link != null && context.mounted) await joinByLink(context, link);
-  }
-
-  static void _soon(BuildContext context) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(AppLocalizations.of(context).comingSoon)));
   }
 }
 

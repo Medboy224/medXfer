@@ -1044,6 +1044,9 @@ func handleNode() {
 				}
 				printPrompt()
 
+			case "bench_ping", "bench_burst_req": // the other device's network benchmark
+				api.AnswerBench(activeSession, msg)
+
 			case "complete":
 				fmt.Println("\n[+] Receiver confirmed transfer complete.")
 				if transferCancel != nil {

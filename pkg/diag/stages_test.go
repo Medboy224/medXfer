@@ -23,6 +23,9 @@ func TestBottleneckWeighsParallelism(t *testing.T) {
 	if st.Count != 100 || st.Bytes != 100<<20 || st.BusyMs != 3000 || st.P50Ms != 30 || st.Parallel != 4 {
 		t.Fatalf("net_wait stats %+v", st)
 	}
+	if l := s.Loads(); l["net_wait"] != 750 || l["hash"] != 50 || l["fsync"] != 1000 || len(l) != 3 {
+		t.Fatalf("loads %v; want net_wait 750, hash 50, fsync 1000 (ms per connection)", l)
+	}
 }
 
 func TestBottleneckConfidence(t *testing.T) {

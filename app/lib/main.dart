@@ -15,7 +15,7 @@ import 'platform/storage.dart';
 import 'platform/zxing_qr_scanner.dart';
 import 'settings.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   FrameStats.start();
   final state = AppState(
@@ -31,5 +31,8 @@ void main() {
     library: systemLibrary(),
   );
   state.start();
-  runApp(MedxferApp(state: state, settings: AppSettings()));
+  // Read before the first frame: the saved theme from the start, without a flash.
+  final settings = AppSettings(store: FileSettingsStore(const SystemFolders().dataDir));
+  await settings.load();
+  runApp(MedxferApp(state: state, settings: settings));
 }
