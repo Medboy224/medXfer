@@ -50,6 +50,12 @@ func TestProgressDescribesTheFileNotTheBatch(t *testing.T) {
 			t.Errorf("%s: file %d bytes at %.1f %%, batch %d bytes at %.1f %%: want the file's own size and share",
 				side.name, d.FileTotalBytes, d.FilePercent, d.BatchTotalBytes, d.BatchPercent)
 		}
+		// WP-B.5: the stages measured so far, for the developer panel's live view.
+		side.node.WaitFor("a progress event with the stages and the limiting one", func(e testkit.Event) bool {
+			var d TransferProgressData
+			return e.Event == "transfer_progress" && json.Unmarshal(e.Data, &d) == nil &&
+				d.StageMs[d.Bottleneck] > 0 && d.BottleneckConfidence != ""
+		}, 20*time.Second)
 	}
 	pair.WaitTransferDone(30 * time.Second)
 }

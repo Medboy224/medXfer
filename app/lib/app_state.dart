@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 
 import 'connection/connection.dart';
 import 'background_keeper.dart';
+import 'dev/dev_tools.dart';
 import 'library/explorer.dart';
 import 'library/selection.dart';
 import 'platform/background.dart';
@@ -53,7 +54,11 @@ class AppState extends ChangeNotifier {
     );
     explorer = Explorer(library);
     keeper = BackgroundKeeper(background: background, connection: connection, transfers: transfers);
+    dev = DevTools(core, downloadDir: folders.downloadDir);
   }
+
+  /// The developer panel's telemetry, benchmarks, report and bundle (WP-B.5).
+  late final DevTools dev;
 
   /// What the phone holds, the explorer's lists, and what the user picked (WP-B.9).
   final Library library;
@@ -142,6 +147,7 @@ class AppState extends ChangeNotifier {
     explorer.dispose();
     selection.dispose();
     transfers.dispose();
+    dev.dispose();
     super.dispose();
   }
 }

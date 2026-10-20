@@ -71,6 +71,11 @@ func (t *TransferSessionTracker) OnStage(stage string, parallel int, d time.Dura
 	t.stages.OnStage(stage, parallel, d, bytes)
 }
 
+// Live is each stage's load so far and the limiting stage, for the live view (DEV-19-R).
+func (t *TransferSessionTracker) Live() (map[string]float64, Bottleneck) {
+	return t.stages.Loads(), t.stages.Bottleneck()
+}
+
 // RecordSample records a live progress measurement
 func (t *TransferSessionTracker) RecordSample(stats engine.TransferStats, progressPercent float64) {
 	t.mu.Lock()

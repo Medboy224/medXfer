@@ -6,6 +6,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app_state.dart';
 import 'features/connect/connection_prompts.dart';
+import 'features/dev/dev_banner.dart';
 import 'features/transfer/transfer_prompts.dart';
 import 'features/home/home_screen.dart';
 import 'l10n/app_localizations.dart';
@@ -75,15 +76,19 @@ class _MedxferAppState extends State<MedxferApp> {
             supportedLocales: AppLocalizations.supportedLocales,
             navigatorKey: _navigator,
             scaffoldMessengerKey: _messenger,
-            builder: (context, child) => ConnectionPrompts(
-              connection: state.connection,
+            builder: (context, child) => DevBanner(
+              settings: settings,
               navigator: _navigator,
-              messenger: _messenger,
-              child: TransferPrompts(
-                transfers: state.transfers,
+              child: ConnectionPrompts(
+                connection: state.connection,
                 navigator: _navigator,
                 messenger: _messenger,
-                child: child ?? const SizedBox.shrink(),
+                child: TransferPrompts(
+                  transfers: state.transfers,
+                  navigator: _navigator,
+                  messenger: _messenger,
+                  child: child ?? const SizedBox.shrink(),
+                ),
               ),
             ),
             home: const HomeScreen(),

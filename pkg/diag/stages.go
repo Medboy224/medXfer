@@ -90,6 +90,21 @@ func (s *Stages) Stats() map[string]StageStats {
 	return out
 }
 
+// Loads returns each stage's time so far, divided by how many may run at once, in
+// milliseconds: what [Stages.Bottleneck] compares. Without percentiles, it is cheap enough
+// for the live view of a transfer (DEV-19-R).
+func (s *Stages) Loads() map[string]float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]float64, len(s.m))
+	for name, a := range s.m {
+		if a.count > 0 {
+			out[name] = ms(a.busy / time.Duration(a.parallel))
+		}
+	}
+	return out
+}
+
 // Bottleneck is the stage whose time, divided by how many may run at once, is the highest
 // (bible DEV-04): the stage that keeps the transfer waiting. Every chunk goes through every
 // stage of its side, so the time per byte compares like the time itself. The confidence

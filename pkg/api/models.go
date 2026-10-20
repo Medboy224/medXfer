@@ -295,6 +295,10 @@ type TransferProgressData struct {
 	NetReadLatencyMs   float64 `json:"net_read_latency_ms"`
 	Bottleneck         string  `json:"bottleneck,omitempty"`
 	BottleneckReason   string  `json:"bottleneck_reason,omitempty"`
+	// The stages measured so far (DEV-03): each one's time divided by how many may run at
+	// once, in ms, and how clearly the limiting one, Bottleneck, stands out (DEV-04).
+	StageMs              map[string]float64 `json:"stage_ms,omitempty"`
+	BottleneckConfidence string             `json:"bottleneck_confidence,omitempty"`
 	// Items are the files in progress, by index (32 at most): several go at once. The file_*
 	// fields above describe the first of them (WP-B.0).
 	Items []ItemProgressData `json:"items,omitempty"`

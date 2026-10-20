@@ -1364,6 +1364,17 @@ func (s *DaemonServer) RecordTransferSample(stats engine.TransferStats, progress
 	tracker.RecordSample(stats, progressPercent)
 }
 
+// liveStages is the active transfer's stage loads and limiting stage, if it has measures.
+func (s *DaemonServer) liveStages() (map[string]float64, diag.Bottleneck) {
+	s.trackerMu.Lock()
+	tracker := s.activeTracker
+	s.trackerMu.Unlock()
+	if tracker == nil {
+		return nil, diag.Bottleneck{}
+	}
+	return tracker.Live()
+}
+
 // RecordTransferStage records the time of one stage of one chunk in the active telemetry
 // tracker (DEV-03), creating it on the first measure.
 func (s *DaemonServer) RecordTransferStage(name string, totalFiles int, totalBytes int64, stage string, parallel int, d time.Duration, bytes int64) {

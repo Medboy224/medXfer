@@ -738,6 +738,7 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 		BytesTransferred: p.Bytes, TotalBytes: p.Total, SpeedMBps: p.SpeedMBps,
 		ActiveStreams: p.Streams, ProgressPercent: percent,
 	}, percent, offerName(e.offer), len(e.offer.Items), e.offer.TotalBytes)
+	loads, neck := s.liveStages()
 
 	s.Broadcast(NewEvent("transfer_progress", TransferProgressData{
 		CurrentFile:     name,
@@ -753,6 +754,10 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 		EtaSeconds:      eta,
 		IsPaused:        paused,
 		Items:           items,
+
+		StageMs:              loads,
+		Bottleneck:           neck.Stage,
+		BottleneckConfidence: neck.Confidence,
 	}))
 }
 
