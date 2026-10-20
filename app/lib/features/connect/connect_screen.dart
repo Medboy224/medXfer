@@ -53,7 +53,12 @@ class _ConnectScreenState extends State<ConnectScreen> {
   void _changed() {
     if (!mounted) return;
     if (_c.session != null) {
-      Navigator.of(context).maybePop();
+      // This screen's own route: the top one may be a window closing (the PIN's), and popping
+      // it would leave this screen open.
+      final route = ModalRoute.of(context);
+      if (route != null && route.isActive) {
+        route.isCurrent ? Navigator.of(context).pop() : Navigator.of(context).removeRoute(route);
+      }
       return;
     }
     final target = _c.pinNeeded;

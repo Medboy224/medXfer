@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../core/core.dart';
+import '../platform/file_picker.dart';
 import 'history.dart';
 
 enum ItemStatus { pending, transferring, paused, completed, skipped, failed }
@@ -47,7 +48,8 @@ String _displayName(Object? core, List<TransferItem> items) {
     final first = top(items.first.path);
     if (first.isNotEmpty && items.every((i) => i.path.contains('/') && top(i.path) == first)) return first;
   }
-  return (core as String?) ?? '';
+  // The core's "(N files)" is English, and the count is shown apart already.
+  return ((core as String?) ?? '').replaceFirst(RegExp(r' \(\d+ files?\)$'), '');
 }
 
 List<TransferItem> _items(Object? list) => [
@@ -185,7 +187,7 @@ class FileError extends TransferNotice {
 }
 
 class Transfers extends ChangeNotifier {
-  Transfers(this.core, {required this.history, required this.peerName, required this.downloadDir}) {
+  Transfers(this.core, {required this.history, required this.peerName, required this.downloadDir, this.placeFor}) {
     _sub = core.events.listen(take);
   }
 
@@ -198,6 +200,13 @@ class Transfers extends ChangeNotifier {
   /// Where received files go (the core's download folder): the history keeps it.
   final Future<String> Function() downloadDir;
 
+  /// Where an accepted offer goes, when the platform chooses (Android: `medXfer/<type>/`,
+  /// decision J2); null: the core's download folder.
+  final Future<String?> Function(IncomingOffer offer)? placeFor;
+
+  /// The folder of the transfer being received, for the history.
+  String? _receiveDir;
+
   late final StreamSubscription<CoreEvent> _sub;
   final _notices = StreamController<TransferNotice>.broadcast();
   final _mine = <String>{};
@@ -208,6 +217,10 @@ class Transfers extends ChangeNotifier {
 
   /// How many transfers the history keeps.
   static const historySize = 100;
+
+  /// Where the last received transfer went, when the platform chose (Android): its folder is
+  /// the one to open, not the root.
+  String? get receiveDir => _receiveDir;
 
   IncomingOffer? get offer => _offer;
   ActiveTransfer? get active => _active;
@@ -227,10 +240,22 @@ class Transfers extends ChangeNotifier {
     await _call('send', {'paths': paths});
   }
 
+  /// Sends what the user picked: paths (desktops), or files open by descriptor (Android,
+  /// STO-16: the core owns them from the call on, and closes them).
+  Future<void> sendPicked(Picked picked) async {
+    if (picked.paths.isNotEmpty) return send(picked.paths);
+    if (picked.files.isEmpty) return;
+    await _call('send', {
+      'items': [for (final f in picked.files) f.toJson()],
+    });
+  }
+
   Future<void> accept() async {
     final offer = _offer;
     if (offer == null) return;
-    final reply = await _call('respond_offer', {'accept': true});
+    final dir = await placeFor?.call(offer);
+    _receiveDir = dir;
+    final reply = await _call('respond_offer', {'accept': true, if (dir != null && dir.isNotEmpty) 'save_dir': dir});
     // Refused for lack of room, the offer stays: the user may free some and accept again.
     if (reply.ok) {
       _offer = null;
@@ -401,7 +426,7 @@ class Transfers extends ChangeNotifier {
   }
 
   Future<void> _record(ActiveTransfer a, Outcome outcome) async {
-    final folder = a.direction == Direction.received ? await downloadDir() : '';
+    final folder = a.direction == Direction.received ? (_receiveDir ?? await downloadDir()) : '';
     await _remember(
       HistoryEntry(
         at: DateTime.now(),

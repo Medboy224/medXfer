@@ -3,6 +3,7 @@
 /// while it looks for devices. The desktops need neither: the core enumerates by itself.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'folders.dart' show platformChannel;
@@ -32,6 +33,9 @@ abstract interface class NetworkInfo {
 
   /// Lets multicast in (mDNS answers) while devices are looked for.
   Future<void> multicast(bool on);
+
+  /// A network came, went or changed (Android): the interfaces are to be given again.
+  Stream<void> get changes;
 }
 
 /// The desktops: nothing to give, nothing to hold.
@@ -43,6 +47,9 @@ class NoNetworkInfo implements NetworkInfo {
 
   @override
   Future<void> multicast(bool on) async {}
+
+  @override
+  Stream<void> get changes => const Stream.empty();
 }
 
 /// Android, through the app's Kotlin (Network.kt).
@@ -57,6 +64,16 @@ class AndroidNetworkInfo implements NetworkInfo {
 
   @override
   Future<void> multicast(bool on) => platformChannel.invokeMethod<void>('multicast', {'on': on});
+
+  static final StreamController<void> _changes = StreamController<void>.broadcast(
+    onListen: () => platformChannel.setMethodCallHandler((call) async {
+      if (call.method == 'networkChanged') _changes.add(null);
+    }),
+  );
+
+  /// Network.kt calls networkChanged on the app's channel, once things settle.
+  @override
+  Stream<void> get changes => _changes.stream;
 }
 
 NetworkInfo systemNetworkInfo() => Platform.isAndroid ? const AndroidNetworkInfo() : const NoNetworkInfo();

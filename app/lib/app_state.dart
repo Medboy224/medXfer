@@ -8,6 +8,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'connection/connection.dart';
+import 'background_keeper.dart';
+import 'platform/background.dart';
 import 'core/core.dart';
 import 'platform/file_picker.dart';
 import 'platform/folders.dart';
@@ -15,6 +17,7 @@ import 'platform/hotspot.dart';
 import 'platform/network.dart';
 import 'platform/open_folder.dart';
 import 'platform/qr_scanner.dart';
+import 'platform/storage.dart';
 import 'transfer/history.dart';
 import 'transfer/transfers.dart';
 
@@ -29,6 +32,8 @@ class AppState extends ChangeNotifier {
     this.qrScanner = const NoQrScanner(),
     this.filePicker = const NoFilePicker(),
     this.folderOpener = const NoFolderOpener(),
+    this.storage = const NoReceiveStorage(),
+    Background background = const NoBackground(),
     HistoryStore? history,
   }) : connection = Connection(core, network: network, hotspot: hotspot) {
     // Created now, not on first use: they listen to the core from its first event.
@@ -37,8 +42,16 @@ class AppState extends ChangeNotifier {
       history: history ?? FileHistoryStore(folders.dataDir),
       peerName: () => connection.session?.name ?? '',
       downloadDir: folders.downloadDir,
+      // Android: each offer in medXfer/<type>/ (decision J2), whole.
+      placeFor: storage.supported
+          ? (o) async => '${await storage.root()}/${typeFolderFor(o.items.isEmpty ? [o.name] : [for (final i in o.items) i.path])}'
+          : null,
     );
+    keeper = BackgroundKeeper(background: background, connection: connection, transfers: transfers);
   }
+
+  /// The foreground service while something runs (API-08).
+  late final BackgroundKeeper keeper;
 
   final Core core;
   final Folders folders;
@@ -55,6 +68,9 @@ class AppState extends ChangeNotifier {
   /// Files and folders chosen on a desktop; the received folder opened.
   final FilePicker filePicker;
   final FolderOpener folderOpener;
+
+  /// Where received files go on Android, and the access to all files (WP-B.4).
+  final ReceiveStorage storage;
 
   CoreStatus _status = CoreStatus.starting;
   String _deviceName = '';
@@ -112,6 +128,7 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _events?.cancel();
     connection.dispose();
+    keeper.dispose();
     transfers.dispose();
     super.dispose();
   }

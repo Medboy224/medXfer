@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
+import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/transfer/history.dart';
 import 'package:medxfer/transfer/transfers.dart';
 
@@ -260,5 +261,58 @@ void main() {
         (e.at, e.direction, e.device, e.files, e.bytes, e.outcome, e.folder, e.name));
     await File('${dir.path}${Platform.pathSeparator}history.json').writeAsString('{not json');
     expect(await store.load(), isEmpty);
+  });
+
+  test('Android: the offer goes where the platform says, and the history keeps it', () async {
+    final core = FakeCore()..on('respond_offer', (_) => const FakeAnswer());
+    final store = MemoryHistoryStore();
+    final t = Transfers(
+      core,
+      history: store,
+      peerName: () => 'PC',
+      downloadDir: () async => '/storage/emulated/0/medXfer',
+      placeFor: (o) async => '/storage/emulated/0/medXfer/Photos',
+    );
+    t.take(CoreEvent('incoming_offer', data: {
+      'device_name': 'PC',
+      'file_name': 'Vacances',
+      'file_size': 2,
+      'total_files': 2,
+      'items': [_q(0, 'Vacances/a.jpg', 1, 'pending'), _q(1, 'Vacances/b.jpg', 1, 'pending')],
+    }));
+    await t.accept();
+    expect(core.calls.last.payload, {'accept': true, 'save_dir': '/storage/emulated/0/medXfer/Photos'});
+    t.take(CoreEvent('transfer_complete', data: {
+      'items': [_q(0, 'Vacances/a.jpg', 1, 'completed'), _q(1, 'Vacances/b.jpg', 1, 'completed')],
+    }));
+    await _settle();
+    await _settle();
+    expect(store.entries.single.folder, '/storage/emulated/0/medXfer/Photos');
+  });
+
+  test('Android sends by descriptor: the open files go to the core as items', () async {
+    final (core, t, _) = _model();
+    core.on('send', (_) => const FakeAnswer());
+    await t.sendPicked(const Picked(files: [OpenFile(fd: 87, name: 'IMG_0001.jpg'), OpenFile(fd: 88, name: 'note.pdf')]));
+    expect(core.calls.single.payload, {
+      'items': [
+        {'fd': 87, 'name': 'IMG_0001.jpg'},
+        {'fd': 88, 'name': 'note.pdf'},
+      ],
+    });
+    core.calls.clear();
+    await t.sendPicked(const Picked());
+    expect(core.calls, isEmpty);
+  });
+
+  test("files without a common folder: the core's name, without its English count", () {
+    final (_, t, _) = _model();
+    t.take(CoreEvent('batch_offered', data: {
+      'summary': 'medXfer 2026-10-20 10h56 (2 files)',
+      'total_files': 2,
+      'total_bytes': 2,
+      'items': [_q(0, 'essai1.bin', 1, 'pending'), _q(1, 'essai2.bin', 1, 'pending')],
+    }));
+    expect(t.active!.name, 'medXfer 2026-10-20 10h56');
   });
 }

@@ -190,7 +190,11 @@ class JoinFailed extends ConnectionNotice {
 class Connection extends ChangeNotifier {
   Connection(this.core, {this.network = const NoNetworkInfo(), this.hotspot = const NoHotspot()}) {
     _sub = core.events.listen(take);
+    // Another Wi-Fi, a hotspot gone: the core gets the interfaces again (DISC-10).
+    _netSub = network.changes.listen((_) => unawaited(pushNetwork()));
   }
+
+  StreamSubscription<void>? _netSub;
 
   final Core core;
 
@@ -248,6 +252,9 @@ class Connection extends ChangeNotifier {
     if (h == null || (h.ssid ?? '').isEmpty) return inv.uri;
     return PairLink.withNetwork(inv.uri, LinkNetwork(ssid: h.ssid!, passphrase: h.passphrase ?? '', security: h.security));
   }
+
+  /// The Connect screen is open: this device announces itself.
+  bool get showing => _showing;
 
   List<NearbyDevice> get nearby => _nearby;
   bool get scanning => _scanning;
@@ -565,6 +572,7 @@ class Connection extends ChangeNotifier {
   @override
   void dispose() {
     _scanLimit?.cancel();
+    _netSub?.cancel();
     _sub.cancel();
     _notices.close();
     super.dispose();

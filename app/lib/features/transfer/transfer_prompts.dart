@@ -6,7 +6,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../app.dart';
 import '../../l10n/app_localizations.dart';
+import '../../platform/storage.dart';
 import '../../theme.dart';
 import '../../transfer/transfers.dart';
 import '../../widgets/format.dart';
@@ -108,10 +110,25 @@ class _OfferDialog extends StatefulWidget {
 class _OfferDialogState extends State<_OfferDialog> {
   bool _closed = false;
 
+  /// Android without the access to all files: the files go to Download/medXfer, and the user
+  /// may allow the access here (decision J2), where it matters.
+  late final ReceiveStorage _storage = AppScope.of(context, listen: false).state.storage;
+  bool? _allFiles;
+
   @override
   void initState() {
     super.initState();
     widget.transfers.addListener(_check);
+    if (_storage.supported) {
+      _storage.allFiles().then((v) {
+        if (mounted) setState(() => _allFiles = v);
+      });
+    }
+  }
+
+  Future<void> _askAccess() async {
+    final granted = await _storage.askAllFiles();
+    if (mounted) setState(() => _allFiles = granted);
   }
 
   @override
@@ -171,6 +188,14 @@ class _OfferDialogState extends State<_OfferDialog> {
               l.noSpaceWarning(formatBytes(context, o.bytes), o.freeBytes < 0 ? '?' : formatBytes(context, o.freeBytes)),
               key: const Key('offer-no-space'),
               style: TextStyle(color: c.danger, fontWeight: FontWeight.w600),
+            ),
+          ],
+          if (_allFiles == false) ...[
+            const SizedBox(height: 10),
+            Text(l.storageHint, key: const Key('storage-hint'), style: TextStyle(color: c.muted, fontSize: 13)),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(key: const Key('storage-allow'), onPressed: _askAccess, child: Text(l.storageAllow)),
             ),
           ],
         ],
