@@ -665,10 +665,18 @@ func (s *DaemonServer) handleTestNetwork(rs Responder, req RequestMessage) {
 				BenchPingTS: t0.UnixNano(),
 			})
 
-			if rttMs, ok := awaitPong(s.benchPongChan, t0.UnixNano(), time.Second); ok {
-				rtts = append(rtts, rttMs)
+			// The time on the monotonic clock: UnixNano's steps reach a millisecond on Windows.
+			if _, ok := awaitPong(s.benchPongChan, t0.UnixNano(), time.Second); ok {
+				rtts = append(rtts, float64(time.Since(t0))/float64(time.Millisecond))
 			}
 			time.Sleep(20 * time.Millisecond)
+		}
+
+		if len(rtts) == 0 { // not a measure: say so rather than 0 ms and 0 MB/s
+			rs.Reply(NewEvent("action_error", map[string]string{
+				"error": "the other device did not answer the benchmark (an older version?)",
+			}, req.ID))
+			return
 		}
 
 		minRTT := 9999.0

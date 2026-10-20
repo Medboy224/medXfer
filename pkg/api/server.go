@@ -1224,53 +1224,18 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		s.mu.Unlock()
 		s.Broadcast(NewEvent("disconnected", map[string]string{"reason": "peer requested disconnect"}))
 
-	case "bench_ping":
+	case "bench_ping", "bench_burst_req":
 		s.mu.RLock()
 		sess := s.activeSession
 		s.mu.RUnlock()
 		if sess != nil {
-			_ = sess.Send(session.Message{
-				Type:        "bench_pong",
-				BenchPingTS: msg.BenchPingTS,
-			})
+			AnswerBench(sess, msg)
 		}
 
 	case "bench_pong":
 		select {
 		case s.benchPongChan <- msg:
 		default:
-		}
-
-	case "bench_burst_req":
-		s.mu.RLock()
-		sess := s.activeSession
-		s.mu.RUnlock()
-		if sess != nil {
-			benchSize := msg.BenchSize
-			if benchSize <= 0 {
-				benchSize = 8 * 1024 * 1024
-			}
-			port, waitFn, err := engine.RunNetworkBurstServer(0, benchSize, 4*time.Second)
-			if err == nil {
-				_ = sess.Send(session.Message{
-					Type:      "bench_burst_ready",
-					DataPort:  port,
-					BenchSize: benchSize,
-				})
-				go func() {
-					speed, _ := waitFn()
-					s.mu.RLock()
-					sCur := s.activeSession
-					s.mu.RUnlock()
-					if sCur != nil {
-						_ = sCur.Send(session.Message{
-							Type:      "bench_burst_ack",
-							FileSize:  int64(speed * 100), // Speed encoded in hundredths of MB/s
-							BenchSize: benchSize,
-						})
-					}
-				}()
-			}
 		}
 
 	case "bench_burst_ready", "bench_burst_ack":

@@ -186,8 +186,8 @@ class _Live extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 3),
               child: Row(
                 children: [
-                  SizedBox(
-                    width: 150,
+                  Expanded(
+                    flex: 5,
                     child: Text(
                       _stageName(l, s),
                       maxLines: 1,
@@ -196,6 +196,7 @@ class _Live extends StatelessWidget {
                     ),
                   ),
                   Expanded(
+                    flex: 3,
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(3),
                       child: LinearProgressIndicator(

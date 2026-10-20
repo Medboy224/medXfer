@@ -59,3 +59,41 @@ func TestProgressDescribesTheFileNotTheBatch(t *testing.T) {
 	}
 	pair.WaitTransferDone(30 * time.Second)
 }
+
+// WP-B.5: a stopped transfer closes its measures, with a report: the next transfer does not
+// start from them (the live stages and the report would mix two transfers).
+func TestStoppedTransferClosesItsMeasures(t *testing.T) {
+	testkit.Throttle(t, 2<<20)
+	src := filepath.Join(t.TempDir(), "big.bin")
+	_ = os.WriteFile(src, make([]byte, 8<<20), 0o644)
+	sendServer := NewDaemonServerAt(t.TempDir(), 0, t.TempDir(), "Sender")
+	recvServer := NewDaemonServerAt(t.TempDir(), 0, t.TempDir(), "Receiver")
+	pair := testkit.StartPair(t, sendServer, recvServer)
+	pair.Send([]string{src}, testkit.SendOptions{})
+	pair.AcceptOffer(0)
+	pair.Receiver.WaitFor("measured stages", func(e testkit.Event) bool {
+		var d TransferProgressData
+		return e.Event == "transfer_progress" && json.Unmarshal(e.Data, &d) == nil && len(d.StageMs) > 0
+	}, 20*time.Second)
+	pair.Receiver.Request("cancel", nil)
+
+	for _, side := range []struct {
+		name string
+		s    *DaemonServer
+	}{{"receiver", recvServer}, {"sender", sendServer}} {
+		s := side.s
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			s.trackerMu.Lock()
+			open, last := s.activeTracker != nil, s.lastSummaryReport
+			s.trackerMu.Unlock()
+			if !open && last != nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: tracker still open %v, report %v after the stop", side.name, open, last != nil)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+}

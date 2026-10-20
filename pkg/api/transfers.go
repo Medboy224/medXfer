@@ -425,6 +425,8 @@ func (s *DaemonServer) receive(sess *session.Channel, m *session.Message, saveDi
 		canceled := ctx.Err() != nil
 		s.endTransfer(offer.TransferID)
 		if err != nil {
+			// Its measures end with it: the next transfer starts its own (WP-B.5).
+			s.FinishTransferTracker()
 			if !canceled {
 				s.Broadcast(NewEvent("transfer_error", map[string]string{"file": offerName(offer), "error": err.Error()}))
 			}
@@ -498,6 +500,9 @@ func (s *DaemonServer) serveAccepted(msg session.Message) {
 		sender.SetEvents(ev)
 		err = sender.Serve(ctx, o.l)
 		ev.done()
+		// Its measures end with it, stopped, failed or done (then the receiver's "complete"
+		// finds the report made): the next transfer starts its own.
+		s.FinishTransferTracker()
 		if err != nil && ctx.Err() == nil {
 			s.Broadcast(NewEvent("transfer_error", map[string]string{"file": offerName(o.offer), "error": err.Error()}))
 		}
