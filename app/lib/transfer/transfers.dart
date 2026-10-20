@@ -48,7 +48,8 @@ String _displayName(Object? core, List<TransferItem> items) {
     final first = top(items.first.path);
     if (first.isNotEmpty && items.every((i) => i.path.contains('/') && top(i.path) == first)) return first;
   }
-  return (core as String?) ?? '';
+  // The core's "(N files)" is English, and the count is shown apart already.
+  return ((core as String?) ?? '').replaceFirst(RegExp(r' \(\d+ files?\)$'), '');
 }
 
 List<TransferItem> _items(Object? list) => [
@@ -216,6 +217,10 @@ class Transfers extends ChangeNotifier {
 
   /// How many transfers the history keeps.
   static const historySize = 100;
+
+  /// Where the last received transfer went, when the platform chose (Android): its folder is
+  /// the one to open, not the root.
+  String? get receiveDir => _receiveDir;
 
   IncomingOffer? get offer => _offer;
   ActiveTransfer? get active => _active;

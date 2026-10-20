@@ -15,6 +15,8 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:ffi/ffi.dart';
 
 import 'core.dart';
@@ -114,6 +116,9 @@ class FfiCore implements Core {
       if (msg is! List) return;
       for (final s in msg) {
         final e = CoreEvent.fromJson(jsonDecode(s as String) as Map<String, Object?>);
+        // Debug builds: each event's name in the log (logcat), the core's own log lines whole.
+        // No other data: it may name files or hold a PIN.
+        if (kDebugMode) debugPrint(e.name == 'log' ? 'core log: ${e.data}' : 'core event: ${e.name}${e.id == null ? '' : ' (${e.id})'}');
         _events.add(e);
         if (e.name == CoreEvent.stopped) {
           port.close();

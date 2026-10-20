@@ -27,6 +27,8 @@ func TestSendByDescriptor(t *testing.T) {
 	pair.Sender.Request("send", map[string]any{"items": items, "target_ip": pair.Receiver.PeerAddr()})
 	pair.AcceptOffer(0)
 	pair.WaitTransferDone(30 * time.Second)
+	// The sender's side ends too: its screen leaves "sending" (seen on the phone, WP-B.4).
+	pair.Sender.WaitEvent("transfer_complete", 10*time.Second)
 
 	entries, _ := os.ReadDir(recvDir)
 	if len(entries) != 1 || !entries[0].IsDir() {

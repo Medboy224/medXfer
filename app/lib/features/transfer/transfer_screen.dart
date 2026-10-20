@@ -234,7 +234,7 @@ class _Footer extends StatelessWidget {
               if (canOpen && a.direction == Direction.received && a.outcome != Outcome.rejected)
                 TextButton.icon(
                   key: const Key('open-folder'),
-                  onPressed: () async => state.folderOpener.open(await state.folders.downloadDir()),
+                  onPressed: () async => state.folderOpener.open(t.receiveDir ?? await state.folders.downloadDir()),
                   icon: const Icon(Icons.folder_open_rounded),
                   label: Text(l.openFolder),
                 ),

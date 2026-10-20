@@ -43,7 +43,13 @@ class AndroidFolderOpener implements FolderOpener {
   bool get supported => true;
 
   @override
-  Future<void> open(String folder) => platformChannel.invokeMethod<bool>('openFolder', {'path': folder});
+  Future<void> open(String folder) async {
+    try {
+      await platformChannel.invokeMethod<bool>('openFolder', {'path': folder});
+    } on Object {
+      // No file manager takes it: nothing more to do, the files are there all the same.
+    }
+  }
 }
 
 FolderOpener systemFolderOpener() => Platform.isAndroid ? const AndroidFolderOpener() : const SystemFolderOpener();

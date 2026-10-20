@@ -304,4 +304,15 @@ void main() {
     await t.sendPicked(const Picked());
     expect(core.calls, isEmpty);
   });
+
+  test("files without a common folder: the core's name, without its English count", () {
+    final (_, t, _) = _model();
+    t.take(CoreEvent('batch_offered', data: {
+      'summary': 'medXfer 2026-10-20 10h56 (2 files)',
+      'total_files': 2,
+      'total_bytes': 2,
+      'items': [_q(0, 'essai1.bin', 1, 'pending'), _q(1, 'essai2.bin', 1, 'pending')],
+    }));
+    expect(t.active!.name, 'medXfer 2026-10-20 10h56');
+  });
 }

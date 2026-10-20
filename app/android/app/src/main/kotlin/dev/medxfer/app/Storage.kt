@@ -92,21 +92,31 @@ class Storage(private val activity: Activity) {
             if (c.moveToFirst()) c.getString(0) else null
         }
 
-    /** Opens a folder of the shared storage in the system's file manager; false if none can. */
+    /**
+     * Opens a folder of the shared storage in the system's file manager; false if none can. No
+     * permission is granted with it: the app does not own that document (Android refuses then,
+     * SecurityException). Samsung's My Files, which may not handle the document's view, takes
+     * the path.
+     */
     fun openFolder(path: String): Boolean {
         val root = Environment.getExternalStorageDirectory().absolutePath
         val relative = path.removePrefix(root).trimStart('/')
         val uri = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:$relative")
-        val view = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val tries = listOf(
+            Intent(Intent.ACTION_VIEW).setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR),
+            Intent("samsung.myfiles.intent.action.LAUNCH_MY_FILES").putExtra("samsung.myfiles.intent.extra.START_PATH", path),
+        )
+        for (intent in tries) {
+            try {
+                activity.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return true
+            } catch (e: ActivityNotFoundException) {
+                continue
+            } catch (e: SecurityException) {
+                continue
+            }
         }
-        return try {
-            activity.startActivity(view)
-            true
-        } catch (e: ActivityNotFoundException) {
-            false
-        }
+        return false
     }
 
     companion object {
