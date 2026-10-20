@@ -4,7 +4,6 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -127,12 +126,11 @@ class HomeScreen extends StatelessWidget {
     unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen)));
   }
 
-  /// Android scans with the camera (WP-B.2b); a desktop has the link pasted instead.
+  /// Android scans with the camera; a desktop has the link pasted instead.
   static Future<void> _joinByQr(BuildContext context) async {
-    if (Platform.isAndroid) return _open(context, const ConnectScreen());
-    final connection = AppScope.of(context, listen: false).state.connection;
+    if (AppScope.of(context, listen: false).state.qrScanner.supported) return scanAndJoin(context);
     final link = await askLink(context);
-    if (link != null) await connection.pairUri(link);
+    if (link != null && context.mounted) await joinByLink(context, link);
   }
 
   static void _soon(BuildContext context) {

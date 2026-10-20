@@ -1,7 +1,10 @@
 package dev.medxfer.app
 
+import android.Manifest
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
@@ -31,7 +34,8 @@ class MainActivity : FlutterActivity() {
                     // The interfaces the core cannot list by itself (DISC-10), the multicast lock (DISC-03).
                     "networkInterfaces" -> result.success(network.interfaces())
                     "multicast" -> { network.multicast(call.argument<Boolean>("on") == true); result.success(null) }
-                    // The local access point (DISC-12, WP-B.7).
+                    // The local access point (DISC-12, WP-B.7) needs this permission, asked once.
+                    "hotspotPermission" -> askHotspotPermission { result.success(it) }
                     "hotspotStart" -> hotspot.start { info, err ->
                         if (err != null) result.error("hotspot", err, null) else result.success(info)
                     }
@@ -45,6 +49,25 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    private var permissionAnswer: ((Boolean) -> Unit)? = null
+
+    // NEARBY_WIFI_DEVICES (Android 13 on, neverForLocation), the location before: what both the
+    // local hotspot and the joining of another device's need. done gets whether it is granted.
+    private fun askHotspotPermission(done: (Boolean) -> Unit) {
+        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION
+        if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) return done(true)
+        permissionAnswer?.invoke(false) // a request still open counts as refused
+        permissionAnswer = done
+        requestPermissions(arrayOf(permission), PERMISSION_REQUEST)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != PERMISSION_REQUEST) return
+        permissionAnswer?.invoke(grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)
+        permissionAnswer = null
     }
 
     private var pendingProbe: Intent? = null
@@ -86,5 +109,6 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         const val PROBE_TAG = "medxfer-probe"
+        private const val PERMISSION_REQUEST = 0x6d78
     }
 }

@@ -9,19 +9,24 @@ import 'package:flutter/foundation.dart';
 import 'connection/connection.dart';
 import 'core/core.dart';
 import 'platform/folders.dart';
+import 'platform/hotspot.dart';
 import 'platform/network.dart';
+import 'platform/qr_scanner.dart';
 
 enum CoreStatus { starting, ready, failed }
 
 class AppState extends ChangeNotifier {
-  AppState({required this.core, required this.folders, NetworkInfo network = const NoNetworkInfo()})
-      : connection = Connection(core, network: network);
+  AppState({required this.core, required this.folders, NetworkInfo network = const NoNetworkInfo(), Hotspot hotspot = const NoHotspot(), this.qrScanner = const NoQrScanner()})
+      : connection = Connection(core, network: network, hotspot: hotspot);
 
   final Core core;
   final Folders folders;
 
   /// The other device: pairing, session, trust (WP-B.2). Listens to the core from the start.
   final Connection connection;
+
+  /// The camera that reads QR codes (decision J5); none on the desktops.
+  final QrScanner qrScanner;
 
   CoreStatus _status = CoreStatus.starting;
   String _deviceName = '';

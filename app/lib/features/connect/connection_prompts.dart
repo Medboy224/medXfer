@@ -79,6 +79,8 @@ class _ConnectionPromptsState extends State<ConnectionPrompts> {
       TrustEstablished(:final name) => l.noticeTrustEstablished(name),
       TrustDeclined(:final noAnswer) => noAnswer ? l.noticeTrustNoAnswer : l.noticeTrustDeclined,
       TrustIncomplete(:final name, :final local) => local ? l.noticeTrustIncompleteLocal(name) : l.noticeTrustIncompleteRemote(name),
+      HotspotFailed(:final permission, :final reason) => permission ? l.noticeHotspotPermission : l.noticeHotspotFailed(reason),
+      JoinFailed(:final ssid) => l.noticeJoinFailed(ssid),
       KeyChanged() => '',
     };
     widget.messenger.currentState

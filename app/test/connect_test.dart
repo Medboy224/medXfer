@@ -1,6 +1,7 @@
 // The screens of WP-B.2 on the fake core: Connect, the session banner, what the other device
 // asks of this user, the refusal of ID-05, the trusted devices.
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:medxfer/app.dart';
 import 'package:medxfer/app_state.dart';
@@ -8,6 +9,8 @@ import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/features/connect/connect_screen.dart';
 import 'package:medxfer/platform/folders.dart';
+import 'package:medxfer/platform/hotspot.dart';
+import 'package:medxfer/platform/qr_scanner.dart';
 import 'package:medxfer/settings.dart';
 
 const _expires = 1900000000;
@@ -44,8 +47,34 @@ FakeCore _core() => FakeCore()
         ]),
       ]));
 
-Future<(FakeCore, AppState)> _app(WidgetTester tester, FakeCore core) async {
-  final state = AppState(core: core, folders: const _TestFolders());
+/// A hotspot that starts at once.
+class _Hotspot implements Hotspot {
+  @override
+  bool get supported => true;
+  @override
+  Future<bool> permission() async => true;
+  @override
+  Future<HotspotInfo> start() async => const HotspotInfo(ssid: 'AndroidShare_1732', passphrase: 'vvrtsy', security: 2, address: '10.46.56.232');
+  @override
+  Future<void> stop() async {}
+  @override
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async => const HotspotInfo();
+  @override
+  Future<void> leave() async {}
+}
+
+/// A camera that reads [text] at once.
+class _Scanner implements QrScanner {
+  const _Scanner(this.text);
+  final String text;
+  @override
+  bool get supported => true;
+  @override
+  Future<String?> scan(BuildContext context) async => text;
+}
+
+Future<(FakeCore, AppState)> _app(WidgetTester tester, FakeCore core, {Hotspot hotspot = const NoHotspot(), QrScanner scanner = const NoQrScanner()}) async {
+  final state = AppState(core: core, folders: const _TestFolders(), hotspot: hotspot, qrScanner: scanner);
   tester.platformDispatcher.localesTestValue = [const Locale('fr')];
   addTearDown(tester.platformDispatcher.clearLocalesTestValue);
   tester.view.physicalSize = const Size(1080, 2400);
@@ -198,5 +227,49 @@ void main() {
     await tester.pumpAndSettle();
     expect(core.calls.last.payload, {'fingerprint': 'BDIT4HBWIMJS', 'name': 'Téléphone de Awa'});
     expect(find.text('Téléphone de Awa'), findsOneWidget);
+  });
+
+  testWidgets('no common Wi-Fi: the access point, its name and password for a device without camera', (tester) async {
+    final core = _core();
+    await _app(tester, core, hotspot: _Hotspot());
+    await tester.tap(find.byKey(const Key('connect')));
+    await tester.pumpAndSettle();
+    await _reveal(tester, find.byKey(const Key('hotspot-start')));
+    await tester.tap(find.byKey(const Key('hotspot-start')));
+    await tester.pumpAndSettle();
+    expect(find.text('Réseau : AndroidShare_1732'), findsOneWidget);
+    expect(find.text('Mot de passe : vvrtsy'), findsOneWidget);
+    expect(find.byKey(const Key('hotspot-stop')), findsOneWidget);
+  });
+
+  testWidgets('the camera reads a link: paired by it', (tester) async {
+    const link = 'medxfer://v1/pair?fp=AAAA&a=192.168.1.30&p=18887&s=x&exp=1900000000';
+    final core = _core()..on('pair_uri', (_) => const FakeAnswer());
+    await _app(tester, core, scanner: const _Scanner(link));
+    await tester.tap(find.byTooltip('Scanner un QR pour rejoindre'));
+    await tester.pumpAndSettle();
+    expect(core.calls.last.action, 'pair_uri');
+    expect(core.calls.last.payload['uri'], link);
+  });
+
+  testWidgets('a desktop pastes a link that names a network: told to join it first', (tester) async {
+    const link = 'medxfer://v1/pair?fp=AAAA&a=10.46.56.232&p=18887&s=x&exp=1900000000&ws=AndroidShare_1732&wp=vvrtsy&wt=2';
+    final core = _core()..on('pair_uri', (_) => const FakeAnswer());
+    // The link dialog reads the clipboard first: empty here.
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async => call.method == 'Clipboard.getData' ? {'text': ''} : null);
+    addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    await _app(tester, core);
+    await tester.tap(find.byTooltip('Scanner un QR pour rejoindre'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('link-field')), link);
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('link-ok')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('AndroidShare_1732'), findsOneWidget);
+    expect(find.textContaining('vvrtsy'), findsOneWidget);
+    expect(core.calls.where((c) => c.action == 'pair_uri'), isEmpty);
+    await tester.tap(find.byKey(const Key('join-wifi-ok')));
+    await tester.pumpAndSettle();
+    expect(core.calls.last.payload['uri'], link);
   });
 }

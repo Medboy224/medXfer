@@ -33,6 +33,14 @@ android {
     // The core (libmedxfer.so), staged by scripts/stage-app-native.* from build/lib (WP-B.1).
     sourceSets["main"].jniLibs.srcDir("../../native/android")
 
+    // The native libraries compressed in the APK (UI-5: under 25 MB per architecture): about
+    // half their size. Android extracts them once, at installation.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

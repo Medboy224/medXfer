@@ -1,6 +1,9 @@
 // The connection model on the fake core: what it asks the core, and what it makes of the
 // events (WP-B.2).
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:medxfer/connection/pair_link.dart';
+import 'package:medxfer/platform/hotspot.dart';
 import 'package:medxfer/platform/network.dart';
 import 'package:medxfer/connection/connection.dart';
 import 'package:medxfer/core/core.dart';
@@ -38,6 +41,46 @@ class _AndroidNetwork implements NetworkInfo {
   @override
   Future<void> multicast(bool on) async => locks.add(on);
 }
+
+/// Android's hotspot as the model sees it: what was asked, and what to answer.
+class _FakeHotspot implements Hotspot {
+  bool granted = true;
+  bool joinFails = false;
+  final log = <String>[];
+
+  @override
+  bool get supported => true;
+
+  @override
+  Future<bool> permission() async {
+    log.add('permission');
+    return granted;
+  }
+
+  @override
+  Future<HotspotInfo> start() async {
+    log.add('start');
+    return const HotspotInfo(ssid: 'AndroidShare_1732', passphrase: 'vvrtsy', security: 2, address: '10.46.56.232');
+  }
+
+  @override
+  Future<void> stop() async => log.add('stop');
+
+  @override
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async {
+    log.add('join $ssid $passphrase $security');
+    if (joinFails) throw PlatformException(code: 'join', message: 'unavailable');
+    return const HotspotInfo(address: '10.46.56.91');
+  }
+
+  @override
+  Future<void> leave() async => log.add('leave');
+}
+
+List<Object?> _networkNames(FakeCore core) => [
+      for (final c in core.calls)
+        if (c.action == 'set_network_info') [for (final i in c.payload['interfaces']! as List) (i as Map)['name']],
+    ];
 
 void main() {
   test('opening Connect announces this device, shows its code and looks around', () async {
@@ -232,5 +275,86 @@ void main() {
     await tester.pump(Connection.scanLimit);
     expect(c.scanning, isFalse);
     c.dispose();
+  });
+
+  test("this device's access point: only its interface for the core, the network in the QR code", () async {
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    await c.openConnect();
+    core.calls.clear();
+    await c.startHotspot();
+    expect(h.log, ['permission', 'start']);
+    expect(c.myHotspot!.ssid, 'AndroidShare_1732');
+    expect(_networkNames(core), [['swlan0']]);
+    expect(core.calls.map((x) => x.action), ['set_network_info', 'pair_show', 'pair_pin_show']);
+    final link = PairLink.parse(c.qrData!)!;
+    expect(link.network!.ssid, 'AndroidShare_1732');
+    expect(link.network!.passphrase, 'vvrtsy');
+    expect(link.network!.security, 2);
+
+    // Nobody joined: closing Connect stops it, and the core gets every interface back.
+    await c.closeConnect();
+    expect(h.log.last, 'stop');
+    expect(c.myHotspot, isNull);
+    expect(_networkNames(core).last, ['wlan0', 'swlan0']);
+  });
+
+  test('an access point that carries the session stays until the session ends', () async {
+    final core = _core()..on('set_network_info', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    await c.openConnect();
+    await c.startHotspot();
+    c.take(const CoreEvent('paired', data: {'ip': '10.46.56.91', 'device_name': 'PC'}));
+    await c.closeConnect();
+    expect(h.log, isNot(contains('stop')));
+    c.take(const CoreEvent('disconnected', data: {'reason': 'peer requested disconnect'}));
+    await _settle();
+    await _settle();
+    expect(h.log.last, 'stop');
+  });
+
+  test('no permission, no access point: said, nothing started', () async {
+    final h = _FakeHotspot()..granted = false;
+    final c = Connection(_core(), hotspot: h);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.startHotspot();
+    await _settle();
+    expect(h.log, ['permission']);
+    expect(c.myHotspot, isNull);
+    expect((notices.single as HotspotFailed).permission, isTrue);
+  });
+
+  test('a link with a network: joined first, then paired; left when the session ends', () async {
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_uri', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    final uri = PairLink.withNetwork('medxfer://v1/pair?fp=A&a=10.46.56.232&p=18887&s=x&exp=1900000000',
+        const LinkNetwork(ssid: 'AndroidShare_1732', passphrase: 'vvrtsy', security: 2));
+    await c.pairLink(PairLink.parse(uri)!);
+    expect(h.log, ['permission', 'join AndroidShare_1732 vvrtsy 2']);
+    expect(core.calls.map((x) => x.action), ['set_network_info', 'pair_uri']);
+    expect(core.calls.last.payload['uri'], uri);
+    c.take(const CoreEvent('paired', data: {'ip': '10.46.56.232', 'device_name': 'Galaxy'}));
+    c.take(const CoreEvent('disconnected', data: {'reason': 'user requested disconnect'}));
+    await _settle();
+    expect(h.log.last, 'leave');
+  });
+
+  test('a network that cannot be joined: said, and no pairing tried', () async {
+    final core = _core()..on('pair_uri', (_) => const FakeAnswer());
+    final h = _FakeHotspot()..joinFails = true;
+    final c = Connection(core, hotspot: h);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.pairLink(PairLink.parse('medxfer://v1/pair?fp=A&ws=Net&wp=x')!);
+    await _settle();
+    expect((notices.single as JoinFailed).ssid, 'Net');
+    expect(core.calls.where((x) => x.action == 'pair_uri'), isEmpty);
   });
 }

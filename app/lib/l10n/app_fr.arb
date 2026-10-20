@@ -75,5 +75,21 @@
   "forgetBody": "Pour vous reconnecter, il faudra de nouveau un QR ou un PIN.",
   "keyLabel": "Clé {key}",
   "menu": "Menu",
-  "pinAddress": "Adresse : {address}"
+  "pinAddress": "Adresse : {address}",
+  "hotspotTitle": "Pas de Wi-Fi commun ?",
+  "hotspotHint": "Ce téléphone crée son propre réseau ; l'autre appareil le rejoint avec le QR.",
+  "hotspotStart": "Créer un point d'accès",
+  "hotspotStop": "Arrêter le point d'accès",
+  "hotspotBusy": "Préparation du réseau…",
+  "hotspotOn": "Point d'accès allumé : le QR porte le réseau.",
+  "hotspotNetwork": "Réseau : {ssid}",
+  "hotspotPassword": "Mot de passe : {password}",
+  "hotspotSteps": "Sans caméra : 1. rejoignez ce Wi-Fi dans les réglages ; 2. revenez dans medXfer ; 3. tapez le PIN et l'adresse ci-dessus.",
+  "noticeHotspotPermission": "Sans l'autorisation « Appareils à proximité », pas de point d'accès.",
+  "noticeHotspotFailed": "Le point d'accès n'a pas démarré ({reason}). Coupez le point d'accès du système, puis réessayez.",
+  "noticeJoinFailed": "Impossible de rejoindre le Wi-Fi « {ssid} ».",
+  "joinWifiTitle": "Rejoignez d'abord le Wi-Fi",
+  "joinWifiBody": "Dans les réglages Wi-Fi de cet appareil, rejoignez « {ssid} » (mot de passe : {password}), puis continuez.",
+  "continueLabel": "Continuer",
+  "notALink": "Ce n'est pas un lien medXfer."
 }
