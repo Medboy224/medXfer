@@ -38,16 +38,21 @@ deps="$stage/$name/DEPENDANCES.txt"
   find "$stage/$name" -type f \( -name medxfer -o -name '*.so' \) -exec ldd {} + 2>/dev/null |
     awk '/=>/ && $3 ~ /^\// {print $3}' | grep -v "/$name/" | sort -u > "$stage/libs"
   sed 's/^/  /' "$stage/libs"
+  # OpenGL: libepoxy opens it while the app runs, so ldd does not see it. Without it the app
+  # stops at once ("Couldn't open libEGL.so.1"), found on a fresh Ubuntu by the CI.
+  echo "  libEGL.so.1, libGL.so.1, libGLESv2.so.2 et un pilote OpenGL : chargés au lancement"
   if command -v dpkg >/dev/null; then
     echo
     echo "Paquets Debian et Ubuntu (apt install) :"
-    # dpkg knows the real path: /lib is often a link to /usr/lib.
-    while read -r lib; do
-      dpkg -S "$(readlink -f "$lib")" 2>/dev/null || dpkg -S "$lib" 2>/dev/null || echo "no package owns $lib" >&2
-    done < "$stage/libs" | cut -d: -f1 | sort -u | sed 's/^/  /'
+    {
+      # dpkg knows the real path: /lib is often a link to /usr/lib.
+      while read -r lib; do
+        dpkg -S "$(readlink -f "$lib")" 2>/dev/null || dpkg -S "$lib" 2>/dev/null || echo "no package owns $lib" >&2
+      done < "$stage/libs" | cut -d: -f1
+      # The OpenGL loaded at launch, and Mesa's drivers (software rendering without a GPU).
+      printf '%s\n' libegl1 libgl1 libgles2 libgl1-mesa-dri
+    } | sort -u | sed 's/^/  /'
   fi
-  echo
-  echo "Le rendu passe par OpenGL : sans pilote graphique, le paquet libgl1-mesa-dri (Mesa) suffit."
 } > "$deps"
 
 mkdir -p "$out"

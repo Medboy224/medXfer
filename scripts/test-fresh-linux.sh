@@ -17,7 +17,7 @@ docker run --rm -v "$archive:/pkg.tar.gz:ro" "$image" bash -euo pipefail -c "
   pkgs=\$(sed -n '/^Paquets/,/^\$/{/^  /p}' DEPENDANCES.txt | tr -d ' ')
   echo \"Packages: \$pkgs\"
   apt-get update -qq
-  apt-get install -y -qq --no-install-recommends \$pkgs libgl1-mesa-dri xvfb xauth >/dev/null
+  apt-get install -y -qq --no-install-recommends \$pkgs xvfb xauth >/dev/null
   # The plugins find libflutter_linux_gtk.so in lib/, as the app loads them.
   missing=\$(LD_LIBRARY_PATH=lib ldd medxfer lib/*.so | grep 'not found' || true)
   if [ -n \"\$missing\" ]; then echo \"Missing libraries:\"; echo \"\$missing\"; exit 1; fi
