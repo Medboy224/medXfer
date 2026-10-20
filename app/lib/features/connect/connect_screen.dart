@@ -1,10 +1,10 @@
-/// The Connect screen (§1.2 of the J6b plan): this device's QR code and PIN, the ways to join
-/// another device, and the devices on the same Wi-Fi. The hotspot and the camera come with
-/// WP-B.2b. Once paired, the screen closes: the banner of the home screen takes over.
+/// The Connect screen (§1.2 of the J6b plan): this device's QR code and PIN, its own access
+/// point when there is no common Wi-Fi (Android, WP-B.7), the ways to join another device
+/// (camera, link, PIN), and the devices on the same Wi-Fi. Once paired, the screen closes: the
+/// banner of the home screen takes over.
 library;
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -74,14 +74,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
   Future<void> _pasteLink() async {
     final link = await askLink(context);
-    if (link != null) await _c.pairUri(link);
-  }
-
-  void _scanQr() {
-    // The camera comes with WP-B.2b (QrScanner, decision J5).
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(AppLocalizations.of(context).comingSoon)));
+    if (link != null && mounted) await joinByLink(context, link);
   }
 
   @override
@@ -93,7 +86,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
         listenable: _c,
         builder: (context, _) {
           final code = _CodeCard(connection: _c);
-          final join = _JoinCard(onScan: Platform.isAndroid ? _scanQr : null, onPaste: _pasteLink, onPin: () => _askPin(null));
+          final scanner = AppScope.of(context).state.qrScanner;
+          final join = _JoinCard(onScan: scanner.supported ? () => scanAndJoin(context) : null, onPaste: _pasteLink, onPin: () => _askPin(null));
+          final hotspot = _c.hotspot.supported ? _HotspotCard(connection: _c) : null;
           final nearby = _NearbyCard(
             connection: _c,
             onPick: (d) {
@@ -116,7 +111,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
                   children: [
                     SizedBox(
                       width: 360,
-                      child: ListView(padding: const EdgeInsets.all(16), children: [code, remember]),
+                      child: ListView(padding: const EdgeInsets.all(16), children: [code, ?hotspot, remember]),
                     ),
                     Expanded(
                       child: ListView(padding: const EdgeInsets.all(16), children: [join, const SizedBox(height: 16), nearby]),
@@ -126,7 +121,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
               }
               return ListView(
                 padding: const EdgeInsets.all(16),
-                children: [code, remember, const SizedBox(height: 8), join, const SizedBox(height: 16), nearby],
+                children: [code, if (hotspot != null) ...[const SizedBox(height: 12), hotspot], remember, const SizedBox(height: 8), join, const SizedBox(height: 16), nearby],
               );
             },
           );
@@ -199,7 +194,7 @@ class _CodeCard extends StatelessWidget {
           const SizedBox(height: 12),
           SizedBox(
             height: 220,
-            child: inv == null || inv.uri.isEmpty ? const Center(child: CircularProgressIndicator()) : QrView(key: const Key('my-qr'), data: inv.uri),
+            child: inv == null || inv.uri.isEmpty ? const Center(child: CircularProgressIndicator()) : QrView(key: const Key('my-qr'), data: connection.qrData ?? inv.uri),
           ),
           const SizedBox(height: 12),
           if (pin != null && pin.pin.isNotEmpty)
@@ -359,6 +354,59 @@ class _NearbyCard extends StatelessWidget {
                   ),
               ],
             ),
+    );
+  }
+}
+
+/// This device's own access point (Android, DISC-12): created on demand, its name and password
+/// shown for a device without a camera, which then types the PIN (three steps, §1.2).
+class _HotspotCard extends StatelessWidget {
+  const _HotspotCard({required this.connection});
+
+  final Connection connection;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    final h = connection.myHotspot;
+    final busy = connection.hotspotBusy;
+    return _Section(
+      title: l.hotspotTitle,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (h == null) ...[
+            Text(l.hotspotHint, style: TextStyle(color: c.muted)),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.tonalIcon(
+                key: const Key('hotspot-start'),
+                onPressed: busy ? null : () => unawaited(connection.startHotspot()),
+                icon: busy ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.wifi_tethering_rounded),
+                label: Text(busy ? l.hotspotBusy : l.hotspotStart),
+              ),
+            ),
+          ] else ...[
+            Text(l.hotspotOn, style: const TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            SelectableText(l.hotspotNetwork(h.ssid ?? ''), key: const Key('hotspot-ssid')),
+            SelectableText(l.hotspotPassword(h.passphrase ?? ''), key: const Key('hotspot-password')),
+            const SizedBox(height: 6),
+            Text(l.hotspotSteps, style: TextStyle(color: c.muted, fontSize: 13)),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: const Key('hotspot-stop'),
+                onPressed: () => unawaited(connection.stopHotspot()),
+                icon: const Icon(Icons.portable_wifi_off_rounded),
+                label: Text(l.hotspotStop),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

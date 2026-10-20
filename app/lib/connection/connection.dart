@@ -6,9 +6,12 @@ library;
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import '../core/core.dart';
+import '../platform/hotspot.dart';
 import '../platform/network.dart';
+import 'pair_link.dart';
 
 /// A device found on the network (`peers_list`).
 @immutable
@@ -170,8 +173,22 @@ class TrustIncomplete extends ConnectionNotice {
   final bool local;
 }
 
+/// The access point could not be created: the permission refused, or Android said no (the
+/// system's hotspot on, no channel…).
+class HotspotFailed extends ConnectionNotice {
+  const HotspotFailed({required this.permission, this.reason = ''});
+  final bool permission;
+  final String reason;
+}
+
+/// The other device's access point could not be joined (refused by the user, not found).
+class JoinFailed extends ConnectionNotice {
+  const JoinFailed(this.ssid);
+  final String ssid;
+}
+
 class Connection extends ChangeNotifier {
-  Connection(this.core, {this.network = const NoNetworkInfo()}) {
+  Connection(this.core, {this.network = const NoNetworkInfo(), this.hotspot = const NoHotspot()}) {
     _sub = core.events.listen(take);
   }
 
@@ -179,6 +196,12 @@ class Connection extends ChangeNotifier {
 
   /// What the core cannot see by itself on Android: the interfaces, the multicast lock.
   final NetworkInfo network;
+
+  /// The access point this device creates, or joins (DISC-12, WP-B.7).
+  final Hotspot hotspot;
+  HotspotInfo? _myHotspot;
+  LinkNetwork? _joined;
+  bool _hotspotBusy = false;
   Timer? _scanLimit;
   late final StreamSubscription<CoreEvent> _sub;
   final _notices = StreamController<ConnectionNotice>.broadcast();
@@ -209,6 +232,21 @@ class Connection extends ChangeNotifier {
     _remember = value;
     notifyListeners();
     if (_showing) await showCode();
+  }
+
+  /// The access point this device created: its name and passphrase go in the QR code.
+  HotspotInfo? get myHotspot => _myHotspot;
+
+  /// Creating or joining an access point is under way.
+  bool get hotspotBusy => _hotspotBusy;
+
+  /// What the QR code shows: the core's link, with the network when this device created one.
+  String? get qrData {
+    final inv = _invitation;
+    if (inv == null || inv.uri.isEmpty) return null;
+    final h = _myHotspot;
+    if (h == null || (h.ssid ?? '').isEmpty) return inv.uri;
+    return PairLink.withNetwork(inv.uri, LinkNetwork(ssid: h.ssid!, passphrase: h.passphrase ?? '', security: h.security));
   }
 
   List<NearbyDevice> get nearby => _nearby;
@@ -244,7 +282,8 @@ class Connection extends ChangeNotifier {
     await Future.wait([showCode(), scan()]);
   }
 
-  /// The Connect screen closes: this device stops announcing itself.
+  /// The Connect screen closes: this device stops announcing itself. An access point nobody
+  /// joined goes with it; one that carries the session stays until the session ends.
   Future<void> closeConnect() async {
     _showing = false;
     _scanLimit?.cancel();
@@ -254,13 +293,87 @@ class Connection extends ChangeNotifier {
     notifyListeners();
     await _call('set_discoverable', {'on': false});
     await network.multicast(false);
+    if (_myHotspot != null && _session == null) await stopHotspot();
   }
 
-  /// Gives the core the interfaces the platform sees (DISC-10); nothing on the desktops.
+  /// Gives the core the interfaces the platform sees (DISC-10); nothing on the desktops. While
+  /// this device's access point runs, that interface alone: the QR code, the PIN and the
+  /// announcements then carry the address the joining device reaches (probe of WP-B.7).
   Future<void> pushNetwork() async {
-    final interfaces = await network.interfaces();
+    var interfaces = await network.interfaces();
     if (interfaces == null || interfaces.isEmpty) return;
+    final ap = _myHotspot?.address;
+    if (ap != null && ap.isNotEmpty) {
+      final only = [for (final i in interfaces) if (i.addrs.any((a) => a.split('/').first == ap)) i];
+      if (only.isNotEmpty) interfaces = only;
+    }
     await _call('set_network_info', {'interfaces': [for (final i in interfaces) i.toJson()]});
+  }
+
+  /// Creates this device's access point (Android), then a QR code and PIN that carry it.
+  Future<void> startHotspot() async {
+    if (!hotspot.supported || _hotspotBusy || _myHotspot != null) return;
+    _hotspotBusy = true;
+    notifyListeners();
+    try {
+      if (!await hotspot.permission()) {
+        _notices.add(const HotspotFailed(permission: true));
+        return;
+      }
+      _myHotspot = await hotspot.start();
+      await pushNetwork();
+      if (_showing) await showCode();
+    } on PlatformException catch (e) {
+      _myHotspot = null;
+      _notices.add(HotspotFailed(permission: false, reason: e.message ?? e.code));
+    } finally {
+      _hotspotBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// Stops this device's access point; the core gets every interface back.
+  Future<void> stopHotspot() async {
+    if (_myHotspot == null) return;
+    _myHotspot = null;
+    notifyListeners();
+    await hotspot.stop();
+    await pushNetwork();
+    if (_showing) await showCode();
+  }
+
+  /// Pairs by a scanned or pasted link. When it names an access point, this device joins it
+  /// first (Android; on a desktop the user joins it in the system's settings beforehand).
+  Future<void> pairLink(PairLink link) async {
+    final n = link.network;
+    if (n != null && hotspot.supported && _joined?.ssid != n.ssid) {
+      _hotspotBusy = true;
+      notifyListeners();
+      try {
+        if (!await hotspot.permission()) {
+          _notices.add(const HotspotFailed(permission: true));
+          return;
+        }
+        await hotspot.join(n.ssid, n.passphrase, security: n.security);
+        _joined = n;
+        await pushNetwork();
+      } on PlatformException {
+        _notices.add(JoinFailed(n.ssid));
+        return;
+      } finally {
+        _hotspotBusy = false;
+        notifyListeners();
+      }
+    }
+    await pairUri(link.uri);
+  }
+
+  /// Leaves the access point joined by [pairLink]: back to the usual network.
+  Future<void> leaveJoined() async {
+    if (_joined == null) return;
+    _joined = null;
+    await hotspot.leave();
+    await pushNetwork();
   }
 
   /// A new QR code and PIN; the previous ones stop working.
@@ -398,6 +511,9 @@ class Connection extends ChangeNotifier {
         _session = null;
         _reconnecting = false;
         _trustOffer = null;
+        // The network made for this session is no longer needed.
+        if (_myHotspot != null && !_showing) unawaited(stopHotspot());
+        if (_joined != null) unawaited(leaveJoined());
       case 'status':
         if (m['paired'] == true && _session == null) {
           _session = PeerSession(name: (m['paired_device'] as String?) ?? '', ip: (m['paired_ip'] as String?) ?? '');

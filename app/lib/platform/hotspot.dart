@@ -33,6 +33,10 @@ class HotspotInfo {
 abstract interface class Hotspot {
   bool get supported;
 
+  /// Asks the permission both start and join need (Android: NEARBY_WIFI_DEVICES); true once
+  /// granted.
+  Future<bool> permission();
+
   /// Creates the access point: its name, passphrase and this device's address on it.
   Future<HotspotInfo> start();
   Future<void> stop();
@@ -51,6 +55,9 @@ class AndroidHotspot implements Hotspot {
   bool get supported => Platform.isAndroid;
 
   @override
+  Future<bool> permission() async => await platformChannel.invokeMethod<bool>('hotspotPermission') ?? false;
+
+  @override
   Future<HotspotInfo> start() async =>
       HotspotInfo.fromMap((await platformChannel.invokeMethod<Map<Object?, Object?>>('hotspotStart'))!);
 
@@ -64,3 +71,28 @@ class AndroidHotspot implements Hotspot {
   @override
   Future<void> leave() => platformChannel.invokeMethod<void>('hotspotLeave');
 }
+
+/// The desktops: no hotspot from the app (the user joins a network in the system's settings).
+class NoHotspot implements Hotspot {
+  const NoHotspot();
+
+  @override
+  bool get supported => false;
+
+  @override
+  Future<bool> permission() async => false;
+
+  @override
+  Future<HotspotInfo> start() => throw UnsupportedError('no hotspot on this platform');
+
+  @override
+  Future<void> stop() async {}
+
+  @override
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) => throw UnsupportedError('no joining on this platform');
+
+  @override
+  Future<void> leave() async {}
+}
+
+Hotspot systemHotspot() => Platform.isAndroid ? const AndroidHotspot() : const NoHotspot();

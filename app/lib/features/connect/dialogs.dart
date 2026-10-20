@@ -4,6 +4,8 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../app.dart';
+import '../../connection/pair_link.dart';
 import '../../l10n/app_localizations.dart';
 
 /// Asks for the other device's PIN, and its address when [target] is not known yet. Returns
@@ -140,4 +142,40 @@ class _LinkDialogState extends State<_LinkDialog> {
       ],
     );
   }
+}
+
+/// Pairs by a scanned or pasted link. A link that names an access point is joined by the app
+/// on Android; on a desktop, the user is asked to join it in the system's settings first.
+Future<void> joinByLink(BuildContext context, String text) async {
+  final connection = AppScope.of(context, listen: false).state.connection;
+  final l = AppLocalizations.of(context);
+  final link = PairLink.parse(text);
+  if (link == null) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(l.notALink)));
+    return;
+  }
+  final n = link.network;
+  if (n != null && !connection.hotspot.supported) {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(l.joinWifiTitle),
+        content: SelectableText(l.joinWifiBody(n.ssid, n.passphrase)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: Text(l.cancel)),
+          FilledButton(key: const Key('join-wifi-ok'), onPressed: () => Navigator.of(context).pop(true), child: Text(l.continueLabel)),
+        ],
+      ),
+    );
+    if (go != true) return;
+  }
+  await connection.pairLink(link);
+}
+
+/// Opens the camera, then pairs with what it read.
+Future<void> scanAndJoin(BuildContext context) async {
+  final text = await AppScope.of(context, listen: false).state.qrScanner.scan(context);
+  if (text != null && context.mounted) await joinByLink(context, text);
 }
