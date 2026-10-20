@@ -176,5 +176,12 @@
   "storageHint": "These files will go to Download/medXfer. To sort them by type in medXfer/ at the root of the phone (Photos, Videos…), Android asks for the access to all files.",
   "storageAllow": "Allow the access",
   "storageWhere": "They will go to {folder}.",
-  "@storageWhere": {"placeholders": {"folder": {"type": "String"}}}
+  "@storageWhere": {"placeholders": {"folder": {"type": "String"}}},
+  "notifVisible": "Visible to nearby devices",
+  "notifSession": "Open medXfer to send or receive.",
+  "notifHotspot": "Hotspot on",
+  "notifOffer": "{device} wants to send you files",
+  "@notifOffer": {"placeholders": {"device": {"type": "String"}}},
+  "notifProgress": "{percent} % · {speed}/s",
+  "@notifProgress": {"placeholders": {"percent": {"type": "String"}, "speed": {"type": "String"}}}
 }

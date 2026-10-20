@@ -135,5 +135,10 @@
   "durationHours": "{h} h {m} min",
   "storageHint": "Ces fichiers iront dans Download/medXfer. Pour les ranger par type dans medXfer/ à la racine du téléphone (Photos, Vidéos…), Android demande l'accès à tous les fichiers.",
   "storageAllow": "Autoriser l'accès",
-  "storageWhere": "Ils iront dans {folder}."
+  "storageWhere": "Ils iront dans {folder}.",
+  "notifVisible": "Visible par les appareils proches",
+  "notifSession": "Ouvrez medXfer pour envoyer ou recevoir.",
+  "notifHotspot": "Point d'accès allumé",
+  "notifOffer": "{device} veut vous envoyer des fichiers",
+  "notifProgress": "{percent} % · {speed}/s"
 }

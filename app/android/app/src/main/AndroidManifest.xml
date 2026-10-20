@@ -18,6 +18,11 @@
     <!-- Received files in medXfer/ at the root of the shared storage, sorted by type (decision
          J2); asked with an explanation, never at the first start. Without it: Download/medXfer/. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage"/>
+    <!-- The foreground service (API-08): the network stays while the app is in the background.
+         Type connectedDevice (allowed by CHANGE_WIFI_STATE, CHANGE_NETWORK_STATE). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove"/>
@@ -25,6 +30,10 @@
         android:label="medXfer"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <service
+            android:name=".MedxferService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

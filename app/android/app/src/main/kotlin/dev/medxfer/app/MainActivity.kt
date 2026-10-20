@@ -22,8 +22,10 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.medxfer.app/platform")
-            .setMethodCallHandler { call, result ->
+        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.medxfer.app/platform")
+        // A network came, went or changed: the core gets the interfaces again (DISC-10).
+        network.watch { runOnUiThread { channel.invokeMethod("networkChanged", null) } }
+        channel.setMethodCallHandler { call, result ->
                 when (call.method) {
                     // Private to the app: identity, trusted devices, reports (B6).
                     "dataDir" -> result.success(filesDir.absolutePath)
@@ -39,6 +41,13 @@ class MainActivity : FlutterActivity() {
                     "multicast" -> { network.multicast(call.argument<Boolean>("on") == true); result.success(null) }
                     // The local access point (DISC-12, WP-B.7) needs this permission, asked once.
                     "hotspotPermission" -> askHotspotPermission { result.success(it) }
+                    // The foreground service and its notification (API-08).
+                    "holdService" -> {
+                        MedxferService.hold(this, call.argument<String>("title") ?: "medXfer", call.argument<String>("text") ?: "", call.argument<Int>("progress") ?: -1)
+                        result.success(null)
+                    }
+                    "releaseService" -> { MedxferService.release(this); result.success(null) }
+                    "notificationPermission" -> ask(Manifest.permission.POST_NOTIFICATIONS) { result.success(it) }
                     "hotspotStart" -> hotspot.start { info, err ->
                         if (err != null) result.error("hotspot", err, null) else result.success(info)
                     }
@@ -58,8 +67,13 @@ class MainActivity : FlutterActivity() {
 
     // NEARBY_WIFI_DEVICES (Android 13 on, neverForLocation), the location before: what both the
     // local hotspot and the joining of another device's need. done gets whether it is granted.
-    private fun askHotspotPermission(done: (Boolean) -> Unit) {
-        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION
+    private fun askHotspotPermission(done: (Boolean) -> Unit) =
+        ask(if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION, done)
+
+    // One runtime permission; done gets whether it is granted. POST_NOTIFICATIONS exists from
+    // Android 13 on: before, notifications need no permission.
+    private fun ask(permission: String, done: (Boolean) -> Unit) {
+        if (permission == Manifest.permission.POST_NOTIFICATIONS && Build.VERSION.SDK_INT < 33) return done(true)
         if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) return done(true)
         permissionAnswer?.invoke(false) // a request still open counts as refused
         permissionAnswer = done

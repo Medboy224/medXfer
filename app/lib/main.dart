@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'app.dart';
 import 'app_state.dart';
 import 'core/ffi_core.dart';
+import 'platform/background.dart';
 import 'platform/file_picker.dart';
 import 'platform/folders.dart';
 import 'platform/hotspot.dart';
@@ -23,6 +24,7 @@ void main() {
     filePicker: systemFilePicker(),
     folderOpener: systemFolderOpener(),
     storage: systemReceiveStorage(),
+    background: systemBackground(),
   );
   state.start();
   runApp(MedxferApp(state: state, settings: AppSettings()));

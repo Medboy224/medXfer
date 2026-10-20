@@ -40,6 +40,9 @@ class _AndroidNetwork implements NetworkInfo {
 
   @override
   Future<void> multicast(bool on) async => locks.add(on);
+
+  @override
+  Stream<void> get changes => const Stream.empty();
 }
 
 /// Android's hotspot as the model sees it: what was asked, and what to answer.
