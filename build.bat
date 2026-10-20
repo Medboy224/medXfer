@@ -9,15 +9,8 @@ if not exist bin mkdir bin
 
 set CGO_ENABLED=0
 
-rem Development builds keep the web dashboard (build tag devui, DEV-19).
-rem "build.bat release" builds the published binaries, without it.
-set BUILD_TAGS=-tags devui
-set BUILD_KIND=development, with the web dashboard
-if /i "%~1"=="release" (
-    set BUILD_TAGS=
-    set BUILD_KIND=release, without the web dashboard
-)
-echo [*] Build kind: %BUILD_KIND%
+rem One build: the web dashboard and its "devui" tag were removed at gate G7 (DEV-19-R).
+set BUILD_TAGS=
 
 echo.
 echo [*] [1/3] Building Windows (x64): bin\xfer.exe ...

@@ -1,18 +1,15 @@
-// Package wsclient is a client of the daemon's control WebSocket (/ws): it authenticates with
-// the control token (API-04), sends requests and buffers every event in order, so a slow
-// reader never blocks the daemon. pkg/testkit and `xfer ctl` are built on it.
+// Package wsclient speaks the control vocabulary (requests in, events out) to a daemon in the
+// same process (Local): it sends requests and buffers every event in order, so a slow reader
+// never blocks the daemon. pkg/testkit and `xfer ctl` are built on it. Its WebSocket transport
+// went with the web dashboard, at gate G7 (DEV-19-R).
 package wsclient
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
 	"sync"
 	"sync/atomic"
-
-	"github.com/gorilla/websocket"
 )
 
 // Event is one event sent by the daemon. Data is kept raw: Decode it into the expected type.
@@ -44,8 +41,8 @@ type request struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
-// transport carries requests to the daemon: its /ws endpoint, or the daemon itself in the
-// same process (Local, WP-6.3 of the J6a plan).
+// transport carries requests to the daemon, in the same process (Local, WP-6.3 of the J6a
+// plan).
 type transport interface {
 	send(request []byte) error
 	close() error
@@ -64,51 +61,6 @@ type Client struct {
 	changed chan struct{} // closed and replaced whenever events or err change
 	err     error         // read error that ended the connection
 	watch   func(Event)   // called for every event, in order, from the reading goroutine
-}
-
-// Dial connects to the daemon whose HTTP server listens on httpAddr (host:port).
-func Dial(ctx context.Context, httpAddr, token string) (*Client, error) {
-	h := http.Header{}
-	h.Set("Authorization", "Bearer "+token)
-	ws, resp, err := websocket.DefaultDialer.DialContext(ctx, "ws://"+httpAddr+"/ws", h)
-	if err != nil {
-		if resp != nil {
-			return nil, fmt.Errorf("dial %s: %w (HTTP %d)", httpAddr, err, resp.StatusCode)
-		}
-		return nil, fmt.Errorf("dial %s: %w", httpAddr, err)
-	}
-	c := &Client{changed: make(chan struct{})}
-	t := &wsTransport{ws: ws}
-	c.tr = t
-	go t.readLoop(c)
-	return c, nil
-}
-
-// wsTransport is the dashboard's control WebSocket.
-type wsTransport struct{ ws *websocket.Conn }
-
-func (t *wsTransport) send(request []byte) error {
-	return t.ws.WriteMessage(websocket.TextMessage, request)
-}
-
-func (t *wsTransport) close() error {
-	_ = t.ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-	err := t.ws.Close()
-	if errors.Is(err, websocket.ErrCloseSent) {
-		err = nil
-	}
-	return err
-}
-
-func (t *wsTransport) readLoop(c *Client) {
-	for {
-		var e Event
-		err := t.ws.ReadJSON(&e)
-		c.deliver(e, err)
-		if err != nil {
-			return
-		}
-	}
 }
 
 // deliver records an event, or the error that ended the transport, and wakes the waiters.

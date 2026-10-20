@@ -39,9 +39,9 @@ func journalEvent(evt EventMessage) {
 
 // registerSecrets tells the redactor about this daemon's secrets as soon as they exist, so
 // no journal line or bundle can reveal them (bible chapter 13).
-func registerSecrets(pin, webShareToken, controlToken, pairingCode string) {
+func registerSecrets(pin, webShareToken, pairingCode string) {
 	diag.Secrets.Add("PIN", pin)
-	diag.Secrets.Add("TOKEN", webShareToken, controlToken)
+	diag.Secrets.Add("TOKEN", webShareToken)
 	diag.Secrets.Add("CODE", pairingCode)
 }
 

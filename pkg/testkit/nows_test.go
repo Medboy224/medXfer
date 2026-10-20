@@ -9,12 +9,9 @@ import (
 	"testing"
 )
 
-// The exit criterion of J6a (WP-6.3): tests drive medXfer in-process. Only the tests of the
-// dashboard's own transport may open a control WebSocket.
-var wsAllowed = map[string]bool{
-	"pkg/api/control_guard_devui_test.go": true, // the seven controls of the loopback surface (API-04)
-	"pkg/wsclient/wsclient_test.go":       true, // the WebSocket client itself
-}
+// The exit criterion of J6a (WP-6.3): tests drive medXfer in-process. Since gate G7 there is
+// no control WebSocket left to open.
+var wsAllowed = map[string]bool{}
 
 func TestNoTestOpensAControlWebSocket(t *testing.T) {
 	root, err := filepath.Abs("../..")

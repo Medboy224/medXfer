@@ -58,12 +58,12 @@ func TestBundleHoldsNoSecret(t *testing.T) {
 	var forbidden []string
 	for _, s := range []*DaemonServer{sender, receiver} {
 		st := s.GetStatus()
-		forbidden = append(forbidden, st.WebSharePIN, st.WebShareToken, s.ControlToken(), st.PairingCode)
+		forbidden = append(forbidden, st.WebSharePIN, st.WebShareToken, st.PairingCode)
 	}
 	forbidden = append(forbidden, oldPIN)
 
 	// A careless log line, like a future bug could add: the redactor must still catch it.
-	log.Printf("debug: pin=%s token %s file %s", receiver.GetStatus().WebSharePIN, receiver.ControlToken(), secretFile)
+	log.Printf("debug: pin=%s token %s file %s", receiver.GetStatus().WebSharePIN, receiver.GetStatus().WebShareToken, secretFile)
 	time.Sleep(50 * time.Millisecond) // let the last broadcast reach the journal
 	_ = j.Close()
 

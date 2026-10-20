@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,9 +31,8 @@ const DefaultTimeout = 10 * time.Second
 type Server interface {
 	Listen(port int) (net.Listener, error)
 	StartNode() error            // identity, single port, discovery; Serve calls it too
-	Serve(ln net.Listener) error // the HTTP server: Web Share portal, dashboard routes
+	Serve(ln net.Listener) error // the HTTP server: Web Share portal
 	Stop()
-	ControlToken() string
 	NodeListenAddr() string // "" until Serve has opened the peer listener
 	Fingerprint() string    // this daemon's key, once Serve has loaded it
 	TrustDevice(fingerprint, alias string) error
@@ -95,17 +93,6 @@ func (n *Node) Port() int {
 
 // URL returns the address of path on the node's HTTP server.
 func (n *Node) URL(path string) string { return "http://" + n.HTTPAddr + path }
-
-// ControlRequest builds an HTTP request carrying the node's control token.
-func (n *Node) ControlRequest(method, path string) *http.Request {
-	n.t.Helper()
-	req, err := http.NewRequest(method, n.URL(path), nil)
-	if err != nil {
-		n.t.Fatalf("testkit: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+n.Server.ControlToken())
-	return req
-}
 
 // PeerAddr returns the loopback address of the node's peer (pairing) listener, waiting for
 // Serve to open it.

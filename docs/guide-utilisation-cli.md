@@ -86,16 +86,18 @@ Si l'autre côté refuse, la commande le dit, et rien n'est enregistré.
 - `trust` : proposer la confiance mutuelle à l'appareil appairé ; `--trust` sur `pair` fait de même dès l'appairage ;
 - `send <fichier>`, `stop`, `disconnect`, `exit`.
 
-Si un autre medXfer occupe déjà le port 18887 sur l'appareil (le tableau de bord `xfer dev-ui`, un autre `xfer node`), `xfer node` le signale et prend un autre port. L'adresse affichée avec le PIN ou le QR code contient alors ce port : c'est elle qu'il faut taper.
+Si un autre medXfer occupe déjà le port 18887 sur l'appareil (un autre `xfer node`, `xfer share`), `xfer node` le signale et prend un autre port. L'adresse affichée avec le PIN ou le QR code contient alors ce port : c'est elle qu'il faut taper.
 
 ## 7. Outils de développement
 
 | Commande | Usage |
 |---|---|
-| `xfer daemon` / `xfer dev-ui` | Le tableau de bord dans le navigateur (`http://localhost:19999`), dans les builds de développement |
 | `xfer report list` / `show` | Rapports des derniers transferts : débit, étape limitante |
 | `xfer bundle` | Paquet de diagnostic pour signaler un problème (sans secret ni nom de fichier) |
 | `xfer bench …` | Mesures de disque et de réseau |
+| `xfer ctl` | Piloter un cœur par des lignes JSON, pour les scripts sans écran |
+
+Dans l'application, ces outils sont dans le panneau développeur : Réglages, puis « Mode développeur ».
 
 ## 8. En cas de problème
 
@@ -107,7 +109,7 @@ Si un autre medXfer occupe déjà le port 18887 sur l'appareil (le tableau de bo
 | L'appareil n'apparaît pas dans la liste | Même réseau ? Sinon, passez l'adresse directement : `xfer recv --ip ADRESSE`, `--pin ADRESSE`, ou le QR |
 | L'adresse affichée ne répond pas | Sur un téléphone avec Wi-Fi **et** données mobiles, l'adresse Wi-Fi doit s'afficher depuis la correction de #109. Sinon, signalez-le avec `xfer bundle` |
 | `The sender could not be reached at …` | Le receveur n'arrive pas à télécharger chez l'émetteur. Si l'émetteur est un PC Windows, son pare-feu bloque le port : voir §9, puis renvoyez |
-| `Port 18887 is taken … using port N` | Un autre medXfer tourne déjà sur cet appareil (`xfer node`, le tableau de bord). Fermez-le, ou ouvrez aussi le port N dans le pare-feu de Windows |
+| `Port 18887 is taken … using port N` | Un autre medXfer tourne déjà sur cet appareil (`xfer node`, `xfer share`). Fermez-le, ou ouvrez aussi le port N dans le pare-feu de Windows |
 | `… no longer trusts this device / node: that gives nothing (pairing by PIN)` | La confiance n'existe plus que d'un côté (l'autre vous a oublié, ou l'inverse). Tapez le PIN ; pour ne plus en taper, reproposez la confiance (§3) |
 | `The other device shows no PIN (too many wrong ones?)` | Trop de PIN faux chez l'autre appareil : il n'en affiche plus. Relancez-y la commande (`pair --pin` dans `xfer node`) |
 | `No answer to the trust offer: the session stays temporary` | L'autre n'a pas répondu en 60 s : rien n'est enregistré, recommencez si besoin |

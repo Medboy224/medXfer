@@ -213,7 +213,14 @@ Essai réel (Galaxy A57 et Zorin, Wi-Fi) :
 | Appairage, envoi, réception | L'application (WP-B.2, WP-B.3, WP-B.9) |
 | Scripts sans écran | `xfer ctl` (`DEV-16`) |
 
-Le sélecteur natif, le dépôt temporaire et la navigation de fichiers du tableau de bord (`DEV-19` e) partent avec lui : l'application a ses propres sélecteurs et son explorateur. Le retrait de `devui` fait l'objet d'une PR séparée.
+Le sélecteur natif, le dépôt temporaire et la navigation de fichiers du tableau de bord (`DEV-19` e) partent avec lui : l'application a ses propres sélecteurs et son explorateur.
+
+**Tableau de bord retiré** (20 octobre, PR séparée) :
+- la page, ses routes (`/api/browse`, `/api/fs/*`), le sélecteur natif, l'étiquette `devui` et la commande `xfer daemon` / `xfer dev-ui` ;
+- la surface de contrôle qui ne servait qu'à elle : `/status`, la WebSocket `/ws`, le jeton de contrôle (`API-04`), la dépendance `gorilla/websocket` ;
+- `/` mène au portail Web Share, qui reste ; le kit de test et `xfer ctl` pilotent le cœur dans le même processus, comme avant.
+
+`scripts/check-prod-binary.sh` interdit toujours les symboles et le texte du tableau de bord, au cas où ils reviendraient.
 
 **Reste**, hors des critères de G7 : le diagnostic à distance (`DEV-14`, `diag_request`) n'existe pas encore dans le cœur ; le mode développeur n'active pas encore les traces (`DEV-12`).
 
