@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'app.dart';
 import 'app_state.dart';
 import 'core/ffi_core.dart';
+import 'perf.dart';
 import 'platform/background.dart';
 import 'platform/file_picker.dart';
 import 'platform/folders.dart';
@@ -16,6 +17,7 @@ import 'settings.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  FrameStats.start();
   final state = AppState(
     core: FfiCore(),
     folders: const SystemFolders(),

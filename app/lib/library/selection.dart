@@ -75,6 +75,14 @@ class Selection extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// A folder's size, known once walked.
+  void setSize(String path, int size) {
+    final p = _items[path];
+    if (p == null || p.size == size) return;
+    _items[path] = Pick(path: p.path, name: p.name, size: size, kind: p.kind);
+    notifyListeners();
+  }
+
   bool allOf(Iterable<Pick> all) => all.isNotEmpty && all.every((p) => _items.containsKey(p.path));
 
   void clear() {

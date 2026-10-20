@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
+import android.graphics.pdf.PdfRenderer
+import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -20,7 +22,8 @@ import java.util.concurrent.Executors
 // launched from the home screen, the media of MediaStore, the files of the storage. Everything
 // slow runs on a thread of its own; the answers come back on the main thread.
 class Library(private val activity: Activity) {
-    private val worker = Executors.newFixedThreadPool(3)
+    // Thumbnails decode on several cores at once; the Dart side keeps at most a few asked.
+    private val worker = Executors.newFixedThreadPool(4)
 
     private fun <T> later(work: () -> T, done: (T?, String?) -> Unit) {
         worker.execute {
@@ -68,6 +71,16 @@ class Library(private val activity: Activity) {
         }
     }, done)
 
+    private fun drawablePng(drawable: android.graphics.drawable.Drawable, size: Int): ByteArray {
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        drawable.setBounds(0, 0, size, size)
+        drawable.draw(Canvas(bitmap))
+        return ByteArrayOutputStream().use { out ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            out.toByteArray()
+        }
+    }
+
     private fun collection(kind: String): Uri = when (kind) {
         "video" -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         "audio" -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
@@ -113,11 +126,80 @@ class Library(private val activity: Activity) {
     /** A media's thumbnail as JPEG, decoded at the size shown (UI-1). */
     fun thumbnail(kind: String, id: Long, size: Int, done: (ByteArray?, String?) -> Unit) = later({
         val uri = ContentUris.withAppendedId(collection(kind), id)
-        val bitmap = activity.contentResolver.loadThumbnail(uri, Size(size, size), null)
-        ByteArrayOutputStream().use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 82, out)
-            out.toByteArray()
+        jpeg(activity.contentResolver.loadThumbnail(uri, Size(size, size), null))
+    }, done)
+
+    // The size asked is the tile's, in pixels: no stretching, so no blur. Quality 90: sharp,
+    // and still a few tens of kilobytes.
+    private fun jpeg(bitmap: Bitmap): ByteArray = ByteArrayOutputStream().use { out ->
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        out.toByteArray()
+    }
+
+    /** A file's thumbnail by its kind: image, video, PDF (first page), APK (its icon); else null. */
+    fun fileThumbnail(path: String, size: Int, done: (ByteArray?, String?) -> Unit) = later({
+        val f = File(path)
+        when (f.extension.lowercase()) {
+            in IMAGES -> jpeg(ThumbnailUtils.createImageThumbnail(f, Size(size, size), null))
+            in VIDEOS -> jpeg(ThumbnailUtils.createVideoThumbnail(f, Size(size, size), null))
+            "pdf" -> ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+                PdfRenderer(fd).use { pdf ->
+                    pdf.openPage(0).use { page ->
+                        val scale = size.toFloat() / maxOf(page.width, page.height)
+                        val bmp = Bitmap.createBitmap(maxOf(1, (page.width * scale).toInt()), maxOf(1, (page.height * scale).toInt()), Bitmap.Config.ARGB_8888)
+                        bmp.eraseColor(android.graphics.Color.WHITE)
+                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        jpeg(bmp)
+                    }
+                }
+            }
+            "apk" -> {
+                val pm = activity.packageManager
+                val info = pm.getPackageArchiveInfo(path, 0)?.applicationInfo ?: return@later null
+                info.sourceDir = path
+                info.publicSourceDir = path
+                drawablePng(info.loadIcon(pm), size)
+            }
+            else -> null
         }
+    }, done)
+
+    /** A folder's size, all its files (walked on a worker thread). */
+    fun dirSize(path: String, done: (Long?, String?) -> Unit) = later({
+        File(path).walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    }, done)
+
+    /**
+     * The files of a category, through MediaStore's index of the whole storage (with the access
+     * to all files): documents, ebooks, apps, archives by their extension; large files by size,
+     * the largest first.
+     */
+    fun files(category: String, offset: Int, limit: Int, done: (List<Map<String, Any>>?, String?) -> Unit) = later({
+        val uri = MediaStore.Files.getContentUri("external")
+        @Suppress("DEPRECATION")
+        val columns = arrayOf(MediaStore.Files.FileColumns.DISPLAY_NAME, MediaStore.Files.FileColumns.DATA, MediaStore.Files.FileColumns.SIZE, MediaStore.Files.FileColumns.DATE_MODIFIED)
+        val (selection, args, sort) = if (category == "large") {
+            Triple("${MediaStore.Files.FileColumns.SIZE} >= ?", arrayOf((LARGE_BYTES).toString()), MediaStore.Files.FileColumns.SIZE)
+        } else {
+            val exts = CATEGORIES[category] ?: emptyList()
+            Triple(exts.joinToString(" OR ") { "${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" }, exts.map { "%.$it" }.toTypedArray(), MediaStore.Files.FileColumns.DATE_MODIFIED)
+        }
+        val query = android.os.Bundle().apply {
+            putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
+            putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, args)
+            putStringArray(android.content.ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(sort))
+            putInt(android.content.ContentResolver.QUERY_ARG_SORT_DIRECTION, android.content.ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
+            putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, limit)
+            putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, offset)
+        }
+        val out = mutableListOf<Map<String, Any>>()
+        activity.contentResolver.query(uri, columns, query, null)?.use { c ->
+            while (c.moveToNext()) {
+                val path = c.getString(1) ?: continue
+                out.add(mapOf("name" to (c.getString(0) ?: File(path).name), "path" to path, "dir" to false, "size" to c.getLong(2), "modified" to c.getLong(3)))
+            }
+        }
+        out
     }, done)
 
     /** A folder of the storage: its entries, folders first (needs the access to all files). */
@@ -162,6 +244,15 @@ class Library(private val activity: Activity) {
     }
 
     companion object {
+        private val IMAGES = setOf("jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "avif")
+        private val VIDEOS = setOf("mp4", "mkv", "mov", "avi", "webm", "3gp", "m4v", "ts", "wmv")
+        private const val LARGE_BYTES = 100L * 1024 * 1024
+        private val CATEGORIES = mapOf(
+            "documents" to listOf("pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "txt", "rtf", "csv", "md"),
+            "ebooks" to listOf("epub", "mobi", "azw", "azw3", "fb2", "djvu", "cbz", "cbr"),
+            "apks" to listOf("apk", "apks", "xapk", "apkm"),
+            "archives" to listOf("zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz"),
+        )
         val MEDIA_PERMISSIONS = arrayOf(
             android.Manifest.permission.READ_MEDIA_IMAGES,
             android.Manifest.permission.READ_MEDIA_VIDEO,

@@ -348,7 +348,12 @@ class _SelectAll extends StatelessWidget {
           key: const Key('select-all'),
           tooltip: l.selectAll,
           icon: Icon(all ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded, color: all ? Theme.of(context).colorScheme.primary : c.muted),
-          onPressed: picks.isEmpty ? null : () => state.selection.toggleAll(picks),
+          onPressed: picks.isEmpty
+              ? null
+              : () {
+                  state.selection.toggleAll(picks);
+                  state.explorer.sizeFolders(state.selection);
+                },
         );
       },
     );
