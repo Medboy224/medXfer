@@ -36,7 +36,9 @@ deps="$stage/$name/DEPENDANCES.txt"
   echo
   echo "Bibliothèques :"
   find "$stage/$name" -type f \( -name medxfer -o -name '*.so' \) -exec ldd {} + 2>/dev/null |
-    awk '/=>/ && $3 ~ /^\// {print $3}' | grep -v "/$name/" | sort -u > "$stage/libs"
+    awk '/=>/ && $3 ~ /^\// {print $3}' | grep -v "/$name/" |
+    # The bundle's own libraries, even when a plugin finds them in the build tree.
+    grep -v -F -f <(ls "$stage/$name/lib" | sed 's|^|/|') | sort -u > "$stage/libs"
   sed 's/^/  /' "$stage/libs"
   # OpenGL: libepoxy opens it while the app runs, so ldd does not see it. Without it the app
   # stops at once ("Couldn't open libEGL.so.1"), found on a fresh Ubuntu by the CI.
