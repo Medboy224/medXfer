@@ -78,6 +78,41 @@ func TestSenderSkipReachesTheReceiver(t *testing.T) {
 	}
 }
 
+// The receiver skips a file while the transfer runs (#174): the scheduler ends the item and
+// tells the events, which take the server's lock. The action must not hold it meanwhile, or
+// the core stops for good (seen on the phone: progress frozen, sender at 0 MB/s).
+func TestReceiverSkipDuringTheTransfer(t *testing.T) {
+	sendDir := t.TempDir()
+	folder := filepath.Join(sendDir, "big")
+	_ = os.MkdirAll(folder, 0o755)
+	chunk := make([]byte, 8<<20)
+	for i := 0; i < 4; i++ {
+		_ = os.WriteFile(filepath.Join(folder, fmt.Sprintf("file_%d.bin", i)), chunk, 0o644)
+	}
+	recvDir := t.TempDir()
+	pair := testkit.StartPair(t, NewDaemonServer(0, t.TempDir(), "SenderNode"), NewDaemonServer(0, recvDir, "ReceiverNode"))
+
+	pair.Send([]string{folder}, testkit.SendOptions{})
+	pair.AcceptOffer(0)
+	pair.Receiver.WaitEvent("transfer_start", 0)
+	// Paused, the run stays under way while the skip comes: the case the phone met.
+	pair.Receiver.Request("pause", nil)
+	pair.Receiver.WaitEvent("transfer_paused", 0)
+	pair.Receiver.Request("skip_file", `{"item_index": 3}`)
+	pair.Receiver.WaitEvent("file_skipped", 5*time.Second)
+	pair.Receiver.Request("resume", nil)
+	pair.WaitTransferDone(0)
+
+	if _, err := os.Stat(filepath.Join(recvDir, "big", "file_3.bin")); err == nil {
+		t.Fatal("the skipped file_3.bin was received")
+	}
+	for _, name := range []string{"file_0.bin", "file_1.bin", "file_2.bin"} {
+		if _, err := os.Stat(filepath.Join(recvDir, "big", name)); err != nil {
+			t.Fatalf("%s missing: %v", name, err)
+		}
+	}
+}
+
 // DEV-03, DEV-04: the report sent with transfer_complete carries the stages of the
 // receiver's side and names the limiting one.
 func TestTransferReportHasStages(t *testing.T) {

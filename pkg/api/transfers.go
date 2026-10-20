@@ -553,16 +553,7 @@ func (s *DaemonServer) itemAction(action string, i int, fromPeer bool, reqID str
 		event = "file_resumed"
 		s.setStatus(i, "pending", "completed", "skipped", "failed", "transferring")
 	}
-	if rx := s.activeReceiver; rx != nil {
-		switch action {
-		case itemSkip:
-			rx.SkipItem(i)
-		case itemPause:
-			rx.PauseItem(i)
-		case itemResume:
-			rx.ResumeItem(i)
-		}
-	}
+	rx := s.activeReceiver
 	id := s.activeTransferID
 	if id == "" && s.lastOffered != nil {
 		id = s.lastOffered.offer.TransferID
@@ -574,6 +565,19 @@ func (s *DaemonServer) itemAction(action string, i int, fromPeer bool, reqID str
 	items := s.queue()
 	waiting := s.activeReceiver != nil && s.onlyPausedLeft()
 	s.mu.Unlock()
+
+	// After the unlock: ending an item, the receiver's scheduler tells the events, which take
+	// s.mu (OnItem). Called under it, a skip during the transfer stopped the core (#174).
+	if rx != nil {
+		switch action {
+		case itemSkip:
+			rx.SkipItem(i)
+		case itemPause:
+			rx.PauseItem(i)
+		case itemResume:
+			rx.ResumeItem(i)
+		}
+	}
 
 	if sess != nil && !fromPeer {
 		_ = sess.Send(session.Message{Type: action, TransferID: id, Item: &i})
@@ -599,16 +603,18 @@ func (s *DaemonServer) broadcastPausedWaiting(items []BatchFileInfo) {
 func (s *DaemonServer) pauseAll(pause, fromPeer bool, reqID string) {
 	s.mu.Lock()
 	s.isPaused = pause
-	if rx := s.activeReceiver; rx != nil {
+	rx := s.activeReceiver
+	sess := s.activeSession
+	id := s.activeTransferID
+	s.mu.Unlock()
+	// The receiver is never called under s.mu: its events take it (#174).
+	if rx != nil {
 		if pause {
 			rx.Pause()
 		} else {
 			rx.Resume()
 		}
 	}
-	sess := s.activeSession
-	id := s.activeTransferID
-	s.mu.Unlock()
 
 	typ, event, by := "resume", "transfer_resumed", "user"
 	if pause {
