@@ -134,7 +134,7 @@ La sonde du point d'accès passe tôt : certains fabricants restreignent cette f
 
 **Découpage** (19 octobre) : deux PR.
 - **WP-B.2a**, livré : le modèle `Connection` et tout ce qui précède, sauf la caméra et le point d'accès. Sous Android, l'écran « Connecter » ne marche pas sans les interfaces données au cœur : `set_network_info` et `MulticastLock` sont avancés de WP-B.4 (`lib/platform/network.dart`), envoyés au démarrage et à chaque ouverture de l'écran.
-- **WP-B.2b** : le scan du QR à la caméra (`QrScanner`, décision J5), et l'intégration du point d'accès (WP-B.7) : le QR porte le réseau, le parcours PIN en trois étapes.
+- **WP-B.2b**, livré : le scan du QR à la caméra (`QrScanner`, adaptateur `flutter_zxing`, décision J5), et l'intégration du point d'accès (WP-B.7) : le QR porte le réseau, le parcours PIN en trois étapes.
 
 ### WP-B.3 — Envoi, réception, historique · M
 
@@ -184,7 +184,7 @@ La sonde du point d'accès passe tôt : certains fabricants restreignent cette f
 
 - **Windows** : un dossier portable zippé, avec le runtime Visual C++ à côté de l'exécutable, comme pour G2a ; sans installation ni droits administrateur.
 - **Linux** : une archive `tar.gz` avec ses dépendances listées ; essai sur une distribution fraîche (réserve 2 de G2a).
-- **Android** : APK signé avec une clé de développement. La clé de publication et le Play Store relèvent de J8.
+- **Android** : APK signé avec une clé de développement. La clé de publication et le Play Store relèvent de J8. Les bibliothèques natives sont compressées dans l'APK (WP-B.2b) : 14,0 Mo en arm64 avec le lecteur de QR, contre 30,1 Mo sans compression (UI-5).
 - Les règles du pare-feu Windows restent pour l'installateur de J8 ; d'ici là, le guide explique comment les poser.
 
 ### WP-B.7 — Point d'accès local (`DISC-12`) : sonde, puis intégration · M
@@ -216,10 +216,12 @@ La sonde du point d'accès passe tôt : certains fabricants restreignent cette f
 - Quand le point d'accès tourne, l'application donne au cœur l'interface `swlan0` par `set_network_info` (`DISC-10`), pour que le QR, le PIN et l'annonce portent l'adresse du point d'accès.
 - Le débit dépend du canal du Wi-Fi du téléphone. Quand ce Wi-Fi est à 2,4 GHz, l'écran de connexion peut proposer de le couper le temps du transfert, si l'essai à la main le confirme.
 
-**L'intégration**, si la sonde est concluante :
+**L'intégration** (faite en WP-B.2b) :
 - L'URI d'appairage porte en option le nom et le mot de passe du réseau, pour que le QR fasse tout d'un coup. Ces champs sont des secrets du point d'accès : jamais journalisés (chapitre 13).
 - Le parcours en trois étapes pour un appareil sans caméra.
 - Si un téléphone refuse le point d'accès local : un message clair, et l'usage du point d'accès du système, réglé à la main.
+- Tant que le point d'accès tourne, le cœur ne reçoit que son interface (`set_network_info`) : le QR, le PIN et l'annonce portent son adresse. Il s'arrête à la fermeture de « Connecter » si personne ne l'a rejoint, sinon à la fin de la session.
+- Essai réel (20 octobre) : Zorin rejoint le point d'accès du Galaxy A57 par ses réglages, puis tape le PIN et l'adresse 10.46.56.232 ; jumelage et confiance mutuelle réussis, puis point d'accès arrêté à la fin de la session. La jonction par un second téléphone qui scanne le QR reste à essayer (#169).
 
 ### WP-B.8 — Essais réels, guide, rapport · S
 

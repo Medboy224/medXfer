@@ -236,6 +236,8 @@ Un appareil inconnu n'est jamais admis autrement que par P1 ou P2 : aucune déci
 Le QR contient : empreinte de l'émetteur, adresse, port, secret aléatoire de 128 bits, expiration.
 Format : `medxfer://v1/pair?fp=<empreinte base32>&a=<ip>&p=<port>&s=<secret base64url>&exp=<unix>`
 
+Quand l'émetteur a créé son propre point d'accès (`DISC-12`), l'application ajoute trois champs, que le cœur ignore : `ws` (nom du réseau), `wp` (mot de passe), `wt` (sécurité : 1 WPA2, 2 WPA3 en transition, 3 WPA3). L'appareil qui scanne rejoint d'abord ce réseau, puis s'appaire. Le mot de passe est un secret du point d'accès : il change à chaque démarrage, s'affiche sur l'écran du QR pour un appareil sans caméra, et n'est jamais journalisé.
+
 Déroulement :
 1. Le receveur scanne le QR et se connecte en **épinglant `fp`** (le QR est un canal hors-bande : la caméra est le canal authentifié).
 2. Dans le canal TLS déjà authentifié, il envoie `pair_secret` avec le secret.
