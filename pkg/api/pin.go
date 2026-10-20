@@ -87,6 +87,19 @@ func (s *DaemonServer) handlePairPINShow(rs Responder, req RequestMessage) {
 	}
 }
 
+// handlePINRefuse is this user's refusal of a PIN asked for (pin_requested, PAIR-11): the PIN on
+// demand is destroyed, so the PIN read out no longer pairs. The device that asked learns it
+// when it types the PIN: a pair_failed, as for a wrong one (PAIR-07).
+func (s *DaemonServer) handlePINRefuse(rs Responder, req RequestMessage) {
+	s.mu.Lock()
+	demand := s.pinDemand
+	s.mu.Unlock()
+	if demand != nil {
+		demand.Close()
+	}
+	rs.Reply(NewEvent("pin_refused", map[string]string{}, req.ID))
+}
+
 // handlePairPIN pairs with the device that shows a PIN. A refusal (wrong PIN, PIN destroyed,
 // relay) is a pair_failed event without detail (PAIR-07).
 func (s *DaemonServer) handlePairPIN(rs Responder, req RequestMessage) {

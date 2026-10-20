@@ -8,6 +8,7 @@ import 'package:medxfer/app_state.dart';
 import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/features/connect/connect_screen.dart';
+import 'package:medxfer/features/connect/hotspot_screen.dart';
 import 'package:medxfer/platform/folders.dart';
 import 'package:medxfer/platform/hotspot.dart';
 import 'package:medxfer/platform/qr_scanner.dart';
@@ -34,7 +35,7 @@ class _TestFolders implements Folders {
 }
 
 FakeCore _core() => FakeCore()
-  ..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy A57'})]))
+  ..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy A57', 'instance': 'medXfer-7810'})]))
   ..on('set_discoverable', (_) => const FakeAnswer())
   ..on('pair_show', (_) => const FakeAnswer(replies: [
         CoreEvent('pair_show', data: {'uri': 'medxfer://v1/pair?fp=AAAA&a=192.168.1.20&p=18887&s=x&exp=$_expires', 'expires': _expires, 'instance': 'medXfer-7810'}),
@@ -88,7 +89,7 @@ Future<(FakeCore, AppState)> _app(WidgetTester tester, FakeCore core, {Hotspot h
 }
 
 void main() {
-  testWidgets('Connect: the code, a device of the list, its PIN, then the banner', (tester) async {
+  testWidgets('Connect: no QR code of the shared network, a device of the list, its PIN, then the banner', (tester) async {
     final core = _core()
       ..on('pair', (_) => const FakeAnswer(broadcast: [CoreEvent('pin_needed', data: {'target': '192.168.1.30:18887'})]))
       ..on('pair_pin', (_) => const FakeAnswer(broadcast: [
@@ -99,9 +100,12 @@ void main() {
 
     await tester.tap(find.byKey(const Key('connect')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('my-qr')), findsOneWidget);
-    expect(find.text('054 461'), findsOneWidget);
-    expect(find.text('Apparaît comme medXfer-7810'), findsOneWidget);
+    // A QR code scanned off this network would fail: the screen shows none, and draws no code.
+    expect(find.byKey(const Key('my-qr')), findsNothing);
+    expect(core.calls.where((c) => c.action == 'pair_show' || c.action == 'pair_pin_show'), isEmpty);
+    // The name the other user picks in their list (DISC-07).
+    expect(find.text('Vous apparaissez comme medXfer-7810'), findsOneWidget);
+    expect(find.text('Il affichera un PIN à taper ici'), findsOneWidget);
     expect(core.calls.firstWhere((c) => c.action == 'set_discoverable').payload, {'on': true});
 
     await _reveal(tester, find.text('medXfer-1A2B'));
@@ -151,7 +155,8 @@ void main() {
     final (_, state) = await _app(tester, core);
     core.emit(const CoreEvent('pin_requested', data: {'pin': '123 456', 'expires': _expires, 'from': '192.168.1.40'}));
     await tester.pumpAndSettle();
-    expect(find.text('Un appareil veut se connecter'), findsOneWidget);
+    expect(find.text('Demande de connexion'), findsOneWidget);
+    expect(find.text('192.168.1.40 veut se connecter. Donnez-lui ce PIN :'), findsOneWidget);
     expect(find.text('123 456'), findsOneWidget);
     core.emit(const CoreEvent('paired', data: {'ip': '192.168.1.40', 'device_name': 'PC du salon'}));
     await tester.pumpAndSettle();
@@ -230,17 +235,65 @@ void main() {
     expect(find.text('Téléphone de Awa'), findsOneWidget);
   });
 
-  testWidgets('no common Wi-Fi: the access point, its name and password for a device without camera', (tester) async {
+  testWidgets('no common Wi-Fi: the access point, its QR code with the network, the steps without camera', (tester) async {
     final core = _core();
-    await _app(tester, core, hotspot: _Hotspot());
+    final (_, state) = await _app(tester, core, hotspot: _Hotspot());
     await tester.tap(find.byKey(const Key('connect')));
     await tester.pumpAndSettle();
-    await _reveal(tester, find.byKey(const Key('hotspot-start')));
     await tester.tap(find.byKey(const Key('hotspot-start')));
+    // The spinner of "waiting for the other device" never settles: pump a while instead.
+    Future<void> pumpABit() async {
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+    await pumpABit();
+    // The QR code carries the access point: scanning it works without a common Wi-Fi.
+    expect(find.byKey(const Key('my-qr')), findsOneWidget);
+    expect(state.connection.qrData, contains('ws=AndroidShare_1732'));
+    await tester.tap(find.byKey(const Key('tab-pin')));
+    await pumpABit();
+    expect(find.text('AndroidShare_1732'), findsOneWidget);
+    expect(find.text('vvrtsy'), findsOneWidget);
+    expect(find.text('054 461'), findsOneWidget);
+    // Stopped: back on the Connect screen, the access point gone.
+    final list = find.descendant(of: find.byType(HotspotScreen), matching: find.byType(Scrollable)).first;
+    await tester.scrollUntilVisible(find.byKey(const Key('hotspot-stop')), 200, scrollable: list);
+    await pumpABit();
+    await tester.tap(find.byKey(const Key('hotspot-stop')));
     await tester.pumpAndSettle();
-    expect(find.text('Réseau : AndroidShare_1732'), findsOneWidget);
-    expect(find.text('Mot de passe : vvrtsy'), findsOneWidget);
-    expect(find.byKey(const Key('hotspot-stop')), findsOneWidget);
+    expect(find.byKey(const Key('hotspot-start')), findsOneWidget);
+    expect(state.connection.myHotspot, isNull);
+  });
+
+  testWidgets("a device missing from the list: this one's address and PIN, no QR code", (tester) async {
+    final core = _core();
+    await _app(tester, core);
+    await tester.tap(find.byKey(const Key('connect')));
+    await tester.pumpAndSettle();
+    await _reveal(tester, find.byKey(const Key('not-listed')));
+    await tester.tap(find.byKey(const Key('not-listed')));
+    await tester.pumpAndSettle();
+    expect(find.text('Connexion par adresse'), findsOneWidget);
+    expect(find.text('192.168.1.20:18887'), findsOneWidget);
+    expect(find.text('054 461'), findsOneWidget);
+    expect(find.byKey(const Key('my-qr')), findsNothing);
+  });
+
+  testWidgets('a PIN asked for, refused: the PIN no longer pairs', (tester) async {
+    final core = _core()..on('pin_refuse', (_) => const FakeAnswer(replies: [CoreEvent('pin_refused')]));
+    final (_, state) = await _app(tester, core);
+    core.emit(const CoreEvent('pin_requested', data: {'pin': '123 456', 'expires': _expires, 'from': '192.168.1.40'}));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('refuse-pin')));
+    await tester.pumpAndSettle();
+    expect(core.calls.last.action, 'pin_refuse');
+    expect(find.text('123 456'), findsNothing);
+    expect(state.connection.askedPin, isNull);
+    // The other device types the refused PIN: no "connection failed" for the user who refused.
+    core.emit(const CoreEvent('pair_failed'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('La connexion a échoué'), findsNothing);
   });
 
   testWidgets('the camera reads a link: paired by it', (tester) async {

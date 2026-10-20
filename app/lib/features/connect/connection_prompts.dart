@@ -157,13 +157,23 @@ class _AskedPinDialogState extends State<_AskedPinDialog> with _ClosesWhenGone {
               if (p != null && p.stopped)
                 Text(l.pinStopped, style: TextStyle(color: context.colors.danger))
               else ...[
-                Text(l.askedPinBody(p?.from ?? '')),
+                // Its name in this device's list when it is there (medXfer-xxxx), else its address.
+                Text(l.askedPinBody(connection.nameAt(p?.from ?? ''))),
                 const SizedBox(height: 16),
                 SelectableText(p?.pin ?? '', key: const Key('asked-pin'), style: const TextStyle(fontSize: 38, fontWeight: FontWeight.w800, letterSpacing: 6)),
               ],
             ],
           ),
-          actions: [TextButton(onPressed: connection.dismissAskedPin, child: Text(l.close))],
+          actions: [
+            // Refused, the PIN no longer pairs: the other device fails when it types it.
+            if (p != null && !p.stopped)
+              TextButton(
+                key: const Key('refuse-pin'),
+                onPressed: () => unawaited(connection.refuseAskedPin()),
+                child: Text(l.refuse, style: TextStyle(color: context.colors.danger)),
+              ),
+            TextButton(onPressed: connection.dismissAskedPin, child: Text(l.close)),
+          ],
         );
       },
     );
