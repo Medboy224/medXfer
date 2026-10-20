@@ -6,6 +6,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app_state.dart';
 import 'features/connect/connection_prompts.dart';
+import 'features/transfer/transfer_prompts.dart';
 import 'features/home/home_screen.dart';
 import 'l10n/app_localizations.dart';
 import 'settings.dart';
@@ -78,7 +79,12 @@ class _MedxferAppState extends State<MedxferApp> {
               connection: state.connection,
               navigator: _navigator,
               messenger: _messenger,
-              child: child ?? const SizedBox.shrink(),
+              child: TransferPrompts(
+                transfers: state.transfers,
+                navigator: _navigator,
+                messenger: _messenger,
+                child: child ?? const SizedBox.shrink(),
+              ),
             ),
             home: const HomeScreen(),
           );

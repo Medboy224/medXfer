@@ -11,8 +11,13 @@ import '../../app.dart';
 import '../../app_state.dart';
 import '../../l10n/app_localizations.dart';
 import '../../theme.dart';
+import '../../transfer/transfers.dart';
+import '../../widgets/drop_zone.dart';
+import '../../widgets/format.dart';
 import '../connect/connect_screen.dart';
 import '../connect/dialogs.dart';
+import '../history/history_tab.dart';
+import '../transfer/transfer_screen.dart';
 import '../trusted/trusted_screen.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -38,60 +43,120 @@ class HomeScreen extends StatelessWidget {
               tooltip: l.menu,
               icon: const Icon(Icons.menu_rounded),
               onSelected: (v) => v == 'trusted' ? _open(context, const TrustedScreen()) : _soon(context),
-              itemBuilder: (_) => [
-                PopupMenuItem(value: 'trusted', child: Text(l.trustedDevices)),
-                PopupMenuItem(value: 'settings', child: Text(l.settings)),
-              ],
+              itemBuilder: (_) => [PopupMenuItem(value: 'trusted', child: Text(l.trustedDevices)), PopupMenuItem(value: 'settings', child: Text(l.settings))],
             ),
           ],
           bottom: TabBar(isScrollable: true, tabs: [for (final t in tabs) Tab(text: t)]),
         ),
-        body: Column(
-          children: [
-            const _CoreLine(),
-            const _SessionBanner(),
-            Container(
-              color: c.section,
-              padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
-              child: Row(
-                children: [
-                  Expanded(child: Text(l.onThisDevice, style: TextStyle(color: c.muted, fontWeight: FontWeight.w600))),
-                  IconButton(
-                    tooltip: l.selectAll,
-                    icon: Icon(Icons.radio_button_unchecked_rounded, color: c.muted),
-                    onPressed: () => _soon(context),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: TabBarView(
-                children: [
-                  for (final _ in tabs)
-                    Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(32),
-                        child: Text(l.comingSoon, textAlign: TextAlign.center, style: TextStyle(color: c.muted)),
+        body: ListenableBuilder(
+          listenable: AppScope.of(context).state.connection,
+          builder: (context, child) => DropZone(
+            enabled: AppScope.of(context).state.connection.session != null,
+            hint: l.dropHere,
+            onPaths: (paths) => unawaited(AppScope.of(context, listen: false).state.transfers.send(paths)),
+            child: child!,
+          ),
+          child: Column(
+            children: [
+              const _CoreLine(),
+              const _SessionBanner(),
+              Container(
+                color: c.section,
+                padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        l.onThisDevice,
+                        style: TextStyle(color: c.muted, fontWeight: FontWeight.w600),
                       ),
                     ),
-                ],
+                    IconButton(
+                      tooltip: l.selectAll,
+                      icon: Icon(Icons.radio_button_unchecked_rounded, color: c.muted),
+                      onPressed: () => _soon(context),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    const HistoryTab(),
+                    for (final _ in tabs.skip(1))
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(32),
+                          child: Text(
+                            l.comingSoon,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: c.muted),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
         bottomNavigationBar: SafeArea(
           child: Container(
             key: const Key('bottom-bar'),
-            decoration: BoxDecoration(color: c.surface, border: Border(top: BorderSide(color: c.border))),
+            decoration: BoxDecoration(
+              color: c.surface,
+              border: Border(top: BorderSide(color: c.border)),
+            ),
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
             // heightFactor 1: centered, never stretched to the height the Scaffold offers.
             child: Align(
               heightFactor: 1,
               child: ListenableBuilder(
-                listenable: AppScope.of(context).state.connection,
+                listenable: Listenable.merge([AppScope.of(context).state.connection, AppScope.of(context).state.transfers]),
                 builder: (context, _) {
-                  final connection = AppScope.of(context).state.connection;
-                  // Connected: the bottom bar becomes the sending one with WP-B.3.
+                  final state = AppScope.of(context).state;
+                  final connection = state.connection;
+                  final a = state.transfers.active;
+                  if (a != null && a.stage != Stage.done) {
+                    return FilledButton.tonalIcon(
+                      key: const Key('see-transfer'),
+                      style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
+                      onPressed: () => _open(context, const TransferScreen()),
+                      icon: const Icon(Icons.swap_vert_rounded),
+                      label: Text(
+                        '${a.name} · ${(a.fraction * 100).toStringAsFixed(0)} % · ${formatBytes(context, a.totalBytes)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    );
+                  }
+                  if (connection.session != null && state.filePicker.supported) {
+                    return Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        FilledButton.icon(
+                          key: const Key('send-files'),
+                          style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
+                          onPressed: () async => state.transfers.send(await state.filePicker.files()),
+                          icon: const Icon(Icons.upload_file_rounded),
+                          label: Text(l.sendFiles),
+                        ),
+                        OutlinedButton.icon(
+                          key: const Key('send-folder'),
+                          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
+                          onPressed: () async {
+                            final folder = await state.filePicker.folder();
+                            if (folder != null) await state.transfers.send([folder]);
+                          },
+                          icon: const Icon(Icons.drive_folder_upload_rounded),
+                          label: Text(l.sendFolder),
+                        ),
+                      ],
+                    );
+                  }
+                  // Android sends from the explorer of WP-B.9; until then, the session's end.
                   if (connection.session != null) {
                     return OutlinedButton.icon(
                       key: const Key('disconnect'),
@@ -164,7 +229,13 @@ class _CoreLine extends StatelessWidget {
             children: [
               Icon(Icons.circle, size: 10, color: color),
               const SizedBox(width: 8),
-              Expanded(child: Text(text, key: const Key('core-line'), style: TextStyle(color: c.muted, fontSize: 13))),
+              Expanded(
+                child: Text(
+                  text,
+                  key: const Key('core-line'),
+                  style: TextStyle(color: c.muted, fontSize: 13),
+                ),
+              ),
             ],
           ),
         );
@@ -210,7 +281,10 @@ class _SessionBanner extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(l.connectedTo(s.name.isEmpty ? s.ip : s.name), style: TextStyle(fontWeight: FontWeight.w800, color: c.text)),
+                            Text(
+                              l.connectedTo(s.name.isEmpty ? s.ip : s.name),
+                              style: TextStyle(fontWeight: FontWeight.w800, color: c.text),
+                            ),
                             Text(connection.reconnecting ? l.reconnecting : s.ip, style: TextStyle(color: c.muted, fontSize: 12)),
                           ],
                         ),
