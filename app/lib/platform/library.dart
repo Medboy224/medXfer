@@ -103,7 +103,19 @@ abstract interface class Library {
 
   /// Opens files by path for the core, each under the name given (STO-16).
   Future<List<OpenFile>> open(List<({String path, String name})> files);
+
+  /// A file's thumbnail (image, video, PDF, APK's icon), px wide; null for other kinds.
+  Future<Uint8List?> fileThumbnail(String path, int px);
+
+  /// A folder's size, all its files.
+  Future<int> dirSize(String path);
+
+  /// The files of a category: documents, ebooks, apks, archives, large.
+  Future<List<FileEntry>> files(FileCategory category, {int offset = 0, int limit = 200});
 }
+
+/// The classes of the Files tab, beside the folders.
+enum FileCategory { documents, ebooks, apks, archives, large }
 
 class NoLibrary implements Library {
   const NoLibrary();
@@ -128,6 +140,12 @@ class NoLibrary implements Library {
   Future<List<FileEntry>> listDir(String path) async => const [];
   @override
   Future<List<OpenFile>> open(List<({String path, String name})> files) async => const [];
+  @override
+  Future<Uint8List?> fileThumbnail(String path, int px) async => null;
+  @override
+  Future<int> dirSize(String path) async => 0;
+  @override
+  Future<List<FileEntry>> files(FileCategory category, {int offset = 0, int limit = 200}) async => const [];
 }
 
 class AndroidLibrary implements Library {
@@ -179,6 +197,20 @@ class AndroidLibrary implements Library {
             }) ??
             const [])
       OpenFile(fd: (m['fd'] as num).toInt(), name: '${m['name']}'),
+  ];
+
+  @override
+  Future<Uint8List?> fileThumbnail(String path, int px) => platformChannel.invokeMethod<Uint8List>('libFileThumb', {'path': path, 'size': px});
+
+  @override
+  Future<int> dirSize(String path) async => (await platformChannel.invokeMethod<num>('libDirSize', {'path': path}))?.toInt() ?? 0;
+
+  @override
+  Future<List<FileEntry>> files(FileCategory category, {int offset = 0, int limit = 200}) async => [
+    for (final m
+        in await platformChannel.invokeListMethod<Map<Object?, Object?>>('libFiles', {'category': category.name, 'offset': offset, 'limit': limit}) ??
+            const [])
+      FileEntry.fromMap(m),
   ];
 }
 
