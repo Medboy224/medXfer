@@ -117,8 +117,15 @@ func browseAll(ctx context.Context, ds []Discoverer, timeout time.Duration) []Fo
 	wg.Wait()
 	byName := map[string]Found{}
 	var order []string
+	known := len(localNets()) > 0
 	for _, f := range all {
 		if f.IP == nil || f.Port == 0 || f.Instance == "" || isSelf(f) {
+			continue
+		}
+		// An mDNS answer may carry the address of another interface of the device (a Linux
+		// bridge answers the Wi-Fi's queries too): outside our subnets, it is left out. A beacon's
+		// address is where its packet came from: always kept.
+		if known && f.Via == "mdns" && !IsSubnetReachable(f.IP.String()) {
 			continue
 		}
 		old, ok := byName[f.Instance]

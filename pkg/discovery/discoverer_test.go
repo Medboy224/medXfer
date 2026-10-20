@@ -95,6 +95,10 @@ func (f fixedDiscoverer) Browse(context.Context, time.Duration) ([]Found, error)
 // One entry per device, mDNS first, with the tags of every sighting (an mDNS answer may lag
 // behind the beacon after the tags changed); this device and incomplete entries are left out.
 func TestBrowseAllMerges(t *testing.T) {
+	t.Cleanup(func() { _ = SetNetworkInfo(nil) })
+	if err := SetNetworkInfo([]NetworkInterface{{Name: "wlan0", Addrs: []string{"192.0.2.1/24"}}}); err != nil {
+		t.Fatal(err)
+	}
 	remote := net.IPv4(192, 0, 2, 7) // TEST-NET-1: never a local address
 	mdnsSeen := fixedDiscoverer{{Instance: "medXfer-aa01", IP: remote, Port: 18888, Role: "node", Via: "mdns", Tags: []string{"aaaaaaaaaaaaa"}}}
 	beaconSeen := fixedDiscoverer{
@@ -158,6 +162,26 @@ func TestBrowseAllSelfAndDuplicates(t *testing.T) {
 	}
 	if strings.Join(names, " ") != "192.0.2.50 198.51.100.1" {
 		t.Fatalf("mDNS interfaces: %v", names)
+	}
+}
+
+// A Linux device announces on each of its interfaces, and each server answers the queries of
+// all of them: on Wi-Fi, the answer of its LXC bridge (10.0.3.1) came too, and the mDNS client
+// kept whichever came first (seen with Zorin, 20 October). An mDNS address outside our subnets
+// is left out: the device is reached by the beacon's address, or found at the next scan.
+func TestBrowseAllDropsAnotherInterfacesAnswer(t *testing.T) {
+	t.Cleanup(func() { _ = SetNetworkInfo(nil) })
+	if err := SetNetworkInfo([]NetworkInterface{{Name: "wlan0", Addrs: []string{"192.0.2.123/24"}}}); err != nil {
+		t.Fatal(err)
+	}
+	bridge := fixedDiscoverer{{Instance: "medXfer-c81e", IP: net.IPv4(10, 0, 3, 1), Port: 18887, Via: "mdns"}}
+	if got := browseAll(context.Background(), []Discoverer{bridge}, time.Second); len(got) != 0 {
+		t.Fatalf("browsed %+v: the bridge's address is unreachable from here", got)
+	}
+	beacon := fixedDiscoverer{{Instance: "medXfer-c81e", IP: net.IPv4(192, 0, 2, 91), Port: 18887, Via: "beacon"}}
+	got := browseAll(context.Background(), []Discoverer{bridge, beacon}, time.Second)
+	if len(got) != 1 || !got[0].IP.Equal(net.IPv4(192, 0, 2, 91)) {
+		t.Fatalf("browsed %+v, want the device at its Wi-Fi address", got)
 	}
 }
 
