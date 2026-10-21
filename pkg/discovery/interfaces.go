@@ -92,7 +92,7 @@ func parseIfconfigTargets() []NetworkTarget {
 
 	// 1. Try running ifconfig via /system/bin/sh (bypasses Android SELinux exec restrictions)
 	if _, shErr := os.Stat("/system/bin/sh"); shErr == nil {
-		out, err = exec.Command("/system/bin/sh", "-c", "ifconfig").CombinedOutput()
+		out, err = command(context.Background(), "/system/bin/sh", "-c", "ifconfig").CombinedOutput()
 	}
 
 	// 2. Fallback to direct candidate execution if /system/bin/sh failed or returned no output
@@ -114,7 +114,7 @@ func parseIfconfigTargets() []NetworkTarget {
 		if cmdPath == "" {
 			cmdPath = "ifconfig"
 		}
-		out, err = exec.Command(cmdPath).CombinedOutput()
+		out, err = command(context.Background(), cmdPath).CombinedOutput()
 	}
 
 	if err != nil && len(out) == 0 {
@@ -387,7 +387,7 @@ const (
 
 // arpCommand runs `arp -a`; tests replace it.
 var arpCommand = func(ctx context.Context) ([]byte, error) {
-	return exec.CommandContext(ctx, "arp", "-a").Output()
+	return command(ctx, "arp", "-a").Output()
 }
 
 var arpCache struct {
