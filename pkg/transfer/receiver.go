@@ -115,11 +115,17 @@ func NewReceiver(outDir string, join func(context.Context, net.Conn) (net.Conn, 
 	return r
 }
 
-// Pause stops requesting chunks; the requests in flight end, the connections stay open.
+// Pause stops requesting chunks, at once: the chunks in flight are dropped, and asked again on
+// Resume. Letting them arrive kept both bars moving for seconds on a slow link (up to Workers
+// x 2 chunks after the pause). The connections reconnect on Resume.
 func (r *Receiver) Pause() {
 	r.mu.Lock()
 	r.paused = true
+	ru := r.run
 	r.mu.Unlock()
+	if ru != nil {
+		ru.interrupt()
+	}
 }
 
 // Resume starts requesting chunks again.
@@ -274,6 +280,10 @@ type run struct {
 	stages  StageEvents // nil: the stages are not measured
 	workers int
 	root    *os.Root // the destination; nil with the null sink
+
+	// live are the data connections open: a pause interrupts their reads (Pause).
+	liveMu sync.Mutex
+	live   map[net.Conn]struct{}
 
 	// The transfer's root folder (STO-10): inRoot unless it is a single file. Its items go to
 	// rootDir/<path without strip>; the folder and its marker are made with the first file.
@@ -432,7 +442,8 @@ type item struct {
 }
 
 func newRun(r *Receiver, offer protocol.Offer) *run {
-	ru := &run{r: r, offer: offer, start: time.Now(), speed: newSpeedMeter(), chunks: offer.ChunkSize, active: map[int]struct{}{}}
+	ru := &run{r: r, offer: offer, start: time.Now(), speed: newSpeedMeter(), chunks: offer.ChunkSize, active: map[int]struct{}{},
+		live: map[net.Conn]struct{}{}}
 	ru.items = make([]*item, len(offer.Items))
 	for i, it := range offer.Items {
 		total := protocol.Chunks(it.Size, offer.ChunkSize)
@@ -512,6 +523,44 @@ func (ru *run) next(ctx context.Context, block bool) (task, schedStatus) {
 		}
 		r.cond.Wait()
 	}
+}
+
+// interrupt ends the reads waiting on every data connection: their chunks in flight are asked
+// again (Pause).
+func (ru *run) interrupt() {
+	ru.liveMu.Lock()
+	defer ru.liveMu.Unlock()
+	for c := range ru.live {
+		_ = c.SetReadDeadline(time.Now())
+	}
+}
+
+func (ru *run) track(c net.Conn, open bool) {
+	ru.liveMu.Lock()
+	defer ru.liveMu.Unlock()
+	if open {
+		ru.live[c] = struct{}{}
+	} else {
+		delete(ru.live, c)
+	}
+}
+
+func (ru *run) paused() bool {
+	ru.r.mu.Lock()
+	defer ru.r.mu.Unlock()
+	return ru.r.paused
+}
+
+// waitResumed waits while the transfer is paused, and reports whether it was.
+func (ru *run) waitResumed(ctx context.Context) bool {
+	r := ru.r
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	was := r.paused
+	for r.paused && ctx.Err() == nil {
+		r.cond.Wait()
+	}
+	return was
 }
 
 // retry schedules a chunk again. A chunk with a wrong hash counts as an attempt (XFER-04); a
@@ -1190,6 +1239,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 		inflight = nil
 		if conn != nil {
 			stopClosing()
+			ru.track(conn, false)
 			conn.Close()
 			conn = nil
 			ru.conns.Add(-1)
@@ -1199,6 +1249,13 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 
 	for {
 		if conn == nil {
+			// Paused: no connection meanwhile. The pause cut the last one, not a dead sender.
+			if ru.waitResumed(ctx) {
+				reconnects = 0
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if reconnects >= maxReconnects {
 				return ErrTransferFailed
 			}
@@ -1210,6 +1267,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 				return err
 			}
 			conn = c
+			ru.track(c, true)
 			// A cancel closes the connection: a read waiting for a silent sender ends at once.
 			stopClosing = context.AfterFunc(ctx, func() { c.Close() })
 			reconnects++
@@ -1251,6 +1309,11 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 		case buf = <-free:
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+		if ru.paused() { // paused meanwhile: the requests in flight are asked again on resume
+			free <- buf
+			drop()
+			continue
 		}
 		// The wait starts once the worker can take a chunk: a slow disk or hash holds the
 		// buffers back, and must not count as network time (DEV-04).
