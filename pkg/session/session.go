@@ -80,6 +80,25 @@ type Message struct {
 	BenchSize   int64                `json:"bench_size,omitempty"`    // Requested size for bandwidth burst
 	Error       string               `json:"error,omitempty"`         // Error message for item_failed or transfer failures
 	Code        string               `json:"code,omitempty"`          // Machine-readable reason of an "error" message (bible §8.2)
+
+	Progress *Progress `json:"progress,omitempty"` // progress: how far the receiver is
+}
+
+// TypeProgress carries the receiver's progress to the sender, a few times a second.
+const TypeProgress = "progress"
+
+// Progress is how far the receiver is: the bytes received and checked, of the whole transfer
+// and of the items in progress. The sender shows it rather than what it served: both screens
+// read the same, and a pause stops both bars (the chunks in flight count on neither).
+type Progress struct {
+	Bytes int64          `json:"bytes"`
+	Items []ItemProgress `json:"items,omitempty"`
+}
+
+// ItemProgress is how far the receiver is in one item of the transfer.
+type ItemProgress struct {
+	Index int   `json:"index"`
+	Bytes int64 `json:"bytes"`
 }
 
 // TypeError is the message that answers a message the peer cannot handle; its Code says why.

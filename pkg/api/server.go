@@ -43,6 +43,7 @@ type DaemonServer struct {
 	mu                 sync.RWMutex
 	config             Config
 	activeSession      *session.Channel
+	outEvents          *daemonEvents // the transfer this device sends, while it runs
 	pairedDeviceName   string
 	pendingOffer       *session.Message // a complete offer waiting for respond_offer
 	incomingOffer      *session.Message // an offer whose pages are still arriving (D2)
@@ -1123,6 +1124,14 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		s.mu.RUnlock()
 		if sess != nil {
 			AnswerBench(sess, msg)
+		}
+
+	case session.TypeProgress: // the receiver's progress, which this sender shows
+		s.mu.RLock()
+		ev := s.outEvents
+		s.mu.RUnlock()
+		if ev != nil && msg.Progress != nil && msg.TransferID == ev.offer.TransferID {
+			ev.takePeer(msg.Progress)
 		}
 
 	case "bench_pong":
