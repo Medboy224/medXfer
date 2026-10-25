@@ -1,6 +1,8 @@
 /// The app: the theme the user picked, the languages, and the screens.
 library;
 
+import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -46,6 +48,26 @@ class _MedxferAppState extends State<MedxferApp> {
 
   AppState get state => widget.state;
   AppSettings get settings => widget.settings;
+
+  late final AppLifecycleListener _lifecycle;
+
+  @override
+  void initState() {
+    super.initState();
+    // Closing the window stops the core first (AppState.shutdown).
+    _lifecycle = AppLifecycleListener(
+      onExitRequested: () async {
+        await state.shutdown();
+        return AppExitResponse.exit;
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
