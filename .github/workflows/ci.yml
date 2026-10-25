@@ -69,9 +69,9 @@ jobs:
       - run: flutter build linux --release
       - run: test -f build/linux/x64/release/bundle/lib/libmedxfer.so
 
-  # WP-B.6: the Linux package, built on the oldest Ubuntu still supported so that the glibc
-  # it needs (2.34) suits Ubuntu 22.04, Debian 12 and the distributions built on them (WP-B.8). Then on
-  # fresh systems with only the packages its DEPENDANCES.txt lists (G2A-08, reserve 2 of G2a),
+  # WP-B.6: the Linux package, built on the oldest Ubuntu still supported so that the glibc it
+  # needs (2.34) suits Ubuntu 22.04, Debian 12 and the distributions built on them (WP-B.8).
+  # Then on fresh systems with only the packages its DEPENDANCES.txt lists (G2A-08, reserve 2 of G2a),
   # and kept 14 days for the real tests.
   package-linux:
     runs-on: ubuntu-22.04
