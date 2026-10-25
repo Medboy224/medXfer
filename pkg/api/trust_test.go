@@ -353,3 +353,28 @@ func TestUnknownMessageIsUnsupported(t *testing.T) {
 		t.Fatalf("after an error message: %+v, %v", m, err)
 	}
 }
+
+// PAIR-11, refused: a shows a PIN on demand, its user refuses (pin_refuse); the PIN read out
+// no longer pairs, and b gets the neutral pair_failed (PAIR-07).
+func TestRefusedPINOnDemand(t *testing.T) {
+	_, na := startOwnIdentity(t, "Laptop")
+	_, nb := startOwnIdentity(t, "Phone")
+	nb.Request("pair", map[string]any{"ip": "127.0.0.1", "port": portNumber(t, na.PeerAddr())})
+	var asked struct {
+		PIN string `json:"pin"`
+	}
+	if err := na.WaitEvent("pin_requested", 0).Decode(&asked); err != nil {
+		t.Fatal(err)
+	}
+	var needed struct {
+		Target string `json:"target"`
+	}
+	if err := nb.WaitEvent("pin_needed", 0).Decode(&needed); err != nil {
+		t.Fatal(err)
+	}
+	na.Request("pin_refuse", nil)
+	na.WaitEvent("pin_refused", 0)
+	nb.Request("pair_pin", map[string]any{"target": needed.Target, "pin": asked.PIN})
+	nb.WaitEvent("pair_failed", 0)
+	noEvent(t, na, "paired")
+}

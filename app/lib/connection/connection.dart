@@ -224,6 +224,11 @@ class Connection extends ChangeNotifier {
   TrustOffer? _trustOffer;
   List<TrustedDevice> _trusted = const [];
   bool _showing = false;
+  bool _codeOpen = false;
+  String _instance = '';
+
+  /// This user refused a PIN asked for, until then: the failure it causes here is no news.
+  DateTime? _refusedUntil;
 
   bool _remember = true;
 
@@ -235,7 +240,22 @@ class Connection extends ChangeNotifier {
     if (value == _remember) return;
     _remember = value;
     notifyListeners();
-    if (_showing) await showCode();
+    if (_codeOpen) await showCode();
+  }
+
+  /// The generic name this device announces, medXfer-xxxx (DISC-07): the one a device not yet
+  /// trusted sees in its list. The Connect screen shows it, so the other user picks this one.
+  String get instance => _instance;
+
+  /// The status the application asked for at start: a reply, which [take] does not see.
+  void takeStatus(CoreEvent status) => take(status);
+
+  /// The name of the device at ip in the list, else its address: who asks for a PIN.
+  String nameAt(String ip) {
+    for (final d in _nearby) {
+      if (d.ip == ip) return d.name;
+    }
+    return ip;
   }
 
   /// The access point this device created: its name and passphrase go in the QR code.
@@ -279,14 +299,29 @@ class Connection extends ChangeNotifier {
   // Actions.
 
   /// The Connect screen opens: this device announces itself (DISC-05: only when the user
-  /// asks), shows its QR code and PIN, and looks for devices nearby.
+  /// asks) and looks for devices nearby. It shows no QR code: a QR code exists only with an
+  /// access point, which it carries, so scanning one works wherever the devices are.
   Future<void> openConnect() async {
     _showing = true;
     // The network may have changed since the last time (another Wi-Fi, a hotspot).
     await pushNetwork();
     await network.multicast(true);
     await _call('set_discoverable', {'on': true});
-    await Future.wait([showCode(), scan()]);
+    await scan();
+  }
+
+  /// A screen shows this device's code: the access point's QR code and PIN, or the address
+  /// and PIN typed by hand when a device does not see this one in its list.
+  Future<void> openCode() async {
+    _codeOpen = true;
+    await showCode();
+  }
+
+  void closeCode() {
+    _codeOpen = false;
+    _invitation = null;
+    _pin = null;
+    notifyListeners();
   }
 
   /// The Connect screen closes: this device stops announcing itself. An access point nobody
@@ -329,7 +364,7 @@ class Connection extends ChangeNotifier {
       }
       _myHotspot = await hotspot.start();
       await pushNetwork();
-      if (_showing) await showCode();
+      if (_codeOpen) await showCode();
     } on PlatformException catch (e) {
       _myHotspot = null;
       _notices.add(HotspotFailed(permission: false, reason: e.message ?? e.code));
@@ -346,7 +381,7 @@ class Connection extends ChangeNotifier {
     notifyListeners();
     await hotspot.stop();
     await pushNetwork();
-    if (_showing) await showCode();
+    if (_codeOpen) await showCode();
   }
 
   /// Pairs by a scanned or pasted link. When it names an access point, this device joins it
@@ -424,6 +459,14 @@ class Connection extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The user refuses the device that asked for a PIN: the PIN no longer pairs (pin_refuse).
+  Future<void> refuseAskedPin() async {
+    _askedPin = null;
+    _refusedUntil = DateTime.now().add(const Duration(minutes: 2)); // a PIN's life (PAIR-02)
+    notifyListeners();
+    await _call('pin_refuse');
+  }
+
   /// The user read the PIN out, or does not want to.
   void dismissAskedPin() {
     _askedPin = null;
@@ -478,14 +521,14 @@ class Connection extends ChangeNotifier {
         _scanning = false;
         _scanLimit?.cancel();
       case 'pair_show':
-        if (!_showing) return;
+        if (!_codeOpen) return;
         _invitation = QrInvitation(
           uri: (m['uri'] as String?) ?? '',
           expires: _time(m['expires']),
           instance: (m['instance'] as String?) ?? '',
         );
       case 'pair_pin_shown':
-        if (!_showing) return;
+        if (!_codeOpen) return;
         _pin = ShownPin.fromJson(m);
       case 'pin_requested':
         _askedPin = ShownPin.fromJson(m);
@@ -508,6 +551,11 @@ class Connection extends ChangeNotifier {
         _askedPin = null;
         if (before == null) _notices.add(Paired(_session!.name));
       case 'pair_failed':
+        final refused = _refusedUntil;
+        if (refused != null && DateTime.now().isBefore(refused)) {
+          _refusedUntil = null; // the other device typed the refused PIN: this user said no
+          return;
+        }
         _notices.add(const PairFailed());
       case 'reconnecting':
         _reconnecting = true;
@@ -522,6 +570,7 @@ class Connection extends ChangeNotifier {
         if (_myHotspot != null && !_showing) unawaited(stopHotspot());
         if (_joined != null) unawaited(leaveJoined());
       case 'status':
+        _instance = (m['instance'] as String?) ?? _instance;
         if (m['paired'] == true && _session == null) {
           _session = PeerSession(name: (m['paired_device'] as String?) ?? '', ip: (m['paired_ip'] as String?) ?? '');
         } else if (m['paired'] == false && _session != null) {

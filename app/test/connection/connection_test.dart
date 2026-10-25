@@ -86,12 +86,16 @@ List<Object?> _networkNames(FakeCore core) => [
     ];
 
 void main() {
-  test('opening Connect announces this device, shows its code and looks around', () async {
+  test('opening Connect announces this device and looks around; the code is drawn on demand', () async {
     final core = _core();
     final c = Connection(core);
     await c.openConnect();
-    expect(core.calls.map((x) => x.action), ['set_discoverable', 'pair_show', 'scan', 'pair_pin_show']);
+    // No QR code of the shared network: one scanned elsewhere would fail.
+    expect(core.calls.map((x) => x.action), ['set_discoverable', 'scan']);
     expect(core.calls.first.payload, {'on': true});
+    expect(c.invitation, isNull);
+    // The access point's screen, or a device missing from the list, asks for it.
+    await c.openCode();
     expect(core.calls.firstWhere((x) => x.action == 'pair_show').payload, {'trust': true});
     expect(c.invitation!.instance, 'medXfer-7810');
     expect(c.invitation!.expires, DateTime.fromMillisecondsSinceEpoch(_expires * 1000));
@@ -110,7 +114,7 @@ void main() {
   test('without "remember", the code and the pairings carry no trust offer', () async {
     final core = _core()..on('pair_uri', (_) => const FakeAnswer());
     final c = Connection(core);
-    await c.openConnect();
+    await c.openCode();
     core.calls.clear();
     await c.setRemember(false);
     expect(core.calls.map((x) => x.action), ['pair_show', 'pair_pin_show']);
@@ -291,6 +295,8 @@ void main() {
     expect(h.log, ['permission', 'start']);
     expect(c.myHotspot!.ssid, 'AndroidShare_1732');
     expect(_networkNames(core), [['swlan0']]);
+    // The access point's screen draws the code once the access point exists (HotspotScreen).
+    await c.openCode();
     expect(core.calls.map((x) => x.action), ['set_network_info', 'pair_show', 'pair_pin_show']);
     final link = PairLink.parse(c.qrData!)!;
     expect(link.network!.ssid, 'AndroidShare_1732');
