@@ -296,6 +296,8 @@ Ajouté le 25 octobre à la demande de l'utilisateur (décision J16).
 - **Le cœur est prêt** : son dossier de téléchargement (`set_config`) et le dossier de chaque offre acceptée (`respond_offer`, `save_dir`).
 - Un dossier qui n'existe plus ou n'est plus accessible fait revenir au dossier par défaut, avec un message.
 
+**Fait** (25 octobre) : section « Réception » des réglages (dossier en cours, « Choisir un dossier », « Revenir au dossier par défaut », « Ranger par type » sous Android), enregistrée dans `settings.json`. Le dossier choisi doit accepter l'écriture (un fichier d'essai créé puis supprimé). Chaque offre acceptée porte son dossier (`save_dir`) ; un dossier disparu fait recevoir dans le dossier par défaut, avec un message. Sans l'accès à tous les fichiers, le réglage explique le choix bloqué et propose l'accès. Essai réel : dossier `medxfer-essai-b10` choisi sur le Galaxy A57 par l'explorateur, une image envoyée par l'application Windows, reçue dans `medxfer-essai-b10/Photos/`, empreintes identiques.
+
 ### WP-B.8 — Essais réels, guide, rapport · S
 
 - **Essais réels**, Android ↔ Windows et Android ↔ Linux :
