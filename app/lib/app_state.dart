@@ -22,7 +22,9 @@ import 'platform/network.dart';
 import 'platform/open_folder.dart';
 import 'platform/qr_scanner.dart';
 import 'platform/storage.dart';
+import 'settings.dart';
 import 'transfer/history.dart';
+import 'transfer/receive_folders.dart';
 import 'transfer/transfers.dart';
 
 enum CoreStatus { starting, ready, failed }
@@ -40,17 +42,18 @@ class AppState extends ChangeNotifier {
     Background background = const NoBackground(),
     this.library = const NoLibrary(),
     HistoryStore? history,
-  }) : connection = Connection(core, network: network, hotspot: hotspot) {
+    AppSettings? settings,
+  }) : connection = Connection(core, network: network, hotspot: hotspot),
+       settings = settings ?? AppSettings() {
+    receiveFolders = ReceiveFolders(settings: this.settings, storage: storage, folders: folders);
     // Created now, not on first use: they listen to the core from its first event.
     transfers = Transfers(
       core,
       history: history ?? FileHistoryStore(folders.dataDir),
       peerName: () => connection.session?.name ?? '',
       downloadDir: folders.downloadDir,
-      // Android: each offer in medXfer/<type>/ (decision J2), whole.
-      placeFor: storage.supported
-          ? (o) async => '${await storage.root()}/${typeFolderFor(o.items.isEmpty ? [o.name] : [for (final i in o.items) i.path])}'
-          : null,
+      // The folder chosen in the settings, else the default (decisions J2 and J16, WP-B.10).
+      placeFor: receiveFolders.placeFor,
     );
     explorer = Explorer(library);
     keeper = BackgroundKeeper(background: background, connection: connection, transfers: transfers);
@@ -59,6 +62,12 @@ class AppState extends ChangeNotifier {
 
   /// The developer panel's telemetry, benchmarks, report and bundle (WP-B.5).
   late final DevTools dev;
+
+  /// The settings, saved: the receive folder among them.
+  final AppSettings settings;
+
+  /// Where received files go (WP-B.10).
+  late final ReceiveFolders receiveFolders;
 
   /// What the phone holds, the explorer's lists, and what the user picked (WP-B.9).
   final Library library;

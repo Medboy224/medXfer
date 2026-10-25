@@ -95,7 +95,8 @@ void main() {
 
     await tester.tap(find.byKey(const Key('offer-accept')));
     await tester.pumpAndSettle();
-    expect(core.calls.last.payload, {'accept': true});
+    // The receive folder goes with every acceptance: the default one here (WP-B.10).
+    expect(core.calls.last.payload, {'accept': true, 'save_dir': '/tmp/medxfer-test/out'});
     expect(find.text('Réception de PC du salon'), findsOneWidget);
     expect(find.text('Photos/3.jpg'), findsOneWidget);
 

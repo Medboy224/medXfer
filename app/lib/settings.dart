@@ -1,5 +1,5 @@
-/// The user's settings of the interface: theme and accent (UI-4), and the developer mode
-/// (DEV-13). Saved in settings.json in the application's data folder, behind [SettingsStore].
+/// The user's settings of the interface: theme and accent (UI-4), the developer mode (DEV-13),
+/// and where received files go (WP-B.10, decision J16). Saved in settings.json in the application's data folder, behind [SettingsStore].
 library;
 
 import 'dart:convert';
@@ -66,6 +66,8 @@ class AppSettings extends ChangeNotifier {
   ThemeChoice _theme;
   Color _accent;
   bool _devMode;
+  String _receiveDir = '';
+  bool _sortByType = true;
 
   ThemeChoice get theme => _theme;
   Color get accent => _accent;
@@ -80,6 +82,8 @@ class AppSettings extends ChangeNotifier {
     final i = m['accent'];
     if (i is int && i >= 0 && i < accents.length) _accent = accents[i];
     if (m['dev_mode'] is bool) _devMode = m['dev_mode'] as bool;
+    if (m['receive_dir'] is String) _receiveDir = m['receive_dir'] as String;
+    if (m['sort_by_type'] is bool) _sortByType = m['sort_by_type'] as bool;
     notifyListeners();
   }
 
@@ -101,6 +105,24 @@ class AppSettings extends ChangeNotifier {
     _changed();
   }
 
+  /// The folder chosen for received files; empty: the default one (decision J2).
+  String get receiveDir => _receiveDir;
+
+  set receiveDir(String value) {
+    if (value == _receiveDir) return;
+    _receiveDir = value;
+    _changed();
+  }
+
+  /// Android: received files sorted by type, in Photos/, Vidéos/… (decision J2).
+  bool get sortByType => _sortByType;
+
+  set sortByType(bool value) {
+    if (value == _sortByType) return;
+    _sortByType = value;
+    _changed();
+  }
+
   /// The saves, one after the other: two at once would write the same file.
   Future<void> _saving = Future.value();
 
@@ -111,7 +133,13 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
     final store = _store;
     if (store == null) return;
-    final values = {'theme': _theme.name, 'accent': accents.indexOf(_accent), 'dev_mode': _devMode};
+    final values = {
+      'theme': _theme.name,
+      'accent': accents.indexOf(_accent),
+      'dev_mode': _devMode,
+      'receive_dir': _receiveDir,
+      'sort_by_type': _sortByType,
+    };
     // Not saved: still applied until the app closes.
     _saving = _saving.then((_) => store.save(values)).catchError((Object _) {});
   }

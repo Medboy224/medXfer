@@ -212,5 +212,19 @@
   "stepBack": "Revenez dans medXfer : Connecter › Taper un PIN",
   "stepTypePin": "Tapez cette adresse et ce PIN",
   "waitingOther": "En attente de l'autre appareil…",
-  "refuse": "Refuser"
+  "refuse": "Refuser",
+  "receiveTitle": "Réception",
+  "receiveFolder": "Dossier de réception",
+  "receiveFolderDefault": "Par défaut : {path}",
+  "receiveFolderChoose": "Choisir un dossier",
+  "receiveFolderReset": "Revenir au dossier par défaut",
+  "receiveFolderNotWritable": "medXfer ne peut pas écrire dans ce dossier : choisissez-en un autre.",
+  "receiveNeedsAccess": "Sans l'accès à tous les fichiers, les fichiers reçus vont dans {path}. Pour choisir un autre dossier, Android demande cet accès.",
+  "grantAccess": "Autoriser l'accès",
+  "sortByType": "Ranger par type",
+  "sortByTypeHint": "Photos, vidéos, musique, applications et autres fichiers chacun dans son sous-dossier.",
+  "noticeReceiveFolderGone": "Le dossier de réception {folder} n'est plus accessible : ces fichiers vont dans {used}.",
+  "folderPickerTitle": "Choisir un dossier",
+  "folderPickerUse": "Utiliser ce dossier",
+  "folderPickerEmpty": "Aucun sous-dossier ici."
 }

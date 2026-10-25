@@ -7,6 +7,7 @@ import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/transfer/history.dart';
+import 'package:medxfer/transfer/receive_folders.dart';
 import 'package:medxfer/transfer/transfers.dart';
 
 Future<void> _settle() => Future<void>.delayed(Duration.zero);
@@ -271,7 +272,7 @@ void main() {
       history: store,
       peerName: () => 'PC',
       downloadDir: () async => '/storage/emulated/0/medXfer',
-      placeFor: (o) async => '/storage/emulated/0/medXfer/Photos',
+      placeFor: (o) async => const ReceivePlace('/storage/emulated/0/medXfer/Photos'),
     );
     t.take(CoreEvent('incoming_offer', data: {
       'device_name': 'PC',
