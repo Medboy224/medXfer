@@ -13,6 +13,7 @@ import '../../theme.dart';
 import '../../transfer/history.dart';
 import '../../transfer/transfers.dart';
 import '../../widgets/format.dart';
+import '../../widgets/smooth_bar.dart';
 
 class TransferScreen extends StatelessWidget {
   const TransferScreen({super.key});
@@ -65,7 +66,6 @@ class _Header extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final c = context.colors;
     final a = transfer;
-    final reduce = MediaQuery.of(context).disableAnimations;
     final String line;
     if (a.stage == Stage.offered) {
       line = l.waitingAnswer(a.device);
@@ -95,16 +95,7 @@ class _Header extends StatelessWidget {
             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
           ),
           const SizedBox(height: 8),
-          TweenAnimationBuilder<double>(
-            tween: Tween(end: a.stage == Stage.offered ? 0 : a.fraction),
-            duration: reduce ? Duration.zero : const Duration(milliseconds: 250),
-            builder: (context, v, _) => LinearProgressIndicator(
-              key: const Key('transfer-bar'),
-              value: a.stage == Stage.offered ? null : v,
-              minHeight: 8,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
+          SmoothBar(key: const Key('transfer-bar'), value: a.stage == Stage.offered ? null : a.fraction),
           const SizedBox(height: 6),
           // Wrapped: on a narrow phone, the speed goes under the sizes.
           Wrap(
@@ -165,7 +156,7 @@ class _ItemRow extends StatelessWidget {
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 4),
-                LinearProgressIndicator(value: item.fraction, minHeight: 4, borderRadius: BorderRadius.circular(2), color: color),
+                SmoothBar(value: item.fraction, minHeight: 4, color: color),
                 const SizedBox(height: 2),
                 Text('${formatBytes(context, item.size)} · $label', style: TextStyle(color: c.muted, fontSize: 12)),
               ],

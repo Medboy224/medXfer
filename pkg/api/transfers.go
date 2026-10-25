@@ -498,8 +498,16 @@ func (s *DaemonServer) serveAccepted(msg session.Message) {
 		}
 		ev := newDaemonEvents(s, o.offer, true, cancel)
 		sender.SetEvents(ev)
+		s.mu.Lock()
+		s.outEvents = ev // the receiver's progress goes to it (session.TypeProgress)
+		s.mu.Unlock()
 		err = sender.Serve(ctx, o.l)
 		ev.done()
+		s.mu.Lock()
+		if s.outEvents == ev {
+			s.outEvents = nil
+		}
+		s.mu.Unlock()
 		// Its measures end with it, stopped, failed or done (then the receiver's "complete"
 		// finds the report made): the next transfer starts its own.
 		s.FinishTransferTracker()
@@ -677,6 +685,19 @@ type daemonEvents struct {
 	lastUpdate time.Time
 	current    int // the item last started, for the progress line
 	finished   bool
+
+	peer       *session.Progress // sender: the receiver's progress, shown instead of what was served
+	lastReport time.Time         // receiver: when its progress last went to the sender
+}
+
+// reportEvery bounds how often the receiver tells the sender its progress.
+const reportEvery = 250 * time.Millisecond
+
+// takePeer keeps the receiver's progress, which the sender's next events show.
+func (e *daemonEvents) takePeer(p *session.Progress) {
+	e.mu.Lock()
+	e.peer = p
+	e.mu.Unlock()
 }
 
 func newDaemonEvents(s *DaemonServer, offer protocol.Offer, sender bool, cancel context.CancelFunc) *daemonEvents {
@@ -690,6 +711,16 @@ func (e *daemonEvents) OnStage(stage string, parallel int, d time.Duration, byte
 
 func (e *daemonEvents) OnProgress(p transfer.Progress) {
 	e.mu.Lock()
+	if e.sender && e.peer != nil {
+		// What the receiver has, not what was served: both screens read the same (WP-B.10).
+		p.Bytes = e.peer.Bytes
+		p.Active = nil
+		for _, it := range e.peer.Items {
+			if it.Index >= 0 && it.Index < len(e.offer.Items) {
+				p.Active = append(p.Active, transfer.ItemProgress{Item: it.Index, Bytes: it.Bytes, Size: e.offer.Items[it.Index].Size})
+			}
+		}
+	}
 	if p.Finished && !p.Partial {
 		p.Bytes = p.Total // a resume or a file already there: the receiver has everything
 	}
@@ -707,7 +738,14 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 	}
 	e.lastUpdate = now
 	current := e.current
+	report := !e.sender && (now.Sub(e.lastReport) >= reportEvery || p.Bytes >= p.Total)
+	if report {
+		e.lastReport = now
+	}
 	e.mu.Unlock()
+	if report {
+		e.s.reportProgress(e.offer.TransferID, p)
+	}
 
 	percent := 100.0
 	if p.Total > 0 {
@@ -764,6 +802,21 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 		Bottleneck:           neck.Stage,
 		BottleneckConfidence: neck.Confidence,
 	}))
+}
+
+// reportProgress tells the sender how far this receiver is (session.TypeProgress).
+func (s *DaemonServer) reportProgress(id string, p transfer.Progress) {
+	s.mu.RLock()
+	sess := s.activeSession
+	s.mu.RUnlock()
+	if sess == nil {
+		return
+	}
+	report := &session.Progress{Bytes: p.Bytes}
+	for _, a := range p.Active {
+		report.Items = append(report.Items, session.ItemProgress{Index: a.Item, Bytes: a.Bytes})
+	}
+	_ = sess.Send(session.Message{Type: session.TypeProgress, TransferID: id, Progress: report})
 }
 
 // share is done of size in percent; an empty file is whole.

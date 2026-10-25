@@ -97,3 +97,66 @@ func TestStoppedTransferClosesItsMeasures(t *testing.T) {
 		}
 	}
 }
+
+// Reported by the user: paused, the other device's bar went on, and the two devices never
+// showed the same percentage. A pause now drops the chunks in flight (asked again on resume),
+// and the sender shows the receiver's progress: both bars stop together, on the same figure,
+// and the file arrives whole once resumed.
+func TestPauseStopsBothBarsOnTheSameFigure(t *testing.T) {
+	testkit.Throttle(t, 2<<20)
+	dir := filepath.Join(t.TempDir(), "in")
+	_ = os.MkdirAll(dir, 0o755)
+	data := make([]byte, 12<<20)
+	for i := range data {
+		data[i] = byte(i * 7)
+	}
+	_ = os.WriteFile(filepath.Join(dir, "big.bin"), data, 0o644)
+	out := t.TempDir()
+	sendServer := NewDaemonServerAt(t.TempDir(), 0, t.TempDir(), "Sender")
+	sendServer.config.ChunkSizeMB = 1
+	recvServer := NewDaemonServerAt(t.TempDir(), 0, out, "Receiver")
+	pair := testkit.StartPair(t, sendServer, recvServer)
+	pair.Send([]string{dir}, testkit.SendOptions{})
+	pair.AcceptOffer(0)
+
+	bytesOf := func(e testkit.Event) int64 {
+		var d TransferProgressData
+		_ = json.Unmarshal(e.Data, &d)
+		return d.BatchBytes
+	}
+	progress := func(e testkit.Event) bool { return e.Event == "transfer_progress" }
+	pair.Receiver.WaitFor("a few megabytes received", func(e testkit.Event) bool {
+		return progress(e) && bytesOf(e) >= 3<<20
+	}, 20*time.Second)
+	pair.Receiver.Request("pause", nil)
+
+	// Every progress event of a side within d: the last figure it showed.
+	last := func(n *testkit.Node, d time.Duration) int64 {
+		var b int64 = -1
+		end := time.Now().Add(d)
+		for {
+			e, ok := n.TryWaitFor(progress, time.Until(end))
+			if !ok {
+				return b
+			}
+			b = bytesOf(e)
+		}
+	}
+	time.Sleep(700 * time.Millisecond) // the chunks being written, and the last report, go through
+	recvAt, sendAt := last(pair.Receiver, 300*time.Millisecond), last(pair.Sender, 300*time.Millisecond)
+	time.Sleep(1500 * time.Millisecond) // at 2 MB/s, 3 MB would have gone by
+	recvLater, sendLater := last(pair.Receiver, 300*time.Millisecond), last(pair.Sender, 300*time.Millisecond)
+	if recvLater > 0 && recvAt > 0 && recvLater != recvAt {
+		t.Errorf("paused, the receiver's bar went on: %d then %d bytes", recvAt, recvLater)
+	}
+	if sendLater > 0 && sendAt > 0 && sendLater != sendAt {
+		t.Errorf("paused, the sender's bar went on: %d then %d bytes", sendAt, sendLater)
+	}
+	if sendLater > 0 && recvLater > 0 && sendLater != recvLater {
+		t.Errorf("paused, the two bars differ: sender %d, receiver %d bytes", sendLater, recvLater)
+	}
+
+	pair.Receiver.Request("resume", nil)
+	pair.WaitTransferDone(30 * time.Second)
+	testkit.AssertTreesEqual(t, dir, filepath.Join(out, "in"))
+}
