@@ -10,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import '../core/core.dart';
 import '../platform/file_picker.dart';
 import 'history.dart';
+import 'receive_folders.dart';
 
 enum ItemStatus { pending, transferring, paused, completed, skipped, failed }
 
@@ -174,6 +175,13 @@ class TransferFailed extends TransferNotice {
 }
 
 /// The disk filled up: the receiver paused itself, keeping what it got (STO-07).
+/// The folder chosen for received files is gone (or no longer allowed): they went to [used].
+class ReceiveFolderGone extends TransferNotice {
+  const ReceiveFolderGone(this.folder, this.used);
+  final String folder;
+  final String used;
+}
+
 class DiskFull extends TransferNotice {
   const DiskFull(this.folder);
   final String folder;
@@ -202,7 +210,7 @@ class Transfers extends ChangeNotifier {
 
   /// Where an accepted offer goes, when the platform chooses (Android: `medXfer/<type>/`,
   /// decision J2); null: the core's download folder.
-  final Future<String?> Function(IncomingOffer offer)? placeFor;
+  final Future<ReceivePlace> Function(IncomingOffer offer)? placeFor;
 
   /// The folder of the transfer being received, for the history.
   String? _receiveDir;
@@ -253,7 +261,9 @@ class Transfers extends ChangeNotifier {
   Future<void> accept() async {
     final offer = _offer;
     if (offer == null) return;
-    final dir = await placeFor?.call(offer);
+    final place = await placeFor?.call(offer);
+    final dir = place?.dir;
+    if (place != null && place.gone.isNotEmpty) _notices.add(ReceiveFolderGone(place.gone, place.dir));
     _receiveDir = dir;
     final reply = await _call('respond_offer', {'accept': true, if (dir != null && dir.isNotEmpty) 'save_dir': dir});
     // Refused for lack of room, the offer stays: the user may free some and accept again.

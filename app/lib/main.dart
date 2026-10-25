@@ -18,7 +18,11 @@ import 'settings.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   FrameStats.start();
+  // Read before the first frame: the saved theme from the start, without a flash.
+  final settings = AppSettings(store: FileSettingsStore(const SystemFolders().dataDir));
+  await settings.load();
   final state = AppState(
+    settings: settings,
     core: FfiCore(),
     folders: const SystemFolders(),
     network: systemNetworkInfo(),
@@ -31,8 +35,5 @@ Future<void> main() async {
     library: systemLibrary(),
   );
   state.start();
-  // Read before the first frame: the saved theme from the start, without a flash.
-  final settings = AppSettings(store: FileSettingsStore(const SystemFolders().dataDir));
-  await settings.load();
   runApp(MedxferApp(state: state, settings: settings));
 }

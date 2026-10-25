@@ -85,6 +85,7 @@ class _TransferPromptsState extends State<TransferPrompts> {
     final text = switch (n) {
       TransferFailed(:final message, :final noSpace) => noSpace ? l.noticeNoSpace : message,
       DiskFull() => l.noticeDiskFull,
+      ReceiveFolderGone(:final folder, :final used) => l.noticeReceiveFolderGone(folder, used),
       FileError(:final file, :final error) => l.noticeFileError(file, error),
     };
     widget.messenger.currentState

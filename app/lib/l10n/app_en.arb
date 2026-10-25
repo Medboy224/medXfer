@@ -259,5 +259,22 @@
   "stepBack": "Back in medXfer: Connect › Type a PIN",
   "stepTypePin": "Type this address and this PIN",
   "waitingOther": "Waiting for the other device…",
-  "refuse": "Decline"
+  "refuse": "Decline",
+  "receiveTitle": "Receiving",
+  "receiveFolder": "Receive folder",
+  "receiveFolderDefault": "Default: {path}",
+  "@receiveFolderDefault": {"placeholders": {"path": {"type": "String"}}},
+  "receiveFolderChoose": "Choose a folder",
+  "receiveFolderReset": "Back to default",
+  "receiveFolderNotWritable": "medXfer can't write in this folder: choose another one.",
+  "receiveNeedsAccess": "Without access to all files, received files go to {path}. To choose another folder, Android asks for that access.",
+  "@receiveNeedsAccess": {"placeholders": {"path": {"type": "String"}}},
+  "grantAccess": "Allow access",
+  "sortByType": "Sort by type",
+  "sortByTypeHint": "Photos, videos, music, apps and other files each in their own subfolder.",
+  "noticeReceiveFolderGone": "The receive folder {folder} is no longer reachable: these files go to {used}.",
+  "@noticeReceiveFolderGone": {"placeholders": {"folder": {"type": "String"}, "used": {"type": "String"}}},
+  "folderPickerTitle": "Choose a folder",
+  "folderPickerUse": "Use this folder",
+  "folderPickerEmpty": "No subfolder here."
 }
