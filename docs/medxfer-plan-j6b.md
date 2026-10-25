@@ -92,7 +92,7 @@ Une page de maquettes cliquables (dix écrans) a fixé le parcours avant le code
 WP-B.0 cœur, schéma v4 ──► WP-B.1 squelette et frontière ──► WP-B.7 sonde du point d'accès (tôt, sur le téléphone)
                                                          ──► WP-B.2 connexion et appairage ──► WP-B.3 envoi, réception, historique
                                                          └─► WP-B.4 Android ──► WP-B.9 explorateur par catégories
-WP-B.3 ──► WP-B.5 panneau développeur, gate G7 ──► WP-B.6 empaquetage ──► WP-B.8 essais réels, guide, rapport
+WP-B.3 ──► WP-B.5 panneau développeur, gate G7 ──► WP-B.6 empaquetage ──► WP-B.10 dossier de réception ──► WP-B.8 essais réels, guide, rapport
 ```
 
 La sonde du point d'accès passe tôt : certains fabricants restreignent cette fonction, et le parcours de connexion en dépend.
@@ -283,6 +283,19 @@ Le guide signalait les ports TCP 18887 et UDP 5353 ; il manquait le port UDP 199
 - Tant que le point d'accès tourne, le cœur ne reçoit que son interface (`set_network_info`) : le QR, le PIN et l'annonce portent son adresse. Il s'arrête à la fermeture de « Connecter » si personne ne l'a rejoint, sinon à la fin de la session.
 - Essai réel (20 octobre) : Zorin rejoint le point d'accès du Galaxy A57 par ses réglages, puis tape le PIN et l'adresse 10.46.56.232 ; jumelage et confiance mutuelle réussis, puis point d'accès arrêté à la fin de la session. La jonction par un second téléphone qui scanne le QR reste à essayer (#169).
 
+### WP-B.10 — Dossier de réception au choix · S
+
+Ajouté le 25 octobre à la demande de l'utilisateur (décision J16).
+
+- **Réglages** : « Dossier de réception », avec le dossier en cours et un bouton pour en choisir un autre.
+- **Windows et Linux** : sélecteur de dossier du système (`file_selector`).
+- **Android, avec l'accès à tous les fichiers** :
+  - choix d'un dossier du stockage, par l'explorateur de l'application ;
+  - option « ranger par type » (`Photos/`, `Vidéos/`, `Fichiers/`…, la décision J2), activée par défaut.
+- **Android, sans cet accès** : `Download/medXfer/`, comme aujourd'hui ; le réglage explique pourquoi il n'y a pas de choix.
+- **Le cœur est prêt** : son dossier de téléchargement (`set_config`) et le dossier de chaque offre acceptée (`respond_offer`, `save_dir`).
+- Un dossier qui n'existe plus ou n'est plus accessible fait revenir au dossier par défaut, avec un message.
+
 ### WP-B.8 — Essais réels, guide, rapport · S
 
 - **Essais réels**, Android ↔ Windows et Android ↔ Linux :
@@ -297,6 +310,7 @@ Le guide signalait les ports TCP 18887 et UDP 5353 ; il manquait le port UDP 199
 - **Web Share v2** : J7. L'application n'expose pas le Web Share actuel.
 - **Installateurs, signature de publication, règles du pare-feu posées automatiquement, Play Store** : J8.
 - **Android 10 et antérieurs** : voir la décision J2.
+- **Point d'accès à 5 GHz** (Wi-Fi Direct) : sonde juste après J6b (J6c), intégration en J8 (décision J17).
 
 ## 5. Décisions
 
@@ -319,3 +333,5 @@ Réponses de l'utilisateur du 19 octobre 2026. Les propositions J4, J5, J7, J8, 
 | J13 | Exigences de l'interface (§1.1) | ✅ **Fluide, animée, personnalisable, et capable de tourner sur des téléphones anciens.** | Vérifiées à chaque lot (UI-1 à UI-5). |
 | J14 | Connexion et envoi | ✅ **Se connecter d'abord**, puis envoyer dans les deux sens (§1.2). | Choisir les fichiers, puis l'appareil (la première maquette). |
 | J15 | Identité visuelle | ✅ **Propre à medXfer** : thème clair, accent bleu, Figtree. D'une application prise en référence, on reprend le parcours et la disposition, jamais les couleurs ni l'apparence. | — |
+| J16 | Où vont les fichiers reçus (25 octobre) | ✅ **Au choix de l'utilisateur**, dans les réglages (WP-B.10). Par défaut, la décision J2 : `medXfer/` rangé par type. | Un dossier fixe, celui de J2. |
+| J17 | Point d'accès à 5 GHz (25 octobre) | ✅ **Par Wi-Fi Direct** (Android 10 et plus : un groupe créé par l'application, dont la bande peut être 5 GHz), derrière l'interface `Hotspot`, le point d'accès actuel restant en repli. Sonde juste après J6b (J6c), intégration en J8, avec la mise à jour de `DISC-12`. | `LocalOnlyHotspot` seul : Android choisit la bande, une application ordinaire ne peut pas demander 5 GHz (sonde WP-B.7 : 2,4 GHz, canal 1). |
