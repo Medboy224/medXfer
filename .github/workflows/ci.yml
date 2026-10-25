@@ -68,9 +68,39 @@ jobs:
       - run: flutter test
       - run: flutter build linux --release
       - run: test -f build/linux/x64/release/bundle/lib/libmedxfer.so
-      # WP-B.6: the Linux package, then on a fresh Ubuntu 24.04 with only the packages its
-      # DEPENDANCES.txt lists (G2A-08, reserve 2 of G2a).
-      - run: MEDXFER_SKIP_BUILD=1 bash scripts/package-linux.sh dist
-        working-directory: .
-      - run: bash scripts/test-fresh-linux.sh dist/medxfer-*-linux-x64.tar.gz
-        working-directory: .
+
+  # WP-B.6: the Linux package, built on the oldest Ubuntu still supported so that the glibc it
+  # needs (2.34) suits Ubuntu 22.04, Debian 12 and the distributions built on them (WP-B.8).
+  # Then on fresh systems with only the packages its DEPENDANCES.txt lists (G2A-08, reserve 2
+  # of G2a), and kept 14 days for the real tests.
+  package-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: subosito/flutter-action@v2.9.1
+        with:
+          flutter-version: 3.47.6
+          channel: stable
+          cache: true
+      - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build pkg-config libgtk-3-dev
+      # Clang 18 from LLVM's own repository, not the 14 of 22.04: zxing builds aggregates with
+      # parentheses (C++20, P0960), which clang knows from version 16. The libstdc++ stays that
+      # of 22.04, so the package runs there.
+      - run: |
+          wget -q https://apt.llvm.org/llvm.sh
+          sudo bash llvm.sh 18
+          mkdir -p "$HOME/clang"
+          ln -s /usr/bin/clang-18 "$HOME/clang/clang"
+          ln -s /usr/bin/clang++-18 "$HOME/clang/clang++"
+          echo "$HOME/clang" >> "$GITHUB_PATH"
+      - run: bash scripts/package-linux.sh dist
+      - run: bash scripts/test-fresh-linux.sh dist/medxfer-*-linux-x64.tar.gz ubuntu:22.04
+      - run: bash scripts/test-fresh-linux.sh dist/medxfer-*-linux-x64.tar.gz ubuntu:24.04
+      - uses: actions/upload-artifact@v7
+        with:
+          name: medxfer-linux-x64
+          path: dist/medxfer-*-linux-x64.tar.gz
+          retention-days: 14
