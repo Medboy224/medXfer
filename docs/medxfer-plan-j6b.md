@@ -236,7 +236,7 @@ Le sélecteur natif, le dépôt temporaire et la navigation de fichiers du table
 | Paquet | Script | Taille | Vérifié |
 |---|---|---|---|
 | Windows : dossier portable zippé | `package-windows.ps1` | 17,1 Mo | Le cœur, `msvcp140`, `vcruntime140` et `vcruntime140_1` présents ; lancé décompressé hors de l'arbre, toutes ces DLL chargées depuis son dossier |
-| Linux : `tar.gz` et `DEPENDANCES.txt` | `package-linux.sh` | — | Construit dans la CI sur Ubuntu 22.04 (glibc 2.35), puis essayé sur une Ubuntu 22.04 et une 24.04 neuves avec les seuls paquets listés : toutes les bibliothèques trouvées, l'application tourne 15 s (Xvfb) |
+| Linux : `tar.gz` et `DEPENDANCES.txt` | `package-linux.sh` | — | Construit dans la CI sur Ubuntu 22.04 (demande glibc 2.34), puis essayé sur une Ubuntu 22.04 et une 24.04 neuves avec les seuls paquets listés : toutes les bibliothèques trouvées, l'application tourne 15 s (Xvfb) |
 | Android : APK arm64 | `package-android.ps1` | 20,4 Mo | Signé avec la clé de développement ; un APK signé avec la clé de débogage est refusé |
 
 Ce que l'essai sur une distribution neuve a trouvé : Flutter charge OpenGL au lancement (`libEGL.so.1`, par `libepoxy`), ce que `ldd` ne voit pas. Sans lui, l'application s'arrête aussitôt. `DEPENDANCES.txt` liste maintenant `libegl1`, `libgl1`, `libgles2` et `libgl1-mesa-dri`. La réserve 2 de G2a (G2A-08 sous Linux) est levée.
