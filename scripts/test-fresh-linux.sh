@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The Linux package on a fresh distribution (G2A-08, reserve 2 of G2a; WP-B.6 of the J6b plan):
-# in an Ubuntu 24.04 container where nothing else is installed, the packages DEPENDANCES.txt
-# lists are installed, every library is found, and the app runs for 15 seconds (on Xvfb)
-# without stopping.
+# in a fresh Ubuntu container (24.04 by default) where nothing else is installed, the packages
+# DEPENDANCES.txt lists are installed, every library is found, and the app runs for 15 seconds
+# (on Xvfb) without stopping.
 # Usage: bash scripts/test-fresh-linux.sh dist/medxfer-<version>-linux-x64.tar.gz [image]
 set -euo pipefail
 archive=$(readlink -f "$1")

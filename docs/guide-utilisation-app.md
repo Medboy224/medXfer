@@ -41,7 +41,7 @@ Une archive : `medxfer-<version>-linux-x64.tar.gz`.
 2. Installez les bibliothèques qu'elle demande. Le fichier `DEPENDANCES.txt` les liste, avec la version de glibc nécessaire et, pour Debian et Ubuntu, la commande `apt install` à taper. Sur un bureau GNOME, KDE ou Xfce, elles sont presque toujours déjà là. Sur un système minimal, n'oubliez pas OpenGL (`libegl1`, `libgl1`, `libgles2`, `libgl1-mesa-dri`) : l'application le charge au lancement, et s'arrête aussitôt sans lui.
 3. Lancez `./medxfer` depuis le dossier décompressé.
 
-La liste des paquets vient d'Ubuntu 24.04, où la CI essaie l'archive sur un système neuf. Sur une autre distribution, les noms des paquets peuvent changer ; les bibliothèques, elles, sont les mêmes.
+L'archive est construite sur Ubuntu 22.04 : elle demande glibc 2.35 ou plus récente, comme Ubuntu 22.04, Debian 12, Zorin OS 17, Linux Mint 21 et les versions suivantes. La CI l'essaie sur une Ubuntu 22.04 et une Ubuntu 24.04 neuves, avec les seuls paquets de `DEPENDANCES.txt`. Sur une autre distribution, les noms des paquets peuvent changer ; les bibliothèques, elles, sont les mêmes.
 
 ## 3. Android
 

@@ -4,12 +4,14 @@
 # (G2A-08: the package runs outside the build tree; the fresh distribution test is in the CI).
 # Usage (from the repository root): bash scripts/package-linux.sh [out_dir]
 # Prerequisites: those of scripts/build-lib.sh (Go, gcc), Flutter, the GTK 3 development files.
+# The package needs the glibc of the system it is built on, or a newer one: the CI builds it on
+# Ubuntu 22.04.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:-"$root/dist"}
 version=$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' "$root/app/pubspec.yaml")
 
-# MEDXFER_SKIP_BUILD=1: the bundle is already built (the CI's app job).
+# MEDXFER_SKIP_BUILD=1: the bundle is already built.
 if [ "${MEDXFER_SKIP_BUILD:-}" != 1 ]; then
   bash "$root/scripts/build-lib.sh"
   bash "$root/scripts/stage-app-native.sh"
