@@ -518,9 +518,7 @@ func (s *DaemonServer) serveAccepted(msg session.Message) {
 		// Its measures end with it: the next transfer starts its own. What stopped it (the
 		// receiver's "complete", a cancel, the peer's failure) ended them first, with the reason.
 		if err == nil && ev.receiverDone() {
-			s.completeSent(o.offer.TransferID)
-			// A receiver that canceled sends DONE too: the transfer, no longer active, was
-			// not completed, and late progress may have opened measures again.
+			s.completeSent(o.offer.TransferID) // a receiver that canceled sends DONE too: no effect
 			s.FinishTransferTracker(diag.OutcomeCanceled)
 			return
 		}
@@ -825,7 +823,7 @@ func newDaemonEvents(s *DaemonServer, offer protocol.Offer, sender bool, cancel 
 
 // OnStage feeds the transfer report with the time of each stage of each chunk (DEV-03).
 func (e *daemonEvents) OnStage(stage string, parallel int, d time.Duration, bytes int64) {
-	e.s.RecordTransferStage(e.name, len(e.offer.Items), e.offer.TotalBytes, stage, parallel, d, bytes)
+	e.s.RecordTransferStage(e.offer.TransferID, e.name, len(e.offer.Items), e.offer.TotalBytes, stage, parallel, d, bytes)
 }
 
 func (e *daemonEvents) OnProgress(p transfer.Progress) {
@@ -908,7 +906,7 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 		}
 	}
 
-	s.RecordTransferSample(engine.TransferStats{
+	s.RecordTransferSample(e.offer.TransferID, engine.TransferStats{
 		BytesTransferred: p.Bytes, TotalBytes: p.Total, SpeedMBps: p.SpeedMBps,
 		ActiveStreams: p.Streams, ProgressPercent: percent,
 	}, percent, offerName(e.offer), len(e.offer.Items), e.offer.TotalBytes)
