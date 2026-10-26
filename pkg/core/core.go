@@ -196,7 +196,9 @@ func (c *Core) NextEvent(timeout time.Duration) (api.EventMessage, bool) {
 	return api.EventMessage{}, false
 }
 
-// Stop stops the device and wakes every NextEvent waiting. A second call does nothing.
+// Stop stops the device and wakes every NextEvent waiting. A second call does nothing. The
+// readers are woken first: a server slow to stop does not keep them waiting (B9), else the
+// app's reader, and with it the process, stayed alive after its window closed (WP-B.8).
 func (c *Core) Stop() {
 	c.mu.Lock()
 	if c.stopped {
@@ -205,9 +207,20 @@ func (c *Core) Stop() {
 	}
 	c.stopped = true
 	c.mu.Unlock()
-	c.unsubscribe()
-	c.srv.Stop()
 	close(c.stopCh)
+	c.unsubscribe()
+	serverStopping()
+	c.srv.Stop()
+}
+
+// serverStopping runs just before the server stops; tests hold it.
+var serverStopping = func() {}
+
+// Stopped reports whether Stop has been called.
+func (c *Core) Stopped() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stopped
 }
 
 // Stats reports the event queue.
