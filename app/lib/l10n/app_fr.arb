@@ -227,5 +227,6 @@
   "folderPickerTitle": "Choisir un dossier",
   "folderPickerUse": "Utiliser ce dossier",
   "folderPickerEmpty": "Aucun sous-dossier ici.",
-  "noticeTransferStopped": "Le transfert avec {device} s'est arrêté ({error}). Ce qui a été reçu est gardé : un nouvel envoi reprend là où il s'était arrêté."
+  "noticeTransferStopped": "Le transfert avec {device} s'est arrêté ({error}). Ce qui a été reçu est gardé : le reprendre continue à partir de là.",
+  "resendTransfer": "Reprendre"
 }

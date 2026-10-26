@@ -218,6 +218,28 @@ void main() {
     await _settle();
     expect(notices.whereType<TransferStopped>().map((n) => n.error), ['no data connection']);
     expect(store.entries.single.outcome, Outcome.failed);
+    // Received here: the sender resumes it, not this side.
+    expect(t.canResend, isFalse);
+  });
+
+  test('WP-B.8: descriptors are opened again to resume; without a way to, no resume', () async {
+    final (core, t, _) = _model();
+    var opened = 0;
+    Future<Picked> reopen() async => Picked(files: [OpenFile(fd: 40 + ++opened, name: 'a.jpg')]);
+    await t.sendPicked(await reopen(), reopen: reopen);
+    t.take(const CoreEvent('file_offered', data: {'file_name': 'a.jpg', 'file_size': 4}));
+    t.take(const CoreEvent('transfer_failed', data: {'error': 'x'}));
+    expect(t.canResend, isTrue);
+    await t.resend();
+    expect(core.calls.where((c) => c.action == 'send').map((c) => c.payload), [
+      {'items': [{'fd': 41, 'name': 'a.jpg'}]},
+      {'items': [{'fd': 42, 'name': 'a.jpg'}]},
+    ]);
+
+    await t.sendPicked(const Picked(files: [OpenFile(fd: 50, name: 'b.jpg')])); // the system picker
+    t.take(const CoreEvent('file_offered', data: {'file_name': 'b.jpg', 'file_size': 4}));
+    t.take(const CoreEvent('transfer_failed', data: {'error': 'x'}));
+    expect(t.canResend, isFalse);
   });
 
   test('the disk full and a file that failed are said', () async {

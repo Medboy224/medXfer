@@ -253,17 +253,39 @@ class Transfers extends ChangeNotifier {
   /// Sends files and folders, by path, to the device of the session.
   Future<void> send(List<String> paths) async {
     if (paths.isEmpty) return;
+    _again = () => send(paths);
     await _call('send', {'paths': paths});
   }
 
   /// Sends what the user picked: paths (desktops), or files open by descriptor (Android,
-  /// STO-16: the core owns them from the call on, and closes them).
-  Future<void> sendPicked(Picked picked) async {
+  /// STO-16: the core owns them from the call on, and closes them). Descriptors are not sent
+  /// twice: [reopen] opens the same files again for [resend], else there is none.
+  Future<void> sendPicked(Picked picked, {Future<Picked> Function()? reopen}) async {
     if (picked.paths.isNotEmpty) return send(picked.paths);
     if (picked.files.isEmpty) return;
+    _again = reopen == null ? null : () async => sendPicked(await reopen(), reopen: reopen);
     await _call('send', {
       'items': [for (final f in picked.files) f.toJson()],
     });
+  }
+
+  /// How to send the last send again, if it can be (WP-B.8).
+  Future<void> Function()? _again;
+
+  /// The transfer this device sent stopped half way and can be sent again: the receiver keeps
+  /// what it got, so it resumes there (bible §9.5).
+  bool get canResend {
+    final a = _active;
+    return _again != null && a != null && a.stage == Stage.done && a.outcome == Outcome.failed && a.direction == Direction.sent;
+  }
+
+  /// Sends the stopped transfer again (canResend).
+  Future<void> resend() async {
+    final again = _again;
+    if (!canResend || again == null) return;
+    _active = null;
+    notifyListeners();
+    await again();
   }
 
   Future<void> accept() async {

@@ -277,6 +277,7 @@
   "folderPickerTitle": "Choose a folder",
   "folderPickerUse": "Use this folder",
   "folderPickerEmpty": "No subfolder here.",
-  "noticeTransferStopped": "The transfer with {device} stopped ({error}). What was received is kept: sending again resumes it.",
-  "@noticeTransferStopped": {"placeholders": {"device": {"type": "String"}, "error": {"type": "String"}}}
+  "noticeTransferStopped": "The transfer with {device} stopped ({error}). What was received is kept: resuming it goes on from there.",
+  "@noticeTransferStopped": {"placeholders": {"device": {"type": "String"}, "error": {"type": "String"}}},
+  "resendTransfer": "Resume"
 }
