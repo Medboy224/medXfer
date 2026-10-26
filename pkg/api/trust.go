@@ -348,12 +348,17 @@ func (s *DaemonServer) startSession(ch *session.Channel, fp identity.Fingerprint
 			s.dropTransfers()
 		}
 	}
+	samePeer := s.trustPeer == fp
 	s.activeSession = ch
 	s.pairedDeviceName = name
 	s.trustTalk = pairing.NewTrustTalk(s.trust, s.identity.Fingerprint, identity.Peer{Fingerprint: fp, Alias: name, LastAddress: ip})
 	s.trustPeer = fp
 	s.trustOffered = time.Time{}
+	active := s.activeTransferID
 	s.mu.Unlock()
+	if samePeer {
+		s.checkTransfer(ch, active) // the session is back: is the transfer still there too?
+	}
 
 	var ids []string
 	if reqID != "" {

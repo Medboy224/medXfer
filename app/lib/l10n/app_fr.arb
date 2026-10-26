@@ -228,5 +228,6 @@
   "folderPickerUse": "Utiliser ce dossier",
   "folderPickerEmpty": "Aucun sous-dossier ici.",
   "noticeTransferStopped": "Le transfert avec {device} s'est arrêté ({error}). Ce qui a été reçu est gardé : le reprendre continue à partir de là.",
-  "resendTransfer": "Reprendre"
+  "resendTransfer": "Reprendre",
+  "connectionLostWaiting": "Connexion perdue avec {device} : en attente"
 }

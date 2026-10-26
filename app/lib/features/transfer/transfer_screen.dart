@@ -27,7 +27,15 @@ class TransferScreen extends StatelessWidget {
       listenable: t,
       builder: (context, _) {
         final a = t.active;
-        if (a == null) return const SizedBox.shrink(); // dismissed: the route is leaving
+        if (a == null) {
+          // Dismissed, the route is leaving; gone otherwise (a send refused), it leaves too,
+          // rather than a blank screen.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!context.mounted) return;
+            if (ModalRoute.of(context)?.isCurrent ?? false) Navigator.of(context).pop();
+          });
+          return const SizedBox.shrink();
+        }
         final title = a.direction == Direction.sent ? l.sendingTo(a.device) : l.receivingFrom(a.device);
         return PopScope(
           // Going back leaves the transfer running; the finished one is dismissed with it.
@@ -78,6 +86,8 @@ class _Header extends StatelessWidget {
         Outcome.rejected => l.outcomeRejected,
         _ => l.outcomeFailed,
       };
+    } else if (a.lost) {
+      line = l.connectionLostWaiting(a.device);
     } else if (a.paused) {
       line = l.pausedLabel;
     } else {

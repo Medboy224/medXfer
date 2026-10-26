@@ -279,5 +279,7 @@
   "folderPickerEmpty": "No subfolder here.",
   "noticeTransferStopped": "The transfer with {device} stopped ({error}). What was received is kept: resuming it goes on from there.",
   "@noticeTransferStopped": {"placeholders": {"device": {"type": "String"}, "error": {"type": "String"}}},
-  "resendTransfer": "Resume"
+  "resendTransfer": "Resume",
+  "connectionLostWaiting": "Connection with {device} lost: waiting for it",
+  "@connectionLostWaiting": {"placeholders": {"device": {"type": "String"}}}
 }

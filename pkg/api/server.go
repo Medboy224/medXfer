@@ -62,8 +62,12 @@ type DaemonServer struct {
 	isPaused           bool
 	currentBatchItems  []BatchFileInfo // the queue the dashboard shows
 	sessionGraceTimer  *time.Timer
-	isReconnecting     bool
-	httpPort           int
+	// sentCompletedID is the last transfer this device sent that was completed (completeSent).
+	sentCompletedID string
+	// completedTransferID is the last transfer this device received whole (answerCheck).
+	completedTransferID string
+	isReconnecting      bool
+	httpPort            int
 
 	authFailMu   sync.Mutex
 	lastAuthFail map[string]time.Time
@@ -125,6 +129,8 @@ type DaemonServer struct {
 
 	trackerMu         sync.Mutex
 	activeTracker     *TransferSessionTracker
+	trackerID         string // the transfer of activeTracker
+	closedTrackerID   string // the transfer whose measures were closed last (trackerFor)
 	lastSummaryReport *TransferSummaryReport
 }
 
@@ -1186,6 +1192,9 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 	case session.TypeFailed:
 		s.peerFailed(msg)
 
+	case session.TypeTransferCheck:
+		s.answerCheck(msg)
+
 	case session.TypeError: // never answered, so that two peers cannot ping-pong errors
 		s.Broadcast(NewEvent("log", map[string]string{
 			"level":   "WARN",
@@ -1222,16 +1231,28 @@ func (s *DaemonServer) StartTransferTracker(name string, totalFiles int, totalBy
 	return tracker
 }
 
-// RecordTransferSample records a live progress measurement
-func (s *DaemonServer) RecordTransferSample(stats engine.TransferStats, progressPercent float64, fallbackName string, totalFiles int, totalBytes int64) {
-	s.trackerMu.Lock()
-	if s.activeTracker == nil {
-		s.activeTracker = NewTransferSessionTracker(fallbackName, totalFiles, totalBytes)
+// RecordTransferSample records a live progress measurement of transfer id.
+func (s *DaemonServer) RecordTransferSample(id string, stats engine.TransferStats, progressPercent float64, fallbackName string, totalFiles int, totalBytes int64) {
+	tracker := s.trackerFor(id, fallbackName, totalFiles, totalBytes)
+	if tracker != nil {
+		tracker.RecordSample(stats, progressPercent)
 	}
-	tracker := s.activeTracker
-	s.trackerMu.Unlock()
+}
 
-	tracker.RecordSample(stats, progressPercent)
+// trackerFor is the measures of transfer id, created on its first measure; nil once they were
+// closed (FinishTransferTracker): a late progress of an ended transfer does not open new ones,
+// whose report would replace the real one (WP-B.8).
+func (s *DaemonServer) trackerFor(id, name string, totalFiles int, totalBytes int64) *TransferSessionTracker {
+	s.trackerMu.Lock()
+	defer s.trackerMu.Unlock()
+	if id != "" && id == s.closedTrackerID {
+		return nil
+	}
+	if s.activeTracker == nil {
+		s.activeTracker = NewTransferSessionTracker(name, totalFiles, totalBytes)
+		s.trackerID = id
+	}
+	return s.activeTracker
 }
 
 // liveStages is the active transfer's stage loads and limiting stage, if it has measures.
@@ -1247,14 +1268,10 @@ func (s *DaemonServer) liveStages() (map[string]float64, diag.Bottleneck) {
 
 // RecordTransferStage records the time of one stage of one chunk in the active telemetry
 // tracker (DEV-03), creating it on the first measure.
-func (s *DaemonServer) RecordTransferStage(name string, totalFiles int, totalBytes int64, stage string, parallel int, d time.Duration, bytes int64) {
-	s.trackerMu.Lock()
-	if s.activeTracker == nil {
-		s.activeTracker = NewTransferSessionTracker(name, totalFiles, totalBytes)
+func (s *DaemonServer) RecordTransferStage(id, name string, totalFiles int, totalBytes int64, stage string, parallel int, d time.Duration, bytes int64) {
+	if tracker := s.trackerFor(id, name, totalFiles, totalBytes); tracker != nil {
+		tracker.OnStage(stage, parallel, d, bytes)
 	}
-	tracker := s.activeTracker
-	s.trackerMu.Unlock()
-	tracker.OnStage(stage, parallel, d, bytes)
 }
 
 // RecordTransferRetry counts a chunk retry in the active telemetry tracker, if any.
@@ -1287,6 +1304,7 @@ func (s *DaemonServer) FinishTransferTracker(outcome string) *TransferSummaryRep
 	report := s.activeTracker.GenerateReport(diag.ReportOptions{})
 	s.lastSummaryReport = report
 	s.activeTracker = nil
+	s.closedTrackerID = s.trackerID
 	s.trackerMu.Unlock()
 
 	if _, err := diag.SaveReport(filepath.Join(s.dataDir, "reports"), report, maxSavedReports); err != nil {

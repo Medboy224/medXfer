@@ -172,7 +172,10 @@ void main() {
 
     t.take(const CoreEvent('file_offered', data: {'file_name': 'c.txt', 'file_size': 4}));
     t.take(const CoreEvent('transfer_accepted', data: {}));
+    // The link lost, the transfer waits for it; the core then says it failed (WP-B.8).
     t.take(const CoreEvent('disconnected', data: {'reason': 'connection timed out'}));
+    expect(t.active!.lost, isTrue);
+    t.take(const CoreEvent('transfer_failed', data: {'error': 'the receiver stopped asking for data'}));
     expect(t.active!.outcome, Outcome.failed);
     await _settle();
     expect(store.entries.map((e) => e.outcome), [Outcome.failed, Outcome.canceled, Outcome.rejected]);
@@ -240,6 +243,31 @@ void main() {
     t.take(const CoreEvent('file_offered', data: {'file_name': 'b.jpg', 'file_size': 4}));
     t.take(const CoreEvent('transfer_failed', data: {'error': 'x'}));
     expect(t.canResend, isFalse);
+  });
+
+  test('WP-B.8: the session lost, the transfer waits; a late progress does not bring back a finished one', () async {
+    final (_, t, store) = _model();
+    t.take(const CoreEvent('file_offered', data: {'file_name': 'big.bin', 'file_size': 100}));
+    t.take(const CoreEvent('transfer_accepted', data: {}));
+    t.take(const CoreEvent('reconnecting', data: {}));
+    expect((t.active!.stage, t.active!.lost), (Stage.running, true));
+    t.take(const CoreEvent('disconnected', data: {'reason': 'connection timed out'}));
+    expect((t.active!.stage, t.active!.lost), (Stage.running, true));
+    t.take(const CoreEvent('paired', data: {'device_name': 'PC'}));
+    expect(t.active!.lost, isFalse);
+
+    t.take(const CoreEvent('transfer_failed', data: {'error': 'x'}));
+    t.take(const CoreEvent('transfer_progress', data: {'batch_bytes': 52, 'batch_total_bytes': 100}));
+    expect((t.active!.stage, t.active!.outcome), (Stage.done, Outcome.failed));
+    await _settle();
+    expect(store.entries.single.outcome, Outcome.failed);
+    t.dismiss();
+
+    // Asked for, the end stops the transfer at once (the core drops it).
+    t.take(const CoreEvent('file_offered', data: {'file_name': 'b', 'file_size': 1}));
+    t.take(const CoreEvent('transfer_accepted', data: {}));
+    t.take(const CoreEvent('disconnected', data: {'reason': 'peer requested disconnect'}));
+    expect(t.active!.outcome, Outcome.failed);
   });
 
   test('the disk full and a file that failed are said', () async {
