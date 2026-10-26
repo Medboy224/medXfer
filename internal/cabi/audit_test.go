@@ -88,3 +88,22 @@ func TestNegativeTimeoutWaits(t *testing.T) {
 		t.Fatal("Stop did not wake a reader waiting without end")
 	}
 }
+
+// WP-B.8: a core that never ends its stop does not hold Stop, nor the app's window that waits
+// for it, beyond stopWait.
+func TestStopIsBounded(t *testing.T) {
+	decode(t, Start(config(t)))
+	release := make(chan struct{})
+	stopping = func() { <-release }
+	t.Cleanup(func() {
+		close(release)
+		stopping = func() {}
+	})
+	stopWait = 200 * time.Millisecond
+	t.Cleanup(func() { stopWait = 2 * time.Second })
+	start := time.Now()
+	Stop()
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Stop took %v with a core that does not stop", d)
+	}
+}
