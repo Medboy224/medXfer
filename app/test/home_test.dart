@@ -1,5 +1,8 @@
 // The home screen of the mockups, on the fake core: the tabs, the Connect button, and the
 // core's line, which says the device's name once the core has started.
+import 'dart:async';
+import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:medxfer/app.dart';
@@ -19,8 +22,21 @@ class _TestFolders implements Folders {
   Future<String> downloadDir() async => '/tmp/medxfer-test/out';
 }
 
-Future<(FakeCore, AppState)> _app(WidgetTester tester, {Locale locale = const Locale('fr'), AppSettings? settings}) async {
-  final core = FakeCore()
+/// A core whose stop is seen, and may hang.
+class _StopCore extends FakeCore {
+  bool stopAsked = false;
+  Completer<void>? hold;
+
+  @override
+  Future<void> stop() async {
+    stopAsked = true;
+    await hold?.future;
+    await super.stop();
+  }
+}
+
+Future<(FakeCore, AppState)> _app(WidgetTester tester, {Locale locale = const Locale('fr'), AppSettings? settings, FakeCore? fake}) async {
+  final core = (fake ?? FakeCore())
     ..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy A57'})]));
   final state = AppState(core: core, folders: const _TestFolders(), history: MemoryHistoryStore());
   tester.platformDispatcher.localesTestValue = [locale];
@@ -49,6 +65,20 @@ void main() {
     final bar = tester.getSize(find.byKey(const Key('bottom-bar')));
     expect(bar.height, lessThan(120), reason: 'the bottom bar covers the screen');
     expect(tester.getRect(find.text('Apps')).top, lessThan(tester.getRect(find.byKey(const Key('bottom-bar'))).top));
+  });
+
+  testWidgets('closing the window stops the core first: else its reader keeps the process alive', (tester) async {
+    final core = _StopCore();
+    await _app(tester, fake: core);
+    expect(await tester.binding.handleRequestAppExit(), AppExitResponse.exit);
+    expect(core.stopAsked, isTrue);
+  });
+
+  testWidgets('a core that does not stop does not keep the window open', (tester) async {
+    final core = _StopCore()..hold = Completer<void>();
+    final (_, state) = await _app(tester, fake: core);
+    await tester.runAsync(() => state.shutdown(wait: const Duration(milliseconds: 50)));
+    expect(core.stopAsked, isTrue);
   });
 
   testWidgets('English, by the system language', (tester) async {
