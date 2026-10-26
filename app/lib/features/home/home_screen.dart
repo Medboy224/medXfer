@@ -383,8 +383,8 @@ class _Basket extends StatelessWidget {
       case ByPath(:final paths):
         await state.transfers.send(paths);
       case ByDescriptor(:final files):
-        final open = await state.library.open(files);
-        await state.transfers.sendPicked(fp.Picked(files: open));
+        Future<fp.Picked> openThem() async => fp.Picked(files: await state.library.open(files));
+        await state.transfers.sendPicked(await openThem(), reopen: openThem);
     }
     state.selection.clear();
   }

@@ -167,6 +167,32 @@ void main() {
     expect(find.text('Refusé'), findsOneWidget);
   });
 
+  testWidgets('WP-B.8: a send stopped half way is resumed from its screen, the same files again', (tester) async {
+    final core = FakeCore()
+      ..on('send', (p) => const FakeAnswer(broadcast: [CoreEvent('file_offered', data: {'file_name': 'film.mkv', 'file_size': 4096})]));
+    await _app(tester, core, picker: const _Picker([r'C:\Users\a\film.mkv']));
+    core.emit(const CoreEvent('paired', data: {'ip': '192.168.1.30', 'device_name': 'Galaxy'}));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('send-files')));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    core.emit(const CoreEvent('transfer_accepted', data: {}));
+    core.emit(const CoreEvent('transfer_failed', data: {'error': 'no data connection', 'by': 'peer'}));
+    await tester.pumpAndSettle();
+    expect(find.text('Transfert interrompu'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('transfer-resend')));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(core.calls.where((c) => c.action == 'send').map((c) => c.payload), [
+      {'paths': [r'C:\Users\a\film.mkv']},
+      {'paths': [r'C:\Users\a\film.mkv']},
+    ]);
+    expect(find.text("En attente de l'accord de Galaxy…"), findsOneWidget);
+  });
+
   testWidgets('a running transfer left with back stays closed; the bottom bar brings it back', (tester) async {
     final core = FakeCore();
     await _app(tester, core);

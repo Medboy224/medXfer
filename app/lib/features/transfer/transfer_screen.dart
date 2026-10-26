@@ -46,9 +46,10 @@ class TransferScreen extends StatelessWidget {
                     itemBuilder: (context, i) => _ItemRow(item: a.items[i], transfer: a),
                   ),
                 ),
-                _Footer(transfer: a, canOpen: state.folderOpener.supported),
               ],
             ),
+            // In the bottom bar, the notices float above the buttons, not over them.
+            bottomNavigationBar: _Footer(transfer: a, canOpen: state.folderOpener.supported),
           ),
         );
       },
@@ -228,6 +229,13 @@ class _Footer extends StatelessWidget {
                   onPressed: () async => state.folderOpener.open(t.receiveDir ?? await state.folders.downloadDir()),
                   icon: const Icon(Icons.folder_open_rounded),
                   label: Text(l.openFolder),
+                ),
+              if (t.canResend)
+                FilledButton.tonalIcon(
+                  key: const Key('transfer-resend'),
+                  onPressed: () => unawaited(t.resend()),
+                  icon: const Icon(Icons.replay_rounded),
+                  label: Text(l.resendTransfer),
                 ),
               FilledButton(key: const Key('transfer-close'), onPressed: () => Navigator.of(context).maybePop(), child: Text(l.close)),
             ],
