@@ -182,6 +182,17 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Transfert interrompu'), findsOneWidget);
 
+    // The session not back yet: refused, the stopped transfer stays, with the reason.
+    core.on('send', (p) => const FakeAnswer(ok: false, replies: [CoreEvent('action_error', data: {'error': 'Not paired with any device.'})]));
+    await tester.tap(find.byKey(const Key('transfer-resend')));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.text('Transfert interrompu'), findsOneWidget);
+    expect(find.byKey(const Key('transfer-resend')), findsOneWidget);
+
+    // Back: sent again, the new offer takes its place.
+    core.on('send', (p) => const FakeAnswer(broadcast: [CoreEvent('file_offered', data: {'file_name': 'film.mkv', 'file_size': 4096})]));
     await tester.tap(find.byKey(const Key('transfer-resend')));
     for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 100));
@@ -189,8 +200,28 @@ void main() {
     expect(core.calls.where((c) => c.action == 'send').map((c) => c.payload), [
       {'paths': [r'C:\Users\a\film.mkv']},
       {'paths': [r'C:\Users\a\film.mkv']},
+      {'paths': [r'C:\Users\a\film.mkv']},
     ]);
     expect(find.text("En attente de l'accord de Galaxy…"), findsOneWidget);
+  });
+
+  testWidgets('WP-B.8: a transfer gone while its screen is open closes the screen, not a blank one', (tester) async {
+    final core = FakeCore()
+      ..on('send', (p) => const FakeAnswer(broadcast: [CoreEvent('file_offered', data: {'file_name': 'film.mkv', 'file_size': 4096})]));
+    await _app(tester, core, picker: const _Picker([r'C:\Users\a\film.mkv']));
+    core.emit(const CoreEvent('paired', data: {'ip': '192.168.1.30', 'device_name': 'Galaxy'}));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('send-files')));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.text('Envoi à Galaxy'), findsOneWidget);
+    // The offer refused by the core, later, as an error of the send call: the transfer is gone.
+    final sendId = 'ui-${core.calls.indexWhere((c) => c.action == 'send') + 1}';
+    core.emit(CoreEvent('action_error', id: sendId, data: const {'error': 'Not paired with any device.'}));
+    await tester.pumpAndSettle();
+    expect(find.text('Envoi à Galaxy'), findsNothing);
+    expect(find.byKey(const Key('bottom-bar')), findsOneWidget);
   });
 
   testWidgets('WP-B.8: the session lost during a transfer, Connect is there next to it', (tester) async {

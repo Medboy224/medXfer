@@ -519,6 +519,9 @@ func (s *DaemonServer) serveAccepted(msg session.Message) {
 		// receiver's "complete", a cancel, the peer's failure) ended them first, with the reason.
 		if err == nil && ev.receiverDone() {
 			s.completeSent(o.offer.TransferID)
+			// A receiver that canceled sends DONE too: the transfer, no longer active, was
+			// not completed, and late progress may have opened measures again.
+			s.FinishTransferTracker(diag.OutcomeCanceled)
 			return
 		}
 		if err == nil && ev.gaveUp() {

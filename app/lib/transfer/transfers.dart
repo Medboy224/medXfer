@@ -278,21 +278,29 @@ class Transfers extends ChangeNotifier {
 
   /// How to send the last send again, if it can be (WP-B.8).
   Future<void> Function()? _again;
+  bool _resending = false;
 
   /// The transfer this device sent stopped half way and can be sent again: the receiver keeps
   /// what it got, so it resumes there (bible §9.5).
   bool get canResend {
     final a = _active;
-    return _again != null && a != null && a.stage == Stage.done && a.outcome == Outcome.failed && a.direction == Direction.sent;
+    return !_resending && _again != null && a != null && a.stage == Stage.done && a.outcome == Outcome.failed && a.direction == Direction.sent;
   }
 
-  /// Sends the stopped transfer again (canResend).
+  /// Sends the stopped transfer again (canResend). The stopped one stays on screen until the
+  /// new offer takes its place: refused (no session yet), it is still there, with the reason.
+  /// Emptied first, its screen went blank (WP-B.8, on the real PC).
   Future<void> resend() async {
     final again = _again;
     if (!canResend || again == null) return;
-    _active = null;
+    _resending = true;
     notifyListeners();
-    await again();
+    try {
+      await again();
+    } finally {
+      _resending = false;
+      notifyListeners();
+    }
   }
 
   Future<void> accept() async {
