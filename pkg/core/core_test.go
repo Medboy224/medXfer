@@ -181,6 +181,41 @@ func TestStopWakesTheReader(t *testing.T) {
 	}
 }
 
+// WP-B.8: a server slow to stop does not keep the readers waiting. They are woken before it
+// stops, else the app's reader kept the process alive after its window closed.
+func TestStopWakesTheReaderBeforeTheServerStops(t *testing.T) {
+	c := newCore(t, "Solo")
+	for {
+		if _, ok := c.NextEvent(0); !ok {
+			break
+		}
+	}
+	release := make(chan struct{})
+	serverStopping = func() { <-release }
+	t.Cleanup(func() { serverStopping = func() {} })
+	woken := make(chan struct{})
+	go func() {
+		c.NextEvent(-1)
+		close(woken)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	stopped := make(chan struct{})
+	go func() {
+		c.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-woken:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reader waited for the server to stop")
+	}
+	if !c.Stopped() {
+		t.Fatal("Stopped is false once Stop has begun")
+	}
+	close(release)
+	<-stopped // before the cleanup puts serverStopping back
+}
+
 // Two cores keep their data apart (D2): each has its own key.
 func TestCoresKeepTheirDataApart(t *testing.T) {
 	a, b := newCore(t, "A"), newCore(t, "B")

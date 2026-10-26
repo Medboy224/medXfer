@@ -135,7 +135,13 @@ func TestPauseStopsBothBarsOnTheSameFigure(t *testing.T) {
 		var b int64 = -1
 		end := time.Now().Add(d)
 		for {
-			e, ok := n.TryWaitFor(progress, time.Until(end))
+			// Not TryWaitFor with what is left once it is 0 or less: that is its default
+			// timeout, and the progress events that keep coming kept this loop going (#194).
+			left := time.Until(end)
+			if left <= 0 {
+				return b
+			}
+			e, ok := n.TryWaitFor(progress, left)
 			if !ok {
 				return b
 			}

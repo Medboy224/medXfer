@@ -78,7 +78,7 @@ func NextEvent(timeout time.Duration) (event string, ok bool) {
 	}
 	e, ok := c.NextEvent(timeout)
 	if !ok {
-		if current() == nil { // woken by Stop
+		if c.Stopped() { // woken by Stop, which may still hold the lock: not current()
 			return StoppedEvent, true
 		}
 		return "", false
@@ -90,23 +90,39 @@ func NextEvent(timeout time.Duration) (event string, ok bool) {
 	return string(b), true
 }
 
-// Stop stops the core; a later Start starts a fresh one. The lock is held until the core has
-// stopped: a Start meanwhile waits, so two cores never run at once (audit 12, #156). Readers
-// woken by the stop wait for it too, then get StoppedEvent.
+// Stop stops the core; a later Start starts a fresh one. The readers get StoppedEvent at once.
+// The lock is held until the core has stopped: a Start meanwhile waits, so two cores never run
+// at once (audit 12, #156). But at most stopWait: the app's window waits for this call to close,
+// and a stop that never ended kept the process alive without a window (WP-B.8). A core still
+// stopping then is left to end alone, or with the process.
 func Stop() {
 	defer func() { _ = recover() }() // B5: nothing crosses into C
 	lib.mu.Lock()
 	defer lib.mu.Unlock()
 	c := lib.core
 	lib.core = nil
-	if c != nil {
-		stopping()
+	if c == nil {
+		return
+	}
+	done := make(chan struct{})
+	hook := stopping // read here: a test may change it once this call has returned
+	go func() {
+		defer close(done)
+		defer func() { _ = recover() }() // B5, and a panic here would end the process
+		hook()
 		c.Stop()
+	}()
+	select {
+	case <-done:
+	case <-time.After(stopWait):
 	}
 }
 
 // stopping runs just before a core stops; tests slow it down.
 var stopping = func() {}
+
+// stopWait bounds Stop.
+var stopWait = 2 * time.Second
 
 // Stats is the event queue of the running core (B11), in JSON.
 func Stats() (out string) {
