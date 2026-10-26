@@ -204,6 +204,22 @@ void main() {
     expect(t.active!.paused, isFalse);
   });
 
+  test('WP-B.8: the transfer failed here or there, the session alive: it ends, and the user is told', () async {
+    final (_, t, store) = _model();
+    final notices = <TransferNotice>[];
+    t.notices.listen(notices.add);
+    t.take(const CoreEvent('file_offered', data: {'file_name': 'big.bin', 'file_size': 1 << 30}));
+    t.take(const CoreEvent('transfer_accepted', data: {}));
+    t.take(const CoreEvent('transfer_failed', data: {'transfer_id': 'x', 'error': 'no data connection', 'by': 'peer'}));
+    expect(t.active!.stage, Stage.done);
+    expect(t.active!.outcome, Outcome.failed);
+    // A late one changes nothing.
+    t.take(const CoreEvent('transfer_failed', data: {'error': 'again'}));
+    await _settle();
+    expect(notices.whereType<TransferStopped>().map((n) => n.error), ['no data connection']);
+    expect(store.entries.single.outcome, Outcome.failed);
+  });
+
   test('the disk full and a file that failed are said', () async {
     final (_, t, _) = _model();
     final notices = <TransferNotice>[];

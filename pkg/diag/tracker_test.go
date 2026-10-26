@@ -92,3 +92,28 @@ func TestTransferSessionTracker(t *testing.T) {
 
 	t.Logf("Generated Diagnostic Report:\n%s", report.FormattedReport)
 }
+
+// WP-B.8: the report of a transfer that failed says so, with what this side had, and measures
+// its speed on that, not on the bytes offered.
+func TestFailedTransferReport(t *testing.T) {
+	tr := NewTransferSessionTracker("x", 1, 1000<<20)
+	tr.StartTime = time.Now().Add(-10 * time.Second)
+	tr.RecordSample(engine.TransferStats{BytesTransferred: 100 << 20, SpeedMBps: 10}, 10)
+	tr.Finish(OutcomeFailed)
+	r := tr.GenerateReport(ReportOptions{})
+	if r.Outcome != OutcomeFailed || r.DoneBytes != 100<<20 {
+		t.Fatalf("outcome %q, done %d: want failed with 100 MiB", r.Outcome, r.DoneBytes)
+	}
+	if r.AvgSpeedMBps < 9 || r.AvgSpeedMBps > 11 {
+		t.Fatalf("average %.1f MB/s, want about 10 (100 MiB in 10 s)", r.AvgSpeedMBps)
+	}
+	if text := FormatText(r); !strings.Contains(text, "Outcome: FAILED, 100.00 MB of 1000.00 MB") {
+		t.Fatalf("the text does not say it failed:\n%s", text)
+	}
+
+	done := NewTransferSessionTracker("y", 1, 1000<<20)
+	done.Finish(OutcomeCompleted)
+	if r := done.GenerateReport(ReportOptions{}); r.DoneBytes != 0 || strings.Contains(FormatText(r), "Outcome") {
+		t.Fatalf("a completed transfer: done %d, text %q", r.DoneBytes, FormatText(r))
+	}
+}

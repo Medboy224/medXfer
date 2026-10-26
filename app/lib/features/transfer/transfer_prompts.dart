@@ -87,6 +87,7 @@ class _TransferPromptsState extends State<TransferPrompts> {
       DiskFull() => l.noticeDiskFull,
       ReceiveFolderGone(:final folder, :final used) => l.noticeReceiveFolderGone(folder, used),
       FileError(:final file, :final error) => l.noticeFileError(file, error),
+      TransferStopped(:final device, :final error) => l.noticeTransferStopped(device, error),
     };
     widget.messenger.currentState
       ?..clearSnackBars()

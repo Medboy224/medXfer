@@ -187,6 +187,14 @@ class DiskFull extends TransferNotice {
   final String folder;
 }
 
+/// The transfer with [device] stopped, here or there ([error]): what was received is kept,
+/// and sending again resumes it (bible §9.5). Before WP-B.8 neither side was told.
+class TransferStopped extends TransferNotice {
+  const TransferStopped(this.device, this.error);
+  final String device;
+  final String error;
+}
+
 /// One file could not be sent or written; the others go on.
 class FileError extends TransferNotice {
   const FileError(this.file, this.error);
@@ -398,6 +406,10 @@ class Transfers extends ChangeNotifier {
       case 'transfer_canceled':
         if (a == null || a.stage == Stage.done) return;
         _finish(a, Outcome.canceled);
+      case 'transfer_failed': // the whole transfer, on either side; the session lives on
+        if (a == null || a.stage == Stage.done) return;
+        _notices.add(TransferStopped(a.device, (m['error'] as String?) ?? ''));
+        _finish(a, Outcome.failed);
       case 'transfer_complete':
         if (a == null || a.stage == Stage.done) return;
         final items = _merge(a.items, _items(m['items']));
