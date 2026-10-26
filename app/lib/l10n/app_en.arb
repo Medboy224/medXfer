@@ -276,5 +276,7 @@
   "@noticeReceiveFolderGone": {"placeholders": {"folder": {"type": "String"}, "used": {"type": "String"}}},
   "folderPickerTitle": "Choose a folder",
   "folderPickerUse": "Use this folder",
-  "folderPickerEmpty": "No subfolder here."
+  "folderPickerEmpty": "No subfolder here.",
+  "noticeTransferStopped": "The transfer with {device} stopped ({error}). What was received is kept: sending again resumes it.",
+  "@noticeTransferStopped": {"placeholders": {"device": {"type": "String"}, "error": {"type": "String"}}}
 }

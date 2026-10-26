@@ -35,6 +35,8 @@ type TransferSessionTracker struct {
 	bottleneckCounts map[string]int
 	retries          int
 	stages           *Stages // per-chunk measures (DEV-03)
+	doneBytes        int64   // the last progress: what this side had when the transfer ended
+	outcome          string  // how it ended (Outcome*), set by Finish
 
 	// 4 Quartile buckets (0: 0-25%, 1: 25-50%, 2: 50-75%, 3: 75-100%)
 	phaseSpeedSum       [4]float64
@@ -80,6 +82,10 @@ func (t *TransferSessionTracker) Live() (map[string]float64, Bottleneck) {
 func (t *TransferSessionTracker) RecordSample(stats engine.TransferStats, progressPercent float64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	if stats.BytesTransferred > t.doneBytes {
+		t.doneBytes = stats.BytesTransferred
+	}
 
 	// Track speed
 	if stats.SpeedMBps > 0 {
@@ -134,6 +140,18 @@ func (t *TransferSessionTracker) RecordSample(stats engine.TransferStats, progre
 	}
 }
 
+// Finish ends the transfer the way outcome says (OutcomeCompleted, OutcomeFailed,
+// OutcomeCanceled): its report says so, and a transfer that did not complete has its speed
+// measured on what this side had, not on what was offered (WP-B.8).
+func (t *TransferSessionTracker) Finish(outcome string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.EndTime.IsZero() {
+		t.EndTime = time.Now()
+	}
+	t.outcome = outcome
+}
+
 // RecordRetry counts a chunk that had to be requested again.
 func (t *TransferSessionTracker) RecordRetry() {
 	t.mu.Lock()
@@ -157,9 +175,13 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 		durSec = 0.1
 	}
 
+	moved := t.TotalBytes
+	if t.outcome != "" && t.outcome != OutcomeCompleted {
+		moved = t.doneBytes
+	}
 	avgSpeed := 0.0
-	if t.TotalBytes > 0 && durSec > 0 {
-		avgSpeed = (float64(t.TotalBytes) / (1024 * 1024)) / durSec
+	if moved > 0 && durSec > 0 {
+		avgSpeed = (float64(moved) / (1024 * 1024)) / durSec
 	} else if t.samplesCount > 0 {
 		avgSpeed = t.sumSpeed / float64(t.samplesCount)
 	}
@@ -258,6 +280,10 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 		r.TransferName = t.TransferName
 	}
 	r.TotalBytes = t.TotalBytes
+	r.Outcome = t.outcome
+	if t.outcome != "" && t.outcome != OutcomeCompleted {
+		r.DoneBytes = t.doneBytes
+	}
 	r.TotalFiles = t.TotalFiles
 	r.DurationSec = math.Round(durSec*10) / 10
 	r.AvgSpeedMBps = math.Round(avgSpeed*10) / 10

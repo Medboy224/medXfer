@@ -19,7 +19,7 @@ func TestDaemonSavesReportWithoutFileName(t *testing.T) {
 	s := NewDaemonServer(0, t.TempDir(), "ReportNode")
 	s.StartTransferTracker("Bulletin-salaire-mars.pdf", 1, 4096)
 	s.RecordTransferRetry()
-	rep := s.FinishTransferTracker()
+	rep := s.FinishTransferTracker(diag.OutcomeCompleted)
 	if rep == nil || rep.Retries != 1 {
 		t.Fatalf("FinishTransferTracker = %+v; want a report with 1 retry", rep)
 	}
@@ -52,7 +52,7 @@ func TestLastReportSurvivesARestart(t *testing.T) {
 	s.StartTransferTracker("a.bin", 1, 4096)
 	s.RecordTransferRetry()
 	s.RecordTransferRetry()
-	s.FinishTransferTracker()
+	s.FinishTransferTracker(diag.OutcomeCompleted)
 
 	rep := NewDaemonServer(0, t.TempDir(), "After").GetLastSummaryReport()
 	if rep == nil || rep.Retries != 2 || rep.FormattedReport == "" {

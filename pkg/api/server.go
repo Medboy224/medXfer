@@ -1183,6 +1183,9 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 	case "complete":
 		s.peerCompleted(msg)
 
+	case session.TypeFailed:
+		s.peerFailed(msg)
+
 	case session.TypeError: // never answered, so that two peers cannot ping-pong errors
 		s.Broadcast(NewEvent("log", map[string]string{
 			"level":   "WARN",
@@ -1274,12 +1277,13 @@ func ReportsDir() string {
 
 // FinishTransferTracker compiles the final diagnostic summary report and saves it in
 // ReportsDir. The report carries no file name, IP or host name (DEV-05).
-func (s *DaemonServer) FinishTransferTracker() *TransferSummaryReport {
+func (s *DaemonServer) FinishTransferTracker(outcome string) *TransferSummaryReport {
 	s.trackerMu.Lock()
 	if s.activeTracker == nil {
 		defer s.trackerMu.Unlock()
 		return s.lastSummaryReport
 	}
+	s.activeTracker.Finish(outcome)
 	report := s.activeTracker.GenerateReport(diag.ReportOptions{})
 	s.lastSummaryReport = report
 	s.activeTracker = nil
@@ -1316,7 +1320,7 @@ func (s *DaemonServer) GetLastSummaryReport() *TransferSummaryReport {
 
 // broadcastTransferComplete completes telemetry tracker and broadcasts transfer_complete with report
 func (s *DaemonServer) broadcastTransferComplete(extra map[string]interface{}) {
-	rep := s.FinishTransferTracker()
+	rep := s.FinishTransferTracker(diag.OutcomeCompleted)
 	payload := make(map[string]interface{})
 	for k, v := range extra {
 		payload[k] = v

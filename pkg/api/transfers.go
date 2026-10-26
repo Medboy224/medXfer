@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/diag"
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/session"
@@ -425,11 +426,14 @@ func (s *DaemonServer) receive(sess *session.Channel, m *session.Message, saveDi
 		canceled := ctx.Err() != nil
 		s.endTransfer(offer.TransferID)
 		if err != nil {
-			// Its measures end with it: the next transfer starts its own (WP-B.5).
-			s.FinishTransferTracker()
-			if !canceled {
-				s.Broadcast(NewEvent("transfer_error", map[string]string{"file": offerName(offer), "error": err.Error()}))
+			// Its measures end with it: the next transfer starts its own (WP-B.5). Stopped by
+			// a cancel or by the peer's failure, they have ended already, with the reason.
+			if canceled {
+				s.FinishTransferTracker(diag.OutcomeCanceled)
+				return
 			}
+			s.FinishTransferTracker(diag.OutcomeFailed)
+			s.transferFailed(offer, err)
 			return
 		}
 		failed := 0
@@ -493,7 +497,7 @@ func (s *DaemonServer) serveAccepted(msg session.Message) {
 			sender, err = transfer.NewSender(o.offer, o.files)
 		}
 		if err != nil {
-			s.Broadcast(NewEvent("transfer_error", map[string]string{"file": offerName(o.offer), "error": err.Error()}))
+			s.transferFailed(o.offer, err)
 			return
 		}
 		ev := newDaemonEvents(s, o.offer, true, cancel)
@@ -508,13 +512,50 @@ func (s *DaemonServer) serveAccepted(msg session.Message) {
 			s.outEvents = nil
 		}
 		s.mu.Unlock()
-		// Its measures end with it, stopped, failed or done (then the receiver's "complete"
-		// finds the report made): the next transfer starts its own.
-		s.FinishTransferTracker()
+		// Its measures end with it: the next transfer starts its own. What stopped it (the
+		// receiver's "complete", a cancel, the peer's failure) ended them first, with the reason.
 		if err != nil && ctx.Err() == nil {
-			s.Broadcast(NewEvent("transfer_error", map[string]string{"file": offerName(o.offer), "error": err.Error()}))
+			s.FinishTransferTracker(diag.OutcomeFailed)
+			s.transferFailed(o.offer, err)
+			return
 		}
+		s.FinishTransferTracker(diag.OutcomeCanceled)
 	}()
+}
+
+// transferFailed tells the app (transfer_failed) and the peer (session "failed") that the
+// transfer failed on this side. Before, only this side's app knew: the peer waited for a
+// transfer that was over, both screens "in progress" (WP-B.8).
+func (s *DaemonServer) transferFailed(offer protocol.Offer, err error) {
+	s.mu.RLock()
+	sess := s.activeSession
+	s.mu.RUnlock()
+	if sess != nil {
+		_ = sess.Send(session.Message{Type: session.TypeFailed, TransferID: offer.TransferID, Error: err.Error()})
+	}
+	s.Broadcast(NewEvent("transfer_failed", map[string]string{
+		"transfer_id": offer.TransferID, "file": offerName(offer), "error": err.Error(), "by": "self",
+	}))
+}
+
+// peerFailed ends this side of a transfer that failed on the peer's.
+func (s *DaemonServer) peerFailed(msg session.Message) {
+	s.mu.Lock()
+	if s.activeTransferID == "" || (msg.TransferID != "" && msg.TransferID != s.activeTransferID) {
+		s.mu.Unlock()
+		return // over already, or another one
+	}
+	id := s.activeTransferID
+	s.FinishTransferTracker(diag.OutcomeFailed) // before the cancel ends the run (see serveAccepted)
+	if s.transferCancel != nil {
+		s.transferCancel()
+		s.transferCancel = nil
+	}
+	s.activeReceiver = nil
+	s.activeTransferID = ""
+	s.isPaused = false
+	s.mu.Unlock()
+	s.Broadcast(NewEvent("transfer_failed", map[string]string{"transfer_id": id, "error": msg.Error, "by": "peer"}))
 }
 
 // peerCompleted ends this side of a transfer the receiver has finished.
@@ -529,6 +570,7 @@ func (s *DaemonServer) peerCompleted(msg session.Message) {
 	if msg.TransferID != "" && msg.TransferID == s.endedTransferID {
 		s.endedTransferID = ""
 	}
+	s.FinishTransferTracker(diag.OutcomeCompleted) // before the cancel ends the run (see serveAccepted)
 	if s.transferCancel != nil {
 		s.transferCancel()
 		s.transferCancel = nil
@@ -651,6 +693,7 @@ func (s *DaemonServer) cancelTransfer(fromPeer bool, reqID string) {
 	s.mu.Lock()
 	s.isPaused = false
 	if s.transferCancel != nil {
+		s.FinishTransferTracker(diag.OutcomeCanceled) // before the cancel ends the run
 		s.transferCancel()
 		s.transferCancel = nil
 	}

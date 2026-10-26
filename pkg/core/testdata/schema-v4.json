@@ -75,6 +75,7 @@
     "transfer_canceled",
     "transfer_complete",
     "transfer_error",
+    "transfer_failed",
     "transfer_paused",
     "transfer_progress",
     "transfer_rejected",

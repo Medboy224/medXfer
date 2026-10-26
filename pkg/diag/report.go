@@ -41,8 +41,12 @@ type Report struct {
 	OS            string    `json:"os"`
 	Arch          string    `json:"arch"`
 
-	TransferName      string        `json:"transfer_name,omitempty"` // only with ReportOptions.IncludeNames
-	TotalBytes        int64         `json:"total_bytes"`
+	TransferName string `json:"transfer_name,omitempty"` // only with ReportOptions.IncludeNames
+	TotalBytes   int64  `json:"total_bytes"`
+	// Outcome is how the transfer ended (Outcome*); absent from older reports, which were all of
+	// completed transfers. DoneBytes is what this side had when one that did not complete ended.
+	Outcome           string        `json:"outcome,omitempty"`
+	DoneBytes         int64         `json:"done_bytes,omitempty"`
 	TotalFiles        int           `json:"total_files"`
 	DurationSec       float64       `json:"duration_sec"`
 	AvgSpeedMBps      float64       `json:"avg_speed_mbps"`
@@ -61,6 +65,13 @@ type Report struct {
 	FormattedReport string                `json:"formatted_report"` // FormatText of this report, for the dashboard
 }
 
+// How a transfer ended (Report.Outcome).
+const (
+	OutcomeCompleted = "completed"
+	OutcomeFailed    = "failed"
+	OutcomeCanceled  = "canceled"
+)
+
 // FormatText renders the report as the clipboard-ready text shown by the dashboard and by
 // `xfer report show`.
 func FormatText(r *Report) string {
@@ -73,6 +84,9 @@ func FormatText(r *Report) string {
 		sb.WriteString(fmt.Sprintf("Transfer: %s (%d files, %s)\n", r.TransferName, r.TotalFiles, FormatBytes(r.TotalBytes)))
 	} else {
 		sb.WriteString(fmt.Sprintf("Transfer: %d files, %s\n", r.TotalFiles, FormatBytes(r.TotalBytes)))
+	}
+	if r.Outcome != "" && r.Outcome != OutcomeCompleted {
+		sb.WriteString(fmt.Sprintf("Outcome: %s, %s of %s\n", strings.ToUpper(r.Outcome), FormatBytes(r.DoneBytes), FormatBytes(r.TotalBytes)))
 	}
 	sb.WriteString(fmt.Sprintf("Duration: %02dm %02ds | Avg Speed: %.1f MB/s | Peak: %.1f MB/s | Min: %.1f MB/s\n",
 		durMinutes, durRemainderSec, r.AvgSpeedMBps, r.PeakSpeedMBps, r.MinSpeedMBps))

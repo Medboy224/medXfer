@@ -101,6 +101,11 @@ type ItemProgress struct {
 	Bytes int64 `json:"bytes"`
 }
 
+// TypeFailed tells the peer that the transfer TransferID failed on this side, and why
+// (Error): it ends its side too instead of waiting for it (WP-B.8). A peer that does not know
+// it answers unsupported and keeps the old behaviour.
+const TypeFailed = "failed"
+
 // TypeError is the message that answers a message the peer cannot handle; its Code says why.
 const TypeError = "error"
 
