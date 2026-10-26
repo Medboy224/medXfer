@@ -199,7 +199,11 @@ func TestStopWakesTheReaderBeforeTheServerStops(t *testing.T) {
 		close(woken)
 	}()
 	time.Sleep(50 * time.Millisecond)
-	go c.Stop()
+	stopped := make(chan struct{})
+	go func() {
+		c.Stop()
+		close(stopped)
+	}()
 	select {
 	case <-woken:
 	case <-time.After(5 * time.Second):
@@ -209,6 +213,7 @@ func TestStopWakesTheReaderBeforeTheServerStops(t *testing.T) {
 		t.Fatal("Stopped is false once Stop has begun")
 	}
 	close(release)
+	<-stopped // before the cleanup puts serverStopping back
 }
 
 // Two cores keep their data apart (D2): each has its own key.

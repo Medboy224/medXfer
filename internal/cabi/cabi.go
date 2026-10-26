@@ -105,10 +105,11 @@ func Stop() {
 		return
 	}
 	done := make(chan struct{})
+	hook := stopping // read here: a test may change it once this call has returned
 	go func() {
 		defer close(done)
 		defer func() { _ = recover() }() // B5, and a panic here would end the process
-		stopping()
+		hook()
 		c.Stop()
 	}()
 	select {
