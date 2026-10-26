@@ -78,6 +78,8 @@ class _Header extends StatelessWidget {
         Outcome.rejected => l.outcomeRejected,
         _ => l.outcomeFailed,
       };
+    } else if (a.lost) {
+      line = l.connectionLostWaiting(a.device);
     } else if (a.paused) {
       line = l.pausedLabel;
     } else {

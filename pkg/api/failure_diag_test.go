@@ -108,3 +108,74 @@ func TestPeerFailureEndsThisSide(t *testing.T) {
 	pair.Receiver.Request("cancel", nil)
 	pair.Receiver.WaitEvent("transfer_canceled", 10*time.Second)
 }
+
+// stopReceiving ends the receiver's run here only, as a receiver gone or whose "failed" was
+// lost: nothing goes to the sender.
+func stopReceiving(t *testing.T, recvServer *DaemonServer) {
+	t.Helper()
+	recvServer.mu.Lock()
+	stop := recvServer.transferCancel
+	recvServer.transferCancel = nil
+	recvServer.mu.Unlock()
+	stop()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		recvServer.mu.RLock()
+		active := recvServer.activeTransferID
+		recvServer.mu.RUnlock()
+		if active == "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the receiver's run did not end")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// WP-B.8, found on the real devices: the receiver gave up during a long cut, and its "failed"
+// went into a half-open session. With no data connection for senderIdleLimit, outside a pause,
+// the sender gives up too, and says so.
+func TestSenderGivesUpWhenTheReceiverIsGone(t *testing.T) {
+	limit := senderIdleLimit
+	senderIdleLimit = 2 * time.Second
+	t.Cleanup(func() { senderIdleLimit = limit })
+	pair, sendServer, recvServer := failedPair(t)
+	stopReceiving(t, recvServer)
+
+	d := failure(t, pair.Sender.WaitEvent("transfer_failed", 20*time.Second))
+	if d["by"] != "self" || d["error"] != errReceiverGone.Error() {
+		t.Fatalf("sender: transfer_failed %v, want by self, the receiver gone", d)
+	}
+	if rep := sendServer.GetLastSummaryReport(); rep == nil || rep.Outcome != diag.OutcomeFailed {
+		t.Fatalf("sender report: %+v, want failed", rep)
+	}
+}
+
+// A paused transfer holds no data connection: the sender does not give up.
+func TestPausedSenderDoesNotGiveUp(t *testing.T) {
+	limit := senderIdleLimit
+	senderIdleLimit = time.Second
+	t.Cleanup(func() { senderIdleLimit = limit })
+	pair, _, _ := failedPair(t)
+	pair.Receiver.Request("pause", nil)
+	pair.Sender.ExpectNoEvent("transfer_failed", 3*time.Second)
+	pair.Receiver.Request("resume", nil)
+	pair.WaitTransferDone(60 * time.Second)
+}
+
+// WP-B.8: once the session is back, the side that still has the transfer asks the other one;
+// the receiver that has it no more answers "failed", and the sender ends at once.
+func TestTransferCheckEndsWhatThePeerHasNoMore(t *testing.T) {
+	pair, sendServer, recvServer := failedPair(t)
+	sendServer.mu.RLock()
+	sess, id := sendServer.activeSession, sendServer.activeTransferID
+	sendServer.mu.RUnlock()
+	stopReceiving(t, recvServer)
+
+	sendServer.checkTransfer(sess, id)
+	d := failure(t, pair.Sender.WaitEvent("transfer_failed", 10*time.Second))
+	if d["by"] != "peer" || d["transfer_id"] != id {
+		t.Fatalf("sender: transfer_failed %v, want by peer for %s", d, id)
+	}
+}

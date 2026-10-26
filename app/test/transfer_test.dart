@@ -193,6 +193,23 @@ void main() {
     expect(find.text("En attente de l'accord de Galaxy…"), findsOneWidget);
   });
 
+  testWidgets('WP-B.8: the session lost during a transfer, Connect is there next to it', (tester) async {
+    final core = FakeCore();
+    await _app(tester, core);
+    core.emit(const CoreEvent('paired', data: {'ip': '192.168.1.30', 'device_name': 'Galaxy'}));
+    core.emit(const CoreEvent('file_offered', data: {'file_name': 'film.mkv', 'file_size': 4096}));
+    core.emit(const CoreEvent('transfer_accepted', data: {}));
+    await tester.pumpAndSettle();
+    core.emit(const CoreEvent('disconnected', data: {'reason': 'connection timed out'}));
+    await tester.pumpAndSettle();
+    // The transfer screen, open since the send, says it waits.
+    expect(find.text('Connexion perdue avec Galaxy : en attente'), findsOneWidget);
+    await tester.binding.handlePopRoute(); // the system back
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('see-transfer')), findsOneWidget);
+    expect(find.byKey(const Key('connect')), findsOneWidget);
+  });
+
   testWidgets('a running transfer left with back stays closed; the bottom bar brings it back', (tester) async {
     final core = FakeCore();
     await _app(tester, core);

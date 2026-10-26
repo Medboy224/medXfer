@@ -62,8 +62,12 @@ type DaemonServer struct {
 	isPaused           bool
 	currentBatchItems  []BatchFileInfo // the queue the dashboard shows
 	sessionGraceTimer  *time.Timer
-	isReconnecting     bool
-	httpPort           int
+	// sentCompletedID is the last transfer this device sent that was completed (completeSent).
+	sentCompletedID string
+	// completedTransferID is the last transfer this device received whole (answerCheck).
+	completedTransferID string
+	isReconnecting      bool
+	httpPort            int
 
 	authFailMu   sync.Mutex
 	lastAuthFail map[string]time.Time
@@ -1185,6 +1189,9 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 
 	case session.TypeFailed:
 		s.peerFailed(msg)
+
+	case session.TypeTransferCheck:
+		s.answerCheck(msg)
 
 	case session.TypeError: // never answered, so that two peers cannot ping-pong errors
 		s.Broadcast(NewEvent("log", map[string]string{

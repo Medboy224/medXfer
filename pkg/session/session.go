@@ -106,6 +106,12 @@ type ItemProgress struct {
 // it answers unsupported and keeps the old behaviour.
 const TypeFailed = "failed"
 
+// TypeTransferCheck asks the peer, once a lost session is back, whether it still has the
+// transfer TransferID: messages sent while the session was half open are lost, a "failed" or a
+// "complete" among them (WP-B.8). The peer answers "complete" if it completed it, "failed" if
+// it has it no more, nothing if it still has it.
+const TypeTransferCheck = "transfer_check"
+
 // TypeError is the message that answers a message the peer cannot handle; its Code says why.
 const TypeError = "error"
 

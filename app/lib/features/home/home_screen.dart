@@ -139,7 +139,7 @@ class HomeScreen extends StatelessWidget {
                   final connection = state.connection;
                   final a = state.transfers.active;
                   if (a != null && a.stage != Stage.done) {
-                    return FilledButton.tonalIcon(
+                    final see = FilledButton.tonalIcon(
                       key: const Key('see-transfer'),
                       style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
                       onPressed: () => _open(context, const TransferScreen()),
@@ -149,6 +149,23 @@ class HomeScreen extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
+                    );
+                    if (!a.lost || connection.session != null) return see;
+                    // The session lost for good: connecting again lets the transfer go on.
+                    return Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        see,
+                        FilledButton.icon(
+                          key: const Key('connect'),
+                          style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
+                          onPressed: () => _open(context, const ConnectScreen()),
+                          icon: const Icon(Icons.link_rounded),
+                          label: Text(l.connect),
+                        ),
+                      ],
                     );
                   }
                   // Something picked in the explorer: the basket, and send (or connect first).

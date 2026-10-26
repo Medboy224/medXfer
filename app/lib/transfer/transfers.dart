@@ -115,6 +115,7 @@ class ActiveTransfer {
     this.speedMBps = 0,
     this.etaSeconds = 0,
     this.paused = false,
+    this.lost = false,
     this.outcome,
     this.started,
   });
@@ -129,6 +130,10 @@ class ActiveTransfer {
   final double speedMBps;
   final int etaSeconds;
   final bool paused;
+
+  /// The session with the other device is lost: the transfer waits for it (its data may come
+  /// back), until the core says how it ended (WP-B.8).
+  final bool lost;
   final Outcome? outcome;
   final DateTime? started;
 
@@ -144,6 +149,7 @@ class ActiveTransfer {
     double? speedMBps,
     int? etaSeconds,
     bool? paused,
+    bool? lost,
     Outcome? outcome,
     DateTime? started,
   }) => ActiveTransfer(
@@ -157,6 +163,7 @@ class ActiveTransfer {
     speedMBps: speedMBps ?? this.speedMBps,
     etaSeconds: etaSeconds ?? this.etaSeconds,
     paused: paused ?? this.paused,
+    lost: lost ?? this.lost,
     outcome: outcome ?? this.outcome,
     started: started ?? this.started,
   );
@@ -378,7 +385,7 @@ class Transfers extends ChangeNotifier {
           items: _items(m['items']),
         );
       case 'transfer_accepted':
-        if (a == null) return;
+        if (a == null || a.stage == Stage.done) return;
         _active = a.copyWith(stage: Stage.running, started: DateTime.now());
       case 'incoming_offer':
         _offer = IncomingOffer.fromJson(m);
@@ -386,14 +393,16 @@ class Transfers extends ChangeNotifier {
         if (a == null || a.stage == Stage.done) return;
         _active = a.copyWith(stage: Stage.running, totalBytes: (m['batch_total_bytes'] as num?)?.toInt());
       case 'batch_item_transferring' || 'item_completed' || 'item_failed' || 'file_skipped' || 'file_paused' || 'file_resumed':
-        if (a == null) return;
+        if (a == null || a.stage == Stage.done) return;
         _active = a.copyWith(items: _merge(a.items, _items(m['items'])));
         if (e.name == 'item_failed') _notices.add(FileError(_pathOf(a, m['item_index']), (m['error'] as String?) ?? ''));
       case 'batch_paused_waiting':
-        if (a == null) return;
+        if (a == null || a.stage == Stage.done) return;
         _active = a.copyWith(items: _merge(a.items, _items(m['items'])), speedMBps: 0);
       case 'transfer_progress':
-        if (a == null) return;
+        // Not once done: the core may still report a transfer the app ended (WP-B.8: a lost
+        // session made it "failed", then its progress made it "in progress" again).
+        if (a == null || a.stage == Stage.done) return;
         final progress = {
           for (final p in (m['items'] as List?) ?? const [])
             if (p is Map<String, Object?>) (p['index'] as num).toInt(): (p['bytes'] as num?)?.toInt() ?? 0,
@@ -411,10 +420,10 @@ class Transfers extends ChangeNotifier {
           ],
         );
       case 'transfer_paused':
-        if (a == null) return;
+        if (a == null || a.stage == Stage.done) return;
         _active = a.copyWith(paused: true, speedMBps: 0);
       case 'transfer_resumed':
-        if (a == null) return;
+        if (a == null || a.stage == Stage.done) return;
         _active = a.copyWith(paused: false);
       case 'disk_full':
         _notices.add(DiskFull((m['save_dir'] as String?) ?? ''));
@@ -437,10 +446,22 @@ class Transfers extends ChangeNotifier {
         final items = _merge(a.items, _items(m['items']));
         final whole = items.every((i) => i.status == ItemStatus.completed);
         _finish(a.copyWith(items: items, bytes: whole ? a.totalBytes : null), whole ? Outcome.completed : Outcome.partial);
+      case 'reconnecting':
+        if (a == null || a.stage != Stage.running) return;
+        _active = a.copyWith(lost: true, speedMBps: 0);
+      case 'paired':
+        if (a == null || !a.lost) return;
+        _active = a.copyWith(lost: false);
       case 'disconnected':
         _offer = null;
         if (a == null || a.stage == Stage.done) break;
-        _finish(a, Outcome.failed);
+        // The session timed out: the core keeps the transfer, whose data may come back, and
+        // says later how it ended (transfer_failed at worst). Asked for, the end stops it.
+        if (m['reason'] == 'connection timed out' && a.stage == Stage.running) {
+          _active = a.copyWith(lost: true, speedMBps: 0);
+        } else {
+          _finish(a, Outcome.failed);
+        }
       case 'action_error':
         if (e.id == null || !_mine.contains(e.id)) return;
         _notices.add(TransferFailed((m['error'] as String?) ?? '', noSpace: m['code'] == 'NO_SPACE'));

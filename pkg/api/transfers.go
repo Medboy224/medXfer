@@ -442,6 +442,9 @@ func (s *DaemonServer) receive(sess *session.Channel, m *session.Message, saveDi
 				failed++
 			}
 		}
+		s.mu.Lock()
+		s.completedTransferID = offer.TransferID // its "complete" may be lost: a check finds it
+		s.mu.Unlock()
 		_ = sess.Send(session.Message{Type: "complete", TransferID: offer.TransferID})
 		message := "File received successfully"
 		if len(offer.Items) > 1 {
@@ -514,13 +517,52 @@ func (s *DaemonServer) serveAccepted(msg session.Message) {
 		s.mu.Unlock()
 		// Its measures end with it: the next transfer starts its own. What stopped it (the
 		// receiver's "complete", a cancel, the peer's failure) ended them first, with the reason.
-		if err != nil && ctx.Err() == nil {
+		if err == nil && ev.receiverDone() {
+			s.completeSent(o.offer.TransferID)
+			return
+		}
+		if err == nil && ev.gaveUp() {
+			err = errReceiverGone
+		}
+		if err != nil && (ctx.Err() == nil || ev.gaveUp()) {
 			s.FinishTransferTracker(diag.OutcomeFailed)
 			s.transferFailed(o.offer, err)
 			return
 		}
 		s.FinishTransferTracker(diag.OutcomeCanceled)
 	}()
+}
+
+// pausedNow reports whether the transfer waits for the user: paused whole, or every item left
+// paused. The receiver then holds no data connection, and the sender does not give up.
+func (s *DaemonServer) pausedNow() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.isPaused || s.onlyPausedLeft()
+}
+
+// checkTransfer asks the peer of a session just back whether it still has the transfer in
+// progress here (session.TypeTransferCheck).
+func (s *DaemonServer) checkTransfer(sess *session.Channel, id string) {
+	if id != "" {
+		_ = sess.Send(session.Message{Type: session.TypeTransferCheck, TransferID: id})
+	}
+}
+
+// answerCheck answers the peer's transfer_check: "complete" for a transfer completed here,
+// "failed" for one this side has no more, nothing for the one in progress.
+func (s *DaemonServer) answerCheck(msg session.Message) {
+	s.mu.RLock()
+	sess, active, completed := s.activeSession, s.activeTransferID, s.completedTransferID
+	s.mu.RUnlock()
+	if sess == nil || msg.TransferID == "" || msg.TransferID == active {
+		return
+	}
+	if msg.TransferID == completed {
+		_ = sess.Send(session.Message{Type: "complete", TransferID: msg.TransferID})
+		return
+	}
+	_ = sess.Send(session.Message{Type: session.TypeFailed, TransferID: msg.TransferID, Error: "the other device no longer has this transfer"})
 }
 
 // transferFailed tells the app (transfer_failed) and the peer (session "failed") that the
@@ -561,15 +603,21 @@ func (s *DaemonServer) peerFailed(msg session.Message) {
 // peerCompleted ends this side of a transfer the receiver has finished.
 // The sender's Serve may end, with endTransfer, before the receiver's "complete" arrives: the
 // transfer that just ended is still completed, once (#129).
-func (s *DaemonServer) peerCompleted(msg session.Message) {
+func (s *DaemonServer) peerCompleted(msg session.Message) { s.completeSent(msg.TransferID) }
+
+// completeSent ends a sent transfer the receiver finished, once: told by its DONE on a data
+// connection or by its "complete" on the session, whichever comes first. The DONE usually
+// does, and is the only one when the session is lost (WP-B.8).
+func (s *DaemonServer) completeSent(id string) {
 	s.mu.Lock()
-	if msg.TransferID != "" && msg.TransferID != s.activeTransferID && msg.TransferID != s.endedTransferID {
+	if id != "" && (id == s.sentCompletedID || (id != s.activeTransferID && id != s.endedTransferID)) {
 		s.mu.Unlock()
 		return
 	}
-	if msg.TransferID != "" && msg.TransferID == s.endedTransferID {
+	if id != "" && id == s.endedTransferID {
 		s.endedTransferID = ""
 	}
+	s.sentCompletedID = id
 	s.FinishTransferTracker(diag.OutcomeCompleted) // before the cancel ends the run (see serveAccepted)
 	if s.transferCancel != nil {
 		s.transferCancel()
@@ -731,10 +779,35 @@ type daemonEvents struct {
 
 	peer       *session.Progress // sender: the receiver's progress, shown instead of what was served
 	lastReport time.Time         // receiver: when its progress last went to the sender
+	seen       time.Time         // sender: the last time a data connection was open, or a pause
+	idle       bool              // sender: given up at senderIdleLimit
+}
+
+// receiverDone reports whether the receiver said, on a data connection, that it is done (DONE).
+func (e *daemonEvents) receiverDone() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.finished && !e.idle
+}
+
+// gaveUp reports whether the sender gave up at senderIdleLimit.
+func (e *daemonEvents) gaveUp() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.idle
 }
 
 // reportEvery bounds how often the receiver tells the sender its progress.
 const reportEvery = 250 * time.Millisecond
+
+// senderIdleLimit is how long a sender serves a transfer with no data connection open, outside
+// a pause, before it gives up: longer than a receiver waits for it (a chunk read of a minute,
+// then transfer.DefaultReconnectWindow), so the receiver gives up first and says so. Without
+// it, a receiver gone and its "failed" lost left the sender serving for ever (WP-B.8).
+var senderIdleLimit = 4 * time.Minute
+
+// errReceiverGone is why a sender gives up at senderIdleLimit.
+var errReceiverGone = errors.New("the receiver stopped asking for data")
 
 // takePeer keeps the receiver's progress, which the sender's next events show.
 func (e *daemonEvents) takePeer(p *session.Progress) {
@@ -753,7 +826,19 @@ func (e *daemonEvents) OnStage(stage string, parallel int, d time.Duration, byte
 }
 
 func (e *daemonEvents) OnProgress(p transfer.Progress) {
+	waiting := e.sender && e.s.pausedNow()
 	e.mu.Lock()
+	if e.sender && !e.finished {
+		now := time.Now()
+		if p.Streams > 0 || waiting || e.seen.IsZero() {
+			e.seen = now
+		} else if now.Sub(e.seen) > senderIdleLimit {
+			e.finished, e.idle = true, true
+			if e.cancel != nil {
+				e.cancel()
+			}
+		}
+	}
 	if e.sender && e.peer != nil {
 		// What the receiver has, not what was served: both screens read the same (WP-B.10).
 		p.Bytes = e.peer.Bytes
