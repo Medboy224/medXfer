@@ -73,6 +73,15 @@ var dialDelays = []time.Duration{
 	800 * time.Millisecond, time.Second, time.Second,
 }
 
+// DefaultReconnectWindow is how long a receiver goes on trying to reach a sender it was
+// receiving from, after XFER-05's attempts: a phone's Wi-Fi gone for a minute or two (WP-B.8).
+// reconnectEvery is the wait between those further attempts: with MaxWorkers connections,
+// fewer handshakes a minute than the sender's gate allows a known address (LIM-01, #93), so
+// that a sender that lost the transfer does not block this address. Parameters (rule R4).
+const DefaultReconnectWindow = 2 * time.Minute
+
+var reconnectEvery = 5 * time.Second
+
 // Receiver downloads an offer: it opens Workers data connections to the sender's port and
 // drives the transfer (bible §8.3). It asks for the smallest missing chunk of the whole offer,
 // with at most two requests in flight per connection, so several small files are in flight at
@@ -92,7 +101,11 @@ type Receiver struct {
 	// Join secures each data connection and names the transfer (JoinFunc).
 	Join        func(context.Context, net.Conn) (net.Conn, error)
 	DialTimeout time.Duration // 0: DefaultDialTimeout
-	Events      Events
+	// ReconnectWindow: once data came, the sender is tried again that long after XFER-05's
+	// attempts (0: DefaultReconnectWindow; negative: not at all). A sender never reached is
+	// given up at once: a firewall or a wrong address shows without waiting.
+	ReconnectWindow time.Duration
+	Events          Events
 	// Sink is where the chunks go; SinkNull checks and drops them (a bench offer, DEV-09).
 	Sink Sink
 	// NoSync writes without fsync: never durable, for the bench ladder's step R4 only.
@@ -270,6 +283,7 @@ type run struct {
 	start    time.Time
 	bytes    atomic.Int64
 	conns    atomic.Int32
+	reached  atomic.Bool // a data connection was opened in this run (ReconnectWindow)
 	evMu     sync.Mutex
 	speed    *speedMeter
 	// received counts the bytes read from the data connections: the speed. bytes also counts
@@ -1141,16 +1155,36 @@ func (ru *run) reportProgress(ctx context.Context) {
 }
 
 // connect opens one data connection: dial with a timeout, then Join (TLS and DATA_JOIN), with
-// up to 8 attempts (XFER-05).
+// up to 8 attempts (XFER-05). Once this run had a connection, one more every reconnectEvery
+// for ReconnectWindow: the sender's network may come back (WP-B.8).
 func (ru *run) connect(ctx context.Context, addr string) (net.Conn, error) {
 	r := ru.r
 	var lastErr error
-	for attempt := 0; attempt <= len(dialDelays); attempt++ {
+	var deadline time.Time // of the further attempts, set when they start
+	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
+			delay := reconnectEvery
+			if attempt <= len(dialDelays) {
+				delay = dialDelays[attempt-1]
+			} else {
+				if deadline.IsZero() {
+					window := r.ReconnectWindow
+					if window == 0 {
+						window = DefaultReconnectWindow
+					}
+					if window < 0 || !ru.reached.Load() {
+						break
+					}
+					deadline = time.Now().Add(window)
+				}
+				if time.Now().After(deadline) {
+					break
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(dialDelays[attempt-1]):
+			case <-time.After(delay):
 			}
 		}
 		timeout := r.DialTimeout
@@ -1171,6 +1205,7 @@ func (ru *run) connect(ctx context.Context, addr string) (net.Conn, error) {
 			raw = engine.WrapDialed(raw)
 			var c net.Conn
 			if c, err = r.Join(ctx, raw); err == nil {
+				ru.reached.Store(true)
 				return c, nil
 			}
 		}
