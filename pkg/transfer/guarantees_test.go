@@ -9,10 +9,12 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -346,5 +348,128 @@ func TestOtherSenderDoesNotResume(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(part); !bytes.Equal(before, after) {
 		t.Fatal("the first sender's partial file was changed")
+	}
+}
+
+// netCut is a Receiver.dial that can lose the network: cut closes the connections open and
+// makes every new one fail at once, as a Wi-Fi gone does; restore brings it back. Its
+// connections go through the valve v, which holds the transfer where the test wants it.
+type netCut struct {
+	v     *valve
+	mu    sync.Mutex
+	down  bool
+	conns []net.Conn
+}
+
+func (n *netCut) dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.down {
+		return nil, errors.New("network is unreachable")
+	}
+	c, err := n.v.dial(ctx, network, addr)
+	if err == nil {
+		n.conns = append(n.conns, c)
+	}
+	return c, err
+}
+
+func (n *netCut) cut() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.down = true
+	for _, c := range n.conns {
+		_ = c.Close()
+	}
+	n.conns = nil
+}
+
+func (n *netCut) restore() {
+	n.mu.Lock()
+	n.down = false
+	n.mu.Unlock()
+}
+
+// WP-B.8, found on the real devices: the network between the two is gone for longer than
+// XFER-05's attempts (about 3.5 s), the sender still serving, then comes back. The receiver,
+// which was receiving, waits for it and the file is whole.
+func TestReceiverWaitsForTheNetworkToComeBack(t *testing.T) {
+	every := reconnectEvery
+	reconnectEvery = 300 * time.Millisecond
+	t.Cleanup(func() { reconnectEvery = every })
+	offer, paths, contents := tree(t, []int{64 * testChunk})
+	p := newOfferPair(t)
+	p.serve(t, offer, paths)
+	offer.TransferID = p.id.String()
+
+	out := t.TempDir()
+	r := p.receiver(out)
+	r.ReconnectWindow = 30 * time.Second
+	n := netCut{v: newValve(3 * testChunk)}
+	r.dial = n.dial
+	done := make(chan error, 1)
+	var results []ItemResult
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		var err error
+		results, err = r.Run(ctx, p.addr, offer)
+		done <- err
+	}()
+
+	n.v.wait(t)
+	n.cut()
+	time.Sleep(5 * time.Second) // gone for longer than the 8 quick attempts
+	select {
+	case err := <-done:
+		t.Fatalf("the receiver gave up while the network was away: %v", err)
+	default:
+	}
+	n.restore()
+	n.v.open()
+	if err := <-done; err != nil || results[0].State != ItemDone {
+		t.Fatalf("Run: %+v, %v", results, err)
+	}
+	checkFiles(t, out, offer, contents, nil)
+}
+
+// WP-B.8: a sender that does not come back is given up once ReconnectWindow is over.
+func TestReceiverGivesUpAfterTheWindow(t *testing.T) {
+	every := reconnectEvery
+	reconnectEvery = 100 * time.Millisecond
+	t.Cleanup(func() { reconnectEvery = every })
+	offer, paths, _ := tree(t, []int{16 * testChunk})
+	p := newOfferPair(t)
+	offer.TransferID = p.id.String()
+	first, err := NewSender(offer, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sctx, stop := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); _ = first.Serve(sctx, p.tl) }()
+
+	r := p.receiver(t.TempDir())
+	r.ReconnectWindow = time.Second
+	v := newValve(3 * testChunk)
+	r.dial = v.dial
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_, err := r.Run(ctx, p.addr, offer)
+		done <- err
+	}()
+	v.wait(t)
+	stop()
+	<-stopped
+	v.open()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrTransferFailed) {
+			t.Fatalf("Run = %v, want ErrTransferFailed", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the receiver still waits for a sender that is gone")
 	}
 }
