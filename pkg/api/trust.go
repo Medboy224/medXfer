@@ -375,6 +375,7 @@ func (s *DaemonServer) startSession(ch *session.Channel, fp identity.Fingerprint
 		"mutual":      mutual, // a device of mutual trust (P3); otherwise this session only
 	}, ids...))
 	go s.listenToSession(ch)
+	go s.pingSession(ch)
 	if offer && !mutual {
 		s.offerTrust()
 	}
