@@ -1028,9 +1028,12 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 }
 
 func (s *DaemonServer) listenToSession(sess *session.Channel) {
+	silence := sessionSilence
 	for {
+		_ = sess.SetReadDeadline(time.Now().Add(silence)) // the peer pings (pingSession)
 		msg, err := sess.Read()
 		if err != nil {
+			sess.Close() // the peer sees it at once, and the side that dialed dials again
 			s.mu.Lock()
 			if s.activeSession == sess {
 				s.activeSession = nil
@@ -1208,7 +1211,12 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 	case session.TypeTransferCheck:
 		s.answerCheck(msg)
 
+	case session.TypePing: // its coming is enough (listenToSession)
+
 	case session.TypeError: // never answered, so that two peers cannot ping-pong errors
+		if msg.Code == session.CodeUnsupported && msg.Error == session.Unsupported(session.TypePing).Error {
+			return // a peer without pings: its answer shows it is there
+		}
 		s.Broadcast(NewEvent("log", map[string]string{
 			"level":   "WARN",
 			"message": fmt.Sprintf("peer error %s: %s", msg.Code, msg.Error),

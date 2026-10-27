@@ -112,6 +112,12 @@ const TypeFailed = "failed"
 // it has it no more, nothing if it still has it.
 const TypeTransferCheck = "transfer_check"
 
+// TypePing tells the peer that this side is still there: each side sends one every few
+// seconds, and a session silent for longer than a few of them is lost (WP-B.8). TCP's
+// keepalive took minutes on some systems to see a device gone. A peer that does not know it
+// answers unsupported, which shows it is there just as well.
+const TypePing = "ping"
+
 // TypeError is the message that answers a message the peer cannot handle; its Code says why.
 const TypeError = "error"
 
@@ -144,6 +150,9 @@ func NewChannel(conn net.Conn) *Channel {
 	c.maxControl.Store(protocol.MaxControl)
 	return c
 }
+
+// SetReadDeadline bounds the next reads: past it, Read fails.
+func (c *Channel) SetReadDeadline(t time.Time) error { return c.conn.SetReadDeadline(t) }
 
 // SetMaxControl changes the largest control message accepted and sent (LIM-04 is a
 // parameter, rule R4).
