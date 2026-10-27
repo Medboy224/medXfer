@@ -780,6 +780,8 @@ type daemonEvents struct {
 
 	peer       *session.Progress // sender: the receiver's progress, shown instead of what was served
 	peerAt     time.Time         // sender: when peer came (peerStale)
+	peerNew    bool              // sender: peer came since the last progress
+	peerServed int64             // sender: what was served when peer came
 	lastReport time.Time         // receiver: when its progress last went to the sender
 	seen       time.Time         // sender: the last time a data connection was open, or a pause
 	idle       bool              // sender: given up at senderIdleLimit
@@ -811,15 +813,17 @@ var senderIdleLimit = 4 * time.Minute
 // errReceiverGone is why a sender gives up at senderIdleLimit.
 var errReceiverGone = errors.New("the receiver stopped asking for data")
 
-// peerStale is how old the receiver's progress may be and still be shown: about eight missed
-// reports. Older, the session is lost while the data goes on (WP-B.8): the sender shows what
-// it served, not a figure that no longer moves.
+// peerStale is how old the receiver's progress may be and still be shown alone: about eight
+// missed reports. Older, the session is lost or slow while the data goes on (WP-B.8): the sender
+// adds what it served since, not a figure that no longer moves. Not what it served alone: after
+// a resume that starts at 0, and the bar went back and forth between the two figures. A report
+// that comes back is shown as it is: the two bars read the same again (WP-B.10).
 const peerStale = 2 * time.Second
 
 // takePeer keeps the receiver's progress, which the sender's next events show.
 func (e *daemonEvents) takePeer(p *session.Progress) {
 	e.mu.Lock()
-	e.peer, e.peerAt = p, time.Now()
+	e.peer, e.peerAt, e.peerNew = p, time.Now(), true
 	e.mu.Unlock()
 }
 
@@ -846,14 +850,21 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 			}
 		}
 	}
-	if e.sender && e.peer != nil && time.Since(e.peerAt) < peerStale {
-		// What the receiver has, not what was served: both screens read the same (WP-B.10).
-		p.Bytes = e.peer.Bytes
-		p.Active = nil
-		for _, it := range e.peer.Items {
-			if it.Index >= 0 && it.Index < len(e.offer.Items) {
-				p.Active = append(p.Active, transfer.ItemProgress{Item: it.Index, Bytes: it.Bytes, Size: e.offer.Items[it.Index].Size})
+	if e.sender && e.peer != nil {
+		if e.peerNew {
+			e.peerServed, e.peerNew = p.Bytes, false
+		}
+		if time.Since(e.peerAt) < peerStale {
+			// What the receiver has, not what was served: both screens read the same (WP-B.10).
+			p.Active = nil
+			for _, it := range e.peer.Items {
+				if it.Index >= 0 && it.Index < len(e.offer.Items) {
+					p.Active = append(p.Active, transfer.ItemProgress{Item: it.Index, Bytes: it.Bytes, Size: e.offer.Items[it.Index].Size})
+				}
 			}
+			p.Bytes = e.peer.Bytes
+		} else {
+			p.Bytes = min(e.peer.Bytes+max(p.Bytes-e.peerServed, 0), p.Total)
 		}
 	}
 	if p.Finished && !p.Partial {
