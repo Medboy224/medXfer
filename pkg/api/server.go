@@ -67,7 +67,11 @@ type DaemonServer struct {
 	// completedTransferID is the last transfer this device received whole (answerCheck).
 	completedTransferID string
 	isReconnecting      bool
-	httpPort            int
+	// redialTo is where this device dialed the active session: lost, it is dialed again there
+	// (redial); redialCancel stops that.
+	redialTo     string
+	redialCancel context.CancelFunc
+	httpPort     int
 
 	authFailMu   sync.Mutex
 	lastAuthFail map[string]time.Time
@@ -592,6 +596,7 @@ func (s *DaemonServer) Stop() {
 		s.sessionGraceTimer = nil
 	}
 	s.isReconnecting = false
+	s.stopRedial()
 	nodeLn, httpSrv, control := s.nodeLn, s.httpSrv, s.hubControl
 	s.mu.Unlock()
 	if control != nil {
@@ -1044,6 +1049,12 @@ func (s *DaemonServer) listenToSession(sess *session.Channel) {
 						s.mu.Unlock()
 					}
 				})
+				// Nobody else brings it back (WP-B.8): the side that dialed dials again.
+				if s.redialTo != "" && pairing.Declares(s.trust, s.trustPeer) {
+					ctx, cancel := context.WithCancel(s.ctx)
+					s.redialCancel = cancel
+					go s.redial(ctx, s.redialTo, s.trustPeer)
+				}
 			}
 			s.mu.Unlock()
 			s.Broadcast(NewEvent("reconnecting", map[string]string{"message": "Connection lost. Waiting for peer to reconnect (15s grace period)..."}))
@@ -1096,6 +1107,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 
 	case "pair_reject":
 		s.mu.Lock()
+		s.stopRedial()
 		if s.activeSession != nil {
 			s.activeSession.Close()
 			s.activeSession = nil
@@ -1115,6 +1127,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			s.sessionGraceTimer = nil
 		}
 		s.isReconnecting = false
+		s.stopRedial()
 		if s.activeSession != nil {
 			s.activeSession.Close()
 			s.activeSession = nil

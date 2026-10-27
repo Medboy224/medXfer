@@ -236,6 +236,7 @@ func (s *DaemonServer) handleDisconnect(rs Responder, req RequestMessage) {
 		s.sessionGraceTimer = nil
 	}
 	s.isReconnecting = false
+	s.stopRedial()
 	if s.activeSession != nil {
 		s.activeSession.Send(session.Message{Type: "disconnect"})
 		s.activeSession.Close()
