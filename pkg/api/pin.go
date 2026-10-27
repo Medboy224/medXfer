@@ -151,7 +151,11 @@ func (s *DaemonServer) pairWithPIN(target, pin string, offer bool, reqID string)
 		ch.Close()
 		return nil, err
 	}
-	return s.finishOutgoing(ch, connPeer, fp, host, offer, reqID)
+	sess, err := s.finishOutgoing(ch, connPeer, fp, host, offer, reqID)
+	if err == nil {
+		s.dialedFor(sess, target)
+	}
+	return sess, err
 }
 
 // acceptPIN answers an incoming pair_pin, or a pair_pin_wanted (PAIR-11), with the PIN shown

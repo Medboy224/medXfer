@@ -268,6 +268,9 @@ func (s *DaemonServer) pairWith(target string, u *pairing.URI, offer bool, reqID
 		return nil, err
 	}
 	sess, err := s.finishOutgoing(ch, connPeer, fp, host, offer, reqID)
+	if err == nil {
+		s.dialedFor(sess, target)
+	}
 	var rej *rejectedError
 	if u == nil && errors.As(err, &rej) && rej.code == codePINRequired {
 		// We trust it, it no longer trusts us: the entry gives nothing (PAIR-09).
@@ -342,6 +345,7 @@ func (s *DaemonServer) startSession(ch *session.Channel, fp identity.Fingerprint
 		s.sessionGraceTimer = nil
 	}
 	s.isReconnecting = false
+	s.stopRedial() // the new session's side that dialed says so after (dialedFor)
 	if s.activeSession != nil && s.activeSession != ch {
 		s.activeSession.Close()
 		if s.trustPeer != fp { // another device: the old one's transfers end with it (§3.7, #156)
