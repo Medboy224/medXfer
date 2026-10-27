@@ -1,7 +1,9 @@
 /// Envoyer, on a desktop (mockup « 10. Bureau »): files and folders dropped on the window or
-/// chosen, as many times as wanted, fill one list, sent in one transfer (WP-B.8: the system's
-/// dialog chooses files or a folder, never both). Then the device: the one connected, a trusted
-/// one (connected, then sent to, without a code), or another one to pair with by its PIN.
+/// chosen, as many times as wanted, fill one list, sent in one transfer to the device connected
+/// (WP-B.8: the system's dialog chooses files or a folder, never both). Beside it, the
+/// connection, as on the phone (decided on 27 October 2026): the devices of the same network,
+/// which see this one too; else this one creates a connection, or joins another's. Connecting
+/// says nothing of who sends: once connected, either device does.
 library;
 
 import 'dart:async';
@@ -30,63 +32,6 @@ class SendPage extends StatefulWidget {
 
 class _SendPageState extends State<SendPage> {
   late final AppState _state = AppScope.of(context, listen: false).state;
-  Connection get _c => _state.connection;
-  Timer? _rescan;
-  bool _asking = false;
-  String? _pinFor;
-
-  /// A device chosen to send to, not connected yet: the list goes once it is.
-  bool _sendOnSession = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _c.addListener(_changed);
-    // After the first frame: the scan tells the listeners at once, and this page builds now.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      unawaited(_c.loadTrusted());
-      unawaited(_c.scan());
-    });
-    // The devices come and go: look again now and then, while the page is open.
-    _rescan = Timer.periodic(const Duration(seconds: 8), (_) {
-      if (!_c.scanning) unawaited(_c.scan());
-    });
-  }
-
-  @override
-  void dispose() {
-    _rescan?.cancel();
-    _c.removeListener(_changed);
-    super.dispose();
-  }
-
-  void _changed() {
-    if (!mounted) return;
-    if (_c.session != null) {
-      if (_sendOnSession) {
-        _sendOnSession = false;
-        unawaited(_send());
-      }
-      return;
-    }
-    // Not under another screen (Connect asks the PIN itself).
-    final target = _c.pinNeeded;
-    if (target != null && !_asking && (ModalRoute.of(context)?.isCurrent ?? true)) unawaited(_askPin(target));
-  }
-
-  Future<void> _askPin(String target) async {
-    _asking = true;
-    final answer = await askPin(context, target: target, device: _pinFor ?? target);
-    _asking = false;
-    _pinFor = null;
-    if (answer == null) {
-      _sendOnSession = false;
-      _c.cancelPinNeeded();
-      return;
-    }
-    await _c.pairPin(answer.$1, answer.$2);
-  }
 
   void _add(List<String> paths) {
     _state.selection.addAll(picksOfPaths(paths));
@@ -100,36 +45,14 @@ class _SendPageState extends State<SendPage> {
     if (folder != null) _add([folder]);
   }
 
-  /// Everything chosen, by path, in one transfer.
+  /// Everything chosen, by path, in one transfer, to the device connected.
   Future<void> _send() async {
     final sel = _state.selection;
-    if (sel.isEmpty) return;
+    if (sel.isEmpty || _state.connection.session == null) return;
     final plan = sel.plan(byPath: true) as ByPath;
     await _state.transfers.send(plan.paths);
     sel.clear();
   }
-
-  /// A device not connected: connected first (without a code if trusted), then sent to.
-  void _reach(NearbyDevice d) {
-    _pinFor = d.name;
-    _sendOnSession = !_state.selection.isEmpty;
-    unawaited(_c.pairWith(d));
-  }
-
-  void _showCode() => unawaited(
-    showDialog<void>(
-      context: context,
-      builder: (_) => Dialog(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Padding(
-            padding: const EdgeInsets.only(top: 24),
-            child: ManualCodeSheet(connection: _c),
-          ),
-        ),
-      ),
-    ),
-  );
 
   @override
   Widget build(BuildContext context) {
@@ -138,11 +61,11 @@ class _SendPageState extends State<SendPage> {
       hint: l.dropHere,
       onPaths: _add,
       child: ListenableBuilder(
-        listenable: Listenable.merge([_c, _state.selection]),
+        listenable: Listenable.merge([_state.connection, _state.selection]),
         builder: (context, _) => LayoutBuilder(
           builder: (context, box) {
-            final pick = _Pick(onFiles: _chooseFiles, onFolder: _chooseFolder, selection: _state.selection);
-            final to = _SendTo(connection: _c, canSend: !_state.selection.isEmpty, onSend: _send, onReach: _reach, onShowCode: _showCode);
+            final pick = _Pick(onFiles: _chooseFiles, onFolder: _chooseFolder, selection: _state.selection, session: _state.connection.session, onSend: _send);
+            final connection = _ConnectionPanel(connection: _state.connection);
             return SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: box.maxWidth >= 860
@@ -151,10 +74,10 @@ class _SendPageState extends State<SendPage> {
                       children: [
                         Expanded(flex: 3, child: pick),
                         const SizedBox(width: 24),
-                        Expanded(flex: 2, child: to),
+                        Expanded(flex: 2, child: connection),
                       ],
                     )
-                  : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [pick, const SizedBox(height: 24), to]),
+                  : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [pick, const SizedBox(height: 24), connection]),
             );
           },
         ),
@@ -163,13 +86,15 @@ class _SendPageState extends State<SendPage> {
   }
 }
 
-/// The left column: where to drop or choose, then the list of what was chosen.
+/// The left column: where to drop or choose, the list of what was chosen, and send.
 class _Pick extends StatelessWidget {
-  const _Pick({required this.onFiles, required this.onFolder, required this.selection});
+  const _Pick({required this.onFiles, required this.onFolder, required this.selection, required this.session, required this.onSend});
 
   final VoidCallback onFiles;
   final VoidCallback onFolder;
   final Selection selection;
+  final PeerSession? session;
+  final VoidCallback onSend;
 
   @override
   Widget build(BuildContext context) {
@@ -186,6 +111,7 @@ class _Pick extends StatelessWidget {
       textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w600),
     );
     final picks = selection.items.toList();
+    final to = session;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -284,40 +210,105 @@ class _Pick extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(height: 16),
+          if (to != null)
+            FilledButton.icon(
+              key: const Key('send'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(0, 52),
+                shape: const StadiumBorder(),
+                textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+              onPressed: onSend,
+              icon: const Icon(Icons.send_rounded),
+              label: Text(l.sendToDevice(to.name)),
+            )
+          else
+            Text(
+              l.connectToSend,
+              key: const Key('connect-to-send'),
+              textAlign: TextAlign.center,
+              style: TextStyle(color: c.muted),
+            ),
         ],
       ],
     );
   }
 }
 
-/// The right column: the devices to send to, then a way to be found by one not listed.
-class _SendTo extends StatelessWidget {
-  const _SendTo({required this.connection, required this.canSend, required this.onSend, required this.onReach, required this.onShowCode});
+/// The right column, the phone's way of connecting: the device connected; those of the same
+/// network, which see this one too; else create a connection, or join another's.
+class _ConnectionPanel extends StatelessWidget {
+  const _ConnectionPanel({required this.connection});
 
   final Connection connection;
-  final bool canSend;
-  final VoidCallback onSend;
-  final ValueChanged<NearbyDevice> onReach;
-  final VoidCallback onShowCode;
+
+  void _create(BuildContext context) => unawaited(
+    showDialog<void>(
+      context: context,
+      builder: (_) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.only(top: 24),
+            child: ManualCodeSheet(connection: connection),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Future<void> _typePin(BuildContext context) async {
+    final answer = await askPin(context);
+    if (answer != null) await connection.pairPin(answer.$1, answer.$2);
+  }
+
+  Future<void> _pasteLink(BuildContext context) async {
+    final link = await askLink(context);
+    if (link != null && context.mounted) await joinByLink(context, link);
+  }
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final c = context.colors;
     final session = connection.session;
-    // The device connected first, then the others found on the network.
     final others = [
       for (final d in connection.nearby)
         if (session == null || (d.ip != session.ip && d.name != session.name)) d,
     ];
+    final secondary = OutlinedButton.styleFrom(
+      minimumSize: const Size(0, 44),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      shape: const StadiumBorder(),
+      foregroundColor: c.text,
+      side: BorderSide(color: c.border),
+      textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w600),
+    );
+    Widget heading(String text) => Padding(
+      padding: const EdgeInsets.fromLTRB(4, 16, 4, 8),
+      child: Text(
+        text.toUpperCase(),
+        style: TextStyle(color: c.muted, fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: 0.8),
+      ),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Text(l.connectionTitle, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 12),
+        if (session != null)
+          _Device(
+            key: const Key('device-session'),
+            name: session.name,
+            detail: connection.reconnecting ? l.reconnecting : l.deviceConnected,
+            action: l.disconnect,
+            primary: false,
+            onAction: () => unawaited(connection.disconnect()),
+          ),
         Row(
           children: [
-            Expanded(
-              child: Text(l.sendTo, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-            ),
+            Expanded(child: heading(l.nearbyTitle)),
             connection.scanning
                 ? const Padding(
                     padding: EdgeInsets.all(12),
@@ -326,57 +317,50 @@ class _SendTo extends StatelessWidget {
                 : IconButton(tooltip: l.refresh, icon: const Icon(Icons.refresh_rounded), onPressed: () => unawaited(connection.scan())),
           ],
         ),
-        const SizedBox(height: 4),
-        if (session != null)
-          _Device(
-            key: const Key('device-session'),
-            name: session.name,
-            detail: connection.reconnecting ? l.reconnecting : l.deviceConnected,
-            action: l.sendSelection,
-            primary: true,
-            onAction: canSend ? onSend : null,
+        // The name the other user looks for in their list (DISC-07).
+        if (connection.instance.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+            child: Text(
+              l.youAppearAs(connection.instance),
+              key: const Key('my-instance'),
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
           ),
         for (final d in others)
           _Device(
             key: ValueKey('device-${d.ip}'),
             name: d.name,
-            detail: d.trusted ? l.deviceTrustedDirect : l.devicePairByCode,
-            // Trusted: sent to at once, or connected if nothing is chosen yet.
-            action: d.trusted ? (canSend ? l.sendSelection : l.connect) : l.pairAction,
-            primary: d.trusted,
-            onAction: () => onReach(d),
+            detail: d.trusted ? l.nearbyTrusted : l.nearbyAsksPin,
+            action: l.connect,
+            primary: true,
+            onAction: () => unawaited(connection.pairWith(d)),
           ),
-        if (session == null && others.isEmpty)
+        if (others.isEmpty)
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
             child: Text(connection.scanning ? l.searching : l.nearbyEmpty, style: TextStyle(color: c.muted)),
           ),
-        const SizedBox(height: 4),
-        OutlinedButton(
-          key: const Key('show-code'),
-          style: OutlinedButton.styleFrom(
-            minimumSize: const Size(0, 44),
-            shape: const StadiumBorder(),
-            foregroundColor: c.text,
-            side: BorderSide(color: c.border),
-            textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w600),
-          ),
-          onPressed: onShowCode,
-          child: Text(l.showQrOrPin),
-        ),
-        Align(
-          child: TextButton(
-            key: const Key('other-ways'),
-            onPressed: () => unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const ConnectScreen()))),
-            child: Text(l.otherWays),
-          ),
+        heading(l.otherNetwork),
+        OutlinedButton(key: const Key('create-connection'), style: secondary, onPressed: () => _create(context), child: Text(l.createConnection)),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(key: const Key('type-pin'), style: secondary, onPressed: () => unawaited(_typePin(context)), child: Text(l.typePin)),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton(key: const Key('paste-link'), style: secondary, onPressed: () => unawaited(_pasteLink(context)), child: Text(l.pasteLink)),
+            ),
+          ],
         ),
       ],
     );
   }
 }
 
-/// One device of the list, with its button: Envoyer, or Appairer.
+/// One device of the list, with its button.
 class _Device extends StatelessWidget {
   const _Device({super.key, required this.name, required this.detail, required this.action, required this.primary, required this.onAction});
 

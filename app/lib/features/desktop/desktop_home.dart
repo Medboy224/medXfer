@@ -1,7 +1,11 @@
 /// The desktop layout (mockup « 10. Bureau », §1.2 of the J6b plan): a side menu and its pages.
-/// Envoyer: files and folders dropped or chosen, then the device to send them to. Recevoir: how
-/// this computer is found, where files go. Then the history, the trusted devices, the settings.
-/// The phone's tabs are the other layout (HomeScreen).
+/// Envoyer: files and folders dropped or chosen, and the connection beside them. Recevoir: where
+/// received files go. Then the history, the trusted devices, the settings. The phone's tabs are
+/// the other layout (HomeScreen).
+///
+/// The connection is not tied to a page or to a direction (decided on 27 October 2026): while
+/// the window is open, this computer announces itself and looks for the devices of its network,
+/// so two devices on the same Wi-Fi see each other; once connected, either one sends.
 library;
 
 import 'dart:async';
@@ -9,10 +13,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app.dart';
+import '../../connection/connection.dart';
 import '../../l10n/app_localizations.dart';
 import '../../theme.dart';
 import '../../transfer/transfers.dart';
 import '../../widgets/format.dart';
+import '../connect/dialogs.dart';
 import '../history/history_tab.dart';
 import '../settings/settings_screen.dart';
 import '../transfer/transfer_screen.dart';
@@ -31,6 +37,53 @@ class DesktopHome extends StatefulWidget {
 
 class _DesktopHomeState extends State<DesktopHome> {
   DesktopPage _page = DesktopPage.send;
+  late final Connection _c = AppScope.of(context, listen: false).state.connection;
+  Timer? _rescan;
+  bool _asking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _c.addListener(_changed);
+    // After the first frame: the model tells its listeners at once, and the home builds now.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_c.loadTrusted());
+      unawaited(_c.openConnect());
+    });
+    // The devices come and go: look again now and then.
+    _rescan = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (!_c.scanning) unawaited(_c.scan());
+    });
+  }
+
+  @override
+  void dispose() {
+    _rescan?.cancel();
+    _c.removeListener(_changed);
+    // Not during the unmount: the model tells its listeners, and the tree is locked now.
+    scheduleMicrotask(() => unawaited(_c.closeConnect()));
+    super.dispose();
+  }
+
+  /// A device of the list shows a PIN: this user types it, whatever the page.
+  void _changed() {
+    final target = _c.pinNeeded;
+    if (!mounted || _c.session != null || target == null || _asking) return;
+    unawaited(_askPin(target));
+  }
+
+  Future<void> _askPin(String target) async {
+    _asking = true;
+    final name = _c.nearby.where((d) => d.target == target || target.startsWith('${d.ip}:')).map((d) => d.name).firstOrNull;
+    final answer = await askPin(context, target: target, device: name ?? target);
+    _asking = false;
+    if (answer == null) {
+      _c.cancelPinNeeded();
+      return;
+    }
+    await _c.pairPin(answer.$1, answer.$2);
+  }
 
   @override
   Widget build(BuildContext context) {
