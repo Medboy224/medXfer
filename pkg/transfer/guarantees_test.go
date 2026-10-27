@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,6 +104,33 @@ func TestDataConnectionsArePinned(t *testing.T) {
 		if entries, _ := os.ReadDir(out); len(entries) != 0 {
 			t.Errorf("%s: the receive folder is not empty: %v", name, entries)
 		}
+	}
+}
+
+// A connection the sender takes but never answers on is not a reached sender (WP-B.8): a
+// refused receiver ends after XFER-05's attempts, not after ReconnectWindow. In TLS 1.3 a
+// refused client's handshake ends before the sender checks it, so its Join succeeds.
+func TestRefusedReceiverDoesNotWaitForTheSender(t *testing.T) {
+	offer, paths, _ := tree(t, []int{testChunk + 1})
+	p := newOfferPair(t)
+	p.serve(t, offer, paths)
+	offer.TransferID = p.id.String()
+	// The first Join succeeds without the sender's agreement (plain bytes, which it drops);
+	// the next ones are refused, as by its handshake limit (LIM-01).
+	var joins atomic.Int32
+	r := NewReceiver(t.TempDir(), func(_ context.Context, c net.Conn) (net.Conn, error) {
+		if joins.Add(1) == 1 {
+			return c, nil
+		}
+		c.Close()
+		return nil, errors.New("refused")
+	})
+	r.DialTimeout = time.Second
+	r.ReconnectWindow = time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := r.Run(ctx, p.addr, offer); err == nil || ctx.Err() != nil {
+		t.Fatalf("Run = %v; want a failure before the timeout", err)
 	}
 }
 

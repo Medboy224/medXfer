@@ -283,7 +283,7 @@ type run struct {
 	start    time.Time
 	bytes    atomic.Int64
 	conns    atomic.Int32
-	reached  atomic.Bool // a data connection was opened in this run (ReconnectWindow)
+	reached  atomic.Bool // the sender answered on a data connection in this run (ReconnectWindow)
 	evMu     sync.Mutex
 	speed    *speedMeter
 	// received counts the bytes read from the data connections: the speed. bytes also counts
@@ -1155,8 +1155,8 @@ func (ru *run) reportProgress(ctx context.Context) {
 }
 
 // connect opens one data connection: dial with a timeout, then Join (TLS and DATA_JOIN), with
-// up to 8 attempts (XFER-05). Once this run had a connection, one more every reconnectEvery
-// for ReconnectWindow: the sender's network may come back (WP-B.8).
+// up to 8 attempts (XFER-05). Once the sender answered in this run, one more every
+// reconnectEvery for ReconnectWindow: the sender's network may come back (WP-B.8).
 func (ru *run) connect(ctx context.Context, addr string) (net.Conn, error) {
 	r := ru.r
 	var lastErr error
@@ -1204,8 +1204,9 @@ func (ru *run) connect(ctx context.Context, addr string) (net.Conn, error) {
 		if err == nil {
 			raw = engine.WrapDialed(raw)
 			var c net.Conn
+			// Not reached yet: in TLS 1.3 a refused client ends its handshake before the
+			// sender checks it, so only an answer (worker) shows the sender took it.
 			if c, err = r.Join(ctx, raw); err == nil {
-				ru.reached.Store(true)
 				return c, nil
 			}
 		}
@@ -1360,6 +1361,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 			drop()
 			continue
 		}
+		ru.reached.Store(true)
 		t := inflight[0]
 		inflight = inflight[1:]
 		if h.Type == protocol.TypeChunkError {
