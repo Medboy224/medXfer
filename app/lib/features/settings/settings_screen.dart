@@ -69,7 +69,7 @@ class SettingsScreen extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Divider(color: c.border),
-            const _ReceiveSection(),
+            const ReceiveSection(),
             Divider(color: c.border),
             SwitchListTile(
               key: const Key('dev-mode'),
@@ -87,14 +87,14 @@ class SettingsScreen extends StatelessWidget {
 
 /// Where received files go: the folder chosen, or the default one; on Android, sorted by type or
 /// not, and the access to all files a folder of one's choice needs (WP-B.10).
-class _ReceiveSection extends StatefulWidget {
-  const _ReceiveSection();
+class ReceiveSection extends StatefulWidget {
+  const ReceiveSection({super.key});
 
   @override
-  State<_ReceiveSection> createState() => _ReceiveSectionState();
+  State<ReceiveSection> createState() => _ReceiveSectionState();
 }
 
-class _ReceiveSectionState extends State<_ReceiveSection> {
+class _ReceiveSectionState extends State<ReceiveSection> {
   late final AppState _state = AppScope.of(context, listen: false).state;
   bool? _canChoose;
   String _default = '';

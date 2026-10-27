@@ -8,6 +8,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app_state.dart';
 import 'features/connect/connection_prompts.dart';
+import 'features/desktop/desktop_home.dart';
 import 'features/dev/dev_banner.dart';
 import 'features/transfer/transfer_prompts.dart';
 import 'features/home/home_screen.dart';
@@ -113,7 +114,7 @@ class _MedxferAppState extends State<MedxferApp> {
                 ),
               ),
             ),
-            home: const HomeScreen(),
+            home: state.desktop ? const DesktopHome() : const HomeScreen(),
           );
         },
       ),
