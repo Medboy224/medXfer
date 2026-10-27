@@ -433,6 +433,9 @@ func TestReceiverWaitsForTheNetworkToComeBack(t *testing.T) {
 	out := t.TempDir()
 	r := p.receiver(out)
 	r.ReconnectWindow = 30 * time.Second
+	// One connection reads its answers in order: chunk 0 is whole before the budget is spent,
+	// the sender reached. Several share the budget and may each hold only part of a chunk.
+	r.Workers = 1
 	n := netCut{v: newValve(3 * testChunk)}
 	r.dial = n.dial
 	done := make(chan error, 1)
