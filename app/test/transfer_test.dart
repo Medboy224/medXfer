@@ -21,8 +21,9 @@ class _TestFolders implements Folders {
 }
 
 class _Picker implements FilePicker {
-  const _Picker(this.paths);
+  const _Picker(this.paths, {this.folderPath});
   final List<String> paths;
+  final String? folderPath;
   @override
   bool get supported => true;
   @override
@@ -30,7 +31,14 @@ class _Picker implements FilePicker {
   @override
   Future<Picked> files() async => Picked(paths: paths);
   @override
-  Future<String?> folder() async => null;
+  Future<String?> folder() async => folderPath;
+}
+
+/// A desktop chooses files: they go to the basket, sent from there (WP-B.8).
+Future<void> _sendFiles(WidgetTester tester) async {
+  await tester.tap(find.byKey(const Key('pick-files')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('basket-send')));
 }
 
 /// Android without the access to all files, until it is asked.
@@ -150,7 +158,7 @@ void main() {
     await _app(tester, core, picker: const _Picker([r'C:\Users\a\rapport.pdf']));
     core.emit(const CoreEvent('paired', data: {'ip': '192.168.1.30', 'device_name': 'Galaxy'}));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('send-files')));
+    await _sendFiles(tester);
     // The waiting bar moves until the other side answers: no settling, a few frames.
     for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 100));
@@ -167,13 +175,37 @@ void main() {
     expect(find.text('Refusé'), findsOneWidget);
   });
 
+  testWidgets('WP-B.8: a desktop sends files and a folder together, from the basket', (tester) async {
+    final core = FakeCore()
+      ..on('send', (p) => const FakeAnswer(broadcast: [CoreEvent('file_offered', data: {'file_name': 'rapport.pdf', 'file_size': 2048})]));
+    await _app(tester, core, picker: const _Picker([r'C:\Users\a\rapport.pdf'], folderPath: r'C:\Users\a\Photos'));
+    core.emit(const CoreEvent('paired', data: {'ip': '192.168.1.30', 'device_name': 'Galaxy'}));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pick-files')));
+    await tester.pumpAndSettle();
+    expect(core.calls.where((c) => c.action == 'send'), isEmpty, reason: 'chosen, not sent yet');
+    await tester.tap(find.byKey(const Key('basket-add')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('basket-add-folder')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('2 éléments'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('basket-send')));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(core.calls.where((c) => c.action == 'send').single.payload, {
+      'paths': [r'C:\Users\a\rapport.pdf', r'C:\Users\a\Photos'],
+    });
+    expect(find.byKey(const Key('basket')), findsNothing, reason: 'the basket is emptied once sent');
+  });
+
   testWidgets('WP-B.8: a send stopped half way is resumed from its screen, the same files again', (tester) async {
     final core = FakeCore()
       ..on('send', (p) => const FakeAnswer(broadcast: [CoreEvent('file_offered', data: {'file_name': 'film.mkv', 'file_size': 4096})]));
     await _app(tester, core, picker: const _Picker([r'C:\Users\a\film.mkv']));
     core.emit(const CoreEvent('paired', data: {'ip': '192.168.1.30', 'device_name': 'Galaxy'}));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('send-files')));
+    await _sendFiles(tester);
     for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
@@ -211,7 +243,7 @@ void main() {
     await _app(tester, core, picker: const _Picker([r'C:\Users\a\film.mkv']));
     core.emit(const CoreEvent('paired', data: {'ip': '192.168.1.30', 'device_name': 'Galaxy'}));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('send-files')));
+    await _sendFiles(tester);
     for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }

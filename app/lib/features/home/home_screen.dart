@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../app_state.dart';
 import '../../l10n/app_localizations.dart';
+import '../../library/desktop_picks.dart';
 import '../../library/selection.dart';
 import '../../platform/file_picker.dart' as fp;
 import '../../platform/library.dart';
@@ -62,14 +63,9 @@ class HomeScreen extends StatelessWidget {
           ],
           bottom: TabBar(isScrollable: true, tabs: [for (final t in tabs) Tab(text: t)]),
         ),
-        body: ListenableBuilder(
-          listenable: AppScope.of(context).state.connection,
-          builder: (context, child) => DropZone(
-            enabled: AppScope.of(context).state.connection.session != null,
-            hint: l.dropHere,
-            onPaths: (paths) => unawaited(AppScope.of(context, listen: false).state.transfers.send(paths)),
-            child: child!,
-          ),
+        body: DropZone(
+          hint: l.dropHere,
+          onPaths: (paths) => _addPaths(AppScope.of(context, listen: false).state, paths),
           child: Column(
             children: [
               const _CoreLine(),
@@ -176,24 +172,26 @@ class HomeScreen extends StatelessWidget {
                       spacing: 8,
                       runSpacing: 8,
                       children: [
+                        // A desktop fills the basket, files and folders together; Android sends.
                         FilledButton.icon(
-                          key: const Key('send-files'),
+                          key: const Key('pick-files'),
                           style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
-                          onPressed: () async => state.transfers.sendPicked(await state.filePicker.files()),
+                          onPressed: () async {
+                            final picked = await state.filePicker.files();
+                            if (state.filePicker.folders) return _addPaths(state, picked.paths);
+                            await state.transfers.sendPicked(picked);
+                          },
                           icon: const Icon(Icons.upload_file_rounded),
-                          label: Text(l.sendFiles),
+                          label: Text(state.filePicker.folders ? l.chooseFiles : l.sendFiles),
                         ),
                         // A whole folder: the desktops (Android: with the explorer of WP-B.9).
                         if (state.filePicker.folders)
                           OutlinedButton.icon(
-                            key: const Key('send-folder'),
+                            key: const Key('pick-folder'),
                             style: OutlinedButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
-                            onPressed: () async {
-                              final folder = await state.filePicker.folder();
-                              if (folder != null) await state.transfers.send([folder]);
-                            },
+                            onPressed: () async => _addFolder(state),
                             icon: const Icon(Icons.drive_folder_upload_rounded),
-                            label: Text(l.sendFolder),
+                            label: Text(l.chooseFolder),
                           ),
                       ],
                     );
@@ -227,6 +225,17 @@ class HomeScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Paths chosen on a desktop, or dropped on it, into the basket (WP-B.8).
+  static void _addPaths(AppState state, List<String> paths) {
+    state.selection.addAll(picksOfPaths(paths));
+    state.explorer.sizeFolders(state.selection);
+  }
+
+  static Future<void> _addFolder(AppState state) async {
+    final folder = await state.filePicker.folder();
+    if (folder != null) _addPaths(state, [folder]);
   }
 
   /// The system's picker, then send (the Files tab without the access to all files).
@@ -391,7 +400,7 @@ class _Basket extends StatelessWidget {
     final state = AppScope.of(context, listen: false).state;
     final l = AppLocalizations.of(context);
     final messenger = ScaffoldMessenger.of(context);
-    switch (state.selection.plan()) {
+    switch (state.selection.plan(byPath: !state.library.supported)) {
       case Mixed():
         messenger
           ..clearSnackBars()
@@ -422,6 +431,21 @@ class _Basket extends StatelessWidget {
             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
           ),
         ),
+        // A desktop adds files or a folder to what it chose (WP-B.8).
+        if (state.filePicker.folders)
+          PopupMenuButton<bool>(
+            key: const Key('basket-add'),
+            tooltip: l.addToSelection,
+            icon: const Icon(Icons.add_rounded),
+            onSelected: (folder) async {
+              if (folder) return HomeScreen._addFolder(state);
+              HomeScreen._addPaths(state, (await state.filePicker.files()).paths);
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(key: const Key('basket-add-files'), value: false, child: Text(l.chooseFiles)),
+              PopupMenuItem(key: const Key('basket-add-folder'), value: true, child: Text(l.chooseFolder)),
+            ],
+          ),
         FilledButton.icon(
           key: const Key('basket-send'),
           style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
