@@ -281,5 +281,7 @@
   "@noticeTransferStopped": {"placeholders": {"device": {"type": "String"}, "error": {"type": "String"}}},
   "resendTransfer": "Resume",
   "connectionLostWaiting": "Connection with {device} lost: waiting for it",
-  "@connectionLostWaiting": {"placeholders": {"device": {"type": "String"}}}
+  "@connectionLostWaiting": {"placeholders": {"device": {"type": "String"}}},
+  "connectionLostGoingOn": "Connection with {device} lost: the transfer goes on",
+  "@connectionLostGoingOn": {"placeholders": {"device": {"type": "String"}}}
 }

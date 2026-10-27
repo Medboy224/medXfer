@@ -779,6 +779,7 @@ type daemonEvents struct {
 	finished   bool
 
 	peer       *session.Progress // sender: the receiver's progress, shown instead of what was served
+	peerAt     time.Time         // sender: when peer came (peerStale)
 	lastReport time.Time         // receiver: when its progress last went to the sender
 	seen       time.Time         // sender: the last time a data connection was open, or a pause
 	idle       bool              // sender: given up at senderIdleLimit
@@ -810,10 +811,15 @@ var senderIdleLimit = 4 * time.Minute
 // errReceiverGone is why a sender gives up at senderIdleLimit.
 var errReceiverGone = errors.New("the receiver stopped asking for data")
 
+// peerStale is how old the receiver's progress may be and still be shown: about eight missed
+// reports. Older, the session is lost while the data goes on (WP-B.8): the sender shows what
+// it served, not a figure that no longer moves.
+const peerStale = 2 * time.Second
+
 // takePeer keeps the receiver's progress, which the sender's next events show.
 func (e *daemonEvents) takePeer(p *session.Progress) {
 	e.mu.Lock()
-	e.peer = p
+	e.peer, e.peerAt = p, time.Now()
 	e.mu.Unlock()
 }
 
@@ -840,7 +846,7 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 			}
 		}
 	}
-	if e.sender && e.peer != nil {
+	if e.sender && e.peer != nil && time.Since(e.peerAt) < peerStale {
 		// What the receiver has, not what was served: both screens read the same (WP-B.10).
 		p.Bytes = e.peer.Bytes
 		p.Active = nil

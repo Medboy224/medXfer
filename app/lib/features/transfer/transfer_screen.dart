@@ -87,7 +87,8 @@ class _Header extends StatelessWidget {
         _ => l.outcomeFailed,
       };
     } else if (a.lost) {
-      line = l.connectionLostWaiting(a.device);
+      // The data may go on without the session (WP-B.8): it says so rather than "waiting".
+      line = a.speedMBps > 0 ? l.connectionLostGoingOn(a.device) : l.connectionLostWaiting(a.device);
     } else if (a.paused) {
       line = l.pausedLabel;
     } else {
