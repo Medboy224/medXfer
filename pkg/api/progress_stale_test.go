@@ -11,9 +11,10 @@ import (
 )
 
 // WP-B.8, found on the real devices: the session lost while the data goes on, the receiver's
-// reports no longer come. The sender showed the last one until the end, its bar still; it now
-// shows what it served once the report is older than peerStale.
-func TestSenderShowsWhatItServedOnceTheReportsStop(t *testing.T) {
+// reports no longer come. The sender showed the last one until the end, its bar still. Then,
+// showing what it served alone, its bar went back and forth after a resume, whose serving starts
+// at 0, whenever a report was late. It now adds what it served since the last report.
+func TestSenderBarGoesOnWithoutTheReports(t *testing.T) {
 	s := NewDaemonServerAt(t.TempDir(), 0, t.TempDir(), "Solo")
 	offer := protocol.Offer{TransferID: "t1", TotalBytes: 1000, Items: []protocol.OfferItem{{Item: 0, Path: "a.bin", Size: 1000}}}
 	ev := newDaemonEvents(s, offer, true, nil)
@@ -35,19 +36,26 @@ func TestSenderShowsWhatItServedOnceTheReportsStop(t *testing.T) {
 		defer mu.Unlock()
 		return shown
 	}
+	late := func() {
+		ev.mu.Lock()
+		ev.peerAt = time.Now().Add(-peerStale)
+		ev.mu.Unlock()
+	}
 
-	ev.takePeer(&session.Progress{Bytes: 300})
-	if got := progress(400); got != 300 {
-		t.Fatalf("with a fresh report the sender shows %d, want the receiver's 300", got)
+	// A resume: the receiver has 600 already, this sender serves from 0.
+	ev.takePeer(&session.Progress{Bytes: 600})
+	if got := progress(100); got != 600 {
+		t.Fatalf("with a fresh report the sender shows %d, want the receiver's 600", got)
 	}
-	ev.mu.Lock()
-	ev.peerAt = time.Now().Add(-peerStale)
-	ev.mu.Unlock()
-	if got := progress(700); got != 700 {
-		t.Fatalf("with no report for %v the sender shows %d, want the 700 it served", peerStale, got)
+	late()
+	if got := progress(250); got != 750 {
+		t.Fatalf("with no report for %v the sender shows %d, want 600 and the 150 served since", peerStale, got)
 	}
-	ev.takePeer(&session.Progress{Bytes: 650}) // the session is back
-	if got := progress(800); got != 650 {
-		t.Fatalf("with the reports back the sender shows %d, want the receiver's 650", got)
+	if got := progress(300); got != 800 {
+		t.Fatalf("still without a report the sender shows %d, want 600 and the 200 served since", got)
+	}
+	ev.takePeer(&session.Progress{Bytes: 790})
+	if got := progress(320); got != 790 {
+		t.Fatalf("with the reports back the sender shows %d, want the receiver's 790", got)
 	}
 }
