@@ -51,6 +51,21 @@ Les deux sondes passent d'abord : elles décident des API à garder.
   - quel débit (`xfer bench net`, puis un transfert de 1 Go), comparé au point d'accès actuel ?
 - Résultat : un rapport de sonde. Si la réponse est oui, l'intégration se fait en J8 (décision J17).
 
+**Résultats de la sonde** (28 octobre, Galaxy A57 sous Android 16 ; `WifiDirectGroup.kt`, commandes `p2p-start` et `p2p-stop` par adb ; débit brut : 3 envois de 300 Mo par `nc` vers le téléphone) :
+
+| Question | Résultat |
+|---|---|
+| Groupe à 5 GHz | ✅ Demandé par `GROUP_OWNER_BAND_5GHZ`, obtenu à chaque essai : canaux 36, 40, 44 et 157, choisis par Android. |
+| Wi-Fi du téléphone connecté ailleurs en même temps | ⚠️ Possible (Wi-Fi à 2,4 GHz canal 1, groupe à 5 GHz), mais la radio unique alterne entre les deux canaux : ping moyen **215 ms** (max 953), débit 5,4 à 6,7 MB/s, aucun gain. **Le téléphone ne doit être connecté à aucun autre réseau.** |
+| Un PC le rejoint comme un Wi-Fi ordinaire | ✅ PC Windows (Intel AC 8265, 802.11ac) et Zorin (Intel 6205, 802.11n), par nom et mot de passe ; le PC en 1 s. |
+| Découverte et appairage dessus | ✅ Le PC rejoint le groupe ; 14 s plus tard le téléphone le voit dans « Connecter », session ouverte 2 s après (appareils de confiance). |
+| Débit brut (`nc`), téléphone sans autre réseau | PC : **23,4 / 49,6 / 21,6 MB/s**, ping 3,6 ms ; Zorin : 12,1 à 13,3 MB/s, ping 3,2 ms. |
+| Débit brut, point d'accès actuel (2,4 GHz, canal 1), mêmes conditions | Zorin : 6,1 à 7,0 MB/s, ping 2,9 ms. |
+| **Transfert medXfer réel** | **1 Gio du PC vers le téléphone en 19,2 s : 53,4 MB/s en moyenne** (pic 68,1, minimum 52,1), aucune reprise. Étape limitante côté PC : le hachage (10,0 s de travail sur 4 connexions, autant que l'écriture réseau), confiance faible. |
+| Un second téléphone le rejoint par `WifiNetworkSpecifier` | À faire (WP-C.5, avec #169). |
+
+**Conclusion** : un groupe Wi-Fi Direct à 5 GHz, téléphone sans autre réseau, porte le transfert de **~7 MB/s à ~53 MB/s**, au niveau d'un bon routeur à 5 GHz. L'intégration en J8 est confirmée (décision J17), avec une règle : quand le téléphone crée le groupe, il quitte son autre réseau, ou l'application le propose.
+
 **La réglementation du 5 GHz** (vaut pour WP-C.0 et WP-C.1) :
 - les canaux 36 à 48 sont les plus ouverts (en Europe : en intérieur, sans détection de radar) ;
 - les canaux 52 à 144 partagent la bande avec des radars : l'appareil qui crée le réseau doit les détecter et leur céder la place (DFS), et réduire sa puissance (TPC) ;

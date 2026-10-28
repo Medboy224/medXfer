@@ -17,6 +17,7 @@ import org.json.JSONObject
 class MainActivity : FlutterActivity() {
     private val hotspot by lazy { LocalHotspot(this) }
     private val join by lazy { WifiJoin(this) }
+    private val p2p by lazy { WifiDirectGroup(this) }
     private val network by lazy { Network(this) }
     private val storage by lazy { Storage(this) }
     private val library by lazy { Library(this) }
@@ -139,9 +140,10 @@ class MainActivity : FlutterActivity() {
         pendingProbe?.let { pendingProbe = null; probe(it) }
     }
 
-    // The probe of WP-B.7, driven by adb: `am start -n dev.medxfer.app/.MainActivity --es probe
-    // hotspot-start|hotspot-stop|join --es ssid … --es pass … --ei security …`; it reports in
-    // logcat under the tag medxfer-probe. The passphrase is the probe's own test network's.
+    // The probes of WP-B.7 and WP-C.0, driven by adb: `am start -n dev.medxfer.app/.MainActivity
+    // --es probe hotspot-start|hotspot-stop|join|p2p-start|p2p-stop --es ssid … --es pass …
+    // --ei security … --es band 5|2|auto`; they report in logcat under the tag medxfer-probe.
+    // The passphrases are the probes' own test networks'.
     // Debuggable builds only: the activity is exported, any app could send these extras.
     private fun probe(intent: Intent?) {
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
@@ -155,6 +157,9 @@ class MainActivity : FlutterActivity() {
             "join" -> join.join(intent.getStringExtra("ssid") ?: "", intent.getStringExtra("pass") ?: "", intent.getIntExtra("security", 1), log)
             "leave" -> { join.leave(); log(null, null) }
             "interfaces" -> log(mapOf("interfaces" to LocalHotspot.interfaces()), null)
+            // Wi-Fi Direct at 5 GHz (WP-C.0 of the J6c plan): the band asked, the one obtained.
+            "p2p-start" -> p2p.start(intent.getStringExtra("band") ?: "5", log)
+            "p2p-stop" -> p2p.stop { log(null, null) }
         }
     }
 
