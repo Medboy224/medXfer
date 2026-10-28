@@ -81,4 +81,9 @@ func TestSenderLearnsTheEndAfterAResume(t *testing.T) {
 	if !got.Finished || got.Partial || got.Bytes >= got.Total {
 		t.Fatalf("second sender %+v; want finished and complete, having served less than the total", got)
 	}
+	// WP-B.8: the chunks the receiver already had were hashed while the rest went, not read
+	// at the end, after 100 % (seconds on a phone for a large file).
+	if n := again.digestReads.Load(); n != 0 {
+		t.Fatalf("the digest read %d chunks itself at the end; want them hashed ahead", n)
+	}
 }
