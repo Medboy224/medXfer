@@ -37,6 +37,11 @@ type Sender struct {
 	hashes    [][][32]byte     // per item, the SHA-256 of the chunks served, for the digest
 	itemBytes map[int]int64    // per item, the bytes counted in served
 	active    map[int]struct{} // items served in part: the progress of each (WP-B.0)
+	ahead     map[int]*ahead   // per item resumed, the chunks hashed ahead for the digest
+	aheadNext chan int         // items to hash ahead, in the order they were resumed
+	quit      chan struct{}    // closed once Serve's context ends
+
+	digestReads atomic.Int64 // chunks the digest had to read itself (tests)
 
 	bytes    atomic.Int64
 	wire     atomic.Int64 // bytes written to the data connections: the speed
@@ -63,7 +68,18 @@ func NewSender(offer protocol.Offer, paths []string) (*Sender, error) {
 	offer.Items = append([]protocol.OfferItem(nil), offer.Items...)
 	return &Sender{offer: offer, paths: paths, files: map[int]*openFile{},
 		served: make([][]uint64, len(paths)), hashes: make([][][32]byte, len(paths)),
-		itemBytes: map[int]int64{}, active: map[int]struct{}{}}, nil
+		itemBytes: map[int]int64{}, active: map[int]struct{}{}, ahead: map[int]*ahead{},
+		aheadNext: make(chan int, len(paths)), quit: make(chan struct{})}, nil
+}
+
+// ahead is a resumed item's chunks that the receiver already had: not served by this sender,
+// so the digest would read and hash them at the very end, after 100 % (WP-B.8: seconds on a
+// phone for a large file). They are hashed while the rest goes (hashAhead).
+type ahead struct {
+	upTo   uint32     // chunks [0, upTo): those before the first one asked for
+	hashes [][32]byte // a chunk served meanwhile keeps its own hash (servedHash)
+	ok     bool       // all of them hashed
+	done   chan struct{}
 }
 
 // SetEvents sets who gets the progress events, and the stage times if it wants them.
@@ -97,6 +113,7 @@ func (s *Sender) Serve(ctx context.Context, ln net.Listener) error {
 	conns := map[net.Conn]struct{}{}
 	go func() {
 		<-ctx.Done()
+		close(s.quit)
 		ln.Close()
 		connsMu.Lock()
 		for c := range conns {
@@ -105,6 +122,7 @@ func (s *Sender) Serve(ctx context.Context, ln net.Listener) error {
 		connsMu.Unlock()
 	}()
 	go s.reportProgress(ctx)
+	go s.hashAhead(ctx)
 	defer s.closeFiles()
 	for {
 		c, err := ln.Accept()
@@ -321,16 +339,22 @@ func (s *Sender) digest(out, data []byte, item uint32) []byte {
 		return fail(protocol.ChunkErrSourceChanged)
 	}
 	it := s.offer.Items[i]
+	pre := s.hashedAhead(i)
 	hashes := make([][32]byte, protocol.Chunks(it.Size, s.offer.ChunkSize))
 	for index := range hashes {
 		if h, ok := s.servedHash(i, uint32(index)); ok {
 			hashes[index] = h
 			continue
 		}
+		if pre != nil && uint32(index) < pre.upTo {
+			hashes[index] = pre.hashes[index]
+			continue
+		}
 		off, n := s.span(it.Size, uint32(index))
 		if _, err := r.ReadAt(data[:n], off); err != nil {
 			return fail(s.readErr(i, f, err))
 		}
+		s.digestReads.Add(1)
 		hashes[index] = sha256.Sum256(data[:n])
 	}
 	if !s.unchanged(i, f) {
@@ -350,6 +374,11 @@ func (s *Sender) markServed(item int, index uint32, n int64, sum [32]byte) {
 		bits = make([]uint64, (chunks+63)/64)
 		s.served[item] = bits
 		s.hashes[item] = make([][32]byte, chunks)
+		// The first chunk asked for is not the first: a resume, the receiver has those before.
+		if index > 0 {
+			s.ahead[item] = &ahead{upTo: index, hashes: make([][32]byte, index), done: make(chan struct{})}
+			s.aheadNext <- item // never blocks: one per item at most
+		}
 	}
 	w, b := index/64, uint64(1)<<(index%64)
 	if bits[w]&b == 0 {
@@ -363,6 +392,71 @@ func (s *Sender) markServed(item int, index uint32, n int64, sum [32]byte) {
 		}
 	}
 	s.hashes[item][index] = sum
+}
+
+// hashAhead hashes the chunks a resumed item's receiver already had (ahead), one item after
+// the other, while the rest is served: the digest at the end then reads nothing. One goroutine,
+// one buffer: the network is slower than a read and a hash.
+func (s *Sender) hashAhead(ctx context.Context) {
+	data := make([]byte, s.offer.ChunkSize)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case item := <-s.aheadNext:
+			s.mu.Lock()
+			a := s.ahead[item]
+			s.mu.Unlock()
+			a.ok = s.hashChunks(ctx, item, a, data)
+			close(a.done)
+		}
+	}
+}
+
+// hashChunks hashes a's chunks of item, those not served meanwhile; false if it could not.
+func (s *Sender) hashChunks(ctx context.Context, item int, a *ahead, data []byte) bool {
+	r, f, err := s.reader(item)
+	if err != nil {
+		return false
+	}
+	if f != nil {
+		defer s.release(item)
+	}
+	size := s.offer.Items[item].Size
+	for index := range a.upTo {
+		if ctx.Err() != nil {
+			return false
+		}
+		if _, ok := s.servedHash(item, index); ok {
+			continue
+		}
+		off, n := s.span(size, index)
+		if _, err := r.ReadAt(data[:n], off); err != nil {
+			return false
+		}
+		a.hashes[index] = sha256.Sum256(data[:n])
+	}
+	return true
+}
+
+// hashedAhead returns the chunks of item hashed ahead, waiting for them if they are being
+// hashed: sooner than reading them again. Nil if there are none.
+func (s *Sender) hashedAhead(item int) *ahead {
+	s.mu.Lock()
+	a := s.ahead[item]
+	s.mu.Unlock()
+	if a == nil {
+		return nil
+	}
+	select {
+	case <-a.done:
+	case <-s.quit:
+		return nil
+	}
+	if !a.ok {
+		return nil
+	}
+	return a
 }
 
 // servedHash returns the hash of a chunk served in this session.
