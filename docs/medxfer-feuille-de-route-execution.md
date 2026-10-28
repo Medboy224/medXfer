@@ -242,7 +242,7 @@ Ajouté le 19/10/2026 (#156) après l'audit externe du 18 octobre. Retrait du po
 ### J6b — Application Flutter MVP · ≈ 8 à 12 jours
 Écrans : liste des appareils, appairage par QR (caméra) et par PIN, envoi (choix de fichiers/dossiers), réception (acceptation avec taille et expéditeur), progression, historique minimal, panneau développeur (`DEV-13`). Android : service de premier plan, destination des fichiers (décision issue de G2A-10), dossier de réception au choix de l'utilisateur (WP-B.10, ajouté le 25 octobre), évaluation du point d'accès `LocalOnlyHotspot` quand aucun réseau n'est disponible (`DISC-12`). Windows, Linux : empaquetage. **Critère de sortie :** les gates G2a et G7 évaluées ; scénario complet Android ↔ Windows/Linux au Wi-Fi réel. Plan : [medxfer-plan-j6b.md](medxfer-plan-j6b.md).
 
-### J6c — Sonde : point d'accès Wi-Fi Direct à 5 GHz · ≈ 1 à 2 jours
+### J6c — Point d'accès à 5 GHz (sonde), point d'accès du PC, QR de bout en bout · ≈ 4 à 6 jours
 Ajouté le 25 octobre (décision J17 du plan J6b). Le point d'accès de `LocalOnlyHotspot` reste sur la bande choisie par Android : 2,4 GHz sur le téléphone d'essai (sonde WP-B.7), loin de l'objectif de vitesse. Wi-Fi Direct (Android 10 et plus) laisse l'application demander 5 GHz. Questions de la sonde, sur le téléphone d'essai :
 - le groupe se crée-t-il à 5 GHz, Wi-Fi du téléphone allumé ou coupé (une seule radio : `mIsDbs: false`) ?
 - un PC et un autre téléphone le rejoignent-ils comme un Wi-Fi ordinaire (nom et mot de passe), sans Wi-Fi Direct de leur côté ?
@@ -250,11 +250,13 @@ Ajouté le 25 octobre (décision J17 du plan J6b). Le point d'accès de `LocalOn
 
 **Critère de sortie :** un rapport de sonde, et la décision d'intégrer en J8 ou non.
 
+**Élargi le 28 octobre** (rapport J6b, réserves) : le point d'accès du PC, sous Windows et Linux, avec son QR (avancé de J8), pour l'appairage par QR de bout en bout ; l'essai d'un second téléphone qui rejoint le Galaxy A57 par QR (#169) ; la mesure des à-coups de l'interface sous Windows (réserve 4 de G2a). Durée revue : 4 à 6 jours. Plan : [medxfer-plan-j6c.md](medxfer-plan-j6c.md).
+
 ### J7 — Web Share v2 · ≈ 5 à 7 jours
 Bible chapitre 11 : listener séparé, jeton porteur sans cookie (fragment d'URL), HTTPS auto-signé, CSP (JavaScript externalisé), PIN de repli à 5 essais par session, retrait du bouton « 4 chiffres », collision gérée pour le dépôt par morceaux (`WEB-07`). Gate G5 (test utilisateur de l'avertissement de certificat).
 
 ### J8 — Mesure, optimisation, finitions v1 · ≈ 5 à 8 jours
-Matrice d'appareils réels (§14.3), gate G3, optimisations ciblées d'après le rapport par étape, point d'accès Wi-Fi Direct à 5 GHz si la sonde J6c le confirme (derrière l'interface `Hotspot`, mise à jour de `DISC-12`), benchmark nocturne en CI (`DEV-21`), suppression de `devui` si G7 est remplie, point d'accès Windows depuis un module natif (`DISC-12`), ingénierie de livraison (signature, paquets, `SECURITY.md`, documentation d'utilisation, premier `README`). **Critère de sortie :** objectif de 80 % d'iperf3 atteint ou plan écrit ; toutes les exigences ont leur test vert.
+Matrice d'appareils réels (§14.3), gate G3, optimisations ciblées d'après le rapport par étape, point d'accès Wi-Fi Direct à 5 GHz si la sonde J6c le confirme (derrière l'interface `Hotspot`, mise à jour de `DISC-12`), benchmark nocturne en CI (`DEV-21`), suppression de `devui` si G7 est remplie, ingénierie de livraison (signature, paquets, `SECURITY.md`, documentation d'utilisation, premier `README`). **Critère de sortie :** objectif de 80 % d'iperf3 atteint ou plan écrit ; toutes les exigences ont leur test vert.
 
 **Pare-feu Windows (constat de WP-6.5, 15/10/2026) :** sans règle entrante, un PC Windows trouve les autres mais reste invisible, sans message. L'installateur pose les règles de medXfer (UDP 5353 mDNS, UDP 19998 balise, TCP 18887, le port unique de medXfer : appairage et transferts, #133) sur les profils Privé et Public ; l'application vérifie au lancement qu'elles existent et sinon propose de les ajouter (élévation UAC), avec le message « Ce PC n'est pas visible par les autres appareils ».
 
@@ -275,11 +277,11 @@ Prototype G2b, Bonjour, permission « réseau local », comportement en arrière
 | J4a + J4b | 12 à 18 j | ≈ 52 j |
 | J5 | 5 à 8 j | ≈ 60 j |
 | J6a + J6b | 15 à 22 j | ≈ 82 j |
-| J6c | 1 à 2 j | ≈ 84 j |
-| J7 | 5 à 7 j | ≈ 91 j |
-| J8 | 5 à 8 j | ≈ 99 j |
+| J6c | 4 à 6 j | ≈ 88 j |
+| J7 | 5 à 7 j | ≈ 95 j |
+| J8 | 5 à 8 j | ≈ 103 j |
 
-Soit environ **20 semaines** en fourchette basse, pour une première version sur Windows, Linux et Android. Ces chiffres sont des hypothèses et non des engagements ; les estimations de ce type dérapent souvent, un tampon de 30 à 50 % est raisonnable (**≈ 6 mois**). La seule vraie mesure sera la vitesse constatée en J1 ; on recalcule alors tout le tableau.
+Soit environ **21 semaines** en fourchette basse, pour une première version sur Windows, Linux et Android. Ces chiffres sont des hypothèses et non des engagements ; les estimations de ce type dérapent souvent, un tampon de 30 à 50 % est raisonnable (**≈ 6 mois**). La seule vraie mesure sera la vitesse constatée en J1 ; on recalcule alors tout le tableau.
 J9 s'ajoute ensuite et ne figure pas dans ce total.
 
 ---
