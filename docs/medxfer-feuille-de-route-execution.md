@@ -252,6 +252,29 @@ Ajouté le 25 octobre (décision J17 du plan J6b). Le point d'accès de `LocalOn
 
 **Élargi le 28 octobre** (rapport J6b, réserves) : le point d'accès du PC, sous Windows et Linux, avec son QR (avancé de J8), pour l'appairage par QR de bout en bout ; l'essai d'un second téléphone qui rejoint le Galaxy A57 par QR (#169) ; la mesure des à-coups de l'interface sous Windows (réserve 4 de G2a). Durée revue : 4 à 6 jours. Plan : [medxfer-plan-j6c.md](medxfer-plan-j6c.md).
 
+### J6d — Se connecter au réseau par BLE · ≈ 7 à 10 jours
+Ajouté le 28 octobre, à l'idée de l'utilisateur. Deux appareils qui ne sont pas sur le même réseau se trouvent par **Bluetooth Low Energy** ; l'un crée le réseau (selon ce que J6c aura montré : qui peut le créer à 5 GHz), l'autre le **rejoint seul**. Plus de nom de réseau ni de mot de passe à taper dans les réglages, en particulier sur un PC, qui ne peut pas scanner de QR.
+
+BLE ne fait que **mettre les appareils sur le même réseau**. La connexion medXfer suit ses règles habituelles (`PAIR-12`) :
+
+| Cas | Ce que fait l'utilisateur |
+|---|---|
+| Même Wi-Fi | Il touche l'appareil (inchangé) |
+| Appareil de confiance, autre réseau | Il touche l'appareil : BLE, réseau, session sans code (P3) |
+| Appareil inconnu, autre réseau | Il touche l'appareil et tape le PIN affiché par l'autre : BLE, réseau, appairage |
+| Téléphone avec caméra, ou appareil sans BLE | Le QR (inchangé : il porte le réseau et l'appairage) ; sans caméra ni BLE, réglages et PIN |
+
+Sécurité :
+- le mot de passe du réseau ne passe **jamais en clair** par BLE ;
+- appareil inconnu : chiffré par la PAKE du PIN que l'utilisateur tape de toute façon (un seul PIN, un seul compteur d'essais pour le réseau et l'appairage) ;
+- appareil de confiance : chiffré avec la clé de la paire (`DISC-11`), qui sert aussi à l'étiquette tournante de l'annonce BLE (ni nom, ni identifiant stable) ;
+- l'appareil qui crée le réseau accepte la demande d'un inconnu (Accepter, Refuser) ;
+- pas de nouvelle cryptographie : la conception passe par la revue G4.
+
+Le code de pays de chaque appareil peut circuler pour **choisir** celui qui crée le réseau (celui qui a droit au 5 GHz), jamais pour l'imposer à l'autre : le système et le pilote appliquent la réglementation.
+
+D'abord une sonde : rôles BLE (annonce et serveur, balayage et client) sur le Galaxy A57, le PC Windows (Intel) et Zorin ; portée ; délai entre la découverte et l'information reçue ; un message chiffré d'environ 200 octets. **Critère de sortie :** les quatre cas du tableau sur les vrais appareils, le QR toujours disponible en repli.
+
 ### J7 — Web Share v2 · ≈ 5 à 7 jours
 Bible chapitre 11 : listener séparé, jeton porteur sans cookie (fragment d'URL), HTTPS auto-signé, CSP (JavaScript externalisé), PIN de repli à 5 essais par session, retrait du bouton « 4 chiffres », collision gérée pour le dépôt par morceaux (`WEB-07`). Gate G5 (test utilisateur de l'avertissement de certificat).
 
@@ -278,10 +301,11 @@ Prototype G2b, Bonjour, permission « réseau local », comportement en arrière
 | J5 | 5 à 8 j | ≈ 60 j |
 | J6a + J6b | 15 à 22 j | ≈ 82 j |
 | J6c | 4 à 6 j | ≈ 88 j |
-| J7 | 5 à 7 j | ≈ 95 j |
-| J8 | 5 à 8 j | ≈ 103 j |
+| J6d | 7 à 10 j | ≈ 98 j |
+| J7 | 5 à 7 j | ≈ 105 j |
+| J8 | 5 à 8 j | ≈ 113 j |
 
-Soit environ **21 semaines** en fourchette basse, pour une première version sur Windows, Linux et Android. Ces chiffres sont des hypothèses et non des engagements ; les estimations de ce type dérapent souvent, un tampon de 30 à 50 % est raisonnable (**≈ 6 mois**). La seule vraie mesure sera la vitesse constatée en J1 ; on recalcule alors tout le tableau.
+Soit environ **23 semaines** en fourchette basse, pour une première version sur Windows, Linux et Android. Ces chiffres sont des hypothèses et non des engagements ; les estimations de ce type dérapent souvent, un tampon de 30 à 50 % est raisonnable (**≈ 6 mois**). La seule vraie mesure sera la vitesse constatée en J1 ; on recalcule alors tout le tableau.
 J9 s'ajoute ensuite et ne figure pas dans ce total.
 
 ---
