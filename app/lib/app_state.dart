@@ -141,8 +141,11 @@ class AppState extends ChangeNotifier {
   /// The app closes (the window's close button on the desktops): the core stops, which also
   /// wakes its event reader (B9). A reader left waiting keeps the process alive, without a
   /// window, holding the core's port. At most [wait]: the window closes anyway.
-  Future<void> shutdown({Duration wait = const Duration(seconds: 3)}) =>
-      core.stop().timeout(wait, onTimeout: () {}).catchError((Object _) {});
+  Future<void> shutdown({Duration wait = const Duration(seconds: 3)}) async {
+    // A network this computer made stops with the app: NetworkManager would keep it (WP-C.2).
+    await connection.stopHotspot().timeout(wait, onTimeout: () {}).catchError((Object _) {});
+    await core.stop().timeout(wait, onTimeout: () {}).catchError((Object _) {});
+  }
 
   void _fail(String error) {
     _status = CoreStatus.failed;

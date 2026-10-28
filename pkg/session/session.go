@@ -12,6 +12,7 @@ import (
 
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/manifest"
+	"github.com/Medboy224/medXfer/pkg/netbind"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 )
 
@@ -25,7 +26,7 @@ func DialPeer(target string) (*net.TCPConn, error) {
 	}
 
 	// Proactively probe with a UDP datagram to warm up ARP and wake sleeping Wi-Fi radios
-	if udpConn, err := net.DialTimeout("udp4", target, 50*time.Millisecond); err == nil {
+	if udpConn, err := netbind.Dialer(50*time.Millisecond).Dial("udp4", target); err == nil {
 		_, _ = udpConn.Write([]byte{0})
 		_ = udpConn.Close()
 	}
@@ -34,7 +35,7 @@ func DialPeer(target string) (*net.TCPConn, error) {
 	var lastErr error
 
 	for _, t := range timeouts {
-		conn, err := net.DialTimeout("tcp4", target, t)
+		conn, err := netbind.Dialer(t).Dial("tcp4", target) // the joined network, on Android
 		if err == nil {
 			if tcpConn, ok := conn.(*net.TCPConn); ok {
 				_ = tcpConn.SetNoDelay(true)

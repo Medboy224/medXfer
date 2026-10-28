@@ -16,7 +16,9 @@ import org.json.JSONObject
 // background service, the network information and the storage.
 class MainActivity : FlutterActivity() {
     private val hotspot by lazy { LocalHotspot(this) }
-    private val join by lazy { WifiJoin(this) }
+    private var channel: MethodChannel? = null
+    // The joined network lost, then joined again: the core gets the new one (DISC-10, J6c).
+    private val join by lazy { WifiJoin(this) { runOnUiThread { channel?.invokeMethod("networkChanged", null) } } }
     private val p2p by lazy { WifiDirectGroup(this) }
     private val network by lazy { Network(this) }
     private val storage by lazy { Storage(this) }
@@ -25,6 +27,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.medxfer.app/platform")
+        this.channel = channel
         // A network came, went or changed: the core gets the interfaces again (DISC-10).
         network.watch { runOnUiThread { channel.invokeMethod("networkChanged", null) } }
         channel.setMethodCallHandler { call, result ->
@@ -60,6 +63,7 @@ class MainActivity : FlutterActivity() {
                         call.argument<Int>("security") ?: 1,
                     ) { info, err -> if (err != null) result.error("join", err, null) else result.success(info) }
                     "hotspotLeave" -> { join.leave(); result.success(null) }
+                    "hotspotJoinedNetwork" -> result.success(join.network)
                     // The explorer by categories (WP-B.9).
                     "libApps" -> library.apps { v, e -> reply(result, v, e) }
                     "libAppIcon" -> library.appIcon(call.argument<String>("package") ?: "", call.argument<Int>("size") ?: 96) { v, e -> reply(result, v, e) }

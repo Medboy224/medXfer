@@ -157,7 +157,7 @@ Future<void> joinByLink(BuildContext context, String text) async {
     return;
   }
   final n = link.network;
-  if (n != null && !connection.hotspot.supported) {
+  if (n != null && !connection.hotspot.canJoin) {
     final go = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(

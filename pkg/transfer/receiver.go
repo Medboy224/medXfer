@@ -15,6 +15,7 @@ import (
 
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/netbind"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/store"
 )
@@ -1197,8 +1198,7 @@ func (ru *run) connect(ctx context.Context, addr string) (net.Conn, error) {
 		if r.dial != nil {
 			raw, err = r.dial(dctx, "tcp4", addr)
 		} else {
-			var d net.Dialer
-			raw, err = d.DialContext(dctx, "tcp4", addr)
+			raw, err = netbind.Dialer(0).DialContext(dctx, "tcp4", addr) // the joined network, on Android
 		}
 		cancel()
 		if err == nil {

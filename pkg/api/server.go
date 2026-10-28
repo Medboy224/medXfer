@@ -1006,7 +1006,9 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 				ch.Close()
 				return
 			}
-			offer, mutual = trust, msg.Secret == ""
+			// A QR code's session too may be between devices of mutual trust (J6c): then nothing to
+			// offer.
+			offer, mutual = trust, s.mutual(fp, msg.TrustsYou)
 			if err := s.touchTrust(fp, msg.DeviceName, ip); err != nil {
 				s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": "could not save the trusted device: " + err.Error()}))
 			}

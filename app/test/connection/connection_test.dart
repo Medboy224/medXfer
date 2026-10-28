@@ -52,6 +52,9 @@ class _FakeHotspot implements Hotspot {
   final log = <String>[];
 
   @override
+  bool get canJoin => true;
+
+  @override
   bool get supported => true;
 
   @override
@@ -78,6 +81,50 @@ class _FakeHotspot implements Hotspot {
 
   @override
   Future<void> leave() async => log.add('leave');
+
+  @override
+  Future<int> joinedNetwork() async => 643355824141;
+}
+
+/// A desktop's network (WP-C.2 of the J6c plan): it creates one, never joins one itself.
+class _DesktopHotspot implements Hotspot {
+  final log = <String>[];
+
+  @override
+  bool get supported => true;
+
+  @override
+  bool get canJoin => false;
+
+  @override
+  Future<bool> permission() async => true;
+
+  @override
+  Future<HotspotInfo> start() async {
+    log.add('start');
+    return const HotspotInfo(
+      ssid: 'DIRECT-AB-medXfer',
+      passphrase: 'K7XQ2MPRT9ZD',
+      security: 1,
+      address: '192.168.137.1',
+      net: NetInterface(name: 'Connexion au réseau local* 2', index: 23, addrs: ['192.168.137.1/24']),
+    );
+  }
+
+  @override
+  Future<void> stop() async => log.add('stop');
+
+  @override
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async {
+    log.add('join');
+    return const HotspotInfo();
+  }
+
+  @override
+  Future<void> leave() async => log.add('leave');
+
+  @override
+  Future<int> joinedNetwork() async => 0;
 }
 
 List<Object?> _networkNames(FakeCore core) => [
@@ -365,5 +412,46 @@ void main() {
     await _settle();
     expect((notices.single as JoinFailed).ssid, 'Net');
     expect(core.calls.where((x) => x.action == 'pair_uri'), isEmpty);
+  });
+
+  test("WP-C.2: a desktop's own network: its interface alone for the core, then the enumeration back", () async {
+    final core = _core()..on('set_network_info', (_) => const FakeAnswer());
+    final h = _DesktopHotspot();
+    final c = Connection(core, hotspot: h); // a desktop: the core enumerates by itself
+    await c.openConnect();
+    expect(core.calls.where((x) => x.action == 'set_network_info'), isEmpty);
+    await c.startHotspot();
+    expect(core.calls.where((x) => x.action == 'set_network_info').single.payload, {
+      'interfaces': [
+        {'name': 'Connexion au réseau local* 2', 'index': 23, 'addrs': ['192.168.137.1/24']},
+      ],
+    });
+    core.calls.clear();
+    await c.stopHotspot();
+    expect(h.log.last, 'stop');
+    expect(core.calls.where((x) => x.action == 'set_network_info').single.payload, {'enumerate': true});
+  });
+
+  test('WP-C.2: a desktop joins no network itself: the link pairs, the user joined it first', () async {
+    final core = _core()..on('pair_uri', (_) => const FakeAnswer());
+    final h = _DesktopHotspot();
+    final c = Connection(core, hotspot: h);
+    await c.pairLink(PairLink.parse('medxfer://v1/pair?fp=AAAA&a=10.46.56.232&p=18887&s=x&exp=$_expires&ws=Net&wp=secret12&wt=1')!);
+    expect(h.log, isEmpty);
+    expect(core.calls.where((x) => x.action == 'pair_uri'), hasLength(1));
+  });
+
+  test("J6c: a network joined by a QR code: its handle goes to the core, whose sockets go through it", () async {
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_uri', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    await c.pairLink(PairLink.parse('medxfer://v1/pair?fp=AAAA&a=169.254.121.148&p=18887&s=x&exp=$_expires&ws=DIRECT-VF-medXfer&wp=K7XQ2MPRT9ZD&wt=1')!);
+    final joined = core.calls.where((x) => x.action == 'set_network_info').last.payload;
+    expect(joined['network'], 643355824141);
+    expect(core.calls.last.action, 'pair_uri', reason: 'paired once the network is given');
+    await c.leaveJoined();
+    expect(core.calls.where((x) => x.action == 'set_network_info').last.payload.containsKey('network'), isFalse);
   });
 }

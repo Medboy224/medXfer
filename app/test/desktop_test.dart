@@ -8,6 +8,8 @@ import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/platform/folders.dart';
+import 'package:medxfer/platform/hotspot.dart';
+import 'package:medxfer/platform/network.dart';
 import 'package:medxfer/settings.dart';
 import 'package:medxfer/transfer/history.dart';
 
@@ -47,13 +49,52 @@ FakeCore _core() => FakeCore()
       ]))
   ..on('send', (_) => const FakeAnswer(broadcast: [CoreEvent('file_offered', data: {'file_name': 'rapport.pdf', 'file_size': 2048})]));
 
-Future<AppState> _app(WidgetTester tester, FakeCore core) async {
+/// The network a computer creates (WP-C.2 of the J6c plan), as WindowsHotspot gives it.
+class _PcHotspot implements Hotspot {
+  final log = <String>[];
+
+  @override
+  bool get supported => true;
+
+  @override
+  bool get canJoin => false;
+
+  @override
+  Future<bool> permission() async => true;
+
+  @override
+  Future<HotspotInfo> start() async {
+    log.add('start');
+    return const HotspotInfo(
+      ssid: 'DIRECT-AB-medXfer',
+      passphrase: 'K7XQ2MPRT9ZD',
+      security: 1,
+      address: '192.168.137.1',
+      net: NetInterface(name: 'Connexion au réseau local* 2', index: 23, addrs: ['192.168.137.1/24']),
+    );
+  }
+
+  @override
+  Future<void> stop() async => log.add('stop');
+
+  @override
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) => throw UnsupportedError('no');
+
+  @override
+  Future<void> leave() async {}
+
+  @override
+  Future<int> joinedNetwork() async => 0;
+}
+
+Future<AppState> _app(WidgetTester tester, FakeCore core, {Hotspot hotspot = const NoHotspot()}) async {
   final state = AppState(
     core: core,
     folders: const _TestFolders(),
     filePicker: const _Picker([_file], _folder),
     history: MemoryHistoryStore(),
     desktop: true,
+    hotspot: hotspot,
   );
   tester.platformDispatcher.localesTestValue = [const Locale('fr')];
   addTearDown(tester.platformDispatcher.clearLocalesTestValue);
@@ -166,5 +207,37 @@ void main() {
     await tester.tap(find.byKey(const Key('basket-clear')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('basket')), findsNothing);
+  });
+
+  testWidgets('WP-C.3: this computer creates its network; the session over, it stops', (tester) async {
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_show', (_) => const FakeAnswer(replies: [
+            CoreEvent('pair_show', data: {'uri': 'medxfer://v1/pair?fp=AAAA&a=192.168.137.1&p=18887&s=x&exp=1900000000', 'expires': 1900000000, 'instance': 'medXfer-7810'}),
+          ]))
+      ..on('pair_pin_show', (_) => const FakeAnswer(replies: [
+            CoreEvent('pair_pin_shown', data: {'pin': '054 461', 'expires': 1900000000, 'address': '192.168.137.1:18887', 'instance': 'medXfer-7810'}),
+          ]));
+    final h = _PcHotspot();
+    await _app(tester, core, hotspot: h);
+    await tester.tap(find.byKey(const Key('hotspot-start')));
+    await _frames(tester);
+    expect(h.log, ['start']);
+    expect(core.calls.where((c) => c.action == 'set_network_info').last.payload, {
+      'interfaces': [
+        {'name': 'Connexion au réseau local* 2', 'index': 23, 'addrs': ['192.168.137.1/24']},
+      ],
+    });
+    expect(find.text('Point d\'accès actif'), findsOneWidget);
+
+    // The phone scanned the QR code: paired, the screen closes, the network stays for the session.
+    core.emit(const CoreEvent('paired', data: {'ip': '192.168.137.20', 'device_name': 'Galaxy A57'}));
+    await _frames(tester);
+    expect(find.text('Point d\'accès actif'), findsNothing);
+    expect(h.log, ['start']);
+    core.emit(const CoreEvent('disconnected', data: {'reason': 'peer requested disconnect'}));
+    await _frames(tester);
+    expect(h.log, ['start', 'stop']);
+    expect(core.calls.where((c) => c.action == 'set_network_info').last.payload, {'enumerate': true});
   });
 }

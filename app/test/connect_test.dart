@@ -54,6 +54,8 @@ class _Hotspot implements Hotspot {
   @override
   bool get supported => true;
   @override
+  bool get canJoin => true;
+  @override
   Future<bool> permission() async => true;
   @override
   Future<HotspotInfo> start() async => const HotspotInfo(ssid: 'AndroidShare_1732', passphrase: 'vvrtsy', security: 2, address: '10.46.56.232');
@@ -63,6 +65,8 @@ class _Hotspot implements Hotspot {
   Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async => const HotspotInfo();
   @override
   Future<void> leave() async {}
+  @override
+  Future<int> joinedNetwork() async => 0;
 }
 
 /// A camera that reads [text] at once.

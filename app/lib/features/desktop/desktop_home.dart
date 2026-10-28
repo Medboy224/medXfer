@@ -40,6 +40,7 @@ class _DesktopHomeState extends State<DesktopHome> {
   late final Connection _c = AppScope.of(context, listen: false).state.connection;
   Timer? _rescan;
   bool _asking = false;
+  bool _hadSession = false;
 
   @override
   void initState() {
@@ -66,8 +67,13 @@ class _DesktopHomeState extends State<DesktopHome> {
     super.dispose();
   }
 
-  /// A device of the list shows a PIN: this user types it, whatever the page.
+  /// A device of the list shows a PIN: this user types it, whatever the page. The session over,
+  /// the network this computer made for it stops: the window keeps looking for devices, which
+  /// on the phone the end of Connect would have done (WP-C.3 of the J6c plan).
   void _changed() {
+    final had = _hadSession;
+    _hadSession = _c.session != null;
+    if (had && !_hadSession && _c.myHotspot != null && !_c.codeOpen) unawaited(_c.stopHotspot());
     final target = _c.pinNeeded;
     if (!mounted || _c.session != null || target == null || _asking) return;
     unawaited(_askPin(target));

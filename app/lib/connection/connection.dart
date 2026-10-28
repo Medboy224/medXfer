@@ -204,6 +204,7 @@ class Connection extends ChangeNotifier {
   /// The access point this device creates, or joins (DISC-12, WP-B.7).
   final Hotspot hotspot;
   HotspotInfo? _myHotspot;
+  bool _gaveNet = false; // a desktop gave the core its own network's interface (pushNetwork)
   LinkNetwork? _joined;
   bool _hotspotBusy = false;
   Timer? _scanLimit;
@@ -263,6 +264,9 @@ class Connection extends ChangeNotifier {
 
   /// Creating or joining an access point is under way.
   bool get hotspotBusy => _hotspotBusy;
+
+  /// A screen shows this device's code (openCode).
+  bool get codeOpen => _codeOpen;
 
   /// What the QR code shows: the core's link, with the network when this device created one.
   String? get qrData {
@@ -338,18 +342,37 @@ class Connection extends ChangeNotifier {
     if (_myHotspot != null && _session == null) await stopHotspot();
   }
 
-  /// Gives the core the interfaces the platform sees (DISC-10); nothing on the desktops. While
-  /// this device's access point runs, that interface alone: the QR code, the PIN and the
-  /// announcements then carry the address the joining device reaches (probe of WP-B.7).
+  /// Gives the core the interfaces the platform sees (DISC-10). While this device's access point
+  /// runs, that interface alone: the QR code, the PIN and the announcements then carry the
+  /// address the joining device reaches (probe of WP-B.7). A desktop's core enumerates by
+  /// itself, except while the computer's own network runs (WP-C.2 of the J6c plan): it gets
+  /// that interface, then the enumeration back.
   Future<void> pushNetwork() async {
     var interfaces = await network.interfaces();
-    if (interfaces == null || interfaces.isEmpty) return;
+    if (interfaces == null) {
+      final net = _myHotspot?.net;
+      if (net != null) {
+        _gaveNet = true;
+        await _call('set_network_info', {'interfaces': [net.toJson()]});
+      } else if (_gaveNet) {
+        _gaveNet = false;
+        await _call('set_network_info', {'enumerate': true});
+      }
+      return;
+    }
+    if (interfaces.isEmpty) return;
     final ap = _myHotspot?.address;
     if (ap != null && ap.isNotEmpty) {
       final only = [for (final i in interfaces) if (i.addrs.any((a) => a.split('/').first == ap)) i];
       if (only.isNotEmpty) interfaces = only;
     }
-    await _call('set_network_info', {'interfaces': [for (final i in interfaces) i.toJson()]});
+    // A network joined by a QR code: the core's own sockets go through it (pkg/netbind, J6c);
+    // asked each time, its handle changes when it is joined again after a loss.
+    final joined = _joined != null ? await hotspot.joinedNetwork() : 0;
+    await _call('set_network_info', {
+      'interfaces': [for (final i in interfaces) i.toJson()],
+      if (joined != 0) 'network': joined,
+    });
   }
 
   /// Creates this device's access point (Android), then a QR code and PIN that carry it.
@@ -388,7 +411,7 @@ class Connection extends ChangeNotifier {
   /// first (Android; on a desktop the user joins it in the system's settings beforehand).
   Future<void> pairLink(PairLink link) async {
     final n = link.network;
-    if (n != null && hotspot.supported && _joined?.ssid != n.ssid) {
+    if (n != null && hotspot.canJoin && _joined?.ssid != n.ssid) {
       _hotspotBusy = true;
       notifyListeners();
       try {
