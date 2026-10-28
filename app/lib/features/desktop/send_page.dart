@@ -2,7 +2,8 @@
 /// chosen, as many times as wanted, fill one list, sent in one transfer to the device connected
 /// (WP-B.8: the system's dialog chooses files or a folder, never both). Beside it, the
 /// connection, as on the phone (decided on 27 October 2026): the devices of the same network,
-/// which see this one too; else this one creates a connection, or joins another's. Connecting
+/// which see this one too; else this one creates its own network (WP-C.3 of the J6c plan), or
+/// joins another's. Connecting
 /// says nothing of who sends: once connected, either device does.
 library;
 
@@ -22,6 +23,7 @@ import '../../widgets/drop_zone.dart';
 import '../../widgets/format.dart';
 import '../connect/connect_screen.dart';
 import '../connect/dialogs.dart';
+import '../connect/hotspot_screen.dart';
 
 class SendPage extends StatefulWidget {
   const SendPage({super.key});
@@ -341,9 +343,29 @@ class _ConnectionPanel extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
             child: Text(connection.scanning ? l.searching : l.nearbyEmpty, style: TextStyle(color: c.muted)),
           ),
+        // Discovery blocked by the Wi-Fi or a firewall: this computer's address and PIN.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(key: const Key('not-listed'), onPressed: () => _create(context), child: Text(l.notListed)),
+        ),
         heading(l.otherNetwork),
-        OutlinedButton(key: const Key('create-connection'), style: secondary, onPressed: () => _create(context), child: Text(l.createConnection)),
-        const SizedBox(height: 8),
+        // This computer creates the network (WP-C.3 of the J6c plan): its QR code carries it.
+        if (connection.hotspot.supported) ...[
+          FilledButton.icon(
+            key: const Key('hotspot-start'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(0, 44),
+              shape: const StadiumBorder(),
+              textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w700),
+            ),
+            onPressed: connection.hotspotBusy
+                ? null
+                : () => unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const HotspotScreen()))),
+            icon: const Icon(Icons.wifi_tethering_rounded),
+            label: Text(l.hotspotStart),
+          ),
+          const SizedBox(height: 8),
+        ],
         Row(
           children: [
             Expanded(

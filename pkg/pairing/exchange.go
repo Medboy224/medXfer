@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/netbind"
 	"github.com/Medboy224/medXfer/pkg/pake"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
@@ -466,7 +467,7 @@ func dial(ctx context.Context, addr string, cfg securechan.Config) (*securechan.
 	if err != nil {
 		return nil, nil, "", err
 	}
-	d := net.Dialer{Timeout: 5 * time.Second, KeepAlive: 15 * time.Second}
+	d := net.Dialer{Timeout: 5 * time.Second, KeepAlive: 15 * time.Second, Control: netbind.Control}
 	raw, err := d.DialContext(ctx, "tcp4", addr)
 	if err != nil {
 		return nil, nil, "", err

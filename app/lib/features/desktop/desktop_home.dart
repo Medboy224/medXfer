@@ -40,6 +40,8 @@ class _DesktopHomeState extends State<DesktopHome> {
   late final Connection _c = AppScope.of(context, listen: false).state.connection;
   Timer? _rescan;
   bool _asking = false;
+  bool _hadSession = false;
+  Timer? _stopLater; // this computer's network, kept after a session lost (J6c)
 
   @override
   void initState() {
@@ -60,14 +62,33 @@ class _DesktopHomeState extends State<DesktopHome> {
   @override
   void dispose() {
     _rescan?.cancel();
+    _stopLater?.cancel();
     _c.removeListener(_changed);
     // Not during the unmount: the model tells its listeners, and the tree is locked now.
     scheduleMicrotask(() => unawaited(_c.closeConnect()));
     super.dispose();
   }
 
-  /// A device of the list shows a PIN: this user types it, whatever the page.
+  /// A device of the list shows a PIN: this user types it, whatever the page. The session over,
+  /// the network this computer made for it stops: the window keeps looking for devices, which
+  /// on the phone the end of Connect would have done (WP-C.3 of the J6c plan). A session lost
+  /// (timed out) keeps it rejoinFor: the device comes back.
   void _changed() {
+    final had = _hadSession;
+    _hadSession = _c.session != null;
+    if (_hadSession) _stopLater?.cancel();
+    if (had && !_hadSession && _c.myHotspot != null && !_c.codeOpen) {
+      if (_c.lastEndTimedOut) {
+        // Lost, not ended: the other device joins this network again (J6c). Stopped at once,
+        // it had nothing to come back to; it waits as long as the device tries (rejoinFor).
+        _stopLater?.cancel();
+        _stopLater = Timer(Connection.rejoinFor, () {
+          if (mounted && _c.session == null && _c.myHotspot != null && !_c.codeOpen) unawaited(_c.stopHotspot());
+        });
+      } else {
+        unawaited(_c.stopHotspot());
+      }
+    }
     final target = _c.pinNeeded;
     if (!mounted || _c.session != null || target == null || _asking) return;
     unawaited(_askPin(target));

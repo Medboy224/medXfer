@@ -1,6 +1,9 @@
 #include "flutter_window.h"
 
+#include <flutter/standard_method_codec.h>
+
 #include <optional>
+#include <string>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -25,6 +28,38 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  hotspot_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "dev.medxfer.app/hotspot",
+      &flutter::StandardMethodCodec::GetInstance());
+  hotspot_channel_->SetMethodCallHandler([this](const auto& call, auto result) {
+    if (call.method_name() == "start") {
+      const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
+      auto text = [args](const char* key) -> std::string {
+        if (!args) return "";
+        auto it = args->find(flutter::EncodableValue(key));
+        if (it == args->end()) return "";
+        const auto* s = std::get_if<std::string>(&it->second);
+        return s ? *s : "";
+      };
+      HotspotInterface group;
+      auto error = hotspot_.Start(text("ssid"), text("passphrase"), &group);
+      if (error) {
+        result->Error("hotspot", *error);
+      } else {
+        result->Success(flutter::EncodableValue(flutter::EncodableMap{
+            {flutter::EncodableValue("name"), flutter::EncodableValue(group.name)},
+            {flutter::EncodableValue("index"), flutter::EncodableValue(static_cast<int32_t>(group.index))},
+            {flutter::EncodableValue("address"), flutter::EncodableValue(group.address)},
+            {flutter::EncodableValue("prefix"), flutter::EncodableValue(static_cast<int32_t>(group.prefix))},
+        }));
+      }
+    } else if (call.method_name() == "stop") {
+      hotspot_.Stop();
+      result->Success();
+    } else {
+      result->NotImplemented();
+    }
+  });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -40,6 +75,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  hotspot_.Stop();
+  hotspot_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

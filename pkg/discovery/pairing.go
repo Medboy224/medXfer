@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Medboy224/medXfer/pkg/netbind"
 )
 
 // GeneratePairingCode creates a 6-digit code: "XXX-YYY".
@@ -294,7 +296,7 @@ func codeProbeTarget(packet []byte, src *net.UDPAddr) (string, bool) {
 
 // probePeerForCode connects to `ip:DiscoveryPort` via TCP and verifies pairing code
 func probePeerForCode(ctx context.Context, ip, expectedCode string, timeout time.Duration) *Peer {
-	d := net.Dialer{Timeout: timeout}
+	d := netbind.Dialer(timeout)
 	target := net.JoinHostPort(ip, strconv.Itoa(int(DiscoveryPort)))
 	conn, err := d.DialContext(ctx, "tcp4", target)
 	if err != nil {

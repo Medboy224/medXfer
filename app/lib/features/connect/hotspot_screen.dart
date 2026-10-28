@@ -1,5 +1,5 @@
-/// This phone's access point (mockup « Point d'accès actif », DISC-12): created when the screen
-/// opens. Its QR code carries the network and the pairing: the other device joins and connects
+/// This device's access point (mockup « Point d'accès actif », DISC-12): created when the screen
+/// opens, by the phone or, since J6c, by a computer. Its QR code carries the network and the pairing: the other device joins and connects
 /// at once. Without a camera, three steps: join this Wi-Fi, come back to medXfer, type the
 /// address and PIN. Leaving before anyone joined stops the access point; once paired, the
 /// screen closes and the access point stays for the session.
@@ -131,7 +131,7 @@ class _HotspotScreenState extends State<HotspotScreen> {
                           _Field(label: l.networkLabel, value: h.ssid ?? '', valueKey: const Key('hotspot-ssid')),
                           _Field(label: l.passwordLabel, value: h.passphrase ?? '', valueKey: const Key('hotspot-password')),
                           const SizedBox(height: 4),
-                          Text(l.chosenByAndroid, style: TextStyle(color: c.muted, fontSize: 12)),
+                          Text(_c.hotspot.canJoin ? l.chosenByAndroid : l.chosenByApp, style: TextStyle(color: c.muted, fontSize: 12)),
                         ],
                       ),
                     ),

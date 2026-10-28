@@ -236,6 +236,58 @@ func TestMutualTrustBetweenDaemons(t *testing.T) {
 	na.WaitEvent("pin_requested", 0)
 }
 
+// J6c, found on the real devices: two devices of mutual trust that meet again by a QR code (the
+// phone scanning the PC's, the PC's network created for it) are of mutual trust: the session
+// says so, and trust is not offered again. Before, a QR code's session was never mutual: each
+// scan, with "remember this device" on, offered trust again.
+func TestQRCodeBetweenTrustedDevicesIsMutual(t *testing.T) {
+	a, na := startOwnIdentity(t, "Laptop")
+	b, nb := startOwnIdentity(t, "Phone")
+	scan := func() {
+		t.Helper()
+		na.Request("pair_show", map[string]any{"trust": true}) // "remember this device", as the app does
+		var shown struct {
+			URI string `json:"uri"`
+		}
+		if err := na.WaitEvent("pair_show", 0).Decode(&shown); err != nil {
+			t.Fatal(err)
+		}
+		u, err := pairing.Parse(shown.URI, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.Host = "127.0.0.1"
+		nb.Request("pair_uri", map[string]any{"uri": u.String(), "trust": true})
+	}
+	scan()
+	na.WaitEvent("paired", 0)
+	nb.WaitEvent("paired", 0)
+	// Both offered (the code's shower, the scanner): both commit, nobody has to answer.
+	na.WaitEvent("trust_established", 0)
+	nb.WaitEvent("trust_established", 0)
+	if !a.trust.Contains(b.identity.Fingerprint) || !b.trust.Contains(a.identity.Fingerprint) {
+		t.Fatal("mutual trust not written on both sides")
+	}
+
+	nb.Request("disconnect", nil)
+	na.WaitEvent("disconnected", 0)
+	scan()
+	var paired struct {
+		Mutual bool `json:"mutual"`
+	}
+	for _, n := range []*testkit.Node{na, nb} {
+		if err := n.WaitEvent("paired", 0).Decode(&paired); err != nil || !paired.Mutual {
+			t.Fatalf("the QR code's session between trusted devices: %+v, %v; want mutual", paired, err)
+		}
+	}
+	offered := func(e testkit.Event) bool { return e.Event == "trust_offered" }
+	for _, n := range []*testkit.Node{na, nb} {
+		if _, ok := n.TryWaitFor(offered, 2*time.Second); ok {
+			t.Fatal("trust offered again between devices of mutual trust")
+		}
+	}
+}
+
 // A no writes nothing, and the offerer hears it.
 func TestTrustOfferDeclined(t *testing.T) {
 	a, na := startOwnIdentity(t, "Laptop")

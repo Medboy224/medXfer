@@ -204,7 +204,21 @@ class Connection extends ChangeNotifier {
   /// The access point this device creates, or joins (DISC-12, WP-B.7).
   final Hotspot hotspot;
   HotspotInfo? _myHotspot;
+  bool _gaveNet = false; // a desktop gave the core its own network's interface (pushNetwork)
   LinkNetwork? _joined;
+  Timer? _giveUp; // the joined network kept after a session timed out (rejoinFor)
+
+  /// How long the joined network is kept, and joined again if lost, once its session timed out:
+  /// as long as the core dials it again (redialFor, J6c). Then left.
+  static Duration rejoinFor = const Duration(minutes: 10);
+
+  /// This device is on another's network, joined by its QR code, or joining it again (J6c).
+  bool get joining => _joined != null;
+
+  /// The last session ended by its grace period running out: lost, not ended (J6c). The other
+  /// device may come back.
+  bool get lastEndTimedOut => _lastEndTimedOut;
+  bool _lastEndTimedOut = false;
   bool _hotspotBusy = false;
   Timer? _scanLimit;
   late final StreamSubscription<CoreEvent> _sub;
@@ -263,6 +277,9 @@ class Connection extends ChangeNotifier {
 
   /// Creating or joining an access point is under way.
   bool get hotspotBusy => _hotspotBusy;
+
+  /// A screen shows this device's code (openCode).
+  bool get codeOpen => _codeOpen;
 
   /// What the QR code shows: the core's link, with the network when this device created one.
   String? get qrData {
@@ -338,18 +355,37 @@ class Connection extends ChangeNotifier {
     if (_myHotspot != null && _session == null) await stopHotspot();
   }
 
-  /// Gives the core the interfaces the platform sees (DISC-10); nothing on the desktops. While
-  /// this device's access point runs, that interface alone: the QR code, the PIN and the
-  /// announcements then carry the address the joining device reaches (probe of WP-B.7).
+  /// Gives the core the interfaces the platform sees (DISC-10). While this device's access point
+  /// runs, that interface alone: the QR code, the PIN and the announcements then carry the
+  /// address the joining device reaches (probe of WP-B.7). A desktop's core enumerates by
+  /// itself, except while the computer's own network runs (WP-C.2 of the J6c plan): it gets
+  /// that interface, then the enumeration back.
   Future<void> pushNetwork() async {
     var interfaces = await network.interfaces();
-    if (interfaces == null || interfaces.isEmpty) return;
+    if (interfaces == null) {
+      final net = _myHotspot?.net;
+      if (net != null) {
+        _gaveNet = true;
+        await _call('set_network_info', {'interfaces': [net.toJson()]});
+      } else if (_gaveNet) {
+        _gaveNet = false;
+        await _call('set_network_info', {'enumerate': true});
+      }
+      return;
+    }
+    if (interfaces.isEmpty) return;
     final ap = _myHotspot?.address;
     if (ap != null && ap.isNotEmpty) {
       final only = [for (final i in interfaces) if (i.addrs.any((a) => a.split('/').first == ap)) i];
       if (only.isNotEmpty) interfaces = only;
     }
-    await _call('set_network_info', {'interfaces': [for (final i in interfaces) i.toJson()]});
+    // A network joined by a QR code: the core's own sockets go through it (pkg/netbind, J6c);
+    // asked each time, its handle changes when it is joined again after a loss.
+    final joined = _joined != null ? await hotspot.joinedNetwork() : 0;
+    await _call('set_network_info', {
+      'interfaces': [for (final i in interfaces) i.toJson()],
+      if (joined != 0) 'network': joined,
+    });
   }
 
   /// Creates this device's access point (Android), then a QR code and PIN that carry it.
@@ -388,7 +424,7 @@ class Connection extends ChangeNotifier {
   /// first (Android; on a desktop the user joins it in the system's settings beforehand).
   Future<void> pairLink(PairLink link) async {
     final n = link.network;
-    if (n != null && hotspot.supported && _joined?.ssid != n.ssid) {
+    if (n != null && hotspot.canJoin && _joined?.ssid != n.ssid) {
       _hotspotBusy = true;
       notifyListeners();
       try {
@@ -412,8 +448,11 @@ class Connection extends ChangeNotifier {
 
   /// Leaves the access point joined by [pairLink]: back to the usual network.
   Future<void> leaveJoined() async {
+    _giveUp?.cancel();
+    _giveUp = null;
     if (_joined == null) return;
     _joined = null;
+    notifyListeners();
     await hotspot.leave();
     await pushNetwork();
   }
@@ -560,6 +599,7 @@ class Connection extends ChangeNotifier {
       case 'reconnecting':
         _reconnecting = true;
       case 'disconnected':
+        _lastEndTimedOut = m['reason'] == 'connection timed out';
         if (_session != null) {
           _notices.add(Disconnected(byPeer: (m['reason'] as String?) != 'user requested disconnect'));
         }
@@ -568,12 +608,27 @@ class Connection extends ChangeNotifier {
         _trustOffer = null;
         // The network made for this session is no longer needed.
         if (_myHotspot != null && !_showing) unawaited(stopHotspot());
-        if (_joined != null) unawaited(leaveJoined());
+        if (_joined != null) {
+          if (m['reason'] == 'connection timed out') {
+            // Lost, not left (J6c): the network is joined again (WifiJoin) and the session
+            // dialed again (redial), slower in the background, where Android scans less. Leaving
+            // now gave up both; it waits rejoinFor.
+            _giveUp?.cancel();
+            _giveUp = Timer(rejoinFor, () {
+              if (_session == null) unawaited(leaveJoined());
+            });
+          } else {
+            unawaited(leaveJoined());
+          }
+        }
       case 'status':
         _instance = (m['instance'] as String?) ?? _instance;
         if (m['paired'] == true && _session == null) {
           _session = PeerSession(name: (m['paired_device'] as String?) ?? '', ip: (m['paired_ip'] as String?) ?? '');
-        } else if (m['paired'] == false && _session != null) {
+        } else if (m['paired'] == false && _session != null && !_reconnecting) {
+          // Not while the session comes back: the core says "not paired" in its grace period, and
+          // a session dropped then let the foreground service go, which Android does not let an
+          // app in the background start again: its network was cut (J6c). disconnected decides.
           _session = null;
         }
       case 'trust_offered':
@@ -621,6 +676,7 @@ class Connection extends ChangeNotifier {
   @override
   void dispose() {
     _scanLimit?.cancel();
+    _giveUp?.cancel();
     _netSub?.cancel();
     _sub.cancel();
     _notices.close();

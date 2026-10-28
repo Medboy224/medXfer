@@ -15,6 +15,8 @@ import (
 	"net"
 	"sort"
 	"time"
+
+	"github.com/Medboy224/medXfer/pkg/netbind"
 )
 
 // Network benchmark (DEV-07, base version): latency by ping-pong, then throughput in both
@@ -138,8 +140,7 @@ func RunNetBench(ctx context.Context, addr, code string, size int64) (*NetBenchR
 	if size < NetBenchMinSize || size > NetBenchMaxSize {
 		return nil, fmt.Errorf("size must be between %d and %d bytes", NetBenchMinSize, NetBenchMaxSize)
 	}
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	conn, err := netbind.Dialer(0).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}

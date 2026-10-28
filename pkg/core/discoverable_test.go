@@ -6,6 +6,7 @@ import (
 
 	"github.com/Medboy224/medXfer/pkg/api"
 	"github.com/Medboy224/medXfer/pkg/discovery"
+	"github.com/Medboy224/medXfer/pkg/netbind"
 )
 
 func statusOf(t *testing.T, r Response) map[string]any {
@@ -52,9 +53,24 @@ func TestSetNetworkInfoAction(t *testing.T) {
 	if st := statusOf(t, ok); st["local_ip"] != "192.168.1.20" {
 		t.Fatalf("local_ip %v, want the platform's address", st["local_ip"])
 	}
-	for _, bad := range []string{`{}`, `{"interfaces":[{"name":"wlan0","addrs":["nope"]}]}`, `[]`} {
+	for _, bad := range []string{`{}`, `{"interfaces":[{"name":"wlan0","addrs":["nope"]}]}`, `[]`,
+		`{"interfaces":[{"name":"wlan0","addrs":["192.168.1.20/24"]}],"enumerate":true}`} {
 		if r := c.Call(api.RequestMessage{Action: "set_network_info", Payload: json.RawMessage(bad)}); r.OK {
 			t.Fatalf("accepted %s", bad)
 		}
+	}
+	// J6c: Android gives the network it joined (a QR code's); the core's sockets go through it.
+	joined := c.Call(api.RequestMessage{Action: "set_network_info",
+		Payload: json.RawMessage(`{"interfaces":[{"name":"wlan0","index":46,"addrs":["169.254.121.149/16"]}],"network":643355824141}`)})
+	if statusOf(t, joined); netbind.Network() != 643355824141 {
+		t.Fatalf("network %d, want the one joined", netbind.Network())
+	}
+	// WP-C.2: a desktop whose own network stopped gives the enumeration back to the core.
+	back := c.Call(api.RequestMessage{Action: "set_network_info", Payload: json.RawMessage(`{"enumerate":true}`)})
+	if st := statusOf(t, back); st["local_ip"] == "192.168.1.20" {
+		t.Fatal("the platform's address stayed after enumerate")
+	}
+	if netbind.Network() != 0 {
+		t.Fatal("the sockets stay tied to a network after enumerate")
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/netbind"
 )
 
 // ALPN is the only application protocol spoken on the channel (CHAN-02).
@@ -266,7 +267,7 @@ func Client(ctx context.Context, raw net.Conn, cfg Config) (*Conn, error) {
 
 // Dial connects to addr and runs the client handshake (CHAN-07: connect timeout, keep-alive).
 func Dial(ctx context.Context, addr string, cfg Config) (*Conn, error) {
-	d := net.Dialer{Timeout: cfg.timeout(), KeepAlive: 15 * time.Second}
+	d := net.Dialer{Timeout: cfg.timeout(), KeepAlive: 15 * time.Second, Control: netbind.Control}
 	raw, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err

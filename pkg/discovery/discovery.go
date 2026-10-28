@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/manifest"
+	"github.com/Medboy224/medXfer/pkg/netbind"
 )
 
 const (
@@ -338,7 +339,7 @@ func sweepPeers() []Peer {
 			return
 		}
 		target := net.JoinHostPort(ip, strconv.Itoa(int(DiscoveryPort)))
-		conn, err := net.DialTimeout("tcp4", target, 350*time.Millisecond)
+		conn, err := netbind.Dialer(350*time.Millisecond).Dial("tcp4", target)
 		if err != nil {
 			return
 		}

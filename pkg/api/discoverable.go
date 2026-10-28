@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/discovery"
+	"github.com/Medboy224/medXfer/pkg/netbind"
 	"github.com/Medboy224/medXfer/pkg/pairing"
 )
 
@@ -70,20 +71,27 @@ func (s *DaemonServer) handleSetDiscoverable(rs Responder, req RequestMessage) {
 }
 
 // SetNetworkInfoPayload is the payload of set_network_info: the interfaces the platform sees.
+// Enumerate gives the enumeration back to the core: a desktop whose own network has stopped
+// (WP-C.2 of the J6c plan) had given only that network's interface.
+// Network is, on Android, the handle of the network the app joined (a QR code's, not the default
+// one): the core's sockets go through it (netbind); 0 for the default network.
 type SetNetworkInfoPayload struct {
 	Interfaces []discovery.NetworkInterface `json:"interfaces"`
+	Enumerate  bool                         `json:"enumerate,omitempty"`
+	Network    uint64                       `json:"network,omitempty"`
 }
 
 func (s *DaemonServer) handleSetNetworkInfo(rs Responder, req RequestMessage) {
 	var p SetNetworkInfoPayload
-	if err := json.Unmarshal(req.Payload, &p); err != nil || p.Interfaces == nil {
+	if err := json.Unmarshal(req.Payload, &p); err != nil || (p.Interfaces == nil) == !p.Enumerate {
 		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid set_network_info payload"}, req.ID))
 		return
 	}
-	if err := discovery.SetNetworkInfo(p.Interfaces); err != nil {
+	if err := discovery.SetNetworkInfo(p.Interfaces); err != nil { // nil with Enumerate
 		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 		return
 	}
+	netbind.SetNetwork(p.Network)
 	if s.Discoverable() { // announce the new address, from the new interface
 		s.SetDiscoverable(false)
 		s.SetDiscoverable(true)

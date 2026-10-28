@@ -117,6 +117,21 @@ Reste, avec WP-C.5 : le téléphone qui rejoint le réseau du PC par le QR, et l
 - Il s'arrête quand on ferme sa fenêtre si personne ne l'a rejoint, sinon à la fin de la session. Le Wi-Fi d'origine revient.
 - `DISC-12` mis à jour dans la bible.
 
+**Fait** (28 octobre, avec WP-C.3) :
+- **Windows** : `hotspot.cpp` (C++/WinRT), un groupe Wi-Fi Direct *legacy* dont l'application tire le nom et le mot de passe ; il rend aussi l'interface du groupe.
+  - L'essai réel a montré que Windows n'y distribue **aucune adresse** : Zorin y restait sans adresse (`ip-config-unavailable`).
+  - « Point d'accès mobile » n'en donnait pas non plus sur ce PC : son partage de connexion (ICS) est réglé sur la carte Ethernet.
+  - D'où `lib/platform/dhcp_server.dart` : un serveur DHCP minimal (DISCOVER → OFFER, REQUEST → ACK ou NAK, sans routeur ni DNS), lié à la seule adresse du groupe. Plage : le sous-réseau du groupe, 169.254.0.0/16, sans droits administrateur.
+- **Linux** : `nmcli`, réseau précédent rétabli à l'arrêt.
+- **Le cœur** :
+  - `set_network_info` prend `{"enumerate": true}`, qui rend l'énumération au cœur une fois le réseau du PC arrêté ;
+  - `network`, sous Android, porte le réseau rejoint.
+- **Android, l'appareil qui rejoint** : les sockets Go ne voient pas `bindProcessToNetwork` ; elles partaient par le réseau par défaut (« network is unreachable »). `pkg/netbind` les lie au réseau rejoint par `android_setsocknetwork` (NDK).
+- **Confiance** : une session ouverte par un QR entre appareils de confiance mutuelle est mutuelle ; la confiance n'est plus reproposée à chaque scan.
+- **Essai réel** : le Galaxy A57 scanne le QR du PC Windows, rejoint son réseau, obtient 169.254.121.149, s'appaire, et un transfert passe.
+
+**Réserve** : le PC Windows coupe le Galaxy A57 toutes les 2 min exactement (« Sécurité sans fil interrompue » côté Windows), pas Zorin (5 min sans coupure, avec ou sans DHCP). Cause probable : la sécurité du lien entre Windows et Android (trames de gestion protégées, ou renouvellement des clés). Palliatif : le téléphone rejoint seul le réseau perdu (Android ne redemande pas l'accord), la session revient seule (#202) : environ 3 s de coupure toutes les 2 min. La cause est à chercher avec le second téléphone (WP-C.5).
+
 ### WP-C.3 — Écran du PC · S
 
 - Dans la colonne « Connexion », la partie « Pas sur le même réseau » propose **« Créer un point d'accès »**, quand l'adaptateur le permet.
@@ -156,5 +171,5 @@ Réponses de l'utilisateur du 28 octobre 2026.
 | C1 | Le point d'accès du PC, sur quels systèmes ? | ✅ **Windows et Linux** en J6c. | Windows seul, Linux en J8 : J6c plus court. |
 | C2 | L'essai #169 (un second téléphone rejoint par QR) | ✅ **En J6c** : un second téléphone Android est disponible. | — |
 | C3 | Clients de la sonde à 5 GHz | ✅ **Le PC et Zorin**, s'il capte le 5 GHz. | Le PC seul. |
-| C4 | L'API du point d'accès sous Windows | ✅ **Wi-Fi Direct, réglages *legacy*** (`WiFiDirectAdvertisementPublisher`), tranché par la sonde WP-C.1 : il crée un réseau sans connexion Internet, sans droits administrateur. | « Point d'accès mobile » : impossible sans connexion à partager, c'est-à-dire justement quand aucun réseau n'est disponible. |
+| C4 | L'API du point d'accès sous Windows | ✅ **Wi-Fi Direct, réglages *legacy*** (`WiFiDirectAdvertisementPublisher`), tranché par la sonde WP-C.1 : il crée un réseau sans connexion Internet, sans droits administrateur. Windows n'y distribuant pas d'adresses, **l'application y sert le DHCP** (décision du 28 octobre, plutôt que de réparer le partage ICS ou de reporter Windows à J8). | « Point d'accès mobile » : impossible sans connexion à partager, c'est-à-dire justement quand aucun réseau n'est disponible. |
 | C5 | Le PC à 5 GHz | ✅ **Sondé aussi** (28 octobre) : le PC crée-t-il son réseau à 5 GHz, par chaque API, dans le respect de la réglementation (§ WP-C.0) ? | Le 5 GHz du téléphone seul. |

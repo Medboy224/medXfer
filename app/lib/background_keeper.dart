@@ -1,5 +1,5 @@
 /// Keeps the app alive in the background while something runs (API-08, WP-B.4): the Connect
-/// screen open, a session, an offer waiting, a transfer, the hotspot. Android's foreground
+/// screen open, a session, an offer waiting, a transfer, the hotspot, another's network joined. Android's foreground
 /// service then holds the network, and its notification says what runs; once nothing does,
 /// it goes. It reads the models of the connection and of the transfers.
 library;
@@ -68,6 +68,9 @@ class BackgroundKeeper {
     final s = connection.session;
     if (s != null) return Notice(l.connectedTo(s.name.isEmpty ? s.ip : s.name), l.notifSession);
     if (connection.myHotspot != null) return Notice('medXfer', l.notifHotspot);
+    // Another's network, lost with its session, joined again: without the service, Android cut
+    // the network of the app in the background, and nothing came back (J6c).
+    if (connection.joining) return Notice('medXfer', l.reconnecting);
     if (connection.showing) return Notice('medXfer', l.notifVisible);
     return null;
   }
