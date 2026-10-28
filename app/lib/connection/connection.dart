@@ -206,6 +206,14 @@ class Connection extends ChangeNotifier {
   HotspotInfo? _myHotspot;
   bool _gaveNet = false; // a desktop gave the core its own network's interface (pushNetwork)
   LinkNetwork? _joined;
+  Timer? _giveUp; // the joined network kept after a session timed out (rejoinFor)
+
+  /// How long the joined network is kept, and joined again if lost, once its session timed out:
+  /// as long as the core dials it again (redialFor, J6c). Then left.
+  static Duration rejoinFor = const Duration(minutes: 10);
+
+  /// This device is on another's network, joined by its QR code, or joining it again (J6c).
+  bool get joining => _joined != null;
   bool _hotspotBusy = false;
   Timer? _scanLimit;
   late final StreamSubscription<CoreEvent> _sub;
@@ -435,8 +443,11 @@ class Connection extends ChangeNotifier {
 
   /// Leaves the access point joined by [pairLink]: back to the usual network.
   Future<void> leaveJoined() async {
+    _giveUp?.cancel();
+    _giveUp = null;
     if (_joined == null) return;
     _joined = null;
+    notifyListeners();
     await hotspot.leave();
     await pushNetwork();
   }
@@ -591,7 +602,19 @@ class Connection extends ChangeNotifier {
         _trustOffer = null;
         // The network made for this session is no longer needed.
         if (_myHotspot != null && !_showing) unawaited(stopHotspot());
-        if (_joined != null) unawaited(leaveJoined());
+        if (_joined != null) {
+          if (m['reason'] == 'connection timed out') {
+            // Lost, not left (J6c): the network is joined again (WifiJoin) and the session
+            // dialed again (redial), slower in the background, where Android scans less. Leaving
+            // now gave up both; it waits rejoinFor.
+            _giveUp?.cancel();
+            _giveUp = Timer(rejoinFor, () {
+              if (_session == null) unawaited(leaveJoined());
+            });
+          } else {
+            unawaited(leaveJoined());
+          }
+        }
       case 'status':
         _instance = (m['instance'] as String?) ?? _instance;
         if (m['paired'] == true && _session == null) {
@@ -647,6 +670,7 @@ class Connection extends ChangeNotifier {
   @override
   void dispose() {
     _scanLimit?.cancel();
+    _giveUp?.cancel();
     _netSub?.cancel();
     _sub.cancel();
     _notices.close();

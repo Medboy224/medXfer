@@ -468,4 +468,44 @@ void main() {
     await c.leaveJoined();
     expect(core.calls.where((x) => x.action == 'set_network_info').last.payload.containsKey('network'), isFalse);
   });
+
+  test("J6c: a session timed out keeps the network joined by a QR code, joined again; a disconnect leaves it", () async {
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_uri', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    final link = PairLink.parse('medxfer://v1/pair?fp=AAAA&a=169.254.121.148&p=18887&s=x&exp=$_expires&ws=DIRECT-ND-medXfer&wp=K7XQ2MPRT9ZD&wt=1')!;
+    await c.pairLink(link);
+    c.take(const CoreEvent('paired', data: {'ip': '169.254.121.148', 'device_name': 'PC'}));
+    c.take(const CoreEvent('reconnecting', data: {}));
+    c.take(const CoreEvent('disconnected', data: {'reason': 'connection timed out'}));
+    await _settle();
+    expect(h.log, isNot(contains('leave')), reason: 'leaving gave up the rejoin under way, in the background');
+    expect(c.joining, isTrue);
+    // Back: the session too.
+    c.take(const CoreEvent('paired', data: {'ip': '169.254.121.148', 'device_name': 'PC'}));
+    // A disconnect asked for leaves it.
+    c.take(const CoreEvent('disconnected', data: {'reason': 'user requested disconnect'}));
+    await _settle();
+    expect(h.log.last, 'leave');
+    expect(c.joining, isFalse);
+  });
+
+  test('J6c: a network joined that does not come back is left after rejoinFor', () async {
+    final old = Connection.rejoinFor;
+    Connection.rejoinFor = const Duration(milliseconds: 20);
+    addTearDown(() => Connection.rejoinFor = old);
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_uri', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    await c.pairLink(PairLink.parse('medxfer://v1/pair?fp=AAAA&a=169.254.121.148&p=18887&s=x&exp=$_expires&ws=DIRECT-ND-medXfer&wp=K7XQ2MPRT9ZD&wt=1')!);
+    c.take(const CoreEvent('paired', data: {'ip': '169.254.121.148', 'device_name': 'PC'}));
+    c.take(const CoreEvent('disconnected', data: {'reason': 'connection timed out'}));
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(h.log.last, 'leave');
+    expect(c.joining, isFalse);
+  });
 }
