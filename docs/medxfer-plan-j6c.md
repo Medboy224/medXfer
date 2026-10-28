@@ -51,6 +51,13 @@ Les deux sondes passent d'abord : elles décident des API à garder.
   - quel débit (`xfer bench net`, puis un transfert de 1 Go), comparé au point d'accès actuel ?
 - Résultat : un rapport de sonde. Si la réponse est oui, l'intégration se fait en J8 (décision J17).
 
+**La réglementation du 5 GHz** (vaut pour WP-C.0 et WP-C.1) :
+- les canaux 36 à 48 sont les plus ouverts (en Europe : en intérieur, sans détection de radar) ;
+- les canaux 52 à 144 partagent la bande avec des radars : l'appareil qui crée le réseau doit les détecter et leur céder la place (DFS), et réduire sa puissance (TPC) ;
+- les canaux 149 à 165 dépendent du pays.
+
+C'est le système et le pilote Wi-Fi qui appliquent ces règles, d'après le pays (carte SIM, réseaux voisins, réglages). medXfer passe par les API officielles : il **demande** une bande, le système la donne sur un canal permis ou reste à 2,4 GHz. L'application ne force jamais le code pays, ne contourne pas le pilote (`hostapd` sur mesure, `iw reg set`) et ne choisit pas de canal radar. Elle montre la bande obtenue.
+
 ### WP-C.1 — Sonde : le point d'accès du PC · S
 
 **Windows**, deux API à essayer :
@@ -65,6 +72,13 @@ Les deux sondes passent d'abord : elles décident des API à garder.
 - le Wi-Fi d'origine revient-il à l'arrêt ?
 
 Pour chaque système : le téléphone rejoint-il le réseau par le QR, le transfert y passe-t-il, à quel débit ?
+
+**Le PC à 5 GHz** (ajouté le 28 octobre, décision C5) : avec chaque API, le PC peut-il créer son réseau à 5 GHz ?
+- la bande demandée, par le réglage officiel : « Point d'accès mobile » (bande du réglage du système), Wi-Fi Direct sous Windows, `802-11-wireless.band a` sous NetworkManager ;
+- l'essai se fait PC connecté à un réseau à 5 GHz, puis à un réseau à 2,4 GHz, puis sans réseau. Certaines cartes, dont l'Intel AC 8265, n'émettent pas d'elles-mêmes à 5 GHz sans un réseau voisin qui confirme le pays (« No Initiate Radiation ») ;
+- la bande et le canal obtenus sont relevés, ainsi que le débit avec le téléphone.
+
+Un « non, le système reste à 2,4 GHz » est un résultat valable.
 
 ### WP-C.2 — Adaptateurs du PC · M
 
@@ -114,3 +128,4 @@ Réponses de l'utilisateur du 28 octobre 2026.
 | C2 | L'essai #169 (un second téléphone rejoint par QR) | ✅ **En J6c** : un second téléphone Android est disponible. | — |
 | C3 | Clients de la sonde à 5 GHz | ✅ **Le PC et Zorin**, s'il capte le 5 GHz. | Le PC seul. |
 | C4 | L'API du point d'accès sous Windows | ⏳ Tranchée par la sonde WP-C.1. | « Point d'accès mobile » ou Wi-Fi Direct sans client Wi-Fi Direct. |
+| C5 | Le PC à 5 GHz | ✅ **Sondé aussi** (28 octobre) : le PC crée-t-il son réseau à 5 GHz, par chaque API, dans le respect de la réglementation (§ WP-C.0) ? | Le 5 GHz du téléphone seul. |
