@@ -306,6 +306,8 @@ Ajouté le 25 octobre à la demande de l'utilisateur (décision J16).
   - les à-coups de l'interface sous Windows (réserve 4 de G2a).
 - **Guide d'utilisation de l'application** et **rapport de sortie** du jalon.
 
+**Fait** (28 octobre) : essais réels du 25 au 28 octobre, Galaxy A57 ↔ Windows 11 et Galaxy A57 ↔ Zorin ; leurs corrections, #187 à #206 ; rapport de sortie [j6b-report.md](j6b-report.md). Le critère est rempli, sauf l'appairage par QR de bout en bout, reporté à J6c avec le point d'accès du PC. Le guide d'utilisation de l'application attend la première version (décision du 28 octobre) : l'application change encore.
+
 ## 4. Hors périmètre
 
 - **macOS et iOS** : J9, après les gates G2b et G8.
