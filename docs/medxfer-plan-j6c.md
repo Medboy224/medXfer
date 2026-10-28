@@ -95,10 +95,24 @@ Pour chaque système : le téléphone rejoint-il le réseau par le QR, le transf
 
 Un « non, le système reste à 2,4 GHz » est un résultat valable.
 
+**Résultats de la sonde** (28 octobre ; PowerShell par les API WinRT sous Windows, `nmcli` sous Linux ; bande et canal relevés par un balayage du téléphone, `cmd wifi list-scan-results`) :
+
+| | Windows 11, Intel AC 8265 | Zorin, Intel Centrino 6205 |
+|---|---|---|
+| « Point d'accès mobile » (`NetworkOperatorTetheringManager`) | ✅ démarre à 2,4 GHz en partageant le Wi-Fi connecté, qui reste connecté. ❌ **Sans réseau, impossible** : aucune connexion à partager. | — |
+| Réseau créé sans connexion Internet | ✅ Wi-Fi Direct, réglages *legacy* (`WiFiDirectAdvertisementPublisher`) : nom et mot de passe choisis par l'application, rejoint comme un Wi-Fi ordinaire | ✅ `nmcli device wifi hotspot` |
+| Droits administrateur | Aucun | Aucun (session de l'utilisateur) |
+| 2,4 GHz | ✅ canal 6 sans autre réseau ; canal 1 connecté au Wi-Fi (il suit son canal) | ✅ canal 1 |
+| **5 GHz** | ❌ L'API l'accepte (`IsBandSupported`), mais le démarrage échoue (`WiFiDeviceOff`) ; Wi-Fi Direct n'a pas de réglage de bande, le pilote prend 2,4 GHz | ❌ « Hotspot network creation took too long » : la carte ne démarre pas à 5 GHz |
+
+**Conclusion** : ces deux PC ne créent pas de réseau à 5 GHz d'eux-mêmes. Leurs cartes Intel n'émettent pas les premières à 5 GHz sans un réseau voisin qui confirme le pays (« No Initiate Radiation ») : c'est la réglementation, appliquée par le pilote. Seul le téléphone crée le 5 GHz (WP-C.0, 53 MB/s). Règle pour l'application : **le téléphone crée le réseau quand il le peut** ; le PC le crée en repli (entre deux PC, ou face à un téléphone qui ne le peut pas), à 2,4 GHz. En J6d, BLE fera ce choix sans l'utilisateur.
+
+Reste, avec WP-C.5 : le téléphone qui rejoint le réseau du PC par le QR, et le débit dessus.
+
 ### WP-C.2 — Adaptateurs du PC · M
 
-- **Windows** : un module natif en C++/WinRT dans `app/windows/runner`, avec l'API retenue par WP-C.1, derrière `Hotspot` (canal de plateforme, comme sous Android).
-- **Linux** : NetworkManager par D-Bus, derrière `Hotspot` (un paquet Dart de D-Bus, ou `nmcli`, d'après WP-C.1 ; une bibliothèque = un adaptateur).
+- **Windows** : un module natif en C++/WinRT dans `app/windows/runner`, avec `WiFiDirectAdvertisementPublisher` en réglages *legacy* (décision C4), derrière `Hotspot` (canal de plateforme, comme sous Android). Le publieur vit tant que l'application tourne.
+- **Linux** : NetworkManager, derrière `Hotspot` (son API D-Bus par un paquet Dart, ou `nmcli` ; une bibliothèque = un adaptateur). À 2,4 GHz : la sonde WP-C.1 montre que 5 GHz échoue après 25 s.
 - Tant que le point d'accès tourne, le cœur ne reçoit que son interface (`set_network_info`, `DISC-10`), comme sous Android : le QR, le PIN et l'annonce portent son adresse.
 - Il s'arrête quand on ferme sa fenêtre si personne ne l'a rejoint, sinon à la fin de la session. Le Wi-Fi d'origine revient.
 - `DISC-12` mis à jour dans la bible.
@@ -142,5 +156,5 @@ Réponses de l'utilisateur du 28 octobre 2026.
 | C1 | Le point d'accès du PC, sur quels systèmes ? | ✅ **Windows et Linux** en J6c. | Windows seul, Linux en J8 : J6c plus court. |
 | C2 | L'essai #169 (un second téléphone rejoint par QR) | ✅ **En J6c** : un second téléphone Android est disponible. | — |
 | C3 | Clients de la sonde à 5 GHz | ✅ **Le PC et Zorin**, s'il capte le 5 GHz. | Le PC seul. |
-| C4 | L'API du point d'accès sous Windows | ⏳ Tranchée par la sonde WP-C.1. | « Point d'accès mobile » ou Wi-Fi Direct sans client Wi-Fi Direct. |
+| C4 | L'API du point d'accès sous Windows | ✅ **Wi-Fi Direct, réglages *legacy*** (`WiFiDirectAdvertisementPublisher`), tranché par la sonde WP-C.1 : il crée un réseau sans connexion Internet, sans droits administrateur. | « Point d'accès mobile » : impossible sans connexion à partager, c'est-à-dire justement quand aucun réseau n'est disponible. |
 | C5 | Le PC à 5 GHz | ✅ **Sondé aussi** (28 octobre) : le PC crée-t-il son réseau à 5 GHz, par chaque API, dans le respect de la réglementation (§ WP-C.0) ? | Le 5 GHz du téléphone seul. |
