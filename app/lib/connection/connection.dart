@@ -596,7 +596,10 @@ class Connection extends ChangeNotifier {
         _instance = (m['instance'] as String?) ?? _instance;
         if (m['paired'] == true && _session == null) {
           _session = PeerSession(name: (m['paired_device'] as String?) ?? '', ip: (m['paired_ip'] as String?) ?? '');
-        } else if (m['paired'] == false && _session != null) {
+        } else if (m['paired'] == false && _session != null && !_reconnecting) {
+          // Not while the session comes back: the core says "not paired" in its grace period, and
+          // a session dropped then let the foreground service go, which Android does not let an
+          // app in the background start again: its network was cut (J6c). disconnected decides.
           _session = null;
         }
       case 'trust_offered':

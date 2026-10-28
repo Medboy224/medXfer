@@ -5,6 +5,8 @@ library;
 
 import 'dart:io';
 
+import 'package:flutter/services.dart';
+
 import 'folders.dart' show platformChannel;
 
 abstract interface class Background {
@@ -43,9 +45,16 @@ class AndroidBackground implements Background {
   @override
   bool get supported => true;
 
+  /// Android does not let an app in the background start its service (Android 12 on): refused,
+  /// nothing more to do, the app runs as before.
   @override
-  Future<void> hold({required String title, required String text, int? progress}) =>
-      platformChannel.invokeMethod<void>('holdService', {'title': title, 'text': text, 'progress': progress ?? -1});
+  Future<void> hold({required String title, required String text, int? progress}) async {
+    try {
+      await platformChannel.invokeMethod<void>('holdService', {'title': title, 'text': text, 'progress': progress ?? -1});
+    } on PlatformException {
+      // ForegroundServiceStartNotAllowedException.
+    }
+  }
 
   @override
   Future<void> release() => platformChannel.invokeMethod<void>('releaseService');

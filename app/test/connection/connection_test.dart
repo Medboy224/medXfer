@@ -200,6 +200,20 @@ void main() {
     expect(notices, hasLength(1));
   });
 
+  test("J6c: the session coming back is kept, whatever status says in the core's grace period", () async {
+    final c = Connection(FakeCore());
+    c.take(const CoreEvent('paired', data: {'ip': '169.254.121.148', 'device_name': 'PC'}));
+    c.take(const CoreEvent('reconnecting', data: {'message': '…'}));
+    // set_network_info, when the network comes back, answers a status: not paired yet.
+    c.take(const CoreEvent('status', data: {'paired': false}));
+    expect(c.session?.name, 'PC', reason: 'dropped, the foreground service went, and Android cut the network');
+    c.take(const CoreEvent('paired', data: {'ip': '169.254.121.148', 'device_name': 'PC'}));
+    expect(c.reconnecting, isFalse);
+    // Outside a reconnection, status still says the truth.
+    c.take(const CoreEvent('status', data: {'paired': false}));
+    expect(c.session, isNull);
+  });
+
   test('a disconnection says who left', () async {
     final c = Connection(FakeCore());
     final notices = <ConnectionNotice>[];
