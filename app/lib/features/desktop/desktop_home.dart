@@ -1,7 +1,8 @@
 /// The desktop layout (mockup « 10. Bureau », §1.2 of the J6b plan): a side menu and its pages.
-/// Envoyer: files and folders dropped or chosen, and the connection beside them. Recevoir: where
-/// received files go. Then the history, the trusted devices, the settings. The phone's tabs are
-/// the other layout (HomeScreen).
+/// Accueil: files and folders dropped or chosen, and the connection beside them. Then the
+/// history, the trusted devices, the settings, where the receive folder is (27 October 2026: no
+/// page Recevoir, a connected device sends whatever page is open). The phone's tabs are the
+/// other layout (HomeScreen).
 ///
 /// The connection is not tied to a page or to a direction (decided on 27 October 2026): while
 /// the window is open, this computer announces itself and looks for the devices of its network,
@@ -23,10 +24,9 @@ import '../history/history_tab.dart';
 import '../settings/settings_screen.dart';
 import '../transfer/transfer_screen.dart';
 import '../trusted/trusted_screen.dart';
-import 'receive_page.dart';
 import 'send_page.dart';
 
-enum DesktopPage { send, receive, history, trusted, settings }
+enum DesktopPage { home, history, trusted, settings }
 
 class DesktopHome extends StatefulWidget {
   const DesktopHome({super.key});
@@ -36,7 +36,7 @@ class DesktopHome extends StatefulWidget {
 }
 
 class _DesktopHomeState extends State<DesktopHome> {
-  DesktopPage _page = DesktopPage.send;
+  DesktopPage _page = DesktopPage.home;
   late final Connection _c = AppScope.of(context, listen: false).state.connection;
   Timer? _rescan;
   bool _asking = false;
@@ -95,8 +95,7 @@ class _DesktopHomeState extends State<DesktopHome> {
           _SideMenu(page: _page, onPick: (p) => setState(() => _page = p)),
           Expanded(
             child: switch (_page) {
-              DesktopPage.send => const SendPage(),
-              DesktopPage.receive => const ReceivePage(),
+              DesktopPage.home => const SendPage(),
               DesktopPage.history => Scaffold(
                 appBar: AppBar(title: Text(l.tabHistory)),
                 body: const HistoryTab(),
@@ -125,13 +124,7 @@ class _SideMenu extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final c = context.colors;
     final accent = Theme.of(context).colorScheme.primary;
-    final labels = {
-      DesktopPage.send: l.navSend,
-      DesktopPage.receive: l.navReceive,
-      DesktopPage.history: l.tabHistory,
-      DesktopPage.trusted: l.trustedDevices,
-      DesktopPage.settings: l.settings,
-    };
+    final labels = {DesktopPage.home: l.navHome, DesktopPage.history: l.tabHistory, DesktopPage.trusted: l.trustedDevices, DesktopPage.settings: l.settings};
     return Container(
       key: const Key('side-menu'),
       width: 240,

@@ -81,9 +81,7 @@ void main() {
     expect(find.text('Déposez ici des fichiers ou des dossiers'), findsOneWidget);
     expect(find.text('Connexion'), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('nav-receive')));
-    await tester.pumpAndSettle();
-    expect(find.text('Dossier de réception'), findsOneWidget);
+    expect(find.byKey(const Key('nav-receive')), findsNothing, reason: 'no page Recevoir: its folder is in the settings');
     await tester.tap(find.byKey(const Key('nav-history')));
     await tester.pumpAndSettle();
     expect(find.text('Aucun transfert pour le moment.'), findsOneWidget);
@@ -92,7 +90,12 @@ void main() {
     expect(find.text('Aucun appareil de confiance pour le moment.'), findsOneWidget);
     await tester.tap(find.byKey(const Key('nav-settings')));
     await tester.pumpAndSettle();
+    expect(find.text('Dossier de réception'), findsOneWidget);
     expect(find.byKey(const Key('dev-mode')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('nav-home')));
+    await tester.pumpAndSettle();
+    expect(find.text('Accueil'), findsOneWidget);
+    expect(find.byKey(const Key('drop-card')), findsOneWidget);
   });
 
   testWidgets('27 Oct.: the window open, this computer is seen by its network, whatever the page', (tester) async {
@@ -102,7 +105,7 @@ void main() {
     expect(core.calls.where((c) => c.action == 'scan'), isNotEmpty);
     await tester.tap(find.byKey(const Key('nav-settings')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('nav-receive')));
+    await tester.tap(find.byKey(const Key('nav-home')));
     await tester.pumpAndSettle();
     expect(core.calls.where((c) => c.action == 'set_discoverable').last.payload, {'on': true}, reason: 'a page is no reason to hide');
   });

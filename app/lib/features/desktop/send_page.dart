@@ -1,4 +1,4 @@
-/// Envoyer, on a desktop (mockup « 10. Bureau »): files and folders dropped on the window or
+/// Accueil, on a desktop (mockup « 10. Bureau »): files and folders dropped on the window or
 /// chosen, as many times as wanted, fill one list, sent in one transfer to the device connected
 /// (WP-B.8: the system's dialog chooses files or a folder, never both). Beside it, the
 /// connection, as on the phone (decided on 27 October 2026): the devices of the same network,
@@ -115,7 +115,7 @@ class _Pick extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(l.navSend, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+        Text(l.sendSelection, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
         const SizedBox(height: 16),
         DashedBox(
           key: const Key('drop-card'),
