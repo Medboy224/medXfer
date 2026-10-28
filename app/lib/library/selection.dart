@@ -5,6 +5,7 @@
 ///     own name (an app's base.apk goes as "<label>.apk");
 ///   - with folders, everything goes by path, the core walking the folders;
 ///   - apps and folders together: sent apart ([Mixed]).
+/// On a desktop, everything goes by path: its files and folders together (desktop_picks.dart).
 library;
 
 import 'package:flutter/foundation.dart';
@@ -59,6 +60,15 @@ class Selection extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Picks them, those already picked staying so (a desktop's pickers, a drop).
+  void addAll(Iterable<Pick> picks) {
+    var added = false;
+    for (final p in picks) {
+      added = _items.putIfAbsent(p.path, () => p) == p || added;
+    }
+    if (added) notifyListeners();
+  }
+
   /// All of them picked, or none if all already were (the "select all" circle).
   void toggleAll(Iterable<Pick> all) {
     final list = all.toList();
@@ -91,7 +101,9 @@ class Selection extends ChangeNotifier {
     notifyListeners();
   }
 
-  SendPlan plan() {
+  /// [byPath]: the platform sends paths only (desktops).
+  SendPlan plan({bool byPath = false}) {
+    if (byPath) return ByPath([for (final p in _items.values) p.path]);
     final folders = _items.values.any((p) => p.kind == PickKind.folder);
     final apps = _items.values.any((p) => p.kind == PickKind.app);
     if (folders && apps) return const Mixed();

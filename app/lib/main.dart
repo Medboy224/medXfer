@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import 'app.dart';
@@ -33,6 +35,7 @@ Future<void> main() async {
     storage: systemReceiveStorage(),
     background: systemBackground(),
     library: systemLibrary(),
+    desktop: Platform.isWindows || Platform.isLinux || Platform.isMacOS,
   );
   state.start();
   runApp(MedxferApp(state: state, settings: settings));

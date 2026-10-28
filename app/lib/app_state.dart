@@ -43,6 +43,7 @@ class AppState extends ChangeNotifier {
     this.library = const NoLibrary(),
     HistoryStore? history,
     AppSettings? settings,
+    this.desktop = false,
   }) : connection = Connection(core, network: network, hotspot: hotspot),
        settings = settings ?? AppSettings() {
     receiveFolders = ReceiveFolders(settings: this.settings, storage: storage, folders: folders);
@@ -62,6 +63,10 @@ class AppState extends ChangeNotifier {
 
   /// The developer panel's telemetry, benchmarks, report and bundle (WP-B.5).
   late final DevTools dev;
+
+  /// The desktop layout (mockup « 10. Bureau »): a side menu and its pages, not the phone's
+  /// tabs (DesktopHome).
+  final bool desktop;
 
   /// The settings, saved: the receive folder among them.
   final AppSettings settings;

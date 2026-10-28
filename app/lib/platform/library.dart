@@ -4,6 +4,7 @@
 library;
 
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'file_picker.dart';
@@ -142,10 +143,33 @@ class NoLibrary implements Library {
   Future<List<OpenFile>> open(List<({String path, String name})> files) async => const [];
   @override
   Future<Uint8List?> fileThumbnail(String path, int px) async => null;
+
+  /// A desktop: the folder is walked here, away from the screen's isolate (the basket).
   @override
-  Future<int> dirSize(String path) async => 0;
+  Future<int> dirSize(String path) => Isolate.run(() => _walk(path));
   @override
   Future<List<FileEntry>> files(FileCategory category, {int offset = 0, int limit = 200}) async => const [];
+}
+
+/// The bytes of the files under [root]; a folder that cannot be read counts for nothing, the
+/// others still count.
+int _walk(String root) {
+  var total = 0;
+  final pending = [root];
+  while (pending.isNotEmpty) {
+    try {
+      for (final e in Directory(pending.removeLast()).listSync(followLinks: false)) {
+        if (e is Directory) {
+          pending.add(e.path);
+        } else if (e is File) {
+          total += e.statSync().size;
+        }
+      }
+    } on FileSystemException {
+      // Not readable: skipped.
+    }
+  }
+  return total;
 }
 
 class AndroidLibrary implements Library {
@@ -208,8 +232,7 @@ class AndroidLibrary implements Library {
   @override
   Future<List<FileEntry>> files(FileCategory category, {int offset = 0, int limit = 200}) async => [
     for (final m
-        in await platformChannel.invokeListMethod<Map<Object?, Object?>>('libFiles', {'category': category.name, 'offset': offset, 'limit': limit}) ??
-            const [])
+        in await platformChannel.invokeListMethod<Map<Object?, Object?>>('libFiles', {'category': category.name, 'offset': offset, 'limit': limit}) ?? const [])
       FileEntry.fromMap(m),
   ];
 }

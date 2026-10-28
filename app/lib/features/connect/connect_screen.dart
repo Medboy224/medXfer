@@ -87,7 +87,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
   void _openHotspot() => unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const HotspotScreen())));
 
   void _openManual() => unawaited(
-    showModalBottomSheet<void>(context: context, isScrollControlled: true, showDragHandle: true, builder: (_) => _ManualSheet(connection: _c)),
+    showModalBottomSheet<void>(context: context, isScrollControlled: true, showDragHandle: true, builder: (_) => ManualCodeSheet(connection: _c)),
   );
 
   @override
@@ -353,16 +353,16 @@ class _Nearby extends StatelessWidget {
 
 /// A device that does not see this one in its list (discovery blocked by the Wi-Fi or a
 /// firewall) types this address and PIN. No QR code: the two must share the network.
-class _ManualSheet extends StatefulWidget {
-  const _ManualSheet({required this.connection});
+class ManualCodeSheet extends StatefulWidget {
+  const ManualCodeSheet({super.key, required this.connection});
 
   final Connection connection;
 
   @override
-  State<_ManualSheet> createState() => _ManualSheetState();
+  State<ManualCodeSheet> createState() => _ManualCodeSheetState();
 }
 
-class _ManualSheetState extends State<_ManualSheet> {
+class _ManualCodeSheetState extends State<ManualCodeSheet> {
   Connection get _c => widget.connection;
 
   @override
