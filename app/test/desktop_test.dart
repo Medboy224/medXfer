@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:medxfer/app.dart';
 import 'package:medxfer/app_state.dart';
+import 'package:medxfer/connection/connection.dart';
 import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/platform/file_picker.dart';
@@ -239,5 +240,34 @@ void main() {
     await _frames(tester);
     expect(h.log, ['start', 'stop']);
     expect(core.calls.where((c) => c.action == 'set_network_info').last.payload, {'enumerate': true});
+  });
+
+  testWidgets("J6c: a session lost keeps this computer's network for the device to come back; then it stops", (tester) async {
+    final old = Connection.rejoinFor;
+    Connection.rejoinFor = const Duration(seconds: 30);
+    addTearDown(() => Connection.rejoinFor = old);
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_show', (_) => const FakeAnswer())
+      ..on('pair_pin_show', (_) => const FakeAnswer());
+    final h = _PcHotspot();
+    await _app(tester, core, hotspot: h);
+    await tester.tap(find.byKey(const Key('hotspot-start')));
+    await _frames(tester);
+    core.emit(const CoreEvent('paired', data: {'ip': '192.168.137.20', 'device_name': 'Galaxy A57'}));
+    await _frames(tester);
+    // The session timed out (the phone dropped by Windows, not back within 15 s): kept.
+    core.emit(const CoreEvent('reconnecting', data: {}));
+    core.emit(const CoreEvent('disconnected', data: {'reason': 'connection timed out'}));
+    await _frames(tester);
+    expect(h.log, ['start'], reason: 'stopped, the phone had no network to come back to');
+    // Back: the session, and the network stays.
+    core.emit(const CoreEvent('paired', data: {'ip': '192.168.137.20', 'device_name': 'Galaxy A57'}));
+    await tester.pump(const Duration(seconds: 40));
+    expect(h.log, ['start']);
+    // Lost again, not back: stopped after rejoinFor.
+    core.emit(const CoreEvent('disconnected', data: {'reason': 'connection timed out'}));
+    await tester.pump(const Duration(seconds: 31));
+    expect(h.log, ['start', 'stop']);
   });
 }

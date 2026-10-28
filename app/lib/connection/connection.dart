@@ -214,6 +214,11 @@ class Connection extends ChangeNotifier {
 
   /// This device is on another's network, joined by its QR code, or joining it again (J6c).
   bool get joining => _joined != null;
+
+  /// The last session ended by its grace period running out: lost, not ended (J6c). The other
+  /// device may come back.
+  bool get lastEndTimedOut => _lastEndTimedOut;
+  bool _lastEndTimedOut = false;
   bool _hotspotBusy = false;
   Timer? _scanLimit;
   late final StreamSubscription<CoreEvent> _sub;
@@ -594,6 +599,7 @@ class Connection extends ChangeNotifier {
       case 'reconnecting':
         _reconnecting = true;
       case 'disconnected':
+        _lastEndTimedOut = m['reason'] == 'connection timed out';
         if (_session != null) {
           _notices.add(Disconnected(byPeer: (m['reason'] as String?) != 'user requested disconnect'));
         }
