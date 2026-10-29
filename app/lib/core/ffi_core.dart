@@ -63,6 +63,10 @@ class _Lib {
   }
 }
 
+/// The core's events in the log of a release or profile build too: a real test followed without
+/// the debug build, whose other signature would need the app uninstalled (29 October 2026).
+const _logEvents = bool.fromEnvironment('MEDXFER_LOG_EVENTS');
+
 /// The real core.
 class FfiCore implements Core {
   FfiCore({String? libraryPath}) : _path = libraryPath ?? coreLibraryName();
@@ -116,9 +120,12 @@ class FfiCore implements Core {
       if (msg is! List) return;
       for (final s in msg) {
         final e = CoreEvent.fromJson(jsonDecode(s as String) as Map<String, Object?>);
-        // Debug builds: each event's name in the log (logcat), the core's own log lines whole.
-        // No other data: it may name files or hold a PIN.
-        if (kDebugMode) debugPrint(e.name == 'log' ? 'core log: ${e.data}' : 'core event: ${e.name}${e.id == null ? '' : ' (${e.id})'}');
+        // Debug builds, or --dart-define=MEDXFER_LOG_EVENTS=true: each event's name in the log
+        // (logcat), the core's own log lines whole. No other data: it may name files or hold a
+        // PIN.
+        if (kDebugMode || _logEvents) {
+          debugPrint(e.name == 'log' ? 'core log: ${e.data}' : 'core event: ${e.name}${e.id == null ? '' : ' (${e.id})'}');
+        }
         _events.add(e);
         if (e.name == CoreEvent.stopped) {
           port.close();
