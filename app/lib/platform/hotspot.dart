@@ -52,6 +52,11 @@ abstract interface class Hotspot {
   /// in the system's settings.
   bool get canJoin;
 
+  /// The Wi-Fi this device is on is left while the network runs, and comes back at [stop]:
+  /// Linux, whose card is one or the other (NetworkManager, without administrator rights).
+  /// Android and Windows create theirs on a second, virtual interface.
+  bool get leavesWifi;
+
   /// Asks the permission both start and join need (Android: NEARBY_WIFI_DEVICES); true once
   /// granted.
   Future<bool> permission();
@@ -79,6 +84,9 @@ class AndroidHotspot implements Hotspot {
 
   @override
   bool get canJoin => Platform.isAndroid;
+
+  @override
+  bool get leavesWifi => false;
 
   @override
   Future<bool> permission() async => await platformChannel.invokeMethod<bool>('hotspotPermission') ?? false;
@@ -110,6 +118,9 @@ class NoHotspot implements Hotspot {
 
   @override
   bool get canJoin => false;
+
+  @override
+  bool get leavesWifi => false;
 
   @override
   Future<bool> permission() async => false;
@@ -155,6 +166,9 @@ class WindowsHotspot implements Hotspot {
 
   @override
   bool get canJoin => false;
+
+  @override
+  bool get leavesWifi => false;
 
   @override
   Future<bool> permission() async => true;
@@ -215,6 +229,9 @@ class LinuxHotspot implements Hotspot {
 
   @override
   bool get canJoin => false;
+
+  @override
+  bool get leavesWifi => true;
 
   @override
   Future<bool> permission() async => true;

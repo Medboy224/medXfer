@@ -55,6 +55,9 @@ class _Hotspot implements Hotspot {
   bool get supported => true;
   @override
   bool get canJoin => true;
+
+  @override
+  bool get leavesWifi => false;
   @override
   Future<bool> permission() async => true;
   @override

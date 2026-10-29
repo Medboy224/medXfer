@@ -76,7 +76,7 @@ class _HotspotScreenState extends State<HotspotScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(l.hotspotActive),
-            Text(l.hotspotNoInternet, style: TextStyle(color: c.muted, fontSize: 13)),
+            Text(_c.hotspot.leavesWifi ? l.hotspotLeftWifi : l.hotspotNoInternet, style: TextStyle(color: c.muted, fontSize: 13)),
           ],
         ),
       ),
@@ -115,7 +115,9 @@ class _HotspotScreenState extends State<HotspotScreen> {
                       child: Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-                        child: SizedBox.square(dimension: 230, child: QrView(key: const Key('my-qr'), data: _c.qrData!)),
+                        // A computer's screen shows it at about 1 mm a module at 230 (real test of
+                        // 29 October 2026): the camera needs to be close, where it cannot focus.
+                        child: SizedBox.square(dimension: _c.hotspot.canJoin ? 230 : 340, child: QrView(key: const Key('my-qr'), data: _c.qrData!)),
                       ),
                     ),
                     const SizedBox(height: 14),

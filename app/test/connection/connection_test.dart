@@ -55,6 +55,9 @@ class _FakeHotspot implements Hotspot {
   bool get canJoin => true;
 
   @override
+  bool get leavesWifi => false;
+
+  @override
   bool get supported => true;
 
   @override
@@ -95,6 +98,9 @@ class _DesktopHotspot implements Hotspot {
 
   @override
   bool get canJoin => false;
+
+  @override
+  bool get leavesWifi => false;
 
   @override
   Future<bool> permission() async => true;
