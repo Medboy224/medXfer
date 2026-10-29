@@ -252,6 +252,17 @@ Ajouté le 25 octobre (décision J17 du plan J6b). Le point d'accès de `LocalOn
 
 **Élargi le 28 octobre** (rapport J6b, réserves) : le point d'accès du PC, sous Windows et Linux, avec son QR (avancé de J8), pour l'appairage par QR de bout en bout ; l'essai d'un second téléphone qui rejoint le Galaxy A57 par QR (#169) ; la mesure des à-coups de l'interface sous Windows (réserve 4 de G2a). Durée revue : 4 à 6 jours. Plan : [medxfer-plan-j6c.md](medxfer-plan-j6c.md).
 
+### Lot « Câble Ethernet entre deux PC » (après J6c) · ≈ 3 à 5 jours
+Ajouté le 29 octobre, à la demande de l'utilisateur. Deux PC, sous Windows ou Linux et quelle que soit leur configuration, reliés par un câble Ethernet direct, se trouvent et transfèrent des fichiers, sans réglage manuel. Placé juste après le rapport J6c, avant J6d (décision du 29 octobre).
+
+Ce qui change sur un câble direct :
+- **pas de DHCP** : Windows prend une adresse link-local (`169.254.x.x`). Linux, selon NetworkManager, peut n'avoir **aucune adresse IPv4**, seulement son adresse IPv6 link-local (`fe80::…`) ;
+- le cœur doit donc gérer les adresses link-local, IPv6 avec sa zone (`fe80::…%eth0`) comprise : découverte sur l'interface du câble, QR et PIN, connexions (`DISC-10`) ;
+- Windows classe ce réseau « non identifié », profil **Public** : les règles du pare-feu (voir J8) doivent y valoir ;
+- c'est potentiellement le lien le plus rapide entre deux PC : 1 Gbit/s, soit environ 110 MB/s.
+
+D'abord une sonde, avec le PC Windows et Zorin reliés par un câble : adresses obtenues de chaque côté, découverte mutuelle, débit brut. **Critère de sortie :** Windows ↔ Linux, sans réglage, se voient, s'appairent et transfèrent 1 Go, avec le débit mesuré ; Windows ↔ Windows et Linux ↔ Linux si le matériel le permet.
+
 ### J6d — Se connecter au réseau par BLE · ≈ 7 à 10 jours
 Ajouté le 28 octobre, à l'idée de l'utilisateur. Deux appareils qui ne sont pas sur le même réseau se trouvent par **Bluetooth Low Energy** ; l'un crée le réseau (selon ce que J6c aura montré : qui peut le créer à 5 GHz), l'autre le **rejoint seul**. Plus de nom de réseau ni de mot de passe à taper dans les réglages, en particulier sur un PC, qui ne peut pas scanner de QR.
 
@@ -301,11 +312,12 @@ Prototype G2b, Bonjour, permission « réseau local », comportement en arrière
 | J5 | 5 à 8 j | ≈ 60 j |
 | J6a + J6b | 15 à 22 j | ≈ 82 j |
 | J6c | 4 à 6 j | ≈ 88 j |
-| J6d | 7 à 10 j | ≈ 98 j |
-| J7 | 5 à 7 j | ≈ 105 j |
-| J8 | 5 à 8 j | ≈ 113 j |
+| Câble Ethernet entre deux PC | 3 à 5 j | ≈ 92 j |
+| J6d | 7 à 10 j | ≈ 102 j |
+| J7 | 5 à 7 j | ≈ 109 j |
+| J8 | 5 à 8 j | ≈ 117 j |
 
-Soit environ **23 semaines** en fourchette basse, pour une première version sur Windows, Linux et Android. Ces chiffres sont des hypothèses et non des engagements ; les estimations de ce type dérapent souvent, un tampon de 30 à 50 % est raisonnable (**≈ 6 mois**). La seule vraie mesure sera la vitesse constatée en J1 ; on recalcule alors tout le tableau.
+Soit environ **24 semaines** en fourchette basse, pour une première version sur Windows, Linux et Android. Ces chiffres sont des hypothèses et non des engagements ; les estimations de ce type dérapent souvent, un tampon de 30 à 50 % est raisonnable (**≈ 6 mois**). La seule vraie mesure sera la vitesse constatée en J1 ; on recalcule alors tout le tableau.
 J9 s'ajoute ensuite et ne figure pas dans ce total.
 
 ---
