@@ -1,14 +1,14 @@
 # Builds medXfer as a C library for Windows and Android, from Windows (WP-6.4 of the J6a plan;
 # bible §10.4). Linux, and Android under Termux: scripts/build-lib.sh.
 # Usage (PowerShell, from the repository root):
-#   scripts\build-lib.ps1                      # windows, android-arm64, android-x86_64
+#   scripts\build-lib.ps1                      # windows, android-arm64, android-arm, android-x86_64
 #   scripts\build-lib.ps1 -Targets windows
 #   scripts\build-lib.ps1 -Targets windows -Smoke   # also run cmd\libmedxfer\testdata\smoke.c
 # Prerequisites (versions in docs/g2a-report.md): Go, llvm-mingw for Windows
 # (x86_64-w64-mingw32-gcc), the Android NDK for Android.
 # Output: build\lib\<target>\ (medxfer.dll or libmedxfer.so, and the header).
 param(
-    [string[]]$Targets = @("windows", "android-arm64", "android-x86_64"),
+    [string[]]$Targets = @("windows", "android-arm64", "android-arm", "android-x86_64"),
     [string]$LlvmMingw = "$env:USERPROFILE\dev\llvm-mingw",
     [string]$Ndk = "",
     [int]$AndroidApi = 24,
@@ -59,11 +59,18 @@ try {
             }
             { $_ -like "android-*" } {
                 if (-not $Ndk) { throw "Android NDK not found (pass -Ndk)" }
-                $abi = @{ "android-arm64" = @("arm64", "aarch64"); "android-x86_64" = @("amd64", "x86_64") }[$target]
+                # android-arm: the 32-bit phones (armeabi-v7a), many of the entry-level ones
+                # (decision of 29 October 2026, J6c).
+                $abi = @{
+                    "android-arm64"  = @("arm64", "aarch64-linux-android")
+                    "android-arm"    = @("arm", "armv7a-linux-androideabi")
+                    "android-x86_64" = @("amd64", "x86_64-linux-android")
+                }[$target]
                 if (-not $abi) { throw "unknown target $target" }
-                $cc = Join-Path $Ndk "toolchains\llvm\prebuilt\windows-x86_64\bin\$($abi[1])-linux-android$AndroidApi-clang.cmd"
+                $cc = Join-Path $Ndk "toolchains\llvm\prebuilt\windows-x86_64\bin\$($abi[1])$AndroidApi-clang.cmd"
                 if (-not (Test-Path $cc)) { throw "NDK compiler not found: $cc" }
-                Build-Lib $target "android" $abi[0] $cc "libmedxfer.so"
+                if ($target -eq "android-arm") { $env:GOARM = "7" }
+                try { Build-Lib $target "android" $abi[0] $cc "libmedxfer.so" } finally { Remove-Item Env:GOARM -ErrorAction SilentlyContinue }
             }
             default { throw "unknown target $target" }
         }

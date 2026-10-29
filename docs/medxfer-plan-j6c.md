@@ -172,6 +172,21 @@ Reste, avec WP-C.5 : le téléphone qui rejoint le réseau du PC par le QR, et l
 - Sous Windows, le transfert se fait avec la version profile, et le journal `perf:` (WP-C.4, la mesure pendant un transfert).
 - Rapport de sortie, et décision sur Wi-Fi Direct pour J8.
 
+**Résultats** (29 octobre) :
+
+| Essai | Résultat |
+|---|---|
+| Galaxy A57 → Zorin par QR | ✅ Réseau de Zorin (2,4 GHz), appairage 14 s après la lecture, 1 Go à environ 7,5 MB/s. Zorin quitte son Wi-Fi le temps du partage (carte unique, NetworkManager), et l'application le dit désormais (#214). |
+| Lecture du QR | 24 s au premier essai. Après #214 (lecteur sans pause entre deux images, 1080p, QR de 340 px sur PC) : **1,1 à 2,3 s** dès que le QR est dans le cadre, mesuré image par image. |
+| TECNO BF6 → Galaxy A57 par QR (#169) | ✅ Lecture rapide (3 essais sur 4), réseau rejoint, appairage et confiance, transferts à environ **4 MB/s**. C'est la limite de la puce du TECNO (Unisoc SC9863A, 2,4 GHz, une antenne). Le TECNO est en Android 32 bits : d'où la décision C6. |
+| Bande du point d'accès du Galaxy A57, son Wi-Fi allumé mais connecté à aucun réseau | **2,4 GHz** (canal 1, 2412 MHz) : Android ne passe pas à 5 GHz de lui-même. Le 5 GHz du téléphone ne vient que de Wi-Fi Direct (WP-C.0). |
+
+Restent :
+- un PC Windows qui rejoint le point d'accès du Galaxy A57 par ses réglages (#169) ;
+- la coupure de Windows toutes les 2 minutes : un autre téléphone est-il coupé aussi ;
+- le transfert de 1 Go vers Windows avec le journal `perf:` ;
+- le rapport.
+
 ## 3. Hors périmètre
 
 - L'intégration de Wi-Fi Direct dans l'application : J8, si la sonde le confirme.
@@ -189,3 +204,4 @@ Réponses de l'utilisateur du 28 octobre 2026.
 | C3 | Clients de la sonde à 5 GHz | ✅ **Le PC et Zorin**, s'il capte le 5 GHz. | Le PC seul. |
 | C4 | L'API du point d'accès sous Windows | ✅ **Wi-Fi Direct, réglages *legacy*** (`WiFiDirectAdvertisementPublisher`), tranché par la sonde WP-C.1 : il crée un réseau sans connexion Internet, sans droits administrateur. Windows n'y distribuant pas d'adresses, **l'application y sert le DHCP** (décision du 28 octobre, plutôt que de réparer le partage ICS ou de reporter Windows à J8). | « Point d'accès mobile » : impossible sans connexion à partager, c'est-à-dire justement quand aucun réseau n'est disponible. |
 | C5 | Le PC à 5 GHz | ✅ **Sondé aussi** (28 octobre) : le PC crée-t-il son réseau à 5 GHz, par chaque API, dans le respect de la réglementation (§ WP-C.0) ? | Le 5 GHz du téléphone seul. |
+| C6 | Les téléphones Android 32 bits (`armeabi-v7a`), comme le TECNO BF6 de l'essai #169 | ✅ **Pris en charge dès J6c** (29 octobre) : la cible `android-arm` dans `build-lib.ps1`, un APK par architecture (`package-android.ps1`, `--split-per-abi`), les tests du cœur en 32 bits dans la CI (`GOARCH=386`). | Plus tard, en J8 ; ou 64 bits seulement. |
