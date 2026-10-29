@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <winrt/Windows.Devices.WiFiDirect.h>
 
@@ -14,14 +15,23 @@ struct HotspotInterface {
   uint32_t index = 0;
   std::string address;
   uint8_t prefix = 0;
+  // Windows serves the addresses itself (its connection sharing, ICS, gives the group
+  // 192.168.137.1): the phones are accepted and stay. Otherwise the group has a link-local
+  // address, the app serves them, and Windows drops each phone after 2 minutes.
+  bool windows_dhcp = false;
+  // Without: the card that holds the sharing's address (a sharing to it, or one left behind),
+  // and that address.
+  std::string held_by;
+  std::string sharing_address;
 };
 
 // The network this computer creates when none is available (DISC-12, WP-C.2 of the J6c plan):
 // a Wi-Fi Direct group it owns, joined by the others as an ordinary Wi-Fi network ("legacy"
 // settings), with a name and passphrase chosen by the app. No Internet connection to share, no
-// administrator rights (probe WP-C.1, decision C4). Windows serves no addresses on it: the app
-// does. The driver picks the band: 2.4 GHz on the probe's PC, its card not starting 5 GHz on its
-// own. The group lives as long as the publisher, so until Stop or the end of the app.
+// administrator rights (probe WP-C.1, decision C4). Windows serves the addresses on it, through
+// its connection sharing, unless that sharing is taken by another card (HotspotInterface). The
+// driver picks the band: 2.4 GHz on the probe's PC, its card not starting 5 GHz on its own. The
+// group lives as long as the publisher, so until Stop or the end of the app.
 class WifiDirectHotspot {
  public:
   ~WifiDirectHotspot();
@@ -32,7 +42,17 @@ class WifiDirectHotspot {
   void Stop();
 
  private:
+  winrt::fire_and_forget Accept(winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionRequest request);
+
   winrt::Windows::Devices::WiFiDirect::WiFiDirectAdvertisementPublisher publisher_{nullptr};
+  // An Android phone joining is a request Windows asks the app to accept; without an answer, it
+  // drops the phone after 2 minutes (real tests of 28 and 29 October 2026, two phones).
+  // Accepted, the phone is kept while its WiFiDirectDevice lives. Accepting needs Windows to
+  // serve the addresses: otherwise it fails after 30 s, and the listener is let go.
+  winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionListener listener_{nullptr};
+  winrt::event_token requested_{};
+  std::optional<winrt::apartment_context> ui_;
+  std::vector<winrt::Windows::Devices::WiFiDirect::WiFiDirectDevice> accepted_;
 };
 
 #endif  // RUNNER_HOTSPOT_H_

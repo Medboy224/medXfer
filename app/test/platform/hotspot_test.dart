@@ -60,6 +60,49 @@ void main() {
     expect(nm.calls, contains('nmcli connection delete medxfer-hotspot'));
   });
 
+  group('WP-C.5: Windows', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    const channel = MethodChannel('dev.medxfer.app/hotspot');
+    final calls = <String>[];
+    late Map<String, Object?> group;
+    setUp(() {
+      calls.clear();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.method);
+        return call.method == 'start' ? group : null;
+      });
+    });
+    tearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+
+    test('Windows serves the addresses: no server of ours, a stable network', () async {
+      group = {'name': 'Connexion au réseau local* 2', 'index': 25, 'address': '192.168.137.1', 'prefix': 24, 'windowsDhcp': true, 'heldBy': '', 'sharingAddress': ''};
+      final served = <String>[];
+      final h = WindowsHotspot(addressServer: (server, prefix) async {
+        served.add('${server.address}/$prefix');
+        return () {};
+      });
+      final info = await h.start();
+      expect(served, isEmpty);
+      expect((info.address, info.dropsClients, info.addressHeldBy), ('192.168.137.1', false, null));
+      expect(info.net!.addrs, ['192.168.137.1/24']);
+    });
+
+    test('its sharing taken by another card: our server, and the card named', () async {
+      group = {'name': 'Connexion au réseau local* 2', 'index': 25, 'address': '169.254.121.148', 'prefix': 16, 'windowsDhcp': false, 'heldBy': 'Ethernet', 'sharingAddress': '192.168.137.1'};
+      final served = <String>[];
+      final h = WindowsHotspot(addressServer: (server, prefix) async {
+        served.add('${server.address}/$prefix');
+        return () => served.add('closed');
+      });
+      final info = await h.start();
+      expect(served, ['169.254.121.148/16']);
+      expect((info.dropsClients, info.addressHeldBy, info.sharingAddress), (true, 'Ethernet', '192.168.137.1'));
+      await h.stop();
+      expect(served.last, 'closed');
+      expect(calls, ['start', 'stop']);
+    });
+  });
+
   test('HotspotInfo reads what LocalHotspot.kt sends', () {
     final info = HotspotInfo.fromMap({
       'ssid': 'AndroidShare_1732',

@@ -52,7 +52,7 @@ FakeCore _core() => FakeCore()
 
 /// The network a computer creates (WP-C.2 of the J6c plan), as WindowsHotspot gives it.
 class _PcHotspot implements Hotspot {
-  _PcHotspot({this.leavesWifi = false});
+  _PcHotspot({this.leavesWifi = false, this.dropsClients = false});
 
   final log = <String>[];
 
@@ -66,18 +66,24 @@ class _PcHotspot implements Hotspot {
   @override
   final bool leavesWifi;
 
+  /// Windows without its connection sharing: the phones dropped every 2 minutes.
+  final bool dropsClients;
+
   @override
   Future<bool> permission() async => true;
 
   @override
   Future<HotspotInfo> start() async {
     log.add('start');
-    return const HotspotInfo(
+    return HotspotInfo(
       ssid: 'DIRECT-AB-medXfer',
       passphrase: 'K7XQ2MPRT9ZD',
       security: 1,
       address: '192.168.137.1',
-      net: NetInterface(name: 'Connexion au réseau local* 2', index: 23, addrs: ['192.168.137.1/24']),
+      net: const NetInterface(name: 'Connexion au réseau local* 2', index: 23, addrs: ['192.168.137.1/24']),
+      dropsClients: dropsClients,
+      addressHeldBy: dropsClients ? 'Ethernet' : null,
+      sharingAddress: dropsClients ? '192.168.137.1' : null,
     );
   }
 
@@ -237,6 +243,7 @@ void main() {
       ],
     });
     expect(find.text('Point d\'accès actif'), findsOneWidget);
+    expect(find.byKey(const Key('hotspot-unstable')), findsNothing);
 
     // The phone scanned the QR code: paired, the screen closes, the network stays for the session.
     core.emit(const CoreEvent('paired', data: {'ip': '192.168.137.20', 'device_name': 'Galaxy A57'}));
@@ -259,6 +266,23 @@ void main() {
     await tester.tap(find.byKey(const Key('hotspot-start')));
     await _frames(tester);
     expect(find.text("Wi-Fi de ce PC quitté le temps du partage, retrouvé à l'arrêt"), findsOneWidget);
+  });
+
+  testWidgets('WP-C.5: Windows without its connection sharing says the phones will be dropped, and why', (tester) async {
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_show', (_) => const FakeAnswer(replies: [
+            CoreEvent('pair_show', data: {'uri': 'medxfer://v1/pair?fp=AAAA&a=169.254.121.148&p=18887&s=x&exp=1900000000', 'expires': 1900000000, 'instance': 'medXfer-7810'}),
+          ]))
+      ..on('pair_pin_show', (_) => const FakeAnswer(replies: [
+            CoreEvent('pair_pin_shown', data: {'pin': '054 461', 'expires': 1900000000, 'address': '169.254.121.148:18887', 'instance': 'medXfer-7810'}),
+          ]));
+    await _app(tester, core, hotspot: _PcHotspot(dropsClients: true));
+    await tester.tap(find.byKey(const Key('hotspot-start')));
+    await _frames(tester);
+    final warning = find.byKey(const Key('hotspot-unstable'));
+    expect(warning, findsOneWidget);
+    expect(find.descendant(of: warning, matching: find.textContaining("« Ethernet » détient l'adresse 192.168.137.1")), findsOneWidget);
   });
 
   testWidgets("J6c: a session lost keeps this computer's network for the device to come back; then it stops", (tester) async {

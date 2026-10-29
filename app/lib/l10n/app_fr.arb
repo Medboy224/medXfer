@@ -217,6 +217,8 @@
   "hotspotNoInternet": "Aucun accès à Internet par ce réseau",
   "hotspotLeavesWifi": "Ce PC quitte son Wi-Fi le temps du partage, et le retrouve à l'arrêt.",
   "hotspotLeftWifi": "Wi-Fi de ce PC quitté le temps du partage, retrouvé à l'arrêt",
+  "hotspotUnstable": "Connexion instable : Windows ne distribue pas d'adresses sur ce réseau. Les téléphones seront coupés toutes les 2 minutes, puis reconnectés seuls. Pour une connexion stable, créez plutôt le réseau sur le téléphone.",
+  "hotspotUnstableHeld": "Connexion instable : Windows ne distribue pas d'adresses sur ce réseau, car la carte « {card} » détient l'adresse {address} de son partage de connexion. Les téléphones seront coupés toutes les 2 minutes, puis reconnectés seuls. Pour une connexion stable : arrêtez ce partage ou retirez cette adresse de la carte (s'il n'en reste qu'une trace), ou créez plutôt le réseau sur le téléphone.",
   "scanHint": "Tenez le téléphone à 15 ou 25 cm du QR code : de trop près, l'appareil photo ne fait pas la mise au point.",
   "tabQr": "QR code",
   "tabPinNoCamera": "PIN, sans caméra",

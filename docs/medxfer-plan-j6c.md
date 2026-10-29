@@ -130,7 +130,7 @@ Reste, avec WP-C.5 : le téléphone qui rejoint le réseau du PC par le QR, et l
 - **Confiance** : une session ouverte par un QR entre appareils de confiance mutuelle est mutuelle ; la confiance n'est plus reproposée à chaque scan.
 - **Essai réel** : le Galaxy A57 scanne le QR du PC Windows, rejoint son réseau, obtient 169.254.121.149, s'appaire, et un transfert passe.
 
-**Réserve** : le PC Windows coupe le Galaxy A57 toutes les 2 min exactement (« Sécurité sans fil interrompue » côté Windows), pas Zorin (5 min sans coupure, avec ou sans DHCP). Cause probable : la sécurité du lien entre Windows et Android (trames de gestion protégées, ou renouvellement des clés). Palliatif : le téléphone rejoint seul le réseau perdu (Android ne redemande pas l'accord), la session revient seule (#202) : environ 3 s de coupure toutes les 2 min. La cause est à chercher avec le second téléphone (WP-C.5).
+**Réserve** : le PC Windows coupe le Galaxy A57 toutes les 2 min exactement (« Sécurité sans fil interrompue » côté Windows), pas Zorin (5 min sans coupure, avec ou sans DHCP). Palliatif : le téléphone rejoint seul le réseau perdu (Android ne redemande pas l'accord), la session revient seule (#202) : environ 3 s de coupure toutes les 2 min. **Cause trouvée et corrigée en WP-C.5** (ci-dessous).
 
 ### WP-C.3 — Écran du PC · S
 
@@ -158,9 +158,9 @@ Reste, avec WP-C.5 : le téléphone qui rejoint le réseau du PC par le QR, et l
 - **Au repos, aucun à-coup** : la réserve 4 de G2a ne se reproduit pas en 10 minutes, où elle aurait dû apparaître 2 ou 3 fois.
 - **Les arrêts de 400 à 600 ms** de la phase de clics viennent de la fenêtre « Choisir des fichiers » du système : elle est modale et bloque la fenêtre de l'application tant qu'elle est ouverte. Sans elle, la navigation seule en donne un seul, de 112 ms, et aucun au-delà.
 - **Les changements de page perdent des images** : 12 % passent 16,7 ms, jusqu'à 67 ms, soit des passages à 30 images par seconde. C'est le dessin (raster p90 de 12 à 19 ms, contre 4 à 8 ms au repos), pas le code Dart (build p90 de 0,2 à 5 ms). C'est à creuser avant la v1, sans bloquer J6c.
-- Le transfert de 1 Go n'a pas été mesuré ici : il le sera pendant ceux de WP-C.5, déjà prévus, avec la même version.
+- **Pendant un transfert** (29 octobre, WP-C.5) : deux transferts de 1 Go reçus par le PC, depuis le Galaxy A57. **Aucune image au-delà de 100 ms.** La seule de la séance, 333 ms, tombe à la création du réseau : le démarrage du groupe Wi-Fi Direct attend sur le fil de la fenêtre.
 
-**Conclusion** : la réserve 4 de G2a est **levée** au repos et pendant la navigation. Il reste la perte d'images aux changements de page, et la mesure pendant un transfert.
+**Conclusion** : la réserve 4 de G2a est **levée**, au repos, pendant la navigation et pendant un transfert. Il reste la perte d'images aux changements de page, et l'attente à la création du réseau.
 
 ### WP-C.5 — Essais réels et rapport · S
 
@@ -181,10 +181,28 @@ Reste, avec WP-C.5 : le téléphone qui rejoint le réseau du PC par le QR, et l
 | TECNO BF6 → Galaxy A57 par QR (#169) | ✅ Lecture rapide (3 essais sur 4), réseau rejoint, appairage et confiance, transferts à environ **4 MB/s**. C'est la limite de la puce du TECNO (Unisoc SC9863A, 2,4 GHz, une antenne). Le TECNO est en Android 32 bits : d'où la décision C6. |
 | Bande du point d'accès du Galaxy A57, son Wi-Fi allumé mais connecté à aucun réseau | **2,4 GHz** (canal 1, 2412 MHz) : Android ne passe pas à 5 GHz de lui-même. Le 5 GHz du téléphone ne vient que de Wi-Fi Direct (WP-C.0). |
 
+**La coupure de Windows toutes les 2 minutes** (29 octobre, cause trouvée et corrigée) :
+
+| Essai | Résultat |
+|---|---|
+| TECNO BF6 sur le réseau du PC | Coupé aussi, exactement 120 s après chaque connexion (`reason=0`, côté PC) : la cause est Windows, pas le Galaxy A57. |
+| L'application écoute les demandes de connexion (`WiFiDirectConnectionListener`) | Windows lui demande d'accepter chaque téléphone Android (`WiFiDirect#…_LegacyPendingRequest`). Sans réponse, il le coupe à 2 min. L'accepter (`WiFiDirectDevice.FromIdAsync`, sur le fil de la fenêtre comme l'exemple de Microsoft) échoue après 30 s, et Windows le coupe alors à 30 s. L'accès au périphérique est pourtant accordé (`DeviceAccessStatus` 1). |
+| Cause | Pour accepter, Windows doit distribuer lui-même les adresses du réseau, par son partage de connexion (ICS, `192.168.137.1`). Sur ce PC, la carte Ethernet gardait `192.168.137.1`, fixée à la main, reste d'un ancien partage : Windows n'en distribuait aucune, d'où aussi le serveur DHCP de l'application en WP-C.2. |
+| Adresse retirée (avec l'accord de l'utilisateur) | Windows distribue les adresses (`192.168.137.177`), acceptation en **93 ms**, **plus aucune coupure** (plus de 6 min, deux fois), 1 Go Galaxy A57 → PC à environ 12 MB/s. |
+
+Correction (PR de WP-C.5) :
+- le PC accepte les téléphones, sur le fil de la fenêtre, sans appairage Windows ;
+- notre serveur DHCP ne démarre que si Windows ne distribue aucune adresse. Deux serveurs sur un réseau se répondraient l'un à l'autre ;
+- dans ce cas, l'application cesse d'écouter : Windows coupe à 2 min et non à 30 s, et le téléphone revient seul. L'écran du réseau le dit, nomme la carte qui détient l'adresse du partage, et propose la voie stable : retirer l'adresse ou arrêter le partage, ou créer le réseau sur le téléphone (règle de WP-C.1).
+
+Défauts relevés pendant ces essais, à corriger :
+- **adresse réattribuée prise pour une attaque** : un appareil de confiance garde sa dernière adresse ; le suivant qui la reçoit est refusé (« device key changed », règle `ID-05`), même avec le secret du QR ou le bon PIN ;
+- **Wi-Fi du téléphone coupé** : après le scan, Android refuse la connexion, et l'application ne le dit pas clairement ;
+- **réseau du PC perdu sans le savoir** : quand le Wi-Fi du PC change de réseau, Windows arrête le groupe Wi-Fi Direct sans prévenir l'application, qui garde un QR mort.
+
 Restent :
 - un PC Windows qui rejoint le point d'accès du Galaxy A57 par ses réglages (#169) ;
-- la coupure de Windows toutes les 2 minutes : un autre téléphone est-il coupé aussi ;
-- le transfert de 1 Go vers Windows avec le journal `perf:` ;
+- un vrai partage de connexion vers Ethernet (le MikroTik de l'utilisateur) : l'avertissement de l'écran du réseau, en conditions réelles ;
 - le rapport.
 
 ## 3. Hors périmètre

@@ -1,8 +1,9 @@
-/// A DHCP server for the network a Windows computer creates (WP-C.2 of the J6c plan): Windows
-/// serves no addresses on its Wi-Fi Direct group, so a device that joined it got none (probe of
-/// 28 October: `ip-config-unavailable` after 45 s). The app serves them, the least RFC 2131
-/// needs: DISCOVER gets an OFFER, REQUEST an ACK or a NAK. No router, no DNS: the network
-/// carries medXfer, not the Internet.
+/// A DHCP server for the network a Windows computer creates (WP-C.2 of the J6c plan), when
+/// Windows serves no addresses on its Wi-Fi Direct group: its connection sharing taken by
+/// another card, or that card holding the sharing's address (WP-C.5; probe of 28 October:
+/// `ip-config-unavailable` after 45 s). The app serves them then, the least RFC 2131 needs:
+/// DISCOVER gets an OFFER, REQUEST an ACK or a NAK. No router, no DNS: the network carries
+/// medXfer, not the Internet.
 ///
 /// Bound to the group's own address, never to every interface: it answers no request from
 /// another network the computer is on. Its range is the group's subnet, link-local
