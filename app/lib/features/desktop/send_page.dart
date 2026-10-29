@@ -364,6 +364,11 @@ class _ConnectionPanel extends StatelessWidget {
             icon: const Icon(Icons.wifi_tethering_rounded),
             label: Text(l.hotspotStart),
           ),
+          if (connection.hotspot.leavesWifi)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
+              child: Text(l.hotspotLeavesWifi, key: const Key('hotspot-leaves-wifi'), style: TextStyle(color: c.muted, fontSize: 12)),
+            ),
           const SizedBox(height: 8),
         ],
         Row(

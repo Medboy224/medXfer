@@ -52,6 +52,8 @@ FakeCore _core() => FakeCore()
 
 /// The network a computer creates (WP-C.2 of the J6c plan), as WindowsHotspot gives it.
 class _PcHotspot implements Hotspot {
+  _PcHotspot({this.leavesWifi = false});
+
   final log = <String>[];
 
   @override
@@ -59,6 +61,10 @@ class _PcHotspot implements Hotspot {
 
   @override
   bool get canJoin => false;
+
+  /// Linux: the Wi-Fi it was on is left while the network runs.
+  @override
+  final bool leavesWifi;
 
   @override
   Future<bool> permission() async => true;
@@ -221,6 +227,7 @@ void main() {
           ]));
     final h = _PcHotspot();
     await _app(tester, core, hotspot: h);
+    expect(find.byKey(const Key('hotspot-leaves-wifi')), findsNothing);
     await tester.tap(find.byKey(const Key('hotspot-start')));
     await _frames(tester);
     expect(h.log, ['start']);
@@ -240,6 +247,18 @@ void main() {
     await _frames(tester);
     expect(h.log, ['start', 'stop']);
     expect(core.calls.where((c) => c.action == 'set_network_info').last.payload, {'enumerate': true});
+  });
+
+  testWidgets('J6c: under Linux, the Wi-Fi left while the network runs is said before and during', (tester) async {
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_show', (_) => const FakeAnswer())
+      ..on('pair_pin_show', (_) => const FakeAnswer());
+    await _app(tester, core, hotspot: _PcHotspot(leavesWifi: true));
+    expect(find.byKey(const Key('hotspot-leaves-wifi')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('hotspot-start')));
+    await _frames(tester);
+    expect(find.text("Wi-Fi de ce PC quitté le temps du partage, retrouvé à l'arrêt"), findsOneWidget);
   });
 
   testWidgets("J6c: a session lost keeps this computer's network for the device to come back; then it stops", (tester) async {

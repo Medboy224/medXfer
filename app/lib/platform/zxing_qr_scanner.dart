@@ -51,15 +51,33 @@ class _ScanScreenState extends State<_ScanScreen> {
         foregroundColor: Colors.white,
         title: Text(l.scanQr),
       ),
-      body: ReaderWidget(
-        codeFormat: Format.qrCode,
-        onScan: _read,
-        showGallery: false,
-        showToggleCamera: false,
-        tryHarder: true,
-        scanDelay: const Duration(milliseconds: 200),
-        scanDelaySuccess: const Duration(milliseconds: 200),
-        cropPercent: 0.7,
+      body: Stack(
+        children: [
+          ReaderWidget(
+            codeFormat: Format.qrCode,
+            onScan: _read,
+            showGallery: false,
+            showToggleCamera: false,
+            tryHarder: true,
+            scanDelay: const Duration(milliseconds: 200),
+            scanDelaySuccess: const Duration(milliseconds: 200),
+            cropPercent: 0.7,
+            // 1080p rather than 720p: a QR code on a computer's screen, from where the camera
+            // focuses, is small in the picture (real test of 29 October 2026, 24 s to read).
+            resolution: ResolutionPreset.veryHigh,
+          ),
+          Positioned(
+            left: 24,
+            right: 24,
+            top: 16,
+            child: Text(
+              l.scanHint,
+              key: const Key('scan-hint'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.4),
+            ),
+          ),
+        ],
       ),
     );
   }

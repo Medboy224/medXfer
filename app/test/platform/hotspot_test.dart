@@ -35,7 +35,7 @@ void main() {
   test('WP-C.2: Linux, NetworkManager at 2.4 GHz; the network it was on comes back at the stop', () async {
     final nm = _Nmcli();
     final h = LinuxHotspot(run: nm.call);
-    expect((h.supported, h.canJoin), (true, false));
+    expect((h.supported, h.canJoin, h.leavesWifi), (true, false, true));
     final info = await h.start();
     expect(info.address, '10.42.0.1');
     expect(info.security, 1);
