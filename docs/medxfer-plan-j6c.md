@@ -147,6 +147,21 @@ Reste, avec WP-C.5 : le téléphone qui rejoint le réseau du PC par le QR, et l
 - Mesures : images au-delà de 16,7 ms, les plus longues, leur fréquence.
 - La réserve 4 de G2a (230 à 240 ms, environ une fois toutes les 3 à 4 minutes) est levée ou confirmée, avec les chiffres.
 
+**Résultats** (28 et 29 octobre ; version profile, Impeller sur OpenGL ES, PC de développement). Un écran immobile ne dessine rien : avec `--dart-define=MEDXFER_PERF_TICK=true`, `perf.dart` demande une image à chaque vsync, et le journal donne aussi l'image la plus longue et le plus grand écart entre deux images.
+
+| Phase | Durée | Images | Au-delà de 16,7 ms | Au-delà de 100 ms | Plus longue |
+|---|---|---|---|---|---|
+| Repos | 10,4 min | 37 366 (60/s) | 0,55 % | **0** | 76 ms (écart max 83 ms) |
+| Navigation entre les pages seule | 3,5 min | 12 612 (60/s) | 12,4 % | 1 | 112 ms |
+| Clics, avec « Choisir des fichiers » | 6,8 min | — | — | 17, dans 9 fenêtres de 2 s | 604 ms |
+
+- **Au repos, aucun à-coup** : la réserve 4 de G2a ne se reproduit pas en 10 minutes, où elle aurait dû apparaître 2 ou 3 fois.
+- **Les arrêts de 400 à 600 ms** de la phase de clics viennent de la fenêtre « Choisir des fichiers » du système : elle est modale et bloque la fenêtre de l'application tant qu'elle est ouverte. Sans elle, la navigation seule en donne un seul, de 112 ms, et aucun au-delà.
+- **Les changements de page perdent des images** : 12 % passent 16,7 ms, jusqu'à 67 ms, soit des passages à 30 images par seconde. C'est le dessin (raster p90 de 12 à 19 ms, contre 4 à 8 ms au repos), pas le code Dart (build p90 de 0,2 à 5 ms). C'est à creuser avant la v1, sans bloquer J6c.
+- Le transfert de 1 Go n'a pas été mesuré ici : il le sera pendant ceux de WP-C.5, déjà prévus, avec la même version.
+
+**Conclusion** : la réserve 4 de G2a est **levée** au repos et pendant la navigation. Il reste la perte d'images aux changements de page, et la mesure pendant un transfert.
+
 ### WP-C.5 — Essais réels et rapport · S
 
 - Appairage par QR de bout en bout :
@@ -154,6 +169,7 @@ Reste, avec WP-C.5 : le téléphone qui rejoint le réseau du PC par le QR, et l
   - Galaxy A57 → Zorin ;
   - second téléphone → Galaxy A57 (#169).
 - Un transfert de 1 Go par chacun de ces réseaux, avec son débit.
+- Sous Windows, le transfert se fait avec la version profile, et le journal `perf:` (WP-C.4, la mesure pendant un transfert).
 - Rapport de sortie, et décision sur Wi-Fi Direct pour J8.
 
 ## 3. Hors périmètre
