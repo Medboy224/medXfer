@@ -11,6 +11,7 @@ $native = Join-Path $root "app\native"
 $copies = @(
     @{ From = "windows-amd64\medxfer.dll";   To = "windows\medxfer.dll" },
     @{ From = "android-arm64\libmedxfer.so"; To = "android\arm64-v8a\libmedxfer.so" },
+    @{ From = "android-arm\libmedxfer.so";   To = "android\armeabi-v7a\libmedxfer.so" },
     @{ From = "android-x86_64\libmedxfer.so"; To = "android\x86_64\libmedxfer.so" }
 )
 foreach ($c in $copies) {
