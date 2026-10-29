@@ -110,6 +110,22 @@ class _HotspotScreenState extends State<HotspotScreen> {
                     onSelectionChanged: (s) => setState(() => _pinTab = s.first),
                   ),
                   const SizedBox(height: 18),
+                  // Windows serves no addresses here: said before the phone is dropped, with the
+                  // cause and the way to a stable connection (WP-C.5 of the J6c plan).
+                  if (h.dropsClients) ...[
+                    Container(
+                      key: const Key('hotspot-unstable'),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(border: Border.all(color: c.danger), borderRadius: BorderRadius.circular(12)),
+                      child: Text(
+                        h.addressHeldBy != null && h.sharingAddress != null
+                            ? l.hotspotUnstableHeld(h.addressHeldBy!, h.sharingAddress!)
+                            : l.hotspotUnstable,
+                        style: const TextStyle(fontSize: 13, height: 1.4),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                  ],
                   if (!_pinTab) ...[
                     Center(
                       child: Container(

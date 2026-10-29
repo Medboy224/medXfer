@@ -17,7 +17,17 @@ import 'network.dart';
 
 /// A network created, or joined, by the app.
 class HotspotInfo {
-  const HotspotInfo({this.ssid, this.passphrase, this.security = 0, this.address, this.interfaces = const [], this.net});
+  const HotspotInfo({
+    this.ssid,
+    this.passphrase,
+    this.security = 0,
+    this.address,
+    this.interfaces = const [],
+    this.net,
+    this.dropsClients = false,
+    this.addressHeldBy,
+    this.sharingAddress,
+  });
 
   factory HotspotInfo.fromMap(Map<Object?, Object?> m) => HotspotInfo(
         ssid: m['ssid'] as String?,
@@ -42,7 +52,19 @@ class HotspotInfo {
   /// PIN and announce then carry this address. Android gives its own interfaces.
   final NetInterface? net;
 
+  /// Windows serves no addresses on this network: it drops each phone after 2 minutes, the
+  /// phone comes back by itself (WP-C.5 of the J6c plan). The card that holds its connection
+  /// sharing's address, and that address, when one does.
+  final bool dropsClients;
+  final String? addressHeldBy;
+  final String? sharingAddress;
 }
+
+/// Starts the address server on the network's address; gives its close. [DhcpServer], or a
+/// fake in the tests.
+typedef AddressServer = Future<void Function()> Function(InternetAddress server, int prefix);
+
+Future<void Function()> _dhcpServer(InternetAddress server, int prefix) async => (await DhcpServer.start(server, prefix)).close;
 
 abstract interface class Hotspot {
   /// This device creates a network ([start]).
@@ -154,12 +176,16 @@ class NoHotspot implements Hotspot {
 /// Windows: a Wi-Fi Direct group this computer owns, joined as an ordinary Wi-Fi network
 /// (WiFiDirectAdvertisementPublisher, "legacy" settings), through the runner's C++/WinRT
 /// (hotspot.cpp). No Internet connection to share, no administrator rights (probe WP-C.1).
-/// Windows serves no addresses on it: [DhcpServer] does, on the group's address only.
+/// Windows serves the addresses on it, through its connection sharing, and accepts the phones.
+/// When that sharing is taken by another card, it serves none: [DhcpServer] does, on the group's
+/// address only, and Windows drops each phone after 2 minutes ([HotspotInfo.dropsClients]).
 class WindowsHotspot implements Hotspot {
-  WindowsHotspot({this.channel = const MethodChannel('dev.medxfer.app/hotspot')});
+  WindowsHotspot({this.channel = const MethodChannel('dev.medxfer.app/hotspot'), AddressServer? addressServer})
+      : _addressServer = addressServer ?? _dhcpServer;
 
   final MethodChannel channel;
-  DhcpServer? _dhcp;
+  final AddressServer _addressServer;
+  void Function()? _closeDhcp;
 
   @override
   bool get supported => true;
@@ -179,25 +205,34 @@ class WindowsHotspot implements Hotspot {
     final group = (await channel.invokeMapMethod<String, Object?>('start', {'ssid': net.ssid, 'passphrase': net.passphrase}))!;
     final address = '${group['address']}';
     final prefix = (group['prefix'] as num?)?.toInt() ?? 16;
-    try {
-      _dhcp = await DhcpServer.start(InternetAddress(address), prefix);
-    } on SocketException catch (e) {
-      await stop();
-      throw PlatformException(code: 'hotspot', message: 'no address server: ${e.message}');
+    // Two servers on one network would answer each other's clients: ours only when Windows
+    // serves none.
+    final windowsDhcp = group['windowsDhcp'] == true;
+    if (!windowsDhcp) {
+      try {
+        _closeDhcp = await _addressServer(InternetAddress(address), prefix);
+      } on SocketException catch (e) {
+        await stop();
+        throw PlatformException(code: 'hotspot', message: 'no address server: ${e.message}');
+      }
     }
+    String? text(String key) => switch (group[key]) { final String s when s.isNotEmpty => s, _ => null };
     return HotspotInfo(
       ssid: net.ssid,
       passphrase: net.passphrase,
       security: 1,
       address: address,
       net: NetInterface(name: '${group['name']}', index: (group['index'] as num?)?.toInt() ?? 0, addrs: ['$address/$prefix']),
+      dropsClients: !windowsDhcp,
+      addressHeldBy: text('heldBy'),
+      sharingAddress: text('sharingAddress'),
     );
   }
 
   @override
   Future<void> stop() async {
-    _dhcp?.close();
-    _dhcp = null;
+    _closeDhcp?.call();
+    _closeDhcp = null;
     await channel.invokeMethod<void>('stop');
   }
 

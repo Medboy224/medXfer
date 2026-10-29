@@ -51,6 +51,9 @@ bool FlutterWindow::OnCreate() {
             {flutter::EncodableValue("index"), flutter::EncodableValue(static_cast<int32_t>(group.index))},
             {flutter::EncodableValue("address"), flutter::EncodableValue(group.address)},
             {flutter::EncodableValue("prefix"), flutter::EncodableValue(static_cast<int32_t>(group.prefix))},
+            {flutter::EncodableValue("windowsDhcp"), flutter::EncodableValue(group.windows_dhcp)},
+            {flutter::EncodableValue("heldBy"), flutter::EncodableValue(group.held_by)},
+            {flutter::EncodableValue("sharingAddress"), flutter::EncodableValue(group.sharing_address)},
         }));
       }
     } else if (call.method_name() == "stop") {
