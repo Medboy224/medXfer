@@ -1,6 +1,6 @@
 /// What the other device can ask of this user at any time, on any screen: read out a PIN
 /// (PAIR-11), accept mutual trust (PAIR-10); and what the user is told once: a pairing that
-/// failed, a key that changed (ID-05), a trust gained or lost.
+/// failed, a key that changed (ID-05), a trust gained or lost, a Wi-Fi to turn on (#218).
 library;
 
 import 'dart:async';
@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../connection/connection.dart';
+import '../../connection/pair_link.dart';
 import '../../l10n/app_localizations.dart';
 import '../../theme.dart';
 
@@ -71,6 +72,10 @@ class _ConnectionPromptsState extends State<ConnectionPrompts> {
       showDialog<void>(context: context, builder: (_) => _KeyChangedDialog(detail: n.message));
       return;
     }
+    if (n is WifiOff) {
+      showDialog<void>(context: context, builder: (_) => _WifiOffDialog(connection: _c, link: n.link));
+      return;
+    }
     final text = switch (n) {
       Paired(:final name) => l.noticePaired(name),
       PairFailed() => l.noticePairFailed,
@@ -81,7 +86,7 @@ class _ConnectionPromptsState extends State<ConnectionPrompts> {
       TrustIncomplete(:final name, :final local) => local ? l.noticeTrustIncompleteLocal(name) : l.noticeTrustIncompleteRemote(name),
       HotspotFailed(:final permission, :final reason) => permission ? l.noticeHotspotPermission : l.noticeHotspotFailed(reason),
       JoinFailed(:final ssid) => l.noticeJoinFailed(ssid),
-      KeyChanged() => '',
+      KeyChanged() || WifiOff() => '',
     };
     widget.messenger.currentState
       ?..clearSnackBars()
@@ -230,6 +235,37 @@ class _TrustOfferDialogState extends State<_TrustOfferDialog> with _ClosesWhenGo
 }
 
 /// ID-05: a known device came back with another key. Said plainly, with the core's details.
+/// This phone's Wi-Fi is off: the scanned network cannot be joined until it is on (#218). The
+/// button opens the system's Wi-Fi panel; once Wi-Fi is on, the join goes on by itself.
+class _WifiOffDialog extends StatelessWidget {
+  const _WifiOffDialog({required this.connection, required this.link});
+
+  final Connection connection;
+  final PairLink link;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    return AlertDialog(
+      key: const Key('wifi-off'),
+      icon: const Icon(Icons.wifi_off_rounded, size: 40),
+      title: Text(l.wifiOffTitle),
+      content: Text(l.wifiOffBody(link.network?.ssid ?? '')),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(l.cancel)),
+        FilledButton(
+          key: const Key('wifi-turn-on'),
+          onPressed: () {
+            Navigator.of(context).pop();
+            unawaited(connection.joinWithWifiOn(link));
+          },
+          child: Text(l.wifiTurnOn),
+        ),
+      ],
+    );
+  }
+}
+
 class _KeyChangedDialog extends StatelessWidget {
   const _KeyChangedDialog({required this.detail});
 

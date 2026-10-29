@@ -70,6 +70,28 @@ class _Hotspot implements Hotspot {
   Future<void> leave() async {}
   @override
   Future<int> joinedNetwork() async => 0;
+
+  @override
+  Future<bool> openWifiPanel() async => false;
+}
+
+/// This phone's Wi-Fi off (#218): joins refused until the system's panel turns it on.
+class _WifiOffHotspot extends _Hotspot {
+  bool on = false;
+  final log = <String>[];
+
+  @override
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async {
+    log.add('join');
+    if (!on) throw PlatformException(code: 'wifi_off');
+    return const HotspotInfo();
+  }
+
+  @override
+  Future<bool> openWifiPanel() async {
+    log.add('panel');
+    return on = true;
+  }
 }
 
 /// A camera that reads [text] at once.
@@ -311,6 +333,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(core.calls.last.action, 'pair_uri');
     expect(core.calls.last.payload['uri'], link);
+  });
+
+  testWidgets('#218: Wi-Fi off after the scan: said, the panel opened, then the same link joined', (tester) async {
+    const link = 'medxfer://v1/pair?fp=AAAA&a=10.46.56.232&p=18887&s=x&exp=1900000000&ws=AndroidShare_1732&wp=vvrtsy&wt=2';
+    final core = _core()
+      ..on('pair_uri', (_) => const FakeAnswer())
+      ..on('set_network_info', (_) => const FakeAnswer());
+    final h = _WifiOffHotspot();
+    await _app(tester, core, hotspot: h, scanner: const _Scanner(link));
+    await tester.tap(find.byTooltip('Scanner un QR pour rejoindre'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('wifi-off')), findsOneWidget);
+    expect(find.textContaining('AndroidShare_1732'), findsOneWidget);
+    expect(core.calls.where((c) => c.action == 'pair_uri'), isEmpty);
+
+    await tester.tap(find.byKey(const Key('wifi-turn-on')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('wifi-off')), findsNothing);
+    expect(h.log, ['join', 'panel', 'join']);
+    expect(core.calls.last.action, 'pair_uri');
   });
 
   testWidgets('a desktop pastes a link that names a network: told to join it first', (tester) async {

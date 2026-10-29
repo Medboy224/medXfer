@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 
 // Joining another device's access point from the app (WP-B.7): the QR gives the network's name
@@ -18,6 +19,10 @@ import android.net.wifi.WifiNetworkSpecifier
 // again without asking the user; changed tells the app, whose core gets the new handle.
 class WifiJoin(context: Context, private val changed: () -> Unit) {
     private val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+
+    /** Whether Wi-Fi is on: a network is joined only then, and an app cannot turn it on (Android 10 on). */
+    val wifiOn: Boolean get() = wifi.isWifiEnabled
     private var callback: ConnectivityManager.NetworkCallback? = null
     private var request: NetworkRequest? = null
     private var joined: Network? = null
@@ -25,9 +30,14 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
     /** The joined network's handle, for the core's sockets; 0 when none. */
     val network: Long get() = joined?.networkHandle ?: 0L
 
-    /** Joins ssid; done gets the network's local address, or an error. security: as LocalHotspot reports it. */
+    /**
+     * Joins ssid; done gets the network's local address, or an error: "wifi_off" when Wi-Fi is off,
+     * Android refusing the request then (real tests of 29 October 2026). security: as LocalHotspot
+     * reports it.
+     */
     fun join(ssid: String, passphrase: String, security: Int, done: (Map<String, Any?>?, String?) -> Unit) {
         leave()
+        if (!wifiOn) return done(null, WIFI_OFF)
         val spec = WifiNetworkSpecifier.Builder().setSsid(ssid).apply {
             if (security == 3) setWpa3Passphrase(passphrase) else setWpa2Passphrase(passphrase)
         }.build()
@@ -83,5 +93,9 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
         callback = null
         joined = null
         cm.bindProcessToNetwork(null)
+    }
+
+    companion object {
+        const val WIFI_OFF = "wifi_off"
     }
 }
