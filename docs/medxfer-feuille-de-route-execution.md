@@ -290,12 +290,14 @@ D'abord une sonde : rôles BLE (annonce et serveur, balayage et client) sur le G
 Bible chapitre 11 : listener séparé, jeton porteur sans cookie (fragment d'URL), HTTPS auto-signé, CSP (JavaScript externalisé), PIN de repli à 5 essais par session, retrait du bouton « 4 chiffres », collision gérée pour le dépôt par morceaux (`WEB-07`). Gate G5 (test utilisateur de l'avertissement de certificat).
 
 ### J8 — Mesure, optimisation, finitions v1 · ≈ 5 à 8 jours
-Matrice d'appareils réels (§14.3), gate G3, optimisations ciblées d'après le rapport par étape, point d'accès Wi-Fi Direct à 5 GHz si la sonde J6c le confirme (derrière l'interface `Hotspot`, mise à jour de `DISC-12`), benchmark nocturne en CI (`DEV-21`), suppression de `devui` si G7 est remplie, ingénierie de livraison (signature, paquets, `SECURITY.md`, documentation d'utilisation, premier `README`). **Critère de sortie :** objectif de 80 % d'iperf3 atteint ou plan écrit ; toutes les exigences ont leur test vert.
+Matrice d'appareils réels (§14.3), gate G3, optimisations ciblées d'après le rapport par étape, point d'accès Wi-Fi Direct à 5 GHz, confirmé par la sonde J6c (derrière l'interface `Hotspot`, mise à jour de `DISC-12`) et choisi par téléphone selon la mesure, sinon `LocalOnlyHotspot` (décision C7 du plan J6c), benchmark nocturne en CI (`DEV-21`), suppression de `devui` si G7 est remplie, ingénierie de livraison (signature, paquets, `SECURITY.md`, documentation d'utilisation, premier `README`). **Critère de sortie :** objectif de 80 % d'iperf3 atteint ou plan écrit ; toutes les exigences ont leur test vert.
 
 **Pare-feu Windows (constat de WP-6.5, 15/10/2026) :** sans règle entrante, un PC Windows trouve les autres mais reste invisible, sans message. L'installateur pose les règles de medXfer (UDP 5353 mDNS, UDP 19998 balise, TCP 18887, le port unique de medXfer : appairage et transferts, #133) sur les profils Privé et Public ; l'application vérifie au lancement qu'elles existent et sinon propose de les ajouter (élévation UAC), avec le message « Ce PC n'est pas visible par les autres appareils ».
 
 ### J9 — macOS et iOS · à planifier quand la gate G8 est levée
 Prototype G2b, Bonjour, permission « réseau local », comportement en arrière-plan sur iPhone, empaquetage et distribution. Pas de plan détaillé avant que l'environnement macOS existe.
+
+**Android ↔ iPhone (noté le 29 octobre, recherches de l'utilisateur) :** iOS n'ouvre pas Wi-Fi Direct aux applications (Apple n'expose que son propre protocole, AWDL). Entre un téléphone Android et un iPhone, c'est donc le téléphone Android qui crée le réseau : `LocalOnlyHotspot`, ou le groupe Wi-Fi Direct, que les autres voient comme un Wi-Fi ordinaire (WP-C.0). L'iPhone le rejoint par `NEHotspotConfiguration`, et l'utilisateur doit l'approuver à chaque fois.
 
 ---
 
