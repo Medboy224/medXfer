@@ -184,6 +184,40 @@ func TestHubFirstFrameRules(t *testing.T) {
 	}
 }
 
+// Once Accept has failed on a closed listener, the hub no longer knows the transfer: a sender's
+// Serve returns only then (TestTransferThroughTheHub failed on macOS, CI of 29 October 2026).
+func TestClosedListenerUnknownOnceAcceptFails(t *testing.T) {
+	device, peer := newID(t), newID(t)
+	h, _ := startHub(t, device)
+	id, _ := NewID()
+	l, err := h.Register(id, peer.Fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := make(chan struct{})
+	go func() {
+		_, _ = l.Accept()
+		close(failed)
+	}()
+	// The hub's lock held: Close cannot unregister the transfer yet, so Accept must not fail.
+	h.mu.Lock()
+	go l.Close()
+	select {
+	case <-failed:
+		_, still := h.transfers[id]
+		h.mu.Unlock()
+		if still {
+			t.Fatal("Accept failed while the transfer was still registered")
+		}
+	case <-time.After(200 * time.Millisecond):
+		h.mu.Unlock()
+		<-failed
+		if h.Known(peer.Fingerprint) {
+			t.Fatal("the transfer still known once Accept failed")
+		}
+	}
+}
+
 // A whole offer through the device's single port: the sender serves on the hub's transfer
 // listener, the receiver joins with DATA_JOIN on every connection, and once the sender stops
 // the transfer is no longer registered.

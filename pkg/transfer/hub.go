@@ -238,7 +238,9 @@ func (l *Listener) Accept() (net.Conn, error) {
 	}
 }
 
-// Close unregisters the listener; connections still waiting are closed.
+// Close unregisters the listener, then ends Accept; connections still waiting are closed.
+// Unregistered first: once Accept has failed, the hub no longer knows the transfer, so a
+// sender's Serve returns only then (TestTransferThroughTheHub, CI on macOS, 29 October 2026).
 func (l *Listener) Close() error {
 	l.mu.Lock()
 	if l.closed {
@@ -246,9 +248,9 @@ func (l *Listener) Close() error {
 		return nil
 	}
 	l.closed = true
-	close(l.done)
 	l.mu.Unlock()
 	l.hub.remove(l)
+	close(l.done)
 	for {
 		select {
 		case c := <-l.ch:
