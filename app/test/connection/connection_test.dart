@@ -49,6 +49,10 @@ class _AndroidNetwork implements NetworkInfo {
 class _FakeHotspot implements Hotspot {
   bool granted = true;
   bool joinFails = false;
+
+  /// Wi-Fi off: the join refused (#218), until the panel turns it on if [panelTurnsOn].
+  bool wifiOff = false;
+  bool panelTurnsOn = true;
   final log = <String>[];
 
   @override
@@ -78,6 +82,7 @@ class _FakeHotspot implements Hotspot {
   @override
   Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async {
     log.add('join $ssid $passphrase $security');
+    if (wifiOff) throw PlatformException(code: 'wifi_off', message: 'wifi_off');
     if (joinFails) throw PlatformException(code: 'join', message: 'unavailable');
     return const HotspotInfo(address: '10.46.56.91');
   }
@@ -87,6 +92,13 @@ class _FakeHotspot implements Hotspot {
 
   @override
   Future<int> joinedNetwork() async => 643355824141;
+
+  @override
+  Future<bool> openWifiPanel() async {
+    log.add('wifi panel');
+    if (panelTurnsOn) wifiOff = false;
+    return !wifiOff;
+  }
 }
 
 /// A desktop's network (WP-C.2 of the J6c plan): it creates one, never joins one itself.
@@ -131,6 +143,9 @@ class _DesktopHotspot implements Hotspot {
 
   @override
   Future<int> joinedNetwork() async => 0;
+
+  @override
+  Future<bool> openWifiPanel() async => false;
 }
 
 List<Object?> _networkNames(FakeCore core) => [
@@ -431,6 +446,42 @@ void main() {
     await c.pairLink(PairLink.parse('medxfer://v1/pair?fp=A&ws=Net&wp=x')!);
     await _settle();
     expect((notices.single as JoinFailed).ssid, 'Net');
+    expect(core.calls.where((x) => x.action == 'pair_uri'), isEmpty);
+  });
+
+  test('#218: Wi-Fi off, said as such; turned on in the panel, the same link joined without a new scan', () async {
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_uri', (_) => const FakeAnswer());
+    final h = _FakeHotspot()..wifiOff = true;
+    final c = Connection(core, hotspot: h);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    final link = PairLink.parse('medxfer://v1/pair?fp=A&ws=Net&wp=x')!;
+    await c.pairLink(link);
+    await _settle();
+    expect(notices.single, isA<WifiOff>().having((n) => n.link, 'link', link));
+    expect(core.calls.where((x) => x.action == 'pair_uri'), isEmpty);
+
+    await c.joinWithWifiOn(link);
+    await _settle();
+    expect(h.log, ['permission', 'join Net x 1', 'wifi panel', 'permission', 'join Net x 1']);
+    expect(core.calls.last.action, 'pair_uri');
+  });
+
+  test('#218: the panel closed with Wi-Fi still off: said again, nothing joined', () async {
+    final core = _core()..on('pair_uri', (_) => const FakeAnswer());
+    final h = _FakeHotspot()
+      ..wifiOff = true
+      ..panelTurnsOn = false;
+    final c = Connection(core, hotspot: h);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    final link = PairLink.parse('medxfer://v1/pair?fp=A&ws=Net&wp=x')!;
+    await c.joinWithWifiOn(link);
+    await _settle();
+    expect(notices.single, isA<WifiOff>());
+    expect(h.log, ['wifi panel']);
     expect(core.calls.where((x) => x.action == 'pair_uri'), isEmpty);
   });
 

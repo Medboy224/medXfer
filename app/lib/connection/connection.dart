@@ -187,6 +187,13 @@ class JoinFailed extends ConnectionNotice {
   final String ssid;
 }
 
+/// This phone's Wi-Fi is off: Android refuses to join [link]'s network then, and an app cannot
+/// turn it on (#218). [Connection.joinWithWifiOn] opens the system's panel, then joins.
+class WifiOff extends ConnectionNotice {
+  const WifiOff(this.link);
+  final PairLink link;
+}
+
 class Connection extends ChangeNotifier {
   Connection(this.core, {this.network = const NoNetworkInfo(), this.hotspot = const NoHotspot()}) {
     _sub = core.events.listen(take);
@@ -435,8 +442,8 @@ class Connection extends ChangeNotifier {
         await hotspot.join(n.ssid, n.passphrase, security: n.security);
         _joined = n;
         await pushNetwork();
-      } on PlatformException {
-        _notices.add(JoinFailed(n.ssid));
+      } on PlatformException catch (e) {
+        _notices.add(e.code == 'wifi_off' ? WifiOff(link) : JoinFailed(n.ssid));
         return;
       } finally {
         _hotspotBusy = false;
@@ -444,6 +451,13 @@ class Connection extends ChangeNotifier {
       }
     }
     await pairUri(link.uri);
+  }
+
+  /// The system's Wi-Fi panel for the user to turn Wi-Fi on, then [link] joined at once: the QR
+  /// code need not be scanned again. Still off, said again.
+  Future<void> joinWithWifiOn(PairLink link) async {
+    if (await hotspot.openWifiPanel()) return pairLink(link);
+    _notices.add(WifiOff(link));
   }
 
   /// Leaves the access point joined by [pairLink]: back to the usual network.

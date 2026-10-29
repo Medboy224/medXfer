@@ -95,6 +95,11 @@ abstract interface class Hotspot {
   /// The joined network's handle, for the core's sockets (pkg/netbind); 0 for none. It changes
   /// when the network, lost, is joined again (Android, J6c).
   Future<int> joinedNetwork();
+
+  /// The system's Wi-Fi panel, for the user to turn Wi-Fi on before [join] (Android: an app
+  /// cannot since Android 10, and joins with Wi-Fi off are refused, #218). Whether Wi-Fi is on
+  /// once it closes; false where there is no such panel.
+  Future<bool> openWifiPanel();
 }
 
 /// Android's local hotspot, through the app's Kotlin (LocalHotspot.kt, WifiJoin.kt).
@@ -129,6 +134,9 @@ class AndroidHotspot implements Hotspot {
 
   @override
   Future<int> joinedNetwork() async => await platformChannel.invokeMethod<int>('hotspotJoinedNetwork') ?? 0;
+
+  @override
+  Future<bool> openWifiPanel() async => await platformChannel.invokeMethod<bool>('openWifiPanel') ?? false;
 }
 
 /// No hotspot from the app (the user joins a network in the system's settings).
@@ -161,6 +169,9 @@ class NoHotspot implements Hotspot {
 
   @override
   Future<int> joinedNetwork() async => 0;
+
+  @override
+  Future<bool> openWifiPanel() async => false;
 }
 
 /// What a desktop's network looks like: a name that says nothing of the device (DISC-07), and a
@@ -244,6 +255,9 @@ class WindowsHotspot implements Hotspot {
 
   @override
   Future<int> joinedNetwork() async => 0;
+
+  @override
+  Future<bool> openWifiPanel() async => false;
 }
 
 /// Runs a program: Process.run, or a fake in the tests.
@@ -333,6 +347,9 @@ class LinuxHotspot implements Hotspot {
 
   @override
   Future<int> joinedNetwork() async => 0;
+
+  @override
+  Future<bool> openWifiPanel() async => false;
 }
 
 Hotspot systemHotspot() {

@@ -6,6 +6,9 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -61,7 +64,10 @@ class MainActivity : FlutterActivity() {
                         call.argument<String>("ssid") ?: "",
                         call.argument<String>("passphrase") ?: "",
                         call.argument<Int>("security") ?: 1,
-                    ) { info, err -> if (err != null) result.error("join", err, null) else result.success(info) }
+                    ) { info, err ->
+                        if (err != null) result.error(if (err == WifiJoin.WIFI_OFF) WifiJoin.WIFI_OFF else "join", err, null) else result.success(info)
+                    }
+                    "openWifiPanel" -> openWifiPanel { result.success(it) }
                     "hotspotLeave" -> { join.leave(); result.success(null) }
                     "hotspotJoinedNetwork" -> result.success(join.network)
                     // The explorer by categories (WP-B.9).
@@ -114,8 +120,34 @@ class MainActivity : FlutterActivity() {
         requestPermissions(arrayOf(permission), PERMISSION_REQUEST)
     }
 
+    private var wifiPanelAnswer: ((Boolean) -> Unit)? = null
+
+    // The system's Wi-Fi panel, for the user to turn Wi-Fi on: an app cannot, from Android 10 on
+    // (#218). done gets whether it is on once the panel closes.
+    private fun openWifiPanel(done: (Boolean) -> Unit) {
+        if (join.wifiOn) return done(true)
+        wifiPanelAnswer?.invoke(false) // a panel still open counts as closed with Wi-Fi off
+        wifiPanelAnswer = done
+        startActivityForResult(Intent(Settings.Panel.ACTION_WIFI), WIFI_PANEL_REQUEST)
+    }
+
+    // Turned on, Wi-Fi is "enabling" for a moment: up to 3 s to be on.
+    private fun wifiPanelClosed(done: (Boolean) -> Unit) {
+        val handler = Handler(Looper.getMainLooper())
+        var tries = 0
+        fun check() {
+            if (join.wifiOn || ++tries >= 10) done(join.wifiOn) else handler.postDelayed({ check() }, 300)
+        }
+        check()
+    }
+
     @Deprecated("The system's pages answer here; no activity result API without AndroidX")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == WIFI_PANEL_REQUEST) {
+            wifiPanelAnswer?.let { wifiPanelClosed(it) }
+            wifiPanelAnswer = null
+            return
+        }
         if (!storage.onResult(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data)
     }
 
@@ -170,5 +202,6 @@ class MainActivity : FlutterActivity() {
     companion object {
         const val PROBE_TAG = "medxfer-probe"
         private const val PERMISSION_REQUEST = 0x6d78
+        private const val WIFI_PANEL_REQUEST = 0x6d7b // Storage has 0x6d79 and 0x6d7a
     }
 }
