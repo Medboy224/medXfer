@@ -27,13 +27,17 @@ var quiet = log.New(io.Discard, "", 0)
 const tagsCheck = 30 * time.Second
 
 func (mdnsDiscoverer) Announce(ctx context.Context, a Announcement) error {
-	serve := func(tags []string) (*mdns.Server, error) {
+	serve := func(tags []string) (shutdowner, error) {
 		svc, err := mdns.NewMDNSService(a.Instance, Service, "", a.Instance+".local.", a.Port, []net.IP{a.IP},
 			txtOf(a.Role, tags))
 		if err != nil {
 			return nil, err
 		}
-		return mdns.NewServer(&mdns.Config{Zone: svc, Iface: a.Iface, Logger: quiet})
+		s, err := mdns.NewServer(&mdns.Config{Zone: svc, Iface: a.Iface, Logger: quiet})
+		if err != nil {
+			return nil, err // not a nil *mdns.Server in a non-nil interface
+		}
+		return s, nil
 	}
 	tags := a.tagsNow()
 	srv, err := serve(tags)
@@ -43,26 +47,44 @@ func (mdnsDiscoverer) Announce(ctx context.Context, a Announcement) error {
 	go func() {
 		t := time.NewTicker(tagsCheck)
 		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				_ = srv.Shutdown()
-				return
-			case <-t.C:
-				now := a.tagsNow()
-				if slices.Equal(now, tags) {
-					continue
-				}
-				_ = srv.Shutdown()
-				if next, err := serve(now); err == nil {
-					srv, tags = next, now
-				} else {
-					srv, _ = serve(tags) // keep announcing, with the old tags
-				}
-			}
-		}
+		keepAnnouncing(ctx, t.C, a.tagsNow, serve, srv, tags)
 	}()
 	return nil
+}
+
+// shutdowner is the announcing server: *mdns.Server, or a fake in the tests.
+type shutdowner interface{ Shutdown() error }
+
+// keepAnnouncing serves the announcement until ctx ends; at each tick, a server with the new
+// tags replaces srv if they changed. When neither the new server nor one with the old tags
+// comes up (the interface gone: the network of the PC stopped), there is none until a later
+// tick, and none is shut down: a nil one was, and the app crashed (real test of 29 October 2026).
+func keepAnnouncing(ctx context.Context, tick <-chan time.Time, tagsNow func() []string,
+	serve func([]string) (shutdowner, error), srv shutdowner, tags []string) {
+	stop := func() {
+		if srv != nil {
+			_ = srv.Shutdown()
+			srv = nil
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			stop()
+			return
+		case <-tick:
+			now := tagsNow()
+			if srv != nil && slices.Equal(now, tags) {
+				continue
+			}
+			stop()
+			if next, err := serve(now); err == nil {
+				srv, tags = next, now
+			} else if old, err := serve(tags); err == nil {
+				srv = old // keep announcing, with the old tags
+			}
+		}
+	}
 }
 
 func (m mdnsDiscoverer) Browse(ctx context.Context, timeout time.Duration) ([]Found, error) {
