@@ -77,6 +77,16 @@ kotlin {
     }
 }
 
+dependencies {
+    // The QR reader's camera screen (QrScanActivity.kt): CameraX, and zxing-cpp (Apache 2.0) to
+    // read; decision C8 of the J6c plan, #227.
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
+    implementation("androidx.camera:camera-view:1.6.2")
+    implementation("androidx.activity:activity:1.9.3")
+    implementation("io.github.zxing-cpp:android:3.1.1")
+}
+
 flutter {
     source = "../.."
 }
