@@ -50,11 +50,13 @@ func (s *DaemonServer) handlePairPINShow(rs Responder, req RequestMessage) {
 		rs.Reply(NewEvent("action_error", map[string]string{"error": "pairing listener not started"}, req.ID))
 		return
 	}
-	addr := net.JoinHostPort(discovery.GetPrimaryLocalIP(), strconv.Itoa(ln.Addr().(*net.TCPAddr).Port))
+	port := ln.Addr().(*net.TCPAddr).Port
+	addr := net.JoinHostPort(discovery.GetPrimaryLocalIP(), strconv.Itoa(port))
+	addrs := pinAddresses(port)
 	pin, err := pairing.NewPIN(pairing.PINConfig{Digits: p.Digits, Show: func(code string, expires time.Time) {
 		if code == "" && expires.IsZero() { // too many wrong PINs: stopped (#105)
 			rs.Reply(NewEvent("pair_pin_shown", map[string]any{"pin": "", "stopped": true, "address": addr,
-				"fingerprint": id.Fingerprint.Short(), "instance": s.instance()}, req.ID))
+				"addresses": addrs, "fingerprint": id.Fingerprint.Short(), "instance": s.instance()}, req.ID))
 			return
 		}
 		shown := ""
@@ -66,6 +68,7 @@ func (s *DaemonServer) handlePairPINShow(rs Responder, req RequestMessage) {
 			"pin":         shown,
 			"expires":     expires.Unix(),
 			"address":     addr,
+			"addresses":   addrs,
 			"fingerprint": id.Fingerprint.Short(),
 			"instance":    s.instance(), // the name in the other device's list (DISC-07)
 		}, req.ID))
@@ -84,6 +87,24 @@ func (s *DaemonServer) handlePairPINShow(rs Responder, req RequestMessage) {
 	if old != nil {
 		old.Close()
 	}
+}
+
+// pinAddress is one address the screen of the PIN shows: this device on one of its networks.
+type pinAddress struct {
+	Address string `json:"address"`
+	Kind    string `json:"kind"` // discovery.KindEthernet, KindWiFi or KindOther
+}
+
+// pinAddresses are this device's addresses with the listener's port, one per network
+// (DISC-13), cable first: a PC joined by a cable and by Wi-Fi shows both. The primary address
+// alone was the Wi-Fi's, which the other PC could not reach by the cable (WP-E.0 of the cable
+// plan).
+func pinAddresses(port int) []pinAddress {
+	out := []pinAddress{}
+	for _, p := range discovery.LocalPaths() {
+		out = append(out, pinAddress{Address: net.JoinHostPort(p.IP, strconv.Itoa(port)), Kind: p.Kind})
+	}
+	return out
 }
 
 // handlePINRefuse is this user's refusal of a PIN asked for (pin_requested, PAIR-11): the PIN on

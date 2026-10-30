@@ -36,9 +36,7 @@ func scoreInterface(name string, ip net.IP) int {
 	lower := strings.ToLower(name)
 
 	// Hypervisor / virtual container bridges
-	if strings.Contains(lower, "vethernet") || strings.Contains(lower, "virtualbox") ||
-		strings.Contains(lower, "vmnet") || strings.Contains(lower, "docker") ||
-		strings.Contains(lower, "virbr") {
+	if isVirtual(lower) {
 		return 10
 	}
 	// Cellular data modem interfaces (lower priority than local Wi-Fi / Hotspot)
@@ -81,6 +79,32 @@ func scoreInterface(name string, ip net.IP) int {
 	}
 
 	return score
+}
+
+// isVirtual reports whether a (lower-case) interface name is a bridge of virtual machines or
+// containers: no other device of the network is behind it. lxcbr0, down and without cable,
+// was the address Zorin showed for itself on a cable to the PC (WP-E.0 of the cable plan).
+func isVirtual(lower string) bool {
+	for _, s := range []string{"vethernet", "virtualbox", "vmnet", "docker", "virbr", "lxcbr", "lxdbr", "podman", "vboxnet"} {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	for _, p := range []string{"br-", "veth", "cni", "flannel"} {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// usable reports whether the enumeration keeps an interface: up and with a link (an unplugged
+// cable, a bridge with nothing on it keep their address), neither loopback nor virtual.
+func usable(iface net.Interface) bool {
+	if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagRunning == 0 {
+		return false
+	}
+	return !isVirtual(strings.ToLower(iface.Name))
 }
 
 // parseIfconfigTargets tries to run ifconfig to discover interfaces when netlink is blocked by SELinux (e.g. Termux on Android 11+)
@@ -208,16 +232,7 @@ func enumerateTargets() []NetworkTarget {
 	ifaces, err := net.Interfaces()
 	if err == nil {
 		for _, iface := range ifaces {
-			// Skip loopback interfaces
-			if iface.Flags&net.FlagLoopback != 0 {
-				continue
-			}
-
-			// Exclude virtual hypervisor bridges
-			name := strings.ToLower(iface.Name)
-			if strings.Contains(name, "vethernet") || strings.Contains(name, "virtualbox") ||
-				strings.Contains(name, "vmnet") || strings.Contains(name, "docker") ||
-				strings.Contains(name, "virbr") {
+			if !usable(iface) {
 				continue
 			}
 

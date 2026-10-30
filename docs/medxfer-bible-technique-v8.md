@@ -220,6 +220,7 @@ Aujourd'hui (`session/tls.go`) le certificat est régénéré à chaque démarra
 - Linux : NetworkManager (`nmcli`, arguments séparés, sans shell).
 
 Le PC crée son réseau à 2,4 GHz : ses cartes n'émettent pas d'elles-mêmes à 5 GHz (sonde J6c). L'appareil qui rejoint par le QR (Android) donne au cœur le réseau rejoint, auquel ses sockets sont liées (`pkg/netbind`), et le rejoint seul s'il le perd. Une plateforme = un adaptateur ; aucun script ni commande du système construit à partir de texte. | ✅ côté cœur (A1, #156) : `pkg/hotspot`, `xfer send --create-network` et les actions `hotspot_*` sont retirés, schéma v3. ✅ côté plateformes : Android (J6b), Windows et Linux (J6c) |
+| `DISC-13` | **Plusieurs chemins, le câble.** Un appareil vu sur plusieurs réseaux de cet appareil (un câble et un Wi-Fi) garde un chemin par réseau, avec la nature de l'interface locale : `ethernet`, `wifi` ou `other`, d'après le type de la carte sous Windows, `/sys/class/net` sous Linux, sinon le nom. L'ordre est stable, le câble d'abord ; `host_ip` est l'adresse du premier. `peers_list` porte `paths`, et l'interface laisse l'utilisateur choisir (décision E2 du plan du câble). L'énumération écarte les interfaces sans lien et les ponts virtuels (`lxcbr0`, `br-…`, `docker0`…). L'écran du PIN montre une adresse par réseau (`pair_pin_shown` porte `addresses`), les adresses `169.254` comprises : sur un câble direct, ce sont les seules. | ✅ côté cœur (WP-E.1) : `pkg/discovery` (`Path`, `LocalPaths`, `usable`), `pair_pin_shown.addresses` ; l'écran en WP-E.3 |
 
 ---
 

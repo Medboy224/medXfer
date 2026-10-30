@@ -91,6 +91,18 @@ Un « Linux n'a aucune adresse IPv4 sur le câble » est un résultat valable : 
 - **IPv6 link-local** : pas dans ce lot. Avec la décision E1, chaque PC a une IPv4 sur le câble, alors que l'IPv6 peut être désactivé (constaté sous Windows).
 - `DISC-10` mis à jour dans la bible, ou une nouvelle exigence pour le câble.
 
+**Fait** (30 octobre) :
+- `pkg/discovery` :
+  - un chemin par réseau (`Path` : adresse et nature), dans un ordre stable, le câble d'abord ;
+  - la nature vient du type de la carte sous Windows (`GetAdaptersAddresses`), de `/sys/class/net` sous Linux, sinon du nom ;
+  - l'énumération écarte les interfaces sans lien (`net.FlagRunning`) et les ponts virtuels (`lxcbr0`, `lxdbr0`, `br-…`, `cni0`…).
+- `peers_list` porte `paths` ; `pair_pin_shown` porte `addresses`, une par réseau. Les adresses `169.254` ne sont plus écartées (`status`, `xfer bench`).
+- Nouvelle exigence `DISC-13` dans la bible.
+- **Sur le vrai câble**, PC Windows et Zorin aussi sur le même Wi-Fi :
+  - chacun voit l'autre par ses deux chemins, câble d'abord, à l'identique sur 3 balayages sur 3 ;
+  - le PIN montre les deux adresses ;
+  - Wi-Fi de Zorin coupé, Zorin montre `169.254.57.98`, l'adresse du câble, et non plus `10.0.3.1`.
+
 ### WP-E.2 — Linux sans IPv4 sur le câble · S (décision E1 : l'application donne l'adresse)
 
 La sonde le montre : avec le profil par défaut, NetworkManager ne laisse aucune IPv4 sur un câble direct.
