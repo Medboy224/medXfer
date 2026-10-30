@@ -27,7 +27,8 @@
 
 ```
 WP-E.0 sonde (câble, adresses, découverte, débit) ──► WP-E.1 cœur ──► WP-E.3 écran ──► WP-E.4 essais réels, rapport
-                                                  └─► WP-E.2 Linux sans IPv4 (décision E1) ─────────────┘
+                                                  ├─► WP-E.2 Linux sans IPv4 (décision E1) ─────────────┤
+                                                  └─► WP-E.5 débit sur le câble ────────────────────────┘
 ```
 
 ## 2. Les lots
@@ -112,6 +113,33 @@ La sonde le montre : avec le profil par défaut, NetworkManager ne laisse aucune
 - Sous Linux, quand l'application donne l'adresse au câble (WP-E.2), elle le dit.
 - Rien d'autre à régler : brancher le câble suffit.
 - Sous Windows, un câble sans DHCP est en profil Public. Si les règles du pare-feu manquent, l'application le dit, comme prévu en J8.
+
+### WP-E.5 — Le débit sur le câble · M (demande de l'utilisateur, 30 octobre)
+
+Sur le câble, le réseau n'est plus la limite : 110 MB/s bruts, mais 83 à 92 MB/s pour le transfert complet de Zorin vers le PC. L'utilisateur demande l'amélioration si medXfer en est la cause.
+
+**Mesures** (30 octobre, Zorin → PC, `xfer bench ladder` et `matrix`, chunks de 2 Mo). Zorin a un i5-2520M de 2011 : AVX, sans AVX2 ni SHA-NI.
+
+| Étape | 1 connexion | 2 | 4 |
+|---|---|---|---|
+| R1 TCP brut | 111,0 | 112,0 | 110,7 |
+| R2 + TLS | 110,6 | 111,1 | 111,1 |
+| R3 + trames et SHA-256 | **45,2** | 61,6 | 50,8 à 91,6 selon le moment |
+
+- Le chiffrement ne coûte rien, même sur une seule connexion : AES-NI.
+- **Le SHA-256 de chaque chunk** coûte le plus. Celui de Go fait 115 MB/s sur un cœur de Zorin (212 sur deux, 235 sur quatre), 2,4 fois moins qu'OpenSSL (277) : Go n'a pas de chemin rapide pour un processeur sans AVX2 ni SHA-NI. Hacher un chunk de 2 Mo prend 17 ms, autant que l'envoyer sur le câble.
+- **Dans une connexion, le hachage et l'envoi ne se recouvrent pas** comme le prévoit `serveConn` (deux requêtes en vol) : 45 MB/s au lieu d'environ 110. C'est un défaut de medXfer.
+- Le processeur de Zorin ne dépasse pas 51 % de ses 4 fils, même avec 8 connexions : une partie du travail reste en série.
+- Les mesures varient d'un moment à l'autre : 91,6 puis 52 MB/s pour la même case, Zorin au repos. Chaque conclusion repose sur des mesures répétées (`--repeat 3`).
+
+À faire :
+1. trouver, par une trace d'exécution du côté qui envoie, pourquoi le hachage et l'envoi ne se recouvrent pas dans une connexion, et le corriger ;
+2. lire le chunk directement dans le tampon de la trame, sans la copie actuelle ;
+3. mesurer avant et après, sur Zorin et sur le PC, en répétant. Le but : le débit brut, moins le coût que le matériel impose.
+
+Hors de ce lot :
+- changer de fonction de hachage : c'est un changement de protocole, qui passe par la revue G4 ;
+- le coût de `fsync` sur un disque dur (40 MB/s vers Zorin) : J8.
 
 ### WP-E.4 — Essais réels et rapport · S
 
