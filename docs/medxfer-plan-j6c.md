@@ -195,10 +195,10 @@ Correction (PR de WP-C.5) :
 - notre serveur DHCP ne démarre que si Windows ne distribue aucune adresse. Deux serveurs sur un réseau se répondraient l'un à l'autre ;
 - dans ce cas, l'application cesse d'écouter : Windows coupe à 2 min et non à 30 s, et le téléphone revient seul. L'écran du réseau le dit, nomme la carte qui détient l'adresse du partage, et propose la voie stable : retirer l'adresse ou arrêter le partage, ou créer le réseau sur le téléphone (règle de WP-C.1).
 
-Défauts relevés pendant ces essais, à corriger :
-- **adresse réattribuée prise pour une attaque** : un appareil de confiance garde sa dernière adresse ; le suivant qui la reçoit est refusé (« device key changed », règle `ID-05`), même avec le secret du QR ou le bon PIN ;
-- **Wi-Fi du téléphone coupé** : après le scan, Android refuse la connexion, et l'application ne le dit pas clairement ;
-- **réseau du PC perdu sans le savoir** : quand le Wi-Fi du PC change de réseau, Windows arrête le groupe Wi-Fi Direct sans prévenir l'application, qui garde un QR mort.
+Défauts relevés pendant ces essais, corrigés :
+- **adresse réattribuée prise pour une attaque** (#217) : un appareil de confiance garde sa dernière adresse ; le suivant qui la reçoit était refusé (« device key changed », règle `ID-05`), même avec le secret du QR ou le bon PIN. Désormais, le secret du QR ou un PIN vérifié prouvent l'autorisation de l'utilisateur, et l'appareil reprend l'adresse ; sans preuve, le refus reste (`ID-05` reformulée, validée par l'utilisateur le 30 octobre) ;
+- **Wi-Fi du téléphone coupé** (#218) : après le scan, Android refusait la connexion, sans message clair ; une fenêtre le dit et ouvre le panneau Wi-Fi, et la jonction reprend seule ;
+- **réseau du PC perdu sans le savoir** (#219) : quand le Wi-Fi du PC change de réseau, Windows arrête le groupe Wi-Fi Direct sans prévenir l'application ; elle le voit désormais, le recrée, et dit de rallumer le Wi-Fi s'il est coupé.
 
 Restent :
 - un PC Windows qui rejoint le point d'accès du Galaxy A57 par ses réglages (#169) ;

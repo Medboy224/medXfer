@@ -124,8 +124,9 @@ func (s *DaemonServer) handlePairPIN(rs Responder, req RequestMessage) {
 }
 
 // pairWithPIN opens a control session with target and runs the initiator's side of the PIN
-// path; on success the session becomes the active one. A known device that shows another key
-// is refused first (ID-05).
+// path; on success the session becomes the active one. The PIN, typed by the user and checked by
+// the PAKE, proves the user's authorisation: a trusted device's address is the new one's then
+// (ID-05, #217).
 func (s *DaemonServer) pairWithPIN(target, pin string, offer bool, reqID string) (*session.Channel, error) {
 	if !strings.Contains(target, ":") {
 		target = net.JoinHostPort(target, strconv.Itoa(18887))
@@ -139,10 +140,6 @@ func (s *DaemonServer) pairWithPIN(target, pin string, offer bool, reqID string)
 		return nil, err
 	}
 	fp := connPeer.PeerFingerprint()
-	if known, changed := s.keyChanged(host, fp); changed {
-		connPeer.Close()
-		return nil, keyChangedError(host, known, fp)
-	}
 	s.mu.RLock()
 	name, self := s.config.DeviceName, s.identity.Fingerprint
 	s.mu.RUnlock()
@@ -151,6 +148,7 @@ func (s *DaemonServer) pairWithPIN(target, pin string, offer bool, reqID string)
 		ch.Close()
 		return nil, err
 	}
+	s.addressTaken(host, fp)
 	sess, err := s.finishOutgoing(ch, connPeer, fp, host, offer, reqID)
 	if err == nil {
 		s.dialedFor(sess, target)
@@ -159,7 +157,9 @@ func (s *DaemonServer) pairWithPIN(target, pin string, offer bool, reqID string)
 }
 
 // acceptPIN answers an incoming pair_pin, or a pair_pin_wanted (PAIR-11), with the PIN shown
-// by pair_pin_show or the one drawn on demand: ID-05 first, then the PAKE. It returns the
+// by pair_pin_show or the one drawn on demand, by the PAKE. The PIN, shown on this device's
+// screen only, proves the user's authorisation: a trusted device's address is the new one's then
+// (ID-05, #217). It returns the
 // initiator's name once both sides confirmed, after pair_accept, and whether this side asked to
 // offer mutual trust (pair_pin_show with trust). Nothing is written (PAIR-08). Any failure gets
 // the same neutral pair_reject (PAIR-07) and a pair_failed event.
@@ -169,10 +169,6 @@ func (s *DaemonServer) acceptPIN(conn *securechan.Conn, ch *session.Channel, msg
 		_ = ch.Send(session.Message{Type: pairing.TypeReject, FileName: pairing.ErrRefused.Error()})
 		s.Broadcast(NewEvent("pair_failed", map[string]string{}))
 		return "", false, false
-	}
-	if known, changed := s.keyChanged(ip, fp); changed {
-		s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": keyChangedError(ip, known, fp).Error()}))
-		return refuse()
 	}
 	s.mu.Lock()
 	shown, trust, self := s.pin, s.pinTrust, s.identity.Fingerprint
@@ -213,6 +209,7 @@ func (s *DaemonServer) acceptPIN(conn *securechan.Conn, ch *session.Channel, msg
 	if err != nil {
 		return refuse()
 	}
+	s.addressTaken(ip, fp)
 	if shown == nil {
 		demand.Close() // a PIN serves one pairing (PAIR-02)
 	}
