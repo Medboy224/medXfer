@@ -10,6 +10,9 @@ class _Nmcli {
   final calls = <String>[];
   bool hotspotFails = false;
 
+  /// The hotspot connection active: up once started, until something else takes the device.
+  bool up = false;
+
   Future<ProcessResult> call(String exe, List<String> args) async {
     final line = '$exe ${args.join(' ')}';
     calls.add(line);
@@ -17,7 +20,14 @@ class _Nmcli {
     var code = 0;
     if (line.contains('-f DEVICE,TYPE device')) out = 'enp0s25:ethernet\nwlo1:wifi\nlo:loopback\n';
     if (line.contains('connection show --active')) out = 'TECNO POP 7:wlo1\nlo:lo\n';
-    if (line.contains('device wifi hotspot') && hotspotFails) code = 4;
+    if (line.contains('device wifi hotspot')) {
+      if (hotspotFails) {
+        code = 4;
+      } else {
+        up = true;
+      }
+    }
+    if (line.contains('-f NAME connection show --active')) out = up ? 'medxfer-hotspot\nlo\n' : 'TECNO POP 7\nlo\n';
     if (line.contains('IP4.ADDRESS')) out = '10.42.0.1/24\n';
     return ProcessResult(0, code, out, code == 0 ? '' : 'Error: hotspot network creation took too long');
   }
@@ -52,6 +62,16 @@ void main() {
     ]);
   });
 
+  test('#219: Linux, the network is alive while its connection is active', () async {
+    final nm = _Nmcli();
+    final h = LinuxHotspot(run: nm.call);
+    expect(await h.alive(), isFalse);
+    await h.start();
+    expect(await h.alive(), isTrue);
+    nm.up = false; // the user picked another Wi-Fi: NetworkManager ended the hotspot
+    expect(await h.alive(), isFalse);
+  });
+
   test('WP-C.2: Linux, a network that does not come up says why, and leaves nothing', () async {
     final nm = _Nmcli()..hotspotFails = true;
     final h = LinuxHotspot(run: nm.call);
@@ -65,11 +85,12 @@ void main() {
     const channel = MethodChannel('dev.medxfer.app/hotspot');
     final calls = <String>[];
     late Map<String, Object?> group;
+    var alive = false;
     setUp(() {
       calls.clear();
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
         calls.add(call.method);
-        return call.method == 'start' ? group : null;
+        return switch (call.method) { 'start' => group, 'alive' => alive, _ => null };
       });
     });
     tearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
@@ -85,6 +106,15 @@ void main() {
       expect(served, isEmpty);
       expect((info.address, info.dropsClients, info.addressHeldBy), ('192.168.137.1', false, null));
       expect(info.net!.addrs, ['192.168.137.1/24']);
+    });
+
+    test('#219: alive as the runner says it', () async {
+      final h = WindowsHotspot(addressServer: (server, prefix) async => () {});
+      alive = true;
+      expect(await h.alive(), isTrue);
+      alive = false;
+      expect(await h.alive(), isFalse);
+      expect(calls, ['alive', 'alive']);
     });
 
     test('its sharing taken by another card: our server, and the card named', () async {

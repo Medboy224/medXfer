@@ -2,6 +2,7 @@
 
 #include <flutter/standard_method_codec.h>
 
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -41,12 +42,14 @@ bool FlutterWindow::OnCreate() {
         const auto* s = std::get_if<std::string>(&it->second);
         return s ? *s : "";
       };
-      HotspotInterface group;
-      auto error = hotspot_.Start(text("ssid"), text("passphrase"), &group);
-      if (error) {
-        result->Error("hotspot", *error);
-      } else {
-        result->Success(flutter::EncodableValue(flutter::EncodableMap{
+      // Answered once the group runs, the window drawing meanwhile.
+      std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> reply = std::move(result);
+      hotspot_.Start(text("ssid"), text("passphrase"), [reply](std::optional<std::string> error, HotspotInterface group) {
+        if (error) {
+          reply->Error("hotspot", *error);
+          return;
+        }
+        reply->Success(flutter::EncodableValue(flutter::EncodableMap{
             {flutter::EncodableValue("name"), flutter::EncodableValue(group.name)},
             {flutter::EncodableValue("index"), flutter::EncodableValue(static_cast<int32_t>(group.index))},
             {flutter::EncodableValue("address"), flutter::EncodableValue(group.address)},
@@ -55,10 +58,12 @@ bool FlutterWindow::OnCreate() {
             {flutter::EncodableValue("heldBy"), flutter::EncodableValue(group.held_by)},
             {flutter::EncodableValue("sharingAddress"), flutter::EncodableValue(group.sharing_address)},
         }));
-      }
+      });
     } else if (call.method_name() == "stop") {
       hotspot_.Stop();
       result->Success();
+    } else if (call.method_name() == "alive") {
+      result->Success(flutter::EncodableValue(hotspot_.Alive()));
     } else {
       result->NotImplemented();
     }

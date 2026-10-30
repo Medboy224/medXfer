@@ -2,6 +2,7 @@
 #define RUNNER_HOTSPOT_H_
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -36,15 +37,25 @@ class WifiDirectHotspot {
  public:
   ~WifiDirectHotspot();
 
-  // Starts the group and finds its interface; the error, if either fails.
-  std::optional<std::string> Start(const std::string& ssid, const std::string& passphrase,
-                                   HotspotInterface* out);
+  // What Start gives once done: the error, if any, else the group's interface.
+  using Started = std::function<void(std::optional<std::string> error, HotspotInterface group)>;
+
+  // Starts the group and finds its interface, then calls done, on the window's thread: called
+  // from it, it waits off it, so that the window keeps drawing (up to 7 s of waits, the window
+  // frozen as long before; real test of 30 October 2026). A Stop meanwhile ends it.
+  winrt::fire_and_forget Start(std::string ssid, std::string passphrase, Started done);
   void Stop();
+
+  // Whether the group still runs: Windows stops it when the computer's Wi-Fi joins another
+  // network, and the publisher still says Started (#219; Microsoft Q&A 2285169).
+  bool Alive();
 
  private:
   winrt::fire_and_forget Accept(winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionRequest request);
 
   winrt::Windows::Devices::WiFiDirect::WiFiDirectAdvertisementPublisher publisher_{nullptr};
+  uint32_t group_index_ = 0;  // the group's adapter
+  uint64_t generation_ = 0;   // each Stop: a Start still waiting gives up
   // An Android phone joining is a request Windows asks the app to accept; without an answer, it
   // drops the phone after 2 minutes (real tests of 28 and 29 October 2026, two phones).
   // Accepted, the phone is kept while its WiFiDirectDevice lives. Accepting needs Windows to

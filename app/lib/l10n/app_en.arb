@@ -90,6 +90,8 @@
   "noticeHotspotPermission": "Without the Nearby devices permission, no hotspot.",
   "noticeHotspotFailed": "The hotspot did not start ({reason}). Turn off the system's hotspot, then try again.",
   "@noticeHotspotFailed": {"placeholders": {"reason": {"type": "String"}}},
+  "noticeHotspotLost": "This device's network stopped (its Wi-Fi may have joined another network).",
+  "noticeHotspotLostAgain": "This device's network stopped (its Wi-Fi may have joined another network): a new one is being created, scan the new QR code.",
   "noticeJoinFailed": "Could not join the Wi-Fi \"{ssid}\".",
   "@noticeJoinFailed": {"placeholders": {"ssid": {"type": "String"}}},
   "wifiOffTitle": "Wi-Fi is off",

@@ -85,6 +85,7 @@ class _ConnectionPromptsState extends State<ConnectionPrompts> {
       TrustDeclined(:final noAnswer) => noAnswer ? l.noticeTrustNoAnswer : l.noticeTrustDeclined,
       TrustIncomplete(:final name, :final local) => local ? l.noticeTrustIncompleteLocal(name) : l.noticeTrustIncompleteRemote(name),
       HotspotFailed(:final permission, :final reason) => permission ? l.noticeHotspotPermission : l.noticeHotspotFailed(reason),
+      HotspotLost(:final again) => again ? l.noticeHotspotLostAgain : l.noticeHotspotLost,
       JoinFailed(:final ssid) => l.noticeJoinFailed(ssid),
       KeyChanged() || WifiOff() => '',
     };

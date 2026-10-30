@@ -73,6 +73,9 @@ class _Hotspot implements Hotspot {
 
   @override
   Future<bool> openWifiPanel() async => false;
+
+  @override
+  Future<bool> alive() async => true;
 }
 
 /// This phone's Wi-Fi off (#218): joins refused until the system's panel turns it on.

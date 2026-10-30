@@ -181,6 +181,13 @@ class HotspotFailed extends ConnectionNotice {
   final String reason;
 }
 
+/// This device's access point stopped without the app: the computer's Wi-Fi on another network,
+/// Android stopping its local hotspot (#219). [again]: a new one was created, its QR code shown.
+class HotspotLost extends ConnectionNotice {
+  const HotspotLost({required this.again});
+  final bool again;
+}
+
 /// The other device's access point could not be joined (refused by the user, not found).
 class JoinFailed extends ConnectionNotice {
   const JoinFailed(this.ssid);
@@ -218,6 +225,13 @@ class Connection extends ChangeNotifier {
   /// How long the joined network is kept, and joined again if lost, once its session timed out:
   /// as long as the core dials it again (redialFor, J6c). Then left.
   static Duration rejoinFor = const Duration(minutes: 10);
+
+  /// How often this device's access point is checked to still run: the system may stop it
+  /// without a word to the app (#219).
+  static Duration hotspotCheck = const Duration(seconds: 5);
+  Timer? _hotspotWatch;
+  Timer? _hotspotRetry;
+  bool _checkingHotspot = false;
 
   /// This device is on another's network, joined by its QR code, or joining it again (J6c).
   bool get joining => _joined != null;
@@ -396,7 +410,8 @@ class Connection extends ChangeNotifier {
   }
 
   /// Creates this device's access point (Android), then a QR code and PIN that carry it.
-  Future<void> startHotspot() async {
+  /// [quiet]: a failure is not said (the tries of [_recreateHotspot]).
+  Future<void> startHotspot({bool quiet = false}) async {
     if (!hotspot.supported || _hotspotBusy || _myHotspot != null) return;
     _hotspotBusy = true;
     notifyListeners();
@@ -406,11 +421,12 @@ class Connection extends ChangeNotifier {
         return;
       }
       _myHotspot = await hotspot.start();
+      _hotspotWatch = Timer.periodic(hotspotCheck, (_) => unawaited(_checkHotspot()));
       await pushNetwork();
       if (_codeOpen) await showCode();
     } on PlatformException catch (e) {
       _myHotspot = null;
-      _notices.add(HotspotFailed(permission: false, reason: e.message ?? e.code));
+      if (!quiet) _notices.add(HotspotFailed(permission: false, reason: e.message ?? e.code));
     } finally {
       _hotspotBusy = false;
       notifyListeners();
@@ -419,12 +435,52 @@ class Connection extends ChangeNotifier {
 
   /// Stops this device's access point; the core gets every interface back.
   Future<void> stopHotspot() async {
+    _hotspotWatch?.cancel();
+    _hotspotWatch = null;
     if (_myHotspot == null) return;
     _myHotspot = null;
     notifyListeners();
     await hotspot.stop();
     await pushNetwork();
     if (_codeOpen) await showCode();
+  }
+
+  /// The access point stopped by the system (#219): stopped here too, and said. Its QR code on
+  /// screen and nobody on it yet, a new one is created at once, so that no dead one is scanned.
+  Future<void> _checkHotspot() async {
+    if (_myHotspot == null || _hotspotBusy || _checkingHotspot) return;
+    _checkingHotspot = true;
+    try {
+      if (await hotspot.alive() || _myHotspot == null) return;
+      final again = _codeOpen && _session == null;
+      _notices.add(HotspotLost(again: again));
+      await stopHotspot();
+      if (again) _recreateHotspot();
+    } finally {
+      _checkingHotspot = false;
+    }
+  }
+
+  /// A new access point, tried every [hotspotCheck] while its QR code is wanted on screen and
+  /// nobody joined: created at once, it failed while the computer's Wi-Fi was still off (real
+  /// test of 30 October 2026), and the QR code never came back.
+  void _recreateHotspot() {
+    _hotspotRetry?.cancel();
+    Future<void> tryOnce() async {
+      if (!_codeOpen || _session != null || _myHotspot != null) {
+        _hotspotRetry?.cancel();
+        _hotspotRetry = null;
+        return;
+      }
+      await startHotspot(quiet: true);
+      if (_myHotspot != null) {
+        _hotspotRetry?.cancel();
+        _hotspotRetry = null;
+      }
+    }
+
+    _hotspotRetry = Timer.periodic(hotspotCheck, (_) => unawaited(tryOnce()));
+    unawaited(tryOnce());
   }
 
   /// Pairs by a scanned or pasted link. When it names an access point, this device joins it
@@ -691,6 +747,8 @@ class Connection extends ChangeNotifier {
   void dispose() {
     _scanLimit?.cancel();
     _giveUp?.cancel();
+    _hotspotWatch?.cancel();
+    _hotspotRetry?.cancel();
     _netSub?.cancel();
     _sub.cancel();
     _notices.close();

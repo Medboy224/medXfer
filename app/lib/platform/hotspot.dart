@@ -100,6 +100,11 @@ abstract interface class Hotspot {
   /// cannot since Android 10, and joins with Wi-Fi off are refused, #218). Whether Wi-Fi is on
   /// once it closes; false where there is no such panel.
   Future<bool> openWifiPanel();
+
+  /// Whether the access point [start] created still runs. The system may stop it without a
+  /// word to the app: Windows when the computer's Wi-Fi joins another network, Android its local
+  /// hotspot (#219). False when none was started.
+  Future<bool> alive();
 }
 
 /// Android's local hotspot, through the app's Kotlin (LocalHotspot.kt, WifiJoin.kt).
@@ -137,6 +142,9 @@ class AndroidHotspot implements Hotspot {
 
   @override
   Future<bool> openWifiPanel() async => await platformChannel.invokeMethod<bool>('openWifiPanel') ?? false;
+
+  @override
+  Future<bool> alive() async => await platformChannel.invokeMethod<bool>('hotspotAlive') ?? false;
 }
 
 /// No hotspot from the app (the user joins a network in the system's settings).
@@ -172,6 +180,9 @@ class NoHotspot implements Hotspot {
 
   @override
   Future<bool> openWifiPanel() async => false;
+
+  @override
+  Future<bool> alive() async => false;
 }
 
 /// What a desktop's network looks like: a name that says nothing of the device (DISC-07), and a
@@ -258,6 +269,9 @@ class WindowsHotspot implements Hotspot {
 
   @override
   Future<bool> openWifiPanel() async => false;
+
+  @override
+  Future<bool> alive() async => await channel.invokeMethod<bool>('alive') ?? false;
 }
 
 /// Runs a program: Process.run, or a fake in the tests.
@@ -350,6 +364,14 @@ class LinuxHotspot implements Hotspot {
 
   @override
   Future<bool> openWifiPanel() async => false;
+
+  /// The connection still active: NetworkManager gives the Wi-Fi device back to another network
+  /// the user picks, ending it.
+  @override
+  Future<bool> alive() async {
+    final active = await _nmcli(['-t', '-f', 'NAME', 'connection', 'show', '--active']);
+    return '${active.stdout}'.split('\n').contains(connection);
+  }
 }
 
 Hotspot systemHotspot() {

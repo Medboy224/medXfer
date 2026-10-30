@@ -101,6 +101,9 @@ class _PcHotspot implements Hotspot {
 
   @override
   Future<bool> openWifiPanel() async => false;
+
+  @override
+  Future<bool> alive() async => true;
 }
 
 Future<AppState> _app(WidgetTester tester, FakeCore core, {Hotspot hotspot = const NoHotspot()}) async {

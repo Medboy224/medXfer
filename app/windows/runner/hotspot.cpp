@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <iphlpapi.h>
 
+#include <chrono>
 #include <cstdio>
 #include <vector>
 
@@ -98,12 +99,28 @@ std::string HolderOf(const std::string& address, uint32_t group_index) {
 
 WifiDirectHotspot::~WifiDirectHotspot() { Stop(); }
 
-std::optional<std::string> WifiDirectHotspot::Start(const std::string& ssid,
-                                                    const std::string& passphrase,
-                                                    HotspotInterface* out) {
+winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string passphrase, Started done) {
   Stop();
+  const uint64_t generation = generation_;
+  // The window's thread: each wait leaves it and comes back to it, and the phones' requests are
+  // accepted there.
+  ui_.emplace();
+  winrt::apartment_context ui = *ui_;
+  WiFiDirectAdvertisementPublisher publisher{nullptr};
+  // Gives up: the publisher stopped, the listener let go (unless a Stop did, and maybe a new
+  // Start since), the error told.
+  auto fail = [&](const std::string& error) {
+    if (publisher) {
+      try {
+        publisher.Stop();
+      } catch (const winrt::hresult_error&) {
+      }
+    }
+    if (generation == generation_) Stop();
+    done(error, HotspotInterface{});
+  };
   try {
-    WiFiDirectAdvertisementPublisher publisher;
+    publisher = WiFiDirectAdvertisementPublisher();
     auto advertisement = publisher.Advertisement();
     advertisement.IsAutonomousGroupOwnerEnabled(true);
     auto legacy = advertisement.LegacySettings();
@@ -112,31 +129,42 @@ std::optional<std::string> WifiDirectHotspot::Start(const std::string& ssid,
     PasswordCredential credential;
     credential.Password(winrt::to_hstring(passphrase));
     legacy.Passphrase(credential);
-    // Listening before the start, so that no request comes before it. Start runs on the
-    // window's thread (the method channel's): the requests are accepted there.
-    ui_.emplace();
+    // Listening before the start, so that no request comes before it.
     WiFiDirectConnectionListener listener;
     requested_ = listener.ConnectionRequested(
         [this](const WiFiDirectConnectionListener&, const WiFiDirectConnectionRequestedEventArgs& args) {
           Accept(args.GetConnectionRequest());
         });
     listener_ = listener;
+    // Off the window's thread too: Windows takes 0.2 to 1.4 s to start the group, the window
+    // frozen as long when it waited there (real test of 30 October 2026).
+    co_await winrt::resume_background();
     publisher.Start();
+    co_await ui;
+    if (generation != generation_) {
+      fail("stopped");
+      co_return;
+    }
     // Started within a few milliseconds on the probe's PC; Aborted says the driver refused.
     bool started = false;
     for (int i = 0; i < 60 && !started; ++i) {
       auto status = publisher.Status();
       if (status == WiFiDirectAdvertisementPublisherStatus::Aborted) {
-        Stop();
-        return "the Wi-Fi Direct group was refused (aborted)";
+        fail("the Wi-Fi Direct group was refused (aborted)");
+        co_return;
       }
       started = status == WiFiDirectAdvertisementPublisherStatus::Started;
-      if (!started) Sleep(50);
+      if (started) break;
+      co_await winrt::resume_after(std::chrono::milliseconds(50));
+      co_await ui;
+      if (generation != generation_) {
+        fail("stopped");
+        co_return;
+      }
     }
     if (!started) {
-      publisher.Stop();
-      Stop();
-      return "the Wi-Fi Direct group did not start";
+      fail("the Wi-Fi Direct group did not start");
+      co_return;
     }
     // Its interface comes up a moment after, and the sharing's address a moment later still:
     // 4 s for the one, 3 more for the other.
@@ -144,28 +172,32 @@ std::optional<std::string> WifiDirectHotspot::Start(const std::string& ssid,
     for (int i = 0; i < 70; ++i) {
       group = FindGroupInterface();
       if ((group && !IsLinkLocal(group->address)) || (!group && i == 40)) break;
-      Sleep(100);
+      co_await winrt::resume_after(std::chrono::milliseconds(100));
+      co_await ui;
+      if (generation != generation_) {
+        fail("stopped");
+        co_return;
+      }
     }
     if (!group) {
-      publisher.Stop();
-      Stop();
-      return "the Wi-Fi Direct group has no interface";
+      fail("the Wi-Fi Direct group has no interface");
+      co_return;
     }
-    *out = *group;
-    out->windows_dhcp = !IsLinkLocal(group->address);
-    if (!out->windows_dhcp) {
+    HotspotInterface out = *group;
+    out.windows_dhcp = !IsLinkLocal(group->address);
+    if (!out.windows_dhcp) {
       // Accepting would fail after 30 s, and Windows drop the phone then: unanswered, it keeps
       // it 2 minutes, and the phone comes back by itself (WifiJoin.kt).
       listener_.ConnectionRequested(requested_);
       listener_ = nullptr;
-      out->sharing_address = SharingAddress();
-      out->held_by = HolderOf(out->sharing_address, group->index);
+      out.sharing_address = SharingAddress();
+      out.held_by = HolderOf(out.sharing_address, group->index);
     }
     publisher_ = publisher;
-    return std::nullopt;
+    group_index_ = group->index;
+    done(std::nullopt, out);
   } catch (const winrt::hresult_error& e) {
-    Stop();
-    return winrt::to_string(e.message());
+    fail(winrt::to_string(e.message()));
   }
 }
 
@@ -193,6 +225,7 @@ winrt::fire_and_forget WifiDirectHotspot::Accept(WiFiDirectConnectionRequest req
 }
 
 void WifiDirectHotspot::Stop() {
+  ++generation_;  // a Start still waiting gives up
   if (listener_) {
     listener_.ConnectionRequested(requested_);
     listener_ = nullptr;
@@ -201,9 +234,16 @@ void WifiDirectHotspot::Stop() {
   accepted_.clear();
   if (!publisher_) return;
   try {
-    publisher_.Stop();
+    publisher_.Stop();  // 31 ms on the PC of the real test: on the window's thread
   } catch (const winrt::hresult_error&) {
     // Stopped already: nothing left to do.
   }
   publisher_ = nullptr;
+  group_index_ = 0;
+}
+
+bool WifiDirectHotspot::Alive() {
+  if (!publisher_) return false;
+  auto group = FindGroupInterface();  // an adapter up, with an address
+  return group && group->index == group_index_;
 }

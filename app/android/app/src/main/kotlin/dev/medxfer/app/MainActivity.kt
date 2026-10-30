@@ -60,6 +60,8 @@ class MainActivity : FlutterActivity() {
                         if (err != null) result.error("hotspot", err, null) else result.success(info)
                     }
                     "hotspotStop" -> { hotspot.stop(); result.success(null) }
+                    // Android may stop it on its own (onStopped), without a word to the app (#219).
+                    "hotspotAlive" -> result.success(hotspot.running)
                     "hotspotJoin" -> join.join(
                         call.argument<String>("ssid") ?: "",
                         call.argument<String>("passphrase") ?: "",
