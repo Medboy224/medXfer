@@ -1,5 +1,5 @@
 /// Reading a QR code with the camera (decision J5): an interface, and one adapter per library.
-/// The screens know only [QrScanner]; zxing_qr_scanner.dart is flutter_zxing's adapter.
+/// The screens know only [QrScanner]; native_qr_scanner.dart is Android's adapter (zxing-cpp, C8).
 library;
 
 import 'package:flutter/widgets.dart';

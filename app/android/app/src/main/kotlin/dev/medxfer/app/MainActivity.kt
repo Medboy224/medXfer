@@ -70,6 +70,18 @@ class MainActivity : FlutterActivity() {
                         if (err != null) result.error(if (err == WifiJoin.WIFI_OFF) WifiJoin.WIFI_OFF else "join", err, null) else result.success(info)
                     }
                     "openWifiPanel" -> openWifiPanel { result.success(it) }
+                    // A QR code read by the app's camera screen (QrScanActivity.kt); null: back.
+                    "scanQr" -> {
+                        scanAnswer?.invoke(null)
+                        scanAnswer = { result.success(it) }
+                        startActivityForResult(
+                            Intent(this, QrScanActivity::class.java)
+                                .putExtra("title", call.argument<String>("title"))
+                                .putExtra("hint", call.argument<String>("hint"))
+                                .putExtra("log", call.argument<Boolean>("log") == true),
+                            SCAN_REQUEST,
+                        )
+                    }
                     "hotspotLeave" -> { join.leave(); result.success(null) }
                     "hotspotJoinedNetwork" -> result.success(join.network)
                     // The explorer by categories (WP-B.9).
@@ -123,6 +135,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private var wifiPanelAnswer: ((Boolean) -> Unit)? = null
+    private var scanAnswer: ((String?) -> Unit)? = null
 
     // The system's Wi-Fi panel, for the user to turn Wi-Fi on: an app cannot, from Android 10 on
     // (#218). done gets whether it is on once the panel closes.
@@ -145,6 +158,12 @@ class MainActivity : FlutterActivity() {
 
     @Deprecated("The system's pages answer here; no activity result API without AndroidX")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == SCAN_REQUEST) {
+            val answer = scanAnswer
+            scanAnswer = null
+            answer?.invoke(if (resultCode == RESULT_OK) data?.getStringExtra("text") else null)
+            return
+        }
         if (requestCode == WIFI_PANEL_REQUEST) {
             wifiPanelAnswer?.let { wifiPanelClosed(it) }
             wifiPanelAnswer = null
@@ -205,5 +224,6 @@ class MainActivity : FlutterActivity() {
         const val PROBE_TAG = "medxfer-probe"
         private const val PERMISSION_REQUEST = 0x6d78
         private const val WIFI_PANEL_REQUEST = 0x6d7b // Storage has 0x6d79 and 0x6d7a
+        private const val SCAN_REQUEST = 0x6d7c
     }
 }

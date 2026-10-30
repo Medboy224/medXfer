@@ -14,7 +14,10 @@ class QrView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Dark on white whatever the theme: the cameras read it best (and the quiet zone around).
-    final image = QrImage(QrCode(payload: QrPayload.fromString(data), errorCorrectLevel: QrErrorCorrectLevel.low));
+    // Correction M (15 % of the modules), not L (7 %): a code on a screen, found by the reader but
+    // misread, failed its checksum on 2261 pictures in a row (real test of 30 October 2026,
+    // #227). 53 modules rather than 49 for a pairing link with its network.
+    final image = QrImage(QrCode(payload: QrPayload.fromString(data), errorCorrectLevel: QrErrorCorrectLevel.medium));
     return Semantics(
       label: 'QR',
       image: true,

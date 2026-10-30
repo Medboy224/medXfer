@@ -14,7 +14,7 @@ import 'platform/hotspot.dart';
 import 'platform/network.dart';
 import 'platform/open_folder.dart';
 import 'platform/storage.dart';
-import 'platform/zxing_qr_scanner.dart';
+import 'platform/native_qr_scanner.dart';
 import 'settings.dart';
 
 Future<void> main() async {
