@@ -9,7 +9,7 @@
 > **Critère de sortie :**
 > - Windows ↔ Linux, sans réglage : les deux PC se voient, s'appairent et transfèrent 1 Go dans chaque sens, avec le débit mesuré ;
 > - dans chacune des configurations du §2 (WP-E.0) ;
-> - Windows ↔ Windows et Linux ↔ Linux si le matériel le permet.
+> - Windows ↔ Windows avec le second PC Windows de l'utilisateur (décision E3) ; Linux ↔ Linux par les tests automatiques.
 >
 > **Durée estimée :** 3 à 5 jours. Une PR par lot, CI verte sur les trois systèmes avant fusion.
 
@@ -27,7 +27,7 @@
 
 ```
 WP-E.0 sonde (câble, adresses, découverte, débit) ──► WP-E.1 cœur ──► WP-E.3 écran ──► WP-E.4 essais réels, rapport
-                                                  └─► WP-E.2 Linux sans IPv4 (si la sonde le montre) ──┘
+                                                  └─► WP-E.2 Linux sans IPv4 (décision E1) ─────────────┘
 ```
 
 ## 2. Les lots
@@ -54,37 +54,70 @@ Pour chacune :
 
 Un « Linux n'a aucune adresse IPv4 sur le câble » est un résultat valable : il décide de WP-E.2.
 
+**Résultats de la sonde** (30 octobre ; PC Windows 11 ↔ Zorin par un câble direct ; `xfer bench net`, `xfer bench ladder` et `xfer ctl` du `main` du jour ; profils NetworkManager temporaires, celui de l'utilisateur rétabli à chaque fois) :
+
+| Question | Résultat |
+|---|---|
+| Lien | ✅ 1 Gbit/s des deux côtés, ping de 0,4 à 1,1 ms. |
+| Adresses, profil de l'utilisateur (Zorin : `ipv4.method link-local`, réglé à la main le 16 septembre ; configuration 3) | ✅ Windows `169.254.185.66`, Zorin `169.254.57.98`, 7 s après le branchement. |
+| Adresses, **profil par défaut** de NetworkManager (DHCP, configuration 1) | ❌ **Aucune IPv4.** Seulement une adresse IPv6 link-local pendant 45 s ; à 46 s, « la configuration IP n'a pas pu être réservée » : l'activation échoue, et NetworkManager recommence. |
+| IPv6 link-local | ❌ Inutilisable avec ce PC : l'IPv6 est **désactivé** sur ses deux cartes, Ethernet et Wi-Fi (`ms_tcpip6`). Un réglage courant : l'IPv6 seul ne suffit pas. |
+| Débit brut | **109,4 et 111,4 MB/s** (latence 0,68 ms). Le même couple par le Wi-Fi, un point d'accès de téléphone à 2,4 GHz : 2,2 et 2,4 MB/s. |
+| Échelle, PC → Zorin (512 Mo, 4 connexions) | R1 110,2 · R2 (TLS) 110,5 · R3 (trames, SHA-256) 99,4 · R4 (disque) 87,0 · R5 (journal, `fsync`) 39,4 · **R6 40,6 MB/s**, limité par `fsync` : le disque dur de Zorin (2011, 7 200 tr/min, plein à 98 %). |
+| Échelle, Zorin → PC | R1 109,5 · R2 107,1 · R3 95,4 · R4 90,9 · R5 83,5 · **R6 83,3 MB/s**, limité par le réseau. Le processeur de Zorin (i5-2520M) tient le hachage. |
+| Découverte, câble seul (Wi-Fi de Zorin coupé ; configuration 1) | ✅ Mutuelle et stable : chacun voit l'autre à son adresse `169.254`, 3 balayages sur 3. |
+| Découverte, câble et Wi-Fi (configuration 4) | ⚠️ L'adresse retenue change d'un balayage à l'autre : le câble, puis le Wi-Fi, puis le câble. Un transfert peut partir à 2,4 MB/s au lieu de 110. |
+| L'adresse que chaque PC montre de lui-même (QR, PIN, `local_ip`) | ❌ Le PC montre son Wi-Fi (`192.168.42.174`), injoignable par le câble seul. Zorin montre **`10.0.3.1`**, le pont LXC `lxcbr0`, éteint et sans câble : `scoreInterface` ne le reconnaît pas comme virtuel et ne regarde pas si l'interface a un lien. |
+| `xfer bench … --listen` | Il ne propose que l'adresse du Wi-Fi : les adresses `169.254` sont écartées de la liste, comme dans le cœur (`server.go`). |
+| Un PC partage sa connexion (configuration 2) | Pas essayé en direct : le PC aurait pris une adresse de Zorin avec Zorin pour passerelle, pour un bail d'une heure, et risquait de perdre Internet à la fin de l'essai. C'est un réseau local ordinaire, que medXfer gère déjà. L'essai réel avec le MikroTik de l'utilisateur reste prévu (réserve du rapport J6c). |
+
+**Conclusion** :
+- le câble porte le transfert à **83 MB/s** vers un PC rapide, et à 40 MB/s vers le disque dur de Zorin : le premier lien de medXfer au-delà du Wi-Fi Direct à 5 GHz (53 MB/s). Le coût de `fsync` sur un disque dur est un sujet pour J8 ;
+- **sans réglage, un Linux n'a pas d'adresse IPv4 sur un câble direct**, et l'IPv6 peut être désactivé sous Windows : l'application Linux doit donner l'adresse elle-même (WP-E.2, décision E1) ;
+- l'adresse montrée doit être celle du câble, et l'interface choisie doit avoir un lien et ne pas être virtuelle (WP-E.1) ;
+- deux chemins vers un même PC sont montrés, et l'utilisateur choisit (décision E2).
+
 ### WP-E.1 — Le cœur : les adresses du câble · M
 
-- **IPv6 link-local**, si la sonde montre qu'il le faut :
-  - découverte, annonce et connexions sur `fe80::…`, avec la zone (`%enp0s25`, `%12`) ;
-  - la zone ne vaut que sur un PC : l'adresse montrée à l'autre (QR, PIN, annonce) n'en porte pas. Le PC qui se connecte y ajoute celle de son interface où l'appareil a été vu, ou essaie ses interfaces link-local une à une.
-- **Le câble l'emporte** quand deux chemins mènent au même appareil (configuration 4) :
-  - un appareil vu sur plusieurs interfaces garde ses adresses ;
-  - la session passe par le lien le plus rapide (le câble, d'après la vitesse de la carte), et se replie sur l'autre s'il tombe.
-- **L'adresse montrée** sous le PIN : l'IPv4 du câble quand elle existe, plus courte à taper qu'une adresse `fe80::…`.
+- **L'interface retenue** (`scoreInterface`, `GetPrimaryLocalIP`) :
+  - une interface sans lien n'est pas retenue ;
+  - les ponts virtuels sont reconnus comme tels : `lxcbr0`, `lxdbr0`, les `br-…` de Docker, `cni0`, `vboxnet…`.
+- **Les adresses montrées** (QR, PIN, `local_ip`) : celles de chaque réseau où l'autre PC peut se trouver, le câble compris. Les adresses `169.254` ne sont plus écartées des listes (`server.go`, `xfer bench`).
+- **Deux chemins vers le même appareil** (configuration 4, décision E2) :
+  - l'appareil garde une adresse par chemin, au lieu de la dernière vue ;
+  - le cœur les donne à l'interface (`peers_list`), avec la nature de chaque chemin : câble ou Wi-Fi ;
+  - la session passe par celui que l'utilisateur a choisi.
+- **IPv6 link-local** : pas dans ce lot. Avec la décision E1, chaque PC a une IPv4 sur le câble, alors que l'IPv6 peut être désactivé (constaté sous Windows).
 - `DISC-10` mis à jour dans la bible, ou une nouvelle exigence pour le câble.
 
-### WP-E.2 — Linux sans IPv4 sur le câble · S (selon la sonde)
+### WP-E.2 — Linux sans IPv4 sur le câble · S (décision E1 : l'application donne l'adresse)
 
-Si la sonde montre que NetworkManager 1.36 ne laisse qu'une adresse IPv6, ou rien (décision E1) :
+La sonde le montre : avec le profil par défaut, NetworkManager ne laisse aucune IPv4 sur un câble direct.
+- Quand une carte Ethernet a un lien mais pas d'IPv4, l'application Linux active un profil NetworkManager temporaire, `medxfer-cable` :
+  - `ipv4.method link-local`, sans démarrage automatique ;
+  - par `nmcli`, sans droits administrateur, comme le point d'accès en J6c.
+- Elle le retire quand le câble est débranché ou l'application fermée. NetworkManager revient alors au profil de l'utilisateur, qui n'est jamais modifié.
+- Quand le déclencher : à l'échec du DHCP (45 s avec les réglages par défaut), ou plus tôt si l'essai montre qu'on peut le savoir sans risque pour un vrai réseau (une box qui répond lentement).
+- Derrière une interface, à côté de `LinuxHotspot`. Rien sous Windows, qui se donne déjà son adresse.
 
-| | A. IPv6 link-local seulement | B. Profil NetworkManager link-local | C. Les deux |
-|---|---|---|---|
-| Principe | Le cœur passe par `fe80::…` (WP-E.1) | L'application crée, pour le câble, un profil `ipv4.method link-local` (`nmcli`, sans droits administrateur, comme le point d'accès en J6c) quand le DHCP échoue, et le retire ensuite | IPv6 d'abord, IPv4 link-local en plus |
-| Pour | Ne touche pas aux réglages du système | Une adresse IPv4 courte à taper, comme sous Windows | Le plus robuste |
-| Contre | Une adresse longue sous le PIN | Modifie les réglages réseau du système (réversible) | Le plus de code |
+Écartées :
+- **l'IPv6 link-local seul** : inutilisable avec un PC dont l'IPv6 est désactivé, comme celui des essais ;
+- **le PC Windows qui distribue les adresses** (comme son réseau en J6c) : il perturberait un vrai réseau si le câble menait à une box ou à un switch, et Linux ↔ Linux resterait sans solution.
 
 ### WP-E.3 — Écran · S
 
 - Dans « Connecter », un appareil vu par le câble le dit (« par câble »).
-- Rien à régler : brancher le câble suffit.
+- Un appareil vu par deux chemins (décision E2) : les deux sont montrés, câble et Wi-Fi, et l'utilisateur choisit. Si le chemin choisi tombe, l'application le dit, comme pour une session perdue.
+- Sous le PIN, l'adresse du câble quand il est branché.
+- Sous Linux, quand l'application donne l'adresse au câble (WP-E.2), elle le dit.
+- Rien d'autre à régler : brancher le câble suffit.
 - Sous Windows, un câble sans DHCP est en profil Public. Si les règles du pare-feu manquent, l'application le dit, comme prévu en J8.
 
 ### WP-E.4 — Essais réels et rapport · S
 
-- PC Windows ↔ Zorin, dans les configurations 1 à 4 : découverte, appairage par PIN, 1 Go dans chaque sens, avec le débit et la mesure par étape.
-- Windows ↔ Windows et Linux ↔ Linux si un second PC est disponible.
+- PC Windows ↔ Zorin, dans les configurations 1, 3 et 4, Zorin avec son profil par défaut puis le sien : découverte, appairage par PIN, 1 Go dans chaque sens, avec le débit et la mesure par étape.
+- Windows ↔ Windows, avec le second PC Windows de l'utilisateur (décision E3).
+- Linux ↔ Linux : pas de second PC Linux ; couvert par les tests automatiques.
 - Rapport du lot.
 
 ## 3. Hors périmètre
@@ -95,8 +128,10 @@ Si la sonde montre que NetworkManager 1.36 ne laisse qu'une adresse IPv6, ou rie
 
 ## 4. Décisions
 
-| # | Question | Recommandation | Autre choix |
+Réponses de l'utilisateur du 30 octobre 2026, après la sonde.
+
+| # | Question | Décision | Autre choix |
 |---|---|---|---|
-| E1 | Linux sans IPv4 sur le câble | Après la sonde : **C** si NetworkManager ne garde que l'IPv6, sinon rien à faire | A ou B seuls (WP-E.2) |
-| E2 | Deux chemins vers le même appareil (câble et Wi-Fi) | **Le câble, automatiquement**, avec repli sur le Wi-Fi | Demander à l'utilisateur |
-| E3 | Windows ↔ Windows et Linux ↔ Linux | Si un second PC est disponible | Windows ↔ Linux seulement |
+| E1 | Linux sans IPv4 sur le câble | ✅ **L'application Linux donne l'adresse** : un profil NetworkManager temporaire `link-local`, retiré quand le câble est débranché ou l'application fermée (WP-E.2). | L'IPv6 seul ; le PC Windows qui distribue les adresses (écartés en WP-E.2). |
+| E2 | Deux chemins vers le même appareil (câble et Wi-Fi) | ✅ **Les deux sont montrés, l'utilisateur choisit** (WP-E.1, WP-E.3). | Le câble, automatiquement, avec repli sur le Wi-Fi. |
+| E3 | Windows ↔ Windows et Linux ↔ Linux | ✅ **Windows ↔ Windows** avec un second PC Windows de l'utilisateur ; Linux ↔ Linux par les tests automatiques. | Windows ↔ Linux seulement. |
