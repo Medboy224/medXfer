@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -726,7 +725,7 @@ var statusAddress = func() string {
 	if localIP == "" || localIP == "127.0.0.1" {
 		targets := discovery.GetActiveNetworkTargets()
 		for _, t := range targets {
-			if !t.LocalIP.IsLoopback() && t.LocalIP.To4() != nil && !strings.HasPrefix(t.LocalIP.String(), "169.254.") {
+			if !t.LocalIP.IsLoopback() && t.LocalIP.To4() != nil { // 169.254 too: a cable between two PCs (DISC-13)
 				localIP = t.LocalIP.String()
 				break
 			}

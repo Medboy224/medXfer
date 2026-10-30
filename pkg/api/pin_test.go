@@ -1,14 +1,50 @@
 package api
 
 import (
+	"net"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Medboy224/medXfer/pkg/discovery"
 )
 
 type pinShownEvent struct {
-	PIN     string `json:"pin"`
-	Expires int64  `json:"expires"`
-	Address string `json:"address"`
+	PIN       string       `json:"pin"`
+	Expires   int64        `json:"expires"`
+	Address   string       `json:"address"`
+	Addresses []pinAddress `json:"addresses"`
+}
+
+// DISC-13, WP-E.0 of the cable plan: a PC on a cable and on Wi-Fi showed its Wi-Fi address
+// alone under the PIN, out of reach of the PC at the other end of the cable. Now one address
+// per network, cable first, the primary one among them.
+func TestPINShowsAnAddressPerNetwork(t *testing.T) {
+	t.Cleanup(func() { _ = discovery.SetNetworkInfo(nil) })
+	if err := discovery.SetNetworkInfo([]discovery.NetworkInterface{
+		{Name: "wltest0", Addrs: []string{"192.0.2.174/24"}},
+		{Name: "ethtest0", Addrs: []string{"169.254.185.66/16"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s, n := startOwnIdentity(t, "Shower")
+	n.Request("pair_pin_show", nil)
+	var shown pinShownEvent
+	if err := n.WaitEvent("pair_pin_shown", 0).Decode(&shown); err != nil {
+		t.Fatal(err)
+	}
+	port := strconv.Itoa(s.nodeLn.Addr().(*net.TCPAddr).Port)
+	want := []pinAddress{
+		{Address: net.JoinHostPort("169.254.185.66", port), Kind: discovery.KindEthernet},
+		{Address: net.JoinHostPort("192.0.2.174", port), Kind: discovery.KindWiFi},
+	}
+	if !slices.Equal(shown.Addresses, want) {
+		t.Fatalf("addresses %+v, want %+v", shown.Addresses, want)
+	}
+	if !slices.ContainsFunc(shown.Addresses, func(a pinAddress) bool { return a.Address == shown.Address }) {
+		t.Fatalf("the primary address %s is not among %+v", shown.Address, shown.Addresses)
+	}
 }
 
 // Two daemons: one shows a PIN (pair_pin_show), the other types it (pair_pin); both end up
