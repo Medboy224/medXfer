@@ -62,7 +62,7 @@ Les deux sondes passent d'abord : elles décident des API à garder.
 | Débit brut (`nc`), téléphone sans autre réseau | PC : **23,4 / 49,6 / 21,6 MB/s**, ping 3,6 ms ; Zorin : 12,1 à 13,3 MB/s, ping 3,2 ms. |
 | Débit brut, point d'accès actuel (2,4 GHz, canal 1), mêmes conditions | Zorin : 6,1 à 7,0 MB/s, ping 2,9 ms. |
 | **Transfert medXfer réel** | **1 Gio du PC vers le téléphone en 19,2 s : 53,4 MB/s en moyenne** (pic 68,1, minimum 52,1), aucune reprise. Étape limitante côté PC : le hachage (10,0 s de travail sur 4 connexions, autant que l'écriture réseau), confiance faible. |
-| Un second téléphone le rejoint par `WifiNetworkSpecifier` | À faire (WP-C.5, avec #169). |
+| Un second téléphone le rejoint par `WifiNetworkSpecifier` | Reporté à J8, avec l'intégration du groupe : en WP-C.5, le TECNO BF6 a rejoint le point d'accès local du Galaxy A57, pas le groupe. |
 
 **Conclusion** : un groupe Wi-Fi Direct à 5 GHz, téléphone sans autre réseau, porte le transfert de **~7 MB/s à ~53 MB/s**, au niveau d'un bon routeur à 5 GHz. L'intégration en J8 est confirmée (décision J17), avec une règle : quand le téléphone crée le groupe, il quitte son autre réseau, ou l'application le propose.
 
@@ -202,9 +202,9 @@ Défauts relevés pendant ces essais, corrigés :
 - **réseau du PC perdu sans le savoir** (#219) : quand le Wi-Fi du PC change de réseau, Windows arrête le groupe Wi-Fi Direct sans prévenir l'application ; elle le voit désormais, le recrée, et dit de rallumer le Wi-Fi s'il est coupé ;
 - **journal absent de l'application** (#169) : seule la ligne de commande ouvrait le journal de diagnostic. Le paquet de diagnostic de l'application (`DEV-11`) n'en contenait donc aucun, et l'échec d'appairage du 30 octobre, montré quelques secondes dans un message, n'a laissé aucune trace. Le cœur de l'application l'ouvre désormais dans son dossier de données, et un appairage interrompu y note sa cause.
 
-Restent :
-- un vrai partage de connexion vers Ethernet (le MikroTik de l'utilisateur) : l'avertissement de l'écran du réseau, en conditions réelles ;
-- le rapport.
+Reste : un vrai partage de connexion vers Ethernet (le MikroTik de l'utilisateur), pour l'avertissement de l'écran du réseau en conditions réelles.
+
+**Rapport de sortie** : [j6c-report.md](j6c-report.md) (30 octobre).
 
 ## 3. Hors périmètre
 
