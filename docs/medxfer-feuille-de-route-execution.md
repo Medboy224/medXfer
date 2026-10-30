@@ -263,7 +263,7 @@ Ce qui change sur un câble direct :
 - Windows classe ce réseau « non identifié », profil **Public** : les règles du pare-feu (voir J8) doivent y valoir ;
 - c'est potentiellement le lien le plus rapide entre deux PC : 1 Gbit/s, soit environ 110 MB/s.
 
-D'abord une sonde, avec le PC Windows et Zorin reliés par un câble : adresses obtenues de chaque côté, découverte mutuelle, débit brut. **Critère de sortie :** Windows ↔ Linux, sans réglage, se voient, s'appairent et transfèrent 1 Go, avec le débit mesuré ; Windows ↔ Windows et Linux ↔ Linux si le matériel le permet.
+D'abord une sonde, avec le PC Windows et Zorin reliés par un câble : adresses obtenues de chaque côté, découverte mutuelle, débit brut. **Critère de sortie :** Windows ↔ Linux, sans réglage, se voient, s'appairent et transfèrent 1 Go, avec le débit mesuré ; Windows ↔ Windows et Linux ↔ Linux si le matériel le permet. Plan : [medxfer-plan-cable.md](medxfer-plan-cable.md).
 
 ### J6d — Se connecter au réseau par BLE · ≈ 7 à 10 jours
 Ajouté le 28 octobre, à l'idée de l'utilisateur. Deux appareils qui ne sont pas sur le même réseau se trouvent par **Bluetooth Low Energy** ; l'un crée le réseau (selon ce que J6c aura montré : qui peut le créer à 5 GHz), l'autre le **rejoint seul**. Plus de nom de réseau ni de mot de passe à taper dans les réglages, en particulier sur un PC, qui ne peut pas scanner de QR.
