@@ -68,6 +68,19 @@ func (s *DaemonServer) keyChanged(ip string, fp identity.Fingerprint) (identity.
 	return ts.KeyChangedAt(ip, fp)
 }
 
+// addressTaken logs that a device proving the user's authorisation (the QR code's secret, a PIN
+// checked by the PAKE) takes over the address a trusted device of another key had. An address is
+// no identity: on the network a computer or a phone creates, the next device often gets the
+// address the last one had, and was refused as an attack (real tests of 29 October 2026, #217).
+// Without such a proof, ID-05 still refuses.
+func (s *DaemonServer) addressTaken(ip string, fp identity.Fingerprint) {
+	if known, changed := s.keyChanged(ip, fp); changed {
+		s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": fmt.Sprintf(
+			"%s was the address of '%s' (%s); %s, paired by the user's QR code or PIN, takes it",
+			ip, known.Alias, known.Fingerprint.Short(), fp.Short())}))
+	}
+}
+
 func keyChangedError(host string, known identity.Peer, fp identity.Fingerprint) error {
 	return fmt.Errorf("REFUSED: %s is the address of '%s' (%s), but the device there presents another key (%s); "+
 		"if '%s' left the network, its address may now belong to another device: pair that one by PIN or QR code",
@@ -144,15 +157,13 @@ func (s *DaemonServer) TrustDevice(fingerprint, alias string) error {
 // Fingerprint is this device's key fingerprint (full form), or "" before Serve.
 func (s *DaemonServer) Fingerprint() string { return s.fingerprint() }
 
-// admitIncoming decides about the peer of an incoming pair_request: ID-05 first, then the QR
-// code's secret, then mutual trust. Anything else needs a PIN or a QR code. offer: this side
-// asked to offer mutual trust once paired (pair_show with trust).
+// admitIncoming decides about the peer of an incoming pair_request: the QR code's secret first,
+// then ID-05, then mutual trust. Anything else needs a PIN or a QR code. offer: this side asked
+// to offer mutual trust once paired (pair_show with trust). The secret, shown on this device's
+// screen only, proves the user's authorisation: the address a trusted device had is the new
+// one's then (ID-05, #217).
 func (s *DaemonServer) admitIncoming(conn *securechan.Conn, msg session.Message, ip string) (offer bool, err error) {
 	fp := conn.PeerFingerprint()
-	if known, changed := s.keyChanged(ip, fp); changed {
-		s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": keyChangedError(ip, known, fp).Error()}))
-		return false, errKeyChanged
-	}
 	if msg.Secret != "" {
 		s.mu.RLock()
 		inv, trust := s.invite, s.inviteTrust
@@ -160,7 +171,12 @@ func (s *DaemonServer) admitIncoming(conn *securechan.Conn, msg session.Message,
 		if inv == nil || inv.Redeem(pairing.DecodeSecret(msg.Secret), time.Now()) != nil {
 			return false, pairing.ErrRefused // PAIR-07: nothing more
 		}
+		s.addressTaken(ip, fp)
 		return trust, nil
+	}
+	if known, changed := s.keyChanged(ip, fp); changed {
+		s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": keyChangedError(ip, known, fp).Error()}))
+		return false, errKeyChanged
 	}
 	if s.mutual(fp, msg.TrustsYou) {
 		return false, nil // path P3

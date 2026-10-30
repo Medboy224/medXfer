@@ -430,3 +430,81 @@ func TestRefusedPINOnDemand(t *testing.T) {
 	nb.WaitEvent("pair_failed", 0)
 	noEvent(t, na, "paired")
 }
+
+// staleTrusted trusts on s a device of another key, last seen at 127.0.0.1: the address the
+// devices of these tests come from.
+func staleTrusted(t *testing.T, s *DaemonServer) {
+	t.Helper()
+	old, err := identity.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.trust.Add(identity.Peer{Fingerprint: old.Fingerprint, Alias: "old phone", LastAddress: "127.0.0.1"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// waitTaken waits for the log line saying a device paired by the user took a trusted address,
+// among all the events n received: it may come before an event waited for already.
+func waitTaken(t *testing.T, n *testkit.Node) {
+	t.Helper()
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		for _, e := range n.Client.Events() {
+			if e.Event == "log" && strings.Contains(string(e.Data), "takes it") {
+				return
+			}
+		}
+	}
+	t.Fatal("no log line of an address taken")
+}
+
+// ID-05, #217: an address is no identity. A device that proves the user's authorisation, the QR
+// code's secret, takes the address a trusted device of another key had, and the log says so.
+// Without such a proof, it is still refused (TestDaemonRefusesChangedKey).
+func TestQRSecretTakesAKnownAddress(t *testing.T) {
+	s, n := startOwnIdentity(t, "Daemon")
+	staleTrusted(t, s)
+	n.Request("pair_show", nil)
+	var shown struct {
+		URI string `json:"uri"`
+	}
+	if err := n.WaitEvent("pair_show", 0).Decode(&shown); err != nil {
+		t.Fatal(err)
+	}
+	u, err := pairing.Parse(shown.URI, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner := testPeerChan(t)
+	scanner.Expected, scanner.AllowUnknown = u.Fingerprint, false
+	got := <-pairRequest(t, n.PeerAddr(), scanner, session.Message{Secret: pairing.EncodeSecret(u.Secret), DeviceName: "phone"}, 5*time.Second)
+	if got.Type != "pair_accept" {
+		t.Fatalf("got %+v, want pair_accept", got)
+	}
+	waitTaken(t, n)
+}
+
+// ID-05, #217: the same with a PIN checked by the PAKE, on both sides at once: the stale trusted
+// devices of the typist and of the shower at that address no longer stop the pairing. A wrong
+// PIN still does.
+func TestPINTakesAKnownAddress(t *testing.T) {
+	a, na := startOwnIdentity(t, "Shower")
+	b, nb := startOwnIdentity(t, "Typist")
+	staleTrusted(t, a)
+	staleTrusted(t, b)
+	na.Request("pair_pin_show", nil)
+	var shown pinShownEvent
+	if err := na.WaitEvent("pair_pin_shown", 0).Decode(&shown); err != nil {
+		t.Fatal(err)
+	}
+	bad := []byte(strings.ReplaceAll(shown.PIN, " ", ""))
+	bad[0] = '0' + (bad[0]-'0'+1)%10
+	nb.Request("pair_pin", map[string]any{"target": na.PeerAddr(), "pin": string(bad)})
+	nb.WaitEvent("pair_failed", 0)
+
+	nb.Request("pair_pin", map[string]any{"target": na.PeerAddr(), "pin": shown.PIN})
+	nb.WaitEvent("paired", 0)
+	na.WaitEvent("paired", 0)
+	waitTaken(t, na)
+	waitTaken(t, nb)
+}
