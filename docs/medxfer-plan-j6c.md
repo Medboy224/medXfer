@@ -180,6 +180,7 @@ Reste, avec WP-C.5 : le téléphone qui rejoint le réseau du PC par le QR, et l
 | Lecture du QR | 24 s au premier essai. Après #214 (lecteur sans pause entre deux images, 1080p, QR de 340 px sur PC) : **1,1 à 2,3 s** dès que le QR est dans le cadre, mesuré image par image. |
 | TECNO BF6 → Galaxy A57 par QR (#169) | ✅ Lecture rapide (3 essais sur 4), réseau rejoint, appairage et confiance, transferts à environ **4 MB/s**. C'est la limite de la puce du TECNO (Unisoc SC9863A, 2,4 GHz, une antenne). Le TECNO est en Android 32 bits : d'où la décision C6. |
 | Bande du point d'accès du Galaxy A57, son Wi-Fi allumé mais connecté à aucun réseau | **2,4 GHz** (canal 1, 2412 MHz) : Android ne passe pas à 5 GHz de lui-même. Le 5 GHz du téléphone ne vient que de Wi-Fi Direct (WP-C.0). |
+| PC Windows → Galaxy A57 par les réglages Wi-Fi de Windows, puis le PIN (#169, 30 octobre) | ✅ Réseau du Galaxy A57 rejoint (2,4 GHz, canal 11, lien à 144 Mbit/s), appairage par PIN et confiance, 57 Mo du PC vers le téléphone en 5,4 s : **10,1 MB/s** en moyenne (pic 12). Le premier essai a échoué (« failed to pair with … ») sans laisser de trace de sa cause (journal absent, ci-dessous) ; le second, avec les événements journalisés, a réussi du premier coup. |
 
 **La coupure de Windows toutes les 2 minutes** (29 octobre, cause trouvée et corrigée) :
 
@@ -198,10 +199,10 @@ Correction (PR de WP-C.5) :
 Défauts relevés pendant ces essais, corrigés :
 - **adresse réattribuée prise pour une attaque** (#217) : un appareil de confiance garde sa dernière adresse ; le suivant qui la reçoit était refusé (« device key changed », règle `ID-05`), même avec le secret du QR ou le bon PIN. Désormais, le secret du QR ou un PIN vérifié prouvent l'autorisation de l'utilisateur, et l'appareil reprend l'adresse ; sans preuve, le refus reste (`ID-05` reformulée, validée par l'utilisateur le 30 octobre) ;
 - **Wi-Fi du téléphone coupé** (#218) : après le scan, Android refusait la connexion, sans message clair ; une fenêtre le dit et ouvre le panneau Wi-Fi, et la jonction reprend seule ;
-- **réseau du PC perdu sans le savoir** (#219) : quand le Wi-Fi du PC change de réseau, Windows arrête le groupe Wi-Fi Direct sans prévenir l'application ; elle le voit désormais, le recrée, et dit de rallumer le Wi-Fi s'il est coupé.
+- **réseau du PC perdu sans le savoir** (#219) : quand le Wi-Fi du PC change de réseau, Windows arrête le groupe Wi-Fi Direct sans prévenir l'application ; elle le voit désormais, le recrée, et dit de rallumer le Wi-Fi s'il est coupé ;
+- **journal absent de l'application** (#169) : seule la ligne de commande ouvrait le journal de diagnostic. Le paquet de diagnostic de l'application (`DEV-11`) n'en contenait donc aucun, et l'échec d'appairage du 30 octobre, montré quelques secondes dans un message, n'a laissé aucune trace. Le cœur de l'application l'ouvre désormais dans son dossier de données, et un appairage interrompu y note sa cause.
 
 Restent :
-- un PC Windows qui rejoint le point d'accès du Galaxy A57 par ses réglages (#169) ;
 - un vrai partage de connexion vers Ethernet (le MikroTik de l'utilisateur) : l'avertissement de l'écran du réseau, en conditions réelles ;
 - le rapport.
 

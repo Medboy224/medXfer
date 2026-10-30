@@ -232,6 +232,10 @@ func (c *Core) NodeAddr() string { return c.srv.NodeListenAddr() }
 // Fingerprint is this device's key, once started.
 func (c *Core) Fingerprint() string { return c.srv.Fingerprint() }
 
+// JournalDir is where the diagnostic bundle reads the journal (DEV-11), in data_dir: the
+// program that holds the core opens it there (internal/cabi).
+func (c *Core) JournalDir() string { return c.srv.JournalDir() }
+
 // push queues an event without ever blocking the engine: a full queue drops and counts (B11);
 // progress events closer than progressGap are dropped too, the next one carries the news (B7).
 // The last one, at 100 %, always passes: no other comes after it (audit §3.7, #156).

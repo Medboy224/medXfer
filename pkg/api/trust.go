@@ -236,7 +236,7 @@ func (s *DaemonServer) handlePairURI(rs Responder, req RequestMessage) {
 	}
 	go func() {
 		if _, err := s.pairWith(u.Addr(), &u, p.Trust, req.ID); err != nil {
-			s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", u.Addr(), err)}, req.ID))
+			s.Broadcast(pairFailed(u.Addr(), err, req.ID))
 		}
 	}()
 }

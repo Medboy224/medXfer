@@ -224,9 +224,19 @@ func (s *DaemonServer) handlePair(rs Responder, req RequestMessage) {
 	target := net.JoinHostPort(payload.IP, strconv.Itoa(int(port)))
 	go func() {
 		if _, err := s.pairWith(target, nil, payload.Trust, req.ID); err != nil && !errors.Is(err, errPINNeeded) {
-			rs.Reply(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", target, err)}, req.ID))
+			rs.Reply(pairFailed(target, err, req.ID))
 		}
 	}()
+}
+
+// pairFailed is the action_error of a pairing broken off (no answer at the address, a
+// handshake cut short), its cause kept in the journal too: the application shows it in a toast
+// that goes in seconds, and a failure seen once in a real test stayed unexplained (#169,
+// 30 October 2026).
+func pairFailed(target string, err error, id string) EventMessage {
+	msg := fmt.Sprintf("failed to pair with %s: %v", target, err)
+	journalf("log WARN %s", msg)
+	return NewEvent("action_error", map[string]string{"error": msg}, id)
 }
 
 func (s *DaemonServer) handleDisconnect(rs Responder, req RequestMessage) {
@@ -298,7 +308,7 @@ func (s *DaemonServer) connectAndSend(targetIP string, src sendSource, id string
 	if _, err := s.pairWith(targetIP, nil, false, id); err != nil {
 		src.close()
 		if !errors.Is(err, errPINNeeded) { // pin_needed: send again once paired by PIN
-			s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", targetIP, err)}, id))
+			s.Broadcast(pairFailed(targetIP, err, id))
 		}
 		return
 	}

@@ -2,6 +2,8 @@ package cabi
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,9 +20,50 @@ func decode(t *testing.T, s string) map[string]any {
 	return m
 }
 
-func config(t *testing.T) string {
-	b, _ := json.Marshal(map[string]string{"data_dir": t.TempDir(), "download_dir": t.TempDir(), "device_name": "Lib"})
+func config(t *testing.T) string { return configAt(folder(t), folder(t)) }
+
+func configAt(dataDir, downloadDir string) string {
+	b, _ := json.Marshal(map[string]string{"data_dir": dataDir, "download_dir": downloadDir, "device_name": "Lib"})
 	return string(b)
+}
+
+// folder is a fresh folder for a core, removed once the core has stopped: its journal stays
+// open until then (DEV-11), and Windows removes no open file. A stop held on purpose
+// (TestStopIsBounded) ends a little after its test: the removal waits for it.
+func folder(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "cabi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		Stop()
+		for end := time.Now().Add(5 * time.Second); os.RemoveAll(dir) != nil && time.Now().Before(end); {
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+	return dir
+}
+
+// DEV-11 and #169: the library's core writes its journal in data_dir, where the application's
+// diagnostic bundle reads it; Stop closes it.
+func TestStartOpensTheJournal(t *testing.T) {
+	t.Cleanup(Stop)
+	dir := folder(t)
+	if r := decode(t, Start(configAt(dir, folder(t)))); r["ok"] != true {
+		t.Fatalf("start: %v", r)
+	}
+	Stop()
+	data, err := os.ReadFile(filepath.Join(dir, "journal", "journal.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "start medXfer") {
+		t.Fatalf("journal without its start line: %q", data)
+	}
+	if err := os.Remove(filepath.Join(dir, "journal", "journal.log")); err != nil {
+		t.Fatalf("journal still open after Stop: %v", err)
+	}
 }
 
 // B4: start is idempotent (a hot restart finds the core running); after stop, a new start

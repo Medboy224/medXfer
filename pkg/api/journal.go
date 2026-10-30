@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -19,6 +21,38 @@ func SetJournal(j *diag.Journal) { journal.Store(j) }
 // JournalDir is where the daemon keeps its diagnostic journal, next to config.json.
 func JournalDir() string {
 	return filepath.Join(filepath.Dir(GetConfigFilePath()), "journal")
+}
+
+// JournalDir is where this server's diagnostic bundle reads the journal: in its data folder.
+func (s *DaemonServer) JournalDir() string { return filepath.Join(s.dataDir, "journal") }
+
+// StartJournal opens the diagnostic journal in dir, sends the log package and the daemon's
+// events to it (DEV-11), and returns the function that closes it. A journal that cannot be
+// opened only costs the diagnosis: the program starts all the same. The function removes the
+// journal only while it is still the one installed: a core that ends late, after another one
+// started (internal/cabi), leaves the new one's journal alone.
+func StartJournal(dir string) (stop func()) {
+	j, err := diag.OpenJournal(dir, diag.JournalBudget, nil)
+	if err != nil {
+		log.Printf("[diag] journal unavailable: %v", err)
+		return func() {}
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, j))
+	journal.Store(j)
+	j.Printf("start medXfer %s", diag.AppVersion)
+	return func() {
+		if journal.CompareAndSwap(j, nil) {
+			log.SetOutput(os.Stderr)
+		}
+		_ = j.Close()
+	}
+}
+
+// journalf writes a line to the journal alone, masked like every other.
+func journalf(format string, args ...any) {
+	if j := journal.Load(); j != nil {
+		j.Printf(format, args...)
+	}
 }
 
 // journalEvent records evt: its name only, since event data carry file names, the PIN and
