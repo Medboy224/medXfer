@@ -252,6 +252,8 @@ Ajouté le 25 octobre (décision J17 du plan J6b). Le point d'accès de `LocalOn
 
 **Élargi le 28 octobre** (rapport J6b, réserves) : le point d'accès du PC, sous Windows et Linux, avec son QR (avancé de J8), pour l'appairage par QR de bout en bout ; l'essai d'un second téléphone qui rejoint le Galaxy A57 par QR (#169) ; la mesure des à-coups de l'interface sous Windows (réserve 4 de G2a). Durée revue : 4 à 6 jours. Plan : [medxfer-plan-j6c.md](medxfer-plan-j6c.md).
 
+**Résultat (30/10/2026) :** le jalon est terminé (PR #208 à #231, et celle du rapport). Groupe Wi-Fi Direct à 5 GHz sondé : 53,4 MB/s, intégration en J8 (décision C7). Le PC crée son réseau sous Windows et Linux ; l'appairage par QR passe de bout en bout dans les trois sens prévus, et un PC rejoint le téléphone par ses réglages puis le PIN. Réserve 4 de G2a levée. Lecture du QR en 0,4 à 1 s (zxing-cpp, décision C8), téléphones 32 bits pris en charge (C6). Détail dans [j6c-report.md](j6c-report.md).
+
 ### Lot « Câble Ethernet entre deux PC » (après J6c) · ≈ 3 à 5 jours
 Ajouté le 29 octobre, à la demande de l'utilisateur. Deux PC, sous Windows ou Linux et quelle que soit leur configuration, reliés par un câble Ethernet direct, se trouvent et transfèrent des fichiers, sans réglage manuel. Placé juste après le rapport J6c, avant J6d (décision du 29 octobre).
 
@@ -298,6 +300,29 @@ Matrice d'appareils réels (§14.3), gate G3, optimisations ciblées d'après le
 Prototype G2b, Bonjour, permission « réseau local », comportement en arrière-plan sur iPhone, empaquetage et distribution. Pas de plan détaillé avant que l'environnement macOS existe.
 
 **Android ↔ iPhone (noté le 29 octobre, recherches de l'utilisateur) :** iOS n'ouvre pas Wi-Fi Direct aux applications (Apple n'expose que son propre protocole, AWDL). Entre un téléphone Android et un iPhone, c'est donc le téléphone Android qui crée le réseau : `LocalOnlyHotspot`, ou le groupe Wi-Fi Direct, que les autres voient comme un Wi-Fi ordinaire (WP-C.0). L'iPhone le rejoint par `NEHotspotConfiguration`, et l'utilisateur doit l'approuver à chaque fois.
+
+**Les connexions avec un iPhone (complété le 30 octobre, rapport J6c) :**
+
+| Paire | Même Wi-Fi | Sans réseau commun : voie prévue | À sonder sur les vrais appareils |
+|---|---|---|---|
+| Android ↔ iPhone | mDNS (Bonjour côté iPhone) | Le téléphone Android crée le réseau, l'iPhone scanne son QR et le rejoint (`NEHotspotConfiguration`) | Wi-Fi Aware entre les deux (iOS 26) |
+| iPhone ↔ iPhone | Bonjour | Le Wi-Fi pair-à-pair d'Apple, par le framework Network : ni réseau à créer, ni mot de passe | Wi-Fi Aware ; le partage de connexion d'un des deux |
+| PC ↔ iPhone | mDNS, Bonjour | Le PC crée son réseau (J6c), l'iPhone scanne son QR et le rejoint (`NEHotspotConfiguration`) | Le partage de connexion de l'iPhone, rejoint par le PC, puis le PIN |
+
+- **Wi-Fi Aware (iOS 26).** Apple ouvre aux applications Wi-Fi Aware, la norme pair-à-pair de la Wi-Fi Alliance, imposée par le règlement européen sur les marchés numériques (DMA) ; sa documentation ne la limite pas à l'Europe :
+  - framework `WiFiAware`, iPhone 12 et suivants, droit `com.apple.developer.wifi-aware` ;
+  - appairage par `DeviceDiscoveryUI` ou `AccessorySetupKit`, connexions par le framework Network, au premier plan comme en arrière-plan ;
+  - Android l'offre depuis Android 8, sur les téléphones dont la puce le permet (`FEATURE_WIFI_AWARE`, à relever sur le Galaxy A57 : `adb shell pm list features`).
+
+  La documentation d'Apple parle d'appareils Apple et d'accessoires certifiés Wi-Fi Aware. Elle ne dit pas qu'un iPhone s'appaire avec un téléphone Android qui n'en est pas un. Seule une sonde le dira ; d'ici là, la voie prévue reste le réseau du téléphone Android.
+- **Le Wi-Fi pair-à-pair d'Apple (AWDL)** : un `NWListener` et un `NWBrowser` Bonjour, chacun avec `includePeerToPeer`, que le système n'active jamais seul. Sur le forum des développeurs d'Apple, un fil (décembre 2025 à avril 2026) rapporte qu'il échoue sous iOS 26 sur un iPhone 12 mini avec carte SIM, sans réseau commun, et marche sur un iPhone 16 Pro, sans réponse définitive d'Apple. À sonder, avec Wi-Fi Aware en comparaison.
+- **`NEHotspotConfiguration`** : avec `joinOnce`, l'iPhone ne reste sur le réseau que tant que l'application est au premier plan (documentation d'Apple), et toute jonction demande l'accord de l'utilisateur. Un transfert en arrière-plan sur ce réseau est donc à concevoir avec le comportement en arrière-plan de J9.
+- **Le PC n'a ni AWDL ni, en pratique, Wi-Fi Aware** : Windows n'offre pas d'API Wi-Fi Aware aux applications, à notre connaissance, et la prise en charge sous Linux dépend de rares pilotes. Entre un PC et un iPhone, l'un des deux crée donc un Wi-Fi ordinaire :
+  - le PC, comme pour un téléphone Android. À vérifier : que Windows accepte l'iPhone comme les téléphones Android (WP-C.5), et qu'iOS reste sur un réseau sans Internet ;
+  - ou l'iPhone, par son partage de connexion, que l'utilisateur active dans les réglages (aucune API ne le fait) et que l'opérateur doit permettre. À vérifier : la bande obtenue, et que l'application de l'iPhone accepte les connexions des appareils qui l'ont rejoint.
+- **Un Mac** a aussi le Wi-Fi pair-à-pair d'Apple : Mac ↔ iPhone comme iPhone ↔ iPhone, à confirmer.
+
+Toutes ces API sont celles du système (aucune dépendance livrée) et passent derrière les interfaces existantes (`Hotspot`, découverte), un adaptateur par moyen. Sources : documentation d'Apple ([WiFiAware](https://developer.apple.com/documentation/wifiaware), [Building peer-to-peer apps](https://developer.apple.com/documentation/wifiaware/building-peer-to-peer-apps), [`joinOnce`](https://developer.apple.com/documentation/networkextension/nehotspotconfiguration/joinonce)) ; [fil 808917](https://developer.apple.com/forums/thread/808917) du forum des développeurs d'Apple.
 
 ---
 
