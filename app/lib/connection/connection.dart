@@ -181,6 +181,13 @@ class HotspotFailed extends ConnectionNotice {
   final String reason;
 }
 
+/// This device's access point stopped without the app during a session: the computer's Wi-Fi
+/// off or on another network, Android stopping its local hotspot (#219). With nobody on it, a
+/// new one is created instead, its screen showing what goes on.
+class HotspotLost extends ConnectionNotice {
+  const HotspotLost();
+}
+
 /// The other device's access point could not be joined (refused by the user, not found).
 class JoinFailed extends ConnectionNotice {
   const JoinFailed(this.ssid);
@@ -218,6 +225,18 @@ class Connection extends ChangeNotifier {
   /// How long the joined network is kept, and joined again if lost, once its session timed out:
   /// as long as the core dials it again (redialFor, J6c). Then left.
   static Duration rejoinFor = const Duration(minutes: 10);
+
+  /// How often this device's access point is checked to still run: the system may stop it
+  /// without a word to the app (#219).
+  static Duration hotspotCheck = const Duration(seconds: 5);
+  Timer? _hotspotWatch;
+  Timer? _hotspotRetry;
+  bool _checkingHotspot = false;
+  bool _wantHotspot = false; // asked by the user, not stopped yet
+  bool _hotspotWifiOff = false;
+
+  /// This device's network is wanted, but its Wi-Fi is off: it comes once it is on (#219).
+  bool get hotspotWifiOff => _hotspotWifiOff;
 
   /// This device is on another's network, joined by its QR code, or joining it again (J6c).
   bool get joining => _joined != null;
@@ -395,22 +414,42 @@ class Connection extends ChangeNotifier {
     });
   }
 
-  /// Creates this device's access point (Android), then a QR code and PIN that carry it.
+  /// Creates this device's access point, then a QR code and PIN that carry it. Wanted until
+  /// [stopHotspot]: with this device's Wi-Fi off, the screen says so and the network comes once
+  /// it is on; stopped by the system, it is created again ([_keepHotspot], #219).
   Future<void> startHotspot() async {
-    if (!hotspot.supported || _hotspotBusy || _myHotspot != null) return;
+    if (!hotspot.supported) return;
+    _wantHotspot = true;
+    await _startHotspot();
+  }
+
+  /// One try. [quiet]: a failure is not said (the tries of [_keepHotspot]).
+  Future<void> _startHotspot({bool quiet = false}) async {
+    if (_hotspotBusy || _myHotspot != null) return;
     _hotspotBusy = true;
     notifyListeners();
     try {
       if (!await hotspot.permission()) {
+        _wantHotspot = false;
         _notices.add(const HotspotFailed(permission: true));
         return;
       }
+      // Wi-Fi off: no try, no error; the screen asks for it, the network comes once it is on.
+      _hotspotWifiOff = !await hotspot.wifiOn();
+      if (_hotspotWifiOff) {
+        _keepHotspot();
+        return;
+      }
       _myHotspot = await hotspot.start();
+      _hotspotWatch = Timer.periodic(hotspotCheck, (_) => unawaited(_checkHotspot()));
       await pushNetwork();
       if (_codeOpen) await showCode();
     } on PlatformException catch (e) {
       _myHotspot = null;
-      _notices.add(HotspotFailed(permission: false, reason: e.message ?? e.code));
+      if (!quiet) {
+        _wantHotspot = false;
+        _notices.add(HotspotFailed(permission: false, reason: e.message ?? e.code));
+      }
     } finally {
       _hotspotBusy = false;
       notifyListeners();
@@ -419,12 +458,69 @@ class Connection extends ChangeNotifier {
 
   /// Stops this device's access point; the core gets every interface back.
   Future<void> stopHotspot() async {
+    _wantHotspot = false;
+    _hotspotWifiOff = false;
+    _hotspotRetry?.cancel();
+    _hotspotRetry = null;
+    await _dropHotspot();
+  }
+
+  Future<void> _dropHotspot() async {
+    _hotspotWatch?.cancel();
+    _hotspotWatch = null;
     if (_myHotspot == null) return;
     _myHotspot = null;
     notifyListeners();
     await hotspot.stop();
     await pushNetwork();
     if (_codeOpen) await showCode();
+  }
+
+  /// Turns this device's Wi-Fi on, or opens the system's settings for the user to: the network
+  /// then comes by itself ([_keepHotspot]).
+  Future<void> turnWifiOn() => hotspot.openWifiPanel();
+
+  /// The access point stopped by the system (#219), stopped here too. Nobody on it yet: another
+  /// is created ([_keepHotspot]), the screen showing what goes on, its Wi-Fi off included. During
+  /// a session, said, and none behind it.
+  Future<void> _checkHotspot() async {
+    if (_myHotspot == null || _hotspotBusy || _checkingHotspot) return;
+    _checkingHotspot = true;
+    try {
+      if (await hotspot.alive() || _myHotspot == null) return;
+      if (_session != null) {
+        _notices.add(const HotspotLost());
+        await stopHotspot();
+        return;
+      }
+      await _dropHotspot();
+      _hotspotWifiOff = !await hotspot.wifiOn();
+      notifyListeners();
+      _keepHotspot();
+    } finally {
+      _checkingHotspot = false;
+    }
+  }
+
+  /// The wanted access point, tried every [hotspotCheck] until it runs, with no error said:
+  /// created at once, it failed while the computer's Wi-Fi was still off (real test of
+  /// 30 October 2026), and the QR code never came back. Wi-Fi off, no try: the screen says so.
+  void _keepHotspot() {
+    if (_hotspotRetry != null) return;
+    Future<void> tryOnce() async {
+      if (!_wantHotspot || _session != null || _myHotspot != null) {
+        _hotspotRetry?.cancel();
+        _hotspotRetry = null;
+        return;
+      }
+      await _startHotspot(quiet: true);
+      if (_myHotspot != null) {
+        _hotspotRetry?.cancel();
+        _hotspotRetry = null;
+      }
+    }
+
+    _hotspotRetry = Timer.periodic(hotspotCheck, (_) => unawaited(tryOnce()));
   }
 
   /// Pairs by a scanned or pasted link. When it names an access point, this device joins it
@@ -691,6 +787,8 @@ class Connection extends ChangeNotifier {
   void dispose() {
     _scanLimit?.cancel();
     _giveUp?.cancel();
+    _hotspotWatch?.cancel();
+    _hotspotRetry?.cancel();
     _netSub?.cancel();
     _sub.cancel();
     _notices.close();

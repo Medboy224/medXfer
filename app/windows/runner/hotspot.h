@@ -2,6 +2,7 @@
 #define RUNNER_HOTSPOT_H_
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -25,6 +26,13 @@ struct HotspotInterface {
   std::string sharing_address;
 };
 
+// This computer's Wi-Fi radio (Windows.Devices.Radios), which the group needs (#219): whether
+// it is on, and turning it on, which Windows lets an app do only if the user allows apps to
+// control the radios (otherwise its Wi-Fi settings open). done is called on the calling thread,
+// the window's, which is never held meanwhile.
+winrt::fire_and_forget WifiRadioOn(std::function<void(bool on)> done);
+winrt::fire_and_forget TurnWifiOn(std::function<void(bool on)> done);
+
 // The network this computer creates when none is available (DISC-12, WP-C.2 of the J6c plan):
 // a Wi-Fi Direct group it owns, joined by the others as an ordinary Wi-Fi network ("legacy"
 // settings), with a name and passphrase chosen by the app. No Internet connection to share, no
@@ -36,15 +44,25 @@ class WifiDirectHotspot {
  public:
   ~WifiDirectHotspot();
 
-  // Starts the group and finds its interface; the error, if either fails.
-  std::optional<std::string> Start(const std::string& ssid, const std::string& passphrase,
-                                   HotspotInterface* out);
+  // What Start gives once done: the error, if any, else the group's interface.
+  using Started = std::function<void(std::optional<std::string> error, HotspotInterface group)>;
+
+  // Starts the group and finds its interface, then calls done, on the window's thread: called
+  // from it, it waits off it, so that the window keeps drawing (up to 7 s of waits, the window
+  // frozen as long before; real test of 30 October 2026). A Stop meanwhile ends it.
+  winrt::fire_and_forget Start(std::string ssid, std::string passphrase, Started done);
   void Stop();
+
+  // Whether the group still runs: Windows stops it when the computer's Wi-Fi joins another
+  // network, and the publisher still says Started (#219; Microsoft Q&A 2285169).
+  bool Alive();
 
  private:
   winrt::fire_and_forget Accept(winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionRequest request);
 
   winrt::Windows::Devices::WiFiDirect::WiFiDirectAdvertisementPublisher publisher_{nullptr};
+  uint32_t group_index_ = 0;  // the group's adapter
+  uint64_t generation_ = 0;   // each Stop: a Start still waiting gives up
   // An Android phone joining is a request Windows asks the app to accept; without an answer, it
   // drops the phone after 2 minutes (real tests of 28 and 29 October 2026, two phones).
   // Accepted, the phone is kept while its WiFiDirectDevice lives. Accepting needs Windows to

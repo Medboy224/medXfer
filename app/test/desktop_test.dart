@@ -52,9 +52,12 @@ FakeCore _core() => FakeCore()
 
 /// The network a computer creates (WP-C.2 of the J6c plan), as WindowsHotspot gives it.
 class _PcHotspot implements Hotspot {
-  _PcHotspot({this.leavesWifi = false, this.dropsClients = false});
+  _PcHotspot({this.leavesWifi = false, this.dropsClients = false, this.wifi = true});
 
   final log = <String>[];
+
+  /// The computer's Wi-Fi (#219); turned on by [openWifiPanel].
+  bool wifi;
 
   @override
   bool get supported => true;
@@ -100,7 +103,16 @@ class _PcHotspot implements Hotspot {
   Future<int> joinedNetwork() async => 0;
 
   @override
-  Future<bool> openWifiPanel() async => false;
+  Future<bool> openWifiPanel() async {
+    log.add('wifi on');
+    return wifi = true;
+  }
+
+  @override
+  Future<bool> alive() async => true;
+
+  @override
+  Future<bool> wifiOn() async => wifi;
 }
 
 Future<AppState> _app(WidgetTester tester, FakeCore core, {Hotspot hotspot = const NoHotspot()}) async {
@@ -269,6 +281,36 @@ void main() {
     await tester.tap(find.byKey(const Key('hotspot-start')));
     await _frames(tester);
     expect(find.text("Wi-Fi de ce PC quitté le temps du partage, retrouvé à l'arrêt"), findsOneWidget);
+  });
+
+  testWidgets('#219: its Wi-Fi off, the network screen says it needs it, and the button brings the network', (tester) async {
+    final old = Connection.hotspotCheck;
+    Connection.hotspotCheck = const Duration(milliseconds: 50);
+    addTearDown(() => Connection.hotspotCheck = old);
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_show', (_) => const FakeAnswer(replies: [
+            CoreEvent('pair_show', data: {'uri': 'medxfer://v1/pair?fp=AAAA&a=192.168.137.1&p=18887&s=x&exp=1900000000', 'expires': 1900000000, 'instance': 'medXfer-7810'}),
+          ]))
+      ..on('pair_pin_show', (_) => const FakeAnswer(replies: [
+            CoreEvent('pair_pin_shown', data: {'pin': '054 461', 'expires': 1900000000, 'address': '192.168.137.1:18887', 'instance': 'medXfer-7810'}),
+          ]));
+    final h = _PcHotspot(wifi: false);
+    await _app(tester, core, hotspot: h);
+    await tester.tap(find.byKey(const Key('hotspot-start')));
+    await _frames(tester);
+    expect(find.byKey(const Key('hotspot-wifi-off')), findsOneWidget);
+    expect(find.text('Le Wi-Fi de cet appareil est désactivé'), findsOneWidget);
+    expect(h.log, isEmpty); // no try, no error
+
+    await tester.tap(find.byKey(const Key('hotspot-turn-wifi-on')));
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 150)));
+    await _frames(tester);
+    expect(h.log, ['wifi on', 'start']);
+    expect(find.byKey(const Key('hotspot-wifi-off')), findsNothing);
+    expect(find.byKey(const Key('my-qr')), findsOneWidget);
+    await tester.tap(find.byTooltip('Retour'));
+    await _frames(tester);
   });
 
   testWidgets('WP-C.5: Windows without its connection sharing says the phones will be dropped, and why', (tester) async {
