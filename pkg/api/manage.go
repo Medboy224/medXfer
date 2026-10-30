@@ -135,7 +135,7 @@ func (s *DaemonServer) handleExportBundle(rs Responder, req RequestMessage) {
 		}
 		werr := diag.WriteBundle(f, diag.BundleOptions{
 			ReportsDir: filepath.Join(s.dataDir, "reports"),
-			JournalDir: filepath.Join(s.dataDir, "journal"),
+			JournalDir: s.JournalDir(),
 			Config:     s.diagnosticConfig(),
 		})
 		if cerr := f.Close(); werr == nil {

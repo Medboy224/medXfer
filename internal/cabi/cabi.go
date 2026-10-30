@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/api"
 	"github.com/Medboy224/medXfer/pkg/core"
 )
 
@@ -20,13 +21,16 @@ import (
 const StoppedEvent = `{"event":"core_stopped"}`
 
 var lib struct {
-	mu    sync.Mutex
-	core  *core.Core
-	calls int // medxfer_start calls since the library was loaded (hot restarts, G2A-05)
+	mu          sync.Mutex
+	core        *core.Core
+	calls       int    // medxfer_start calls since the library was loaded (hot restarts, G2A-05)
+	stopJournal func() // closes the core's journal
 }
 
 // Start starts the core with config ({"data_dir", "download_dir", "device_name"}). A second
-// call returns already_started without touching it (B4).
+// call returns already_started without touching it (B4). The core's journal (DEV-11) is opened
+// first, in data_dir, where the application's diagnostic bundle reads it: without it, the
+// bundle held no journal, and a failure seen once in a real test left no trace (#169).
 func Start(config string) (out string) {
 	defer recoverJSON(&out)
 	lib.mu.Lock()
@@ -45,11 +49,13 @@ func Start(config string) (out string) {
 	if err != nil {
 		return encode(map[string]any{"ok": false, "error": err.Error()})
 	}
+	stopJournal := api.StartJournal(c.JournalDir())
 	if err := c.Start(); err != nil {
 		c.Stop()
+		stopJournal()
 		return encode(map[string]any{"ok": false, "error": err.Error()})
 	}
-	lib.core = c
+	lib.core, lib.stopJournal = c, stopJournal
 	return encode(map[string]any{"ok": true, "already_started": false, "start_calls": lib.calls, "schema": core.SchemaVersion})
 }
 
@@ -99,8 +105,8 @@ func Stop() {
 	defer func() { _ = recover() }() // B5: nothing crosses into C
 	lib.mu.Lock()
 	defer lib.mu.Unlock()
-	c := lib.core
-	lib.core = nil
+	c, stopJournal := lib.core, lib.stopJournal
+	lib.core, lib.stopJournal = nil, nil
 	if c == nil {
 		return
 	}
@@ -109,6 +115,7 @@ func Stop() {
 	go func() {
 		defer close(done)
 		defer func() { _ = recover() }() // B5, and a panic here would end the process
+		defer stopJournal()              // after the core: its last events are journaled too
 		hook()
 		c.Stop()
 	}()

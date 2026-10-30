@@ -7,7 +7,6 @@ package api
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -118,7 +117,7 @@ func (s *DaemonServer) handlePairPIN(rs Responder, req RequestMessage) {
 		case errors.Is(err, pairing.ErrRefused):
 			s.Broadcast(NewEvent("pair_failed", map[string]string{}, req.ID))
 		case err != nil:
-			s.Broadcast(NewEvent("action_error", map[string]string{"error": fmt.Sprintf("failed to pair with %s: %v", p.Target, err)}, req.ID))
+			s.Broadcast(pairFailed(p.Target, err, req.ID))
 		}
 	}()
 }

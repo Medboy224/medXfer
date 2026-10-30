@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -14,23 +13,8 @@ import (
 )
 
 // startJournal sends the log package and the daemon's events to the diagnostic journal
-// (DEV-11) and returns the function that closes it. A journal that cannot be opened only
-// costs the diagnosis: the daemon still starts.
-func startJournal() (stop func()) {
-	j, err := diag.OpenJournal(api.JournalDir(), diag.JournalBudget, nil)
-	if err != nil {
-		log.Printf("[diag] journal unavailable: %v", err)
-		return func() {}
-	}
-	log.SetOutput(io.MultiWriter(os.Stderr, j))
-	api.SetJournal(j)
-	j.Printf("start medXfer %s", diag.AppVersion)
-	return func() {
-		api.SetJournal(nil)
-		log.SetOutput(os.Stderr)
-		_ = j.Close()
-	}
-}
+// (DEV-11), next to config.json, and returns the function that closes it.
+func startJournal() (stop func()) { return api.StartJournal(api.JournalDir()) }
 
 const bundleUsage = `Usage:
   xfer bundle [-o FILE.zip]
