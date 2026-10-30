@@ -110,6 +110,9 @@ class _FakeHotspot implements Hotspot {
 
   @override
   Future<bool> alive() async => true;
+
+  @override
+  Future<bool> wifiOn() async => true;
 }
 
 /// A desktop's network (WP-C.2 of the J6c plan): it creates one, never joins one itself.
@@ -119,8 +122,11 @@ class _DesktopHotspot implements Hotspot {
   /// The network stopped by the system (#219) when false.
   bool running = true;
 
-  /// Starts that fail before one succeeds: the computer's Wi-Fi still off.
+  /// Starts that fail before one succeeds.
   int failingStarts = 0;
+
+  /// The computer's Wi-Fi; turned on by [openWifiPanel].
+  bool wifi = true;
 
   @override
   bool get supported => true;
@@ -167,10 +173,16 @@ class _DesktopHotspot implements Hotspot {
   Future<int> joinedNetwork() async => 0;
 
   @override
-  Future<bool> openWifiPanel() async => false;
+  Future<bool> openWifiPanel() async {
+    log.add('wifi on');
+    return wifi = true;
+  }
 
   @override
   Future<bool> alive() async => running;
+
+  @override
+  Future<bool> wifiOn() async => wifi;
 }
 
 List<Object?> _networkNames(FakeCore core) => [
@@ -528,7 +540,7 @@ void main() {
     expect(core.calls.where((x) => x.action == 'set_network_info').single.payload, {'enumerate': true});
   });
 
-  test('#219: the network stopped by the system, its QR code on screen: said, and a new one created', () async {
+  test('#219: the network stopped by the system, its QR code on screen: a new one, no message', () async {
     final old = Connection.hotspotCheck;
     Connection.hotspotCheck = const Duration(milliseconds: 20);
     addTearDown(() => Connection.hotspotCheck = old);
@@ -541,17 +553,16 @@ void main() {
     await c.openCode();
     await c.startHotspot();
     await Future<void>.delayed(const Duration(milliseconds: 60));
-    expect(notices, isEmpty); // still running: nothing done
-    expect(h.log, ['start']);
+    expect(h.log, ['start']); // still running: nothing done
 
     h.running = false; // the computer's Wi-Fi joined another network
     await _until(() => h.log.length >= 3 && c.myHotspot != null);
-    expect(notices.whereType<HotspotLost>().first.again, isTrue);
     expect(h.log.take(3), ['start', 'stop', 'start']);
     expect(c.myHotspot, isNotNull);
+    expect(notices, isEmpty); // the screen shows what goes on: no passing message
   });
 
-  test('#219: the new network fails while the Wi-Fi is still off: tried again, quietly, until it runs', () async {
+  test('#219: the new network fails, tried again quietly until it runs', () async {
     final old = Connection.hotspotCheck;
     Connection.hotspotCheck = const Duration(milliseconds: 20);
     addTearDown(() => Connection.hotspotCheck = old);
@@ -568,9 +579,56 @@ void main() {
       ..running = false;
     await _until(() => c.myHotspot != null && h.log.length >= 6);
     expect(h.log, ['start', 'stop', 'start', 'start', 'start', 'start']);
-    expect(c.myHotspot, isNotNull);
-    expect(notices.whereType<HotspotFailed>(), isEmpty); // the tries say nothing
-    expect(notices.whereType<HotspotLost>().single.again, isTrue);
+    expect(notices, isEmpty);
+  });
+
+  test('#219: its Wi-Fi turned off: said on its screen, no try; turned on, the network comes back', () async {
+    final old = Connection.hotspotCheck;
+    Connection.hotspotCheck = const Duration(milliseconds: 20);
+    addTearDown(() => Connection.hotspotCheck = old);
+    final core = _core()..on('set_network_info', (_) => const FakeAnswer());
+    final h = _DesktopHotspot();
+    final c = Connection(core, hotspot: h);
+    addTearDown(c.dispose);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.openCode();
+    await c.startHotspot();
+    h
+      ..wifi = false
+      ..running = false;
+    await _until(() => c.hotspotWifiOff);
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    expect(h.log, ['start', 'stop']); // no try while it is off
+    expect(c.myHotspot, isNull);
+
+    await c.turnWifiOn();
+    await _until(() => c.myHotspot != null);
+    expect(h.log, ['start', 'stop', 'wifi on', 'start']);
+    expect(c.hotspotWifiOff, isFalse);
+    expect(notices, isEmpty);
+  });
+
+  test('#219: created with its Wi-Fi off: no error, it waits for the Wi-Fi', () async {
+    final old = Connection.hotspotCheck;
+    Connection.hotspotCheck = const Duration(milliseconds: 20);
+    addTearDown(() => Connection.hotspotCheck = old);
+    final core = _core()..on('set_network_info', (_) => const FakeAnswer());
+    final h = _DesktopHotspot()..wifi = false;
+    final c = Connection(core, hotspot: h);
+    addTearDown(c.dispose);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.startHotspot();
+    expect((c.myHotspot, c.hotspotWifiOff), (null, true));
+    expect(h.log, isEmpty);
+    h.wifi = true; // turned on in the system's settings
+    await _until(() => c.myHotspot != null);
+    expect(h.log, ['start']);
+    expect(notices, isEmpty);
+
+    await c.stopHotspot();
+    expect(c.hotspotWifiOff, isFalse);
   });
 
   test('#219: the network stopped during a session: said, none created behind it', () async {
@@ -589,7 +647,7 @@ void main() {
     h.running = false;
     await _until(() => notices.isNotEmpty && c.myHotspot == null);
     await Future<void>.delayed(const Duration(milliseconds: 60)); // no new one behind it
-    expect(notices.whereType<HotspotLost>().single.again, isFalse);
+    expect(notices.whereType<HotspotLost>(), hasLength(1));
     expect(h.log, ['start', 'stop']);
     expect(c.myHotspot, isNull);
   });

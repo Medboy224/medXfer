@@ -39,8 +39,9 @@ class _HotspotScreenState extends State<HotspotScreen> {
   Future<void> _start() async {
     await _c.startHotspot();
     if (!mounted) return;
-    // Refused or failed: the notice says why, the Connect screen is back.
-    if (_c.myHotspot == null) {
+    // Refused or failed: the notice says why, the Connect screen is back. Waiting for its Wi-Fi,
+    // the screen says so and stays.
+    if (_c.myHotspot == null && !_c.hotspotWifiOff) {
       Navigator.of(context).pop();
       return;
     }
@@ -85,6 +86,35 @@ class _HotspotScreenState extends State<HotspotScreen> {
         builder: (context, _) {
           final h = _c.myHotspot;
           final pin = _c.pin;
+          // Its Wi-Fi off: said here, not in a passing message; the network comes once it is on.
+          if (h == null && _c.hotspotWifiOff) {
+            return Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 440),
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    key: const Key('hotspot-wifi-off'),
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.wifi_off_rounded, size: 48, color: c.muted),
+                      const SizedBox(height: 16),
+                      Text(l.hotspotWifiOffTitle, textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 8),
+                      Text(l.hotspotWifiOffBody, textAlign: TextAlign.center, style: TextStyle(color: c.muted, height: 1.4)),
+                      const SizedBox(height: 20),
+                      FilledButton.icon(
+                        key: const Key('hotspot-turn-wifi-on'),
+                        onPressed: () => unawaited(_c.turnWifiOn()),
+                        icon: const Icon(Icons.wifi_rounded),
+                        label: Text(l.wifiTurnOn),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }
           if (h == null || _c.qrData == null || pin == null) {
             return Center(
               child: Column(

@@ -64,6 +64,14 @@ bool FlutterWindow::OnCreate() {
       result->Success();
     } else if (call.method_name() == "alive") {
       result->Success(flutter::EncodableValue(hotspot_.Alive()));
+    } else if (call.method_name() == "wifiOn" || call.method_name() == "turnWifiOn") {
+      std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> reply = std::move(result);
+      auto answer = [reply](bool on) { reply->Success(flutter::EncodableValue(on)); };
+      if (call.method_name() == "wifiOn") {
+        WifiRadioOn(answer);
+      } else {
+        TurnWifiOn(answer);
+      }
     } else {
       result->NotImplemented();
     }

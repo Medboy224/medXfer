@@ -26,6 +26,13 @@ struct HotspotInterface {
   std::string sharing_address;
 };
 
+// This computer's Wi-Fi radio (Windows.Devices.Radios), which the group needs (#219): whether
+// it is on, and turning it on, which Windows lets an app do only if the user allows apps to
+// control the radios (otherwise its Wi-Fi settings open). done is called on the calling thread,
+// the window's, which is never held meanwhile.
+winrt::fire_and_forget WifiRadioOn(std::function<void(bool on)> done);
+winrt::fire_and_forget TurnWifiOn(std::function<void(bool on)> done);
+
 // The network this computer creates when none is available (DISC-12, WP-C.2 of the J6c plan):
 // a Wi-Fi Direct group it owns, joined by the others as an ordinary Wi-Fi network ("legacy"
 // settings), with a name and passphrase chosen by the app. No Internet connection to share, no

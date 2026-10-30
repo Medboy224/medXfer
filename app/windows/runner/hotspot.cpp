@@ -5,12 +5,15 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
+#include <shellapi.h>
 
 #include <chrono>
 #include <cstdio>
 #include <vector>
 
 #include <winrt/Windows.Devices.Enumeration.h>
+#include <winrt/Windows.Devices.Radios.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Security.Credentials.h>
 
@@ -20,6 +23,10 @@ using winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionListener;
 using winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionRequest;
 using winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionRequestedEventArgs;
 using winrt::Windows::Devices::WiFiDirect::WiFiDirectDevice;
+using winrt::Windows::Devices::Radios::Radio;
+using winrt::Windows::Devices::Radios::RadioAccessStatus;
+using winrt::Windows::Devices::Radios::RadioKind;
+using winrt::Windows::Devices::Radios::RadioState;
 using winrt::Windows::Security::Credentials::PasswordCredential;
 
 namespace {
@@ -95,7 +102,44 @@ std::string HolderOf(const std::string& address, uint32_t group_index) {
   return holder;
 }
 
+// The Wi-Fi radio; none when the computer has no Wi-Fi.
+winrt::Windows::Foundation::IAsyncOperation<Radio> WifiRadio() {
+  auto radios = co_await Radio::GetRadiosAsync();
+  for (const auto& radio : radios) {
+    if (radio.Kind() == RadioKind::WiFi) co_return radio;
+  }
+  co_return nullptr;
+}
+
 }  // namespace
+
+winrt::fire_and_forget WifiRadioOn(std::function<void(bool on)> done) {
+  winrt::apartment_context ui;
+  bool on = true;  // no radio seen: nothing to ask the user for
+  try {
+    if (Radio radio = co_await WifiRadio()) on = radio.State() == RadioState::On;
+  } catch (const winrt::hresult_error&) {
+  }
+  co_await ui;
+  done(on);
+}
+
+winrt::fire_and_forget TurnWifiOn(std::function<void(bool on)> done) {
+  winrt::apartment_context ui;
+  bool on = false;
+  try {
+    if (co_await Radio::RequestAccessAsync() == RadioAccessStatus::Allowed) {
+      if (Radio radio = co_await WifiRadio()) {
+        on = co_await radio.SetStateAsync(RadioState::On) == RadioAccessStatus::Allowed;
+      }
+    }
+  } catch (const winrt::hresult_error&) {
+  }
+  co_await ui;
+  // Apps not allowed to control the radios: the user turns it on in the settings.
+  if (!on) ShellExecuteW(nullptr, L"open", L"ms-settings:network-wifi", nullptr, nullptr, SW_SHOWNORMAL);
+  done(on);
+}
 
 WifiDirectHotspot::~WifiDirectHotspot() { Stop(); }
 

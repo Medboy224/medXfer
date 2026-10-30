@@ -96,10 +96,14 @@ abstract interface class Hotspot {
   /// when the network, lost, is joined again (Android, J6c).
   Future<int> joinedNetwork();
 
-  /// The system's Wi-Fi panel, for the user to turn Wi-Fi on before [join] (Android: an app
-  /// cannot since Android 10, and joins with Wi-Fi off are refused, #218). Whether Wi-Fi is on
-  /// once it closes; false where there is no such panel.
+  /// Turns this device's Wi-Fi on, or lets the user do it: Android before [join], by the
+  /// system's panel (an app cannot since Android 10, and joins with Wi-Fi off are refused, #218);
+  /// a desktop before [start] (#219). Whether Wi-Fi is on afterwards.
   Future<bool> openWifiPanel();
+
+  /// Whether the Wi-Fi [start] needs is on: a desktop's network needs it (#219); Android's local
+  /// hotspot starts with Wi-Fi off.
+  Future<bool> wifiOn();
 
   /// Whether the access point [start] created still runs. The system may stop it without a
   /// word to the app: Windows when the computer's Wi-Fi joins another network, Android its local
@@ -145,6 +149,9 @@ class AndroidHotspot implements Hotspot {
 
   @override
   Future<bool> alive() async => await platformChannel.invokeMethod<bool>('hotspotAlive') ?? false;
+
+  @override
+  Future<bool> wifiOn() async => true; // the local hotspot starts with Wi-Fi off
 }
 
 /// No hotspot from the app (the user joins a network in the system's settings).
@@ -183,6 +190,9 @@ class NoHotspot implements Hotspot {
 
   @override
   Future<bool> alive() async => false;
+
+  @override
+  Future<bool> wifiOn() async => true;
 }
 
 /// What a desktop's network looks like: a name that says nothing of the device (DISC-07), and a
@@ -267,11 +277,15 @@ class WindowsHotspot implements Hotspot {
   @override
   Future<int> joinedNetwork() async => 0;
 
+  /// Turned on through Windows' radios, when the user lets apps do it; else its settings open.
   @override
-  Future<bool> openWifiPanel() async => false;
+  Future<bool> openWifiPanel() async => await channel.invokeMethod<bool>('turnWifiOn') ?? false;
 
   @override
   Future<bool> alive() async => await channel.invokeMethod<bool>('alive') ?? false;
+
+  @override
+  Future<bool> wifiOn() async => await channel.invokeMethod<bool>('wifiOn') ?? true;
 }
 
 /// Runs a program: Process.run, or a fake in the tests.
@@ -363,7 +377,7 @@ class LinuxHotspot implements Hotspot {
   Future<int> joinedNetwork() async => 0;
 
   @override
-  Future<bool> openWifiPanel() async => false;
+  Future<bool> openWifiPanel() async => (await _nmcli(['radio', 'wifi', 'on'])).exitCode == 0;
 
   /// The connection still active: NetworkManager gives the Wi-Fi device back to another network
   /// the user picks, ending it.
@@ -372,6 +386,9 @@ class LinuxHotspot implements Hotspot {
     final active = await _nmcli(['-t', '-f', 'NAME', 'connection', 'show', '--active']);
     return '${active.stdout}'.split('\n').contains(connection);
   }
+
+  @override
+  Future<bool> wifiOn() async => '${(await _nmcli(['radio', 'wifi'])).stdout}'.trim() != 'disabled';
 }
 
 Hotspot systemHotspot() {
