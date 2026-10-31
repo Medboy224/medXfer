@@ -84,6 +84,9 @@ type Found struct {
 	Role     string
 	Via      string   // "mdns" or "beacon"
 	Tags     []string // recognition tags (DISC-11)
+	// Paths are the device's addresses, one per local network it was seen on (a cable and a
+	// Wi-Fi: WP-E.1 of the cable plan), cable first; IP is the first one's. Set by browseAll.
+	Paths []Path
 }
 
 // Discoverer announces this device and finds the others (D5 of the J6a plan, D9 of J5: one
@@ -97,9 +100,10 @@ type Discoverer interface {
 
 // browseAll runs every discoverer at once and merges what they see (#132):
 //   - this device is left out, by the names it announces and by its addresses;
-//   - one entry per device (instance name), seen under several addresses when it has several
-//     networks (Wi-Fi and its own hotspot): the address reachable from one of our subnets is
-//     kept, mDNS before the beacon.
+//   - one entry per device (instance name), with one path per local network it was seen on
+//     (merge): two PCs on a cable and on the same Wi-Fi see each other by both, and the
+//     address no longer depends on which answer came last (WP-E.0: it changed from one scan
+//     to the next, 110 MB/s or 2.4).
 func browseAll(ctx context.Context, ds []Discoverer, timeout time.Duration) []Found {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -115,7 +119,7 @@ func browseAll(ctx context.Context, ds []Discoverer, timeout time.Duration) []Fo
 		}(d)
 	}
 	wg.Wait()
-	byName := map[string]Found{}
+	byName := map[string][]Found{}
 	var order []string
 	known := len(localNets()) > 0
 	for _, f := range all {
@@ -128,42 +132,72 @@ func browseAll(ctx context.Context, ds []Discoverer, timeout time.Duration) []Fo
 		if known && f.Via == "mdns" && !IsSubnetReachable(f.IP.String()) {
 			continue
 		}
-		old, ok := byName[f.Instance]
-		if !ok {
+		if _, ok := byName[f.Instance]; !ok {
 			order = append(order, f.Instance)
-			byName[f.Instance] = f
-			continue
 		}
-		// The tags of every sighting count: an mDNS answer may lag behind the beacon after the
-		// tags changed (a trust just established, DISC-11).
-		tags := cleanTags(dedupTags(append(append([]string(nil), old.Tags...), f.Tags...)))
-		if better(f, old) {
-			old = f
-		}
-		old.Tags = tags
-		byName[f.Instance] = old
+		byName[f.Instance] = append(byName[f.Instance], f)
 	}
+	pf := newPathFinder()
 	out := make([]Found, 0, len(order))
 	for _, name := range order {
-		out = append(out, byName[name])
+		out = append(out, merge(byName[name], pf))
 	}
 	return out
 }
 
+// merge makes one entry of the sightings of a device:
+//   - the tags of every sighting: an mDNS answer may lag behind the beacon after the tags
+//     changed (a trust just established, DISC-11);
+//   - one path per local network the device was seen on, the best sighting of each (better),
+//     cable first (sortPaths). An address outside our subnets (a beacon's) is a path only when
+//     there is no other.
+func merge(seen []Found, pf *pathFinder) Found {
+	var tags []string
+	best := map[string]Found{} // by local interface; "" outside our subnets
+	for _, f := range seen {
+		tags = append(tags, f.Tags...)
+		key := pf.iface(f.IP)
+		if old, ok := best[key]; !ok || better(f, old) {
+			best[key] = f
+		}
+	}
+	byIP := map[string]Found{}
+	var paths []Path
+	for key, f := range best {
+		if key == "" && len(best) > 1 {
+			continue
+		}
+		p := Path{IP: f.IP.String(), Kind: pf.kind(key)}
+		paths = append(paths, p)
+		byIP[p.IP] = f
+	}
+	sortPaths(paths)
+	f := byIP[paths[0].IP]
+	if len(seen) > 1 {
+		f.Tags = cleanTags(dedupTags(tags))
+	}
+	f.Paths = paths
+	return f
+}
+
 // better reports whether a is a better way to reach a device than b: an address in one of our
-// subnets first, then mDNS before the beacon.
+// subnets first, then mDNS before the beacon, then the lower address (the same choice whatever
+// the order the answers came in).
 func better(a, b Found) bool {
 	ra, rb := IsSubnetReachable(a.IP.String()), IsSubnetReachable(b.IP.String())
 	if ra != rb {
 		return ra
 	}
-	return a.Via == "mdns" && b.Via != "mdns"
+	if (a.Via == "mdns") != (b.Via == "mdns") {
+		return a.Via == "mdns"
+	}
+	return lessIP(a.IP.String(), b.IP.String())
 }
 
 // peerOf is a found device in the shape the callers know.
 func peerOf(f Found) Peer {
 	p := Peer{ID: f.Instance + "-" + itoa(f.Port), DeviceName: f.Instance, HostIP: f.IP.String(), Port: f.Port,
-		Version: AppVersion, Role: f.Role, Tags: f.Tags}
+		Version: AppVersion, Role: f.Role, Tags: f.Tags, Paths: f.Paths}
 	if f.Role == "sender" { // a transfer waits; what it is travels only in the secure channel
 		p.Offer = &TransferOffer{FileName: PrivateTransfer}
 	}

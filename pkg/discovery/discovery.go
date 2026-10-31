@@ -62,6 +62,10 @@ type Peer struct {
 	// Tags are the device's recognition tags (DISC-11): a device of mutual trust recognizes it
 	// by them, and shows the name it recorded. They name no one.
 	Tags []string `json:"tags,omitempty"`
+	// Paths are the ways to reach the device, one per local network (a cable and a Wi-Fi,
+	// DISC-13), cable first; HostIP is the first one's. The interface lets the user choose
+	// (decision E2 of the cable plan).
+	Paths []Path `json:"paths,omitempty"`
 }
 
 // IsLocalNetworkIP checks if an IP belongs to the local machine

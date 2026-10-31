@@ -525,7 +525,8 @@ func interfaceAddresses() []lanAddress {
 				continue
 			}
 			ip := ipn.IP.To4()
-			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			// 169.254 is kept: on a cable between two PCs, it is the only address (DISC-13).
+			if ip == nil || ip.IsLoopback() {
 				continue
 			}
 			out = append(out, lanAddress{iface: ifc.Name, ip: ip.String()})

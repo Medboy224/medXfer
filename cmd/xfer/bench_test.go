@@ -61,11 +61,12 @@ func TestParseSize(t *testing.T) {
 	}
 }
 
-// The addresses shown to the other device are reachable ones: IPv4, no loopback, no 169.254.
+// The addresses shown to the other device are reachable ones: IPv4, no loopback. 169.254 is
+// one: the only address on a cable between two PCs (DISC-13).
 func TestLANAddresses(t *testing.T) {
 	for _, a := range lanAddresses() {
 		ip := net.ParseIP(a.ip)
-		if ip == nil || ip.To4() == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || a.iface == "" {
+		if ip == nil || ip.To4() == nil || ip.IsLoopback() || a.iface == "" {
 			t.Errorf("unsuitable address %+v", a)
 		}
 	}
