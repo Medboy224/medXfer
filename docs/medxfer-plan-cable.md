@@ -234,6 +234,21 @@ Le 83 MB/s du 30 octobre (Zorin → PC) venait d'une mesure unique : répétée,
 
 Les deux limites sont le disque de Zorin (2011, plein à 98 %). L'échelle, données en mémoire, donne 101,7 MB/s de Zorin vers le PC : le câble et medXfer vont plus vite que ce disque.
 
+**PC Windows ↔ second PC Windows** (`DESKTOP-OSRR12L`, paquet portable construit depuis `main`, 1er novembre) :
+- **Configuration** : réglages par défaut. Le second PC prend seul son adresse `169.254.79.36` ; les deux aussi sur le même Wi-Fi. À son premier lancement, le pare-feu a été autorisé sur les réseaux publics, où Windows classe le câble.
+- **Découverte** : le second PC vu par ses deux chemins, câble d'abord, 3 balayages sur 3.
+- **Connexion** : appairage par « Câble » et PIN, confiance établie. Le second PC est enregistré à `169.254.79.36` : la session passe par le câble.
+- **Transferts de 1 Gio**, sans reprise, empreinte identique à celle de l'original pour le fichier reçu :
+
+| Sens | Durée | Débit moyen (pic) | Limite |
+|---|---|---|---|
+| PC → second PC | 10,1 s | **101,3 MB/s** (120) | le réseau |
+| Second PC → PC | 9,6 s | **106,1 MB/s** (110,5) | le réseau (`net_wait`, confiance haute) |
+
+Entre deux PC récents, medXfer tient 91 à 96 % des 110 MB/s bruts du câble : la limite est le câble lui-même, comme le prévoyait WP-E.5.
+
+**Rapport du lot** : [report-cable.md](report-cable.md).
+
 ## 3. Hors périmètre
 
 - Les autres câbles : USB (partage de connexion d'un téléphone), Thunderbolt et USB-C entre deux PC.
