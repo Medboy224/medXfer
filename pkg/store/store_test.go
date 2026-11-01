@@ -352,7 +352,8 @@ type memFS struct {
 type memFile struct {
 	fs       *memFS
 	vol, dur []byte
-	failSync bool // Sync fails, as on a disk unplugged
+	failSync bool          // Sync fails, as on a disk unplugged
+	gate     chan struct{} // Sync waits for it, as a slow disk
 }
 
 func (m *memFS) open(_ *os.Root, name string, flag int) (handle, error) {
@@ -413,6 +414,12 @@ func (f *memFile) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *memFile) Sync() error {
+	f.fs.mu.Lock()
+	gate := f.gate
+	f.fs.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
 	f.fs.mu.Lock()
 	defer f.fs.mu.Unlock()
 	if f.failSync {
@@ -525,14 +532,105 @@ func TestGroupCommit(t *testing.T) {
 		t.Fatal("committed before CommitBytes")
 	}
 	_ = writeChunk(f, 2, chunkOf(data, 2), sums[2])
+	_ = f.Settle() // the commit runs in the background (WP-E.5)
 	if journalLen() != headerLen+3*recordLen {
 		t.Fatalf("not committed at CommitBytes: journal of %d bytes", journalLen())
 	}
 	f.p.CommitInterval = time.Millisecond
 	time.Sleep(5 * time.Millisecond) // the clock may not move between two close calls (Windows)
 	_ = writeChunk(f, 3, chunkOf(data, 3), sums[3])
+	_ = f.Settle()
 	if journalLen() != headerLen+4*recordLen {
 		t.Fatal("not committed after CommitInterval")
+	}
+}
+
+// WP-E.5 of the cable plan: the commit runs in the background, so the writers go on while the
+// disk syncs (in the writer, receiving and syncing took turns: 40 MB/s on a disk that writes
+// 64). When the next commit is due and the first still syncs, the writer waits for the disk.
+func TestCommitDoesNotHoldTheWriter(t *testing.T) {
+	root, _ := openRoot(t)
+	m := &memFS{files: map[string]*memFile{}}
+	useMemFS(t, m)
+	data, sums := content(t, 8*testChunk)
+	p := params(len(data))
+	p.CommitBytes, p.CommitInterval = 2*testChunk, time.Hour
+	f, err := Open(root, "f.bin", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := make(chan struct{})
+	m.mu.Lock()
+	m.files["f.bin"+PartSuffix].gate = gate // a slow disk: Sync waits
+	m.mu.Unlock()
+	for i := range 2 { // the commit of chunks 0 and 1 starts, and waits for the disk
+		if err := writeChunk(f, uint32(i), chunkOf(data, i), sums[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for taken := false; !taken; { // until the commit has taken its chunks
+		f.mu.Lock()
+		taken = f.pendingBytes == 0
+		f.mu.Unlock()
+		time.Sleep(time.Millisecond)
+	}
+	if err := writeChunk(f, 2, chunkOf(data, 2), sums[2]); err != nil { // the writer goes on
+		t.Fatal(err)
+	}
+	behind := make(chan error, 1)
+	go func() { behind <- writeChunk(f, 3, chunkOf(data, 3), sums[3]) }() // the next commit due, the first still syncing
+	select {
+	case <-behind:
+		t.Fatal("the writer did not wait for a disk a commit behind")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(gate)
+	if err := <-behind; err != nil {
+		t.Fatal(err)
+	}
+	for i := 4; i < 8; i++ {
+		if err := writeChunk(f, uint32(i), chunkOf(data, i), sums[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Settle(); err != nil {
+		t.Fatal(err)
+	}
+	j := m.files["f.bin"+JournalSuffix]
+	if got := journalChunks(j.dur); len(got) < 4 {
+		t.Fatalf("journal %v after the commits", got)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The error of a commit run in the background is not lost: the next call returns it, and the
+// writer stops there (a disk unplugged, a disk full: STO-07).
+func TestBackgroundCommitErrorIsReported(t *testing.T) {
+	root, _ := openRoot(t)
+	m := &memFS{files: map[string]*memFile{}}
+	useMemFS(t, m)
+	data, sums := content(t, 4*testChunk)
+	p := params(len(data))
+	p.CommitBytes, p.CommitInterval = testChunk, time.Hour
+	f, err := Open(root, "f.bin", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	m.files["f.bin"+PartSuffix].failSync = true
+	m.mu.Unlock()
+	if err := writeChunk(f, 0, chunkOf(data, 0), sums[0]); err != nil {
+		t.Fatalf("the first commit runs in the background: %v", err)
+	}
+	if err := f.Settle(); err == nil {
+		t.Fatal("the background commit's error is lost")
+	}
+	// Still failing: the next calls report it again, by the write or by Settle.
+	err = errors.Join(writeChunk(f, 1, chunkOf(data, 1), sums[1]), writeChunk(f, 2, chunkOf(data, 2), sums[2]), f.Settle())
+	if err == nil {
+		t.Fatal("a failing disk is never reported")
 	}
 }
 

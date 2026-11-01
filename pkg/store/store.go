@@ -132,6 +132,11 @@ type File struct {
 	closed       bool
 
 	commitMu sync.Mutex // one commit at a time: the journal stays in order
+
+	// The group commit runs in the background (WP-E.5 of the cable plan): bg is closed when
+	// the running one ends (nil: none runs), bgErr is its error, for the next call (mu).
+	bg    chan struct{}
+	bgErr error
 }
 
 type record struct {
@@ -414,16 +419,71 @@ func (f *File) WriteChunk(i uint32, data []byte, sum [32]byte) error {
 	return nil
 }
 
-// CommitIfDue commits once 64 MiB or 2 s are pending (STO-04). It is apart from WriteChunk
-// so that a caller measures the write and the fsync as two stages (DEV-03).
+// CommitIfDue starts a commit once 64 MiB or 2 s are pending (STO-04), in the background:
+// the writers go on while the disk syncs. Run in the writer, the commit made receiving and
+// syncing take turns: on a hard disk the transfer got 40 MB/s where the disk writes 64 (the
+// disk idle while the network filled the cache, the network stopped while the disk synced:
+// WP-E.5 of the cable plan). One commit syncs while the next one fills; when that one is due
+// and the first still syncs, the writer waits for it: the disk sets the pace, and a power loss
+// costs at most twice CommitBytes to resend. The error of a background commit is returned by
+// the next call. It is apart from WriteChunk so
+// that a caller measures the write and the fsync as two stages (DEV-03).
 func (f *File) CommitIfDue() error {
 	f.mu.Lock()
-	due := len(f.pending) > 0 && (f.pendingBytes >= f.p.CommitBytes || time.Since(f.lastCommit) >= f.p.CommitInterval)
-	f.mu.Unlock()
-	if due {
-		return f.Commit()
+	if err := f.bgErr; err != nil {
+		f.bgErr = nil
+		f.mu.Unlock()
+		return err
 	}
+	due := len(f.pending) > 0 && (f.pendingBytes >= f.p.CommitBytes || time.Since(f.lastCommit) >= f.p.CommitInterval)
+	if !due {
+		f.mu.Unlock()
+		return nil
+	}
+	if running := f.bg; running != nil {
+		f.mu.Unlock()
+		<-running // the next commit is due while one still syncs: the disk is behind, the writer waits
+		f.mu.Lock()
+		if err := f.bgErr; err != nil {
+			f.bgErr = nil
+			f.mu.Unlock()
+			return err
+		}
+		if f.bg != nil { // another writer started it meanwhile
+			f.mu.Unlock()
+			return nil
+		}
+	}
+	done := make(chan struct{})
+	f.bg = done
+	f.mu.Unlock()
+	go func() {
+		err := f.Commit()
+		f.mu.Lock()
+		if err != nil && f.bgErr == nil {
+			f.bgErr = err
+		}
+		f.bg = nil
+		f.mu.Unlock()
+		close(done)
+	}()
 	return nil
+}
+
+// Settle waits for the background commit, if one runs, and returns its error: what is
+// committed is then in the journal.
+func (f *File) Settle() error {
+	f.mu.Lock()
+	running := f.bg
+	f.mu.Unlock()
+	if running != nil {
+		<-running
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	err := f.bgErr
+	f.bgErr = nil
+	return err
 }
 
 // Commit makes the chunks written so far durable and notes them in the journal, in that
@@ -505,7 +565,10 @@ func (f *File) Close() error {
 	if f.markClosed() {
 		return nil
 	}
-	err := f.Commit()
+	err := f.Settle()
+	if cerr := f.Commit(); err == nil {
+		err = cerr
+	}
 	if err == nil && f.journal == nil { // nothing to commit (an empty file): resumable all the same
 		f.commitMu.Lock()
 		err = f.ensureJournal()
@@ -571,6 +634,7 @@ func (f *File) Finalize() error {
 	if f.markClosed() {
 		return fmt.Errorf("store: %s is closed", f.name)
 	}
+	_ = f.Settle() // its commit no longer matters: the data is synced below, the journal dropped
 	// One fsync: the data. The journal is not needed to finish; it is written only if the
 	// rename fails, so that the file stays resumable (its data is durable: invariant J holds).
 	if !f.p.NoSync {
