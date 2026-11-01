@@ -25,7 +25,7 @@
   "pasteLinkTitle": "Le lien de l'autre appareil",
   "pasteLinkHint": "Il commence par medxfer://",
   "typePin": "Taper un PIN",
-  "nearbyTitle": "Déjà sur le même Wi-Fi",
+  "nearbyTitle": "Déjà sur le même réseau",
   "nearbyEmpty": "Aucun appareil trouvé. Sur l'autre appareil, ouvrez « Connecter ».",
   "searching": "Recherche…",
   "refresh": "Actualiser",
