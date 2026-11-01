@@ -221,6 +221,19 @@ Le 83 MB/s du 30 octobre (Zorin → PC) venait d'une mesure unique : répétée,
 - Linux ↔ Linux : pas de second PC Linux ; couvert par les tests automatiques.
 - Rapport du lot.
 
+**PC Windows ↔ Zorin** (1er novembre, application construite depuis `main` avec #239, des deux côtés) :
+- **Configuration** : Zorin avec les réglages par défaut de NetworkManager (`ipv4.method auto` : l'utilisateur avait réglé son profil en `link-local` à la main, remis par défaut le 1er novembre). Le PC sans partage de connexion, sa carte en automatique. Les deux PC aussi sur le même Wi-Fi (configuration 4).
+- **Adresse** : l'application de Zorin donne au câble son adresse seule, 65 s après son lancement (`169.254.57.98`).
+- **Connexion** : la colonne « Connexion » du PC offre « Câble » et « Wi-Fi ». Appairage par « Câble » et le PIN de Zorin, confiance établie. Zorin est enregistré à `169.254.57.98` : la session passe par le câble.
+- **Transferts de 1 Gio**, sans reprise, empreintes identiques à celles des originaux :
+
+| Sens | Durée | Débit moyen (pic) | Limite, d'après les rapports des deux côtés |
+|---|---|---|---|
+| PC → Zorin | 18,6 s | **55,2 MB/s** (80) | `fsync` sur le disque dur de Zorin, qui écrit 64 MB/s (WP-E.5 : 57,7 à l'échelle) |
+| Zorin → PC | 14,6 s | **70,1 MB/s** (91,5) | la lecture du fichier sur le disque dur de Zorin (`disk_read`, confiance haute) : 1 Gio hors de sa mémoire |
+
+Les deux limites sont le disque de Zorin (2011, plein à 98 %). L'échelle, données en mémoire, donne 101,7 MB/s de Zorin vers le PC : le câble et medXfer vont plus vite que ce disque.
+
 ## 3. Hors périmètre
 
 - Les autres câbles : USB (partage de connexion d'un téléphone), Thunderbolt et USB-C entre deux PC.
