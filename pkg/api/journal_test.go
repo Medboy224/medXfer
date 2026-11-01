@@ -52,7 +52,14 @@ func TestPairFailureCauseInJournal(t *testing.T) {
 	target := ln.Addr().String()
 	ln.Close() // nothing answers there
 	n.Request("pair_pin", map[string]any{"target": target, "pin": "123456"})
-	n.WaitEvent("action_error", 0)
+	var failed struct{ Code, Target string }
+	if err := n.WaitEvent("action_error", 0).Decode(&failed); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing answered there: the application says so in its own words (real test of 1 November).
+	if failed.Code != "unreachable" || failed.Target != target {
+		t.Fatalf("action_error code %q, target %q; want unreachable, %s", failed.Code, failed.Target, target)
+	}
 	stop()
 	if text := readJournal(t, dir); !strings.Contains(text, "log WARN failed to pair with "+target+": ") {
 		t.Fatalf("the journal lacks the failure's cause: %q", text)

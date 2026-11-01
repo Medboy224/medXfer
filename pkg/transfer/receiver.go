@@ -35,6 +35,20 @@ const (
 
 var ErrTransferFailed = errors.New("transfer: no data connection could be kept to the sender")
 
+// ErrSenderUnreachable: no data connection to the sender ever opened in this run, every one
+// failing at the dial (no answer, refused, no route). Said apart from a sender lost on the way:
+// the sender's firewall is the likely cause, and its user can act (real test of 1 November: a
+// PC whose firewall let medXfer in on its cable only, not on its Wi-Fi, could not send). It is
+// still an ErrTransferFailed.
+var ErrSenderUnreachable = fmt.Errorf("%w: the sender never answered on its data port", ErrTransferFailed)
+
+// DialFailed reports whether err is a connection that never opened: the dial timed out, was
+// refused or found no route. A peer that answered, then refused or failed, is not.
+func DialFailed(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
+}
+
 // Small files (WP-4.11, bench-results/README.md). The files received in one go in the
 // transfer's own folder are made durable together (store.Batch): the batch is flushed at 256
 // files or 64 MiB, 2 s after its first file, or once nothing else is left to receive
@@ -1214,6 +1228,9 @@ func (ru *run) connect(ctx context.Context, addr string) (net.Conn, error) {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+	}
+	if !ru.reached.Load() && DialFailed(lastErr) {
+		return nil, fmt.Errorf("%w: %v", ErrSenderUnreachable, lastErr)
 	}
 	return nil, fmt.Errorf("%w: %v", ErrTransferFailed, lastErr)
 }

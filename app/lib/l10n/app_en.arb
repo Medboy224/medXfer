@@ -323,5 +323,12 @@
   "cableGiven": "Cable: medXfer gave the card {card} an address, which the system had left without one.",
   "@cableGiven": {"placeholders": {"card": {"type": "String"}}},
   "cableSharingLeft": "The card “{card}” keeps the address 192.168.137.1 of a connection sharing: a PC linked by cable will not reach this one. If that sharing is stopped, set the card back to automatic: Settings › Network & internet › Ethernet › IP assignment.",
-  "@cableSharingLeft": {"placeholders": {"card": {"type": "String"}}}
+  "@cableSharingLeft": {"placeholders": {"card": {"type": "String"}}},
+  "connectingLabel": "Connecting…",
+  "noticePeerUnreachable": "{device} does not answer on this network. Its firewall may be keeping medXfer out: on {device}, allow medXfer for this type of network (private or public).",
+  "@noticePeerUnreachable": {"placeholders": {"device": {"type": "String"}}},
+  "noticeSenderUnreachable": "Could not reach {device} to receive: its firewall may be keeping medXfer out on this network. On {device}, allow medXfer for this type of network (private or public).",
+  "@noticeSenderUnreachable": {"placeholders": {"device": {"type": "String"}}},
+  "noticeThisUnreachable": "{device} could not connect to this device to receive: this device's firewall may be keeping medXfer out on this network. Allow medXfer for this type of network (private or public).",
+  "@noticeThisUnreachable": {"placeholders": {"device": {"type": "String"}}}
 }

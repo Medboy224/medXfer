@@ -573,12 +573,20 @@ func (s *DaemonServer) transferFailed(offer protocol.Offer, err error) {
 	s.mu.RLock()
 	sess := s.activeSession
 	s.mu.RUnlock()
-	if sess != nil {
-		_ = sess.Send(session.Message{Type: session.TypeFailed, TransferID: offer.TransferID, Error: err.Error()})
+	// The receiver never reached the sender: both are told, the sender's firewall being the
+	// likely cause (its user can act; real test of 1 November).
+	code := ""
+	if errors.Is(err, transfer.ErrSenderUnreachable) {
+		code = codeSenderUnreachable
 	}
-	s.Broadcast(NewEvent("transfer_failed", map[string]string{
-		"transfer_id": offer.TransferID, "file": offerName(offer), "error": err.Error(), "by": "self",
-	}))
+	if sess != nil {
+		_ = sess.Send(session.Message{Type: session.TypeFailed, TransferID: offer.TransferID, Error: err.Error(), Code: code})
+	}
+	data := map[string]string{"transfer_id": offer.TransferID, "file": offerName(offer), "error": err.Error(), "by": "self"}
+	if code != "" {
+		data["code"] = code
+	}
+	s.Broadcast(NewEvent("transfer_failed", data))
 }
 
 // peerFailed ends this side of a transfer that failed on the peer's.
@@ -598,7 +606,11 @@ func (s *DaemonServer) peerFailed(msg session.Message) {
 	s.activeTransferID = ""
 	s.isPaused = false
 	s.mu.Unlock()
-	s.Broadcast(NewEvent("transfer_failed", map[string]string{"transfer_id": id, "error": msg.Error, "by": "peer"}))
+	data := map[string]string{"transfer_id": id, "error": msg.Error, "by": "peer"}
+	if msg.Code != "" {
+		data["code"] = msg.Code
+	}
+	s.Broadcast(NewEvent("transfer_failed", data))
 }
 
 // peerCompleted ends this side of a transfer the receiver has finished.

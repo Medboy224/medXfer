@@ -446,6 +446,7 @@ Messages `CONTROL` (champ `type`) : `hello`, `pair_secret`, `pair_pake`, `pair_c
 | `XFER-05` | Une connexion de données coupée est rétablie avec un délai croissant (50 ms jusqu'à 1 s, 8 tentatives). Si l'émetteur a déjà répondu sur une connexion de données de ce transfert, le récepteur réessaie ensuite toutes les 5 s pendant au plus 2 min (paramètres, règle R4 ; sous le quota de `LIM-01` pour une adresse connue) : le réseau de l'émetteur peut revenir (WP-B.8). Un émetteur jamais joint est abandonné après les 8 tentatives. | ✅ (déjà dans le code) |
 | `XFER-06` | Négociation de version : ALPN `medxfer/N`. Un changement incompatible utilise un nouvel ALPN, l'ancien restant servi en parallèle pendant la transition. | ✅ |
 | `XFER-07` | L'émetteur DOIT détecter la modification de la source (taille/mtime). | ✅ |
+| `XFER-08` | **Un appareil injoignable est nommé.** Une connexion qui ne s'ouvre jamais (pas de réponse, refus, pas de route) a son code : `unreachable` pour un appairage (`action_error`), `sender_unreachable` pour un transfert dont le récepteur n'a jamais atteint l'émetteur (`transfer_failed`, et le message `failed` de la session, champ `code`, pour l'émetteur). L'interface le dit dans ses mots, de chaque côté : le pare-feu de l'appareil qui n'accepte pas les connexions est la cause probable. Un émetteur qui a répondu puis refusé, ou qui s'est perdu en route, n'est pas injoignable. | ✅ (essai réel du 1er novembre : un PC n'acceptait medXfer que sur son câble) |
 
 ---
 

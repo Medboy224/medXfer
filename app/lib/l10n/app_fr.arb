@@ -263,5 +263,9 @@
   "pathChoose": "Relié par câble et par Wi-Fi : choisissez",
   "pinAddressLine": "{network} : {address}",
   "cableGiven": "Câble : medXfer a donné une adresse à la carte {card}, que le système laissait sans adresse.",
-  "cableSharingLeft": "La carte « {card} » garde l'adresse 192.168.137.1 d'un partage de connexion : un PC relié par câble ne joindra pas ce PC. Si ce partage est arrêté, remettez la carte en automatique : Paramètres › Réseau et Internet › Ethernet › Attribution d'adresse IP."
+  "cableSharingLeft": "La carte « {card} » garde l'adresse 192.168.137.1 d'un partage de connexion : un PC relié par câble ne joindra pas ce PC. Si ce partage est arrêté, remettez la carte en automatique : Paramètres › Réseau et Internet › Ethernet › Attribution d'adresse IP.",
+  "connectingLabel": "Connexion…",
+  "noticePeerUnreachable": "{device} ne répond pas sur ce réseau. Son pare-feu bloque peut-être medXfer : sur {device}, autorisez medXfer pour ce type de réseau (privé ou public).",
+  "noticeSenderUnreachable": "Impossible de joindre {device} pour recevoir : son pare-feu bloque peut-être medXfer sur ce réseau. Sur {device}, autorisez medXfer pour ce type de réseau (privé ou public).",
+  "noticeThisUnreachable": "{device} n'a pas pu se connecter à cet appareil pour recevoir : le pare-feu de cet appareil bloque peut-être medXfer sur ce réseau. Autorisez medXfer pour ce type de réseau (privé ou public)."
 }
