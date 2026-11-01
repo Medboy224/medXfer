@@ -265,6 +265,8 @@ Ce qui change sur un câble direct :
 
 D'abord une sonde, avec le PC Windows et Zorin reliés par un câble : adresses obtenues de chaque côté, découverte mutuelle, débit brut. **Critère de sortie :** Windows ↔ Linux, sans réglage, se voient, s'appairent et transfèrent 1 Go, avec le débit mesuré ; Windows ↔ Windows et Linux ↔ Linux si le matériel le permet. Plan : [medxfer-plan-cable.md](medxfer-plan-cable.md).
 
+**Résultat (01/11/2026) :** le lot est terminé (PR #233 à #239, et celle du rapport). Sans réglage, un Linux reçoit son adresse de l'application (NetworkManager n'en donne aucune sur un câble direct). Un chemin par réseau, câble d'abord, l'utilisateur choisit. Le commit groupé en arrière-plan : 40 → 57,7 MB/s vers un disque dur. Windows ↔ Windows : 101 et 106 MB/s, 91 à 96 % du câble ; Windows ↔ Zorin : 55 et 70 MB/s, limités par le disque de Zorin. Détail dans [report-cable.md](report-cable.md).
+
 ### J6d — Se connecter au réseau par BLE · ≈ 7 à 10 jours
 Ajouté le 28 octobre, à l'idée de l'utilisateur. Deux appareils qui ne sont pas sur le même réseau se trouvent par **Bluetooth Low Energy** ; l'un crée le réseau (selon ce que J6c aura montré : qui peut le créer à 5 GHz), l'autre le **rejoint seul**. Plus de nom de réseau ni de mot de passe à taper dans les réglages, en particulier sur un PC, qui ne peut pas scanner de QR.
 
