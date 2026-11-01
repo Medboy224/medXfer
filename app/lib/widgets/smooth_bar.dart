@@ -1,7 +1,8 @@
-/// A progress bar that glides between two updates of the core. The progress moves a chunk at a
-/// time (2 MB): on a slow link the bar jumped every second, then stood still. Gliding at a
-/// steady pace towards each new figure, it moves on evenly. None of it when the system asks for
-/// less motion.
+/// A progress bar that glides between two updates of the core. The core counts the bytes of the
+/// chunks on their way too, not only the chunks written (WP-E.6 of the cable plan: at 1.3 MB/s
+/// the bar stood still for seconds, then jumped 44 % at once); gliding at a steady pace towards
+/// each new figure, it moves on evenly between them. None of it when the system asks for less
+/// motion.
 library;
 
 import 'package:flutter/material.dart';
