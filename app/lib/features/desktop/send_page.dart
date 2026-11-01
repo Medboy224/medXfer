@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 
 import '../../app.dart';
 import '../../app_state.dart';
+import '../../connection/cable_watch.dart';
 import '../../connection/connection.dart';
 import '../../l10n/app_localizations.dart';
 import '../../library/desktop_picks.dart';
@@ -63,11 +64,11 @@ class _SendPageState extends State<SendPage> {
       hint: l.dropHere,
       onPaths: _add,
       child: ListenableBuilder(
-        listenable: Listenable.merge([_state.connection, _state.selection]),
+        listenable: Listenable.merge([_state.connection, _state.selection, _state.cable]),
         builder: (context, _) => LayoutBuilder(
           builder: (context, box) {
             final pick = _Pick(onFiles: _chooseFiles, onFolder: _chooseFolder, selection: _state.selection, session: _state.connection.session, onSend: _send);
-            final connection = _ConnectionPanel(connection: _state.connection);
+            final connection = _ConnectionPanel(connection: _state.connection, cable: _state.cable);
             return SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: box.maxWidth >= 860
@@ -241,9 +242,12 @@ class _Pick extends StatelessWidget {
 /// The right column, the phone's way of connecting: the device connected; those of the same
 /// network, which see this one too; else create a connection, or join another's.
 class _ConnectionPanel extends StatelessWidget {
-  const _ConnectionPanel({required this.connection});
+  const _ConnectionPanel({required this.connection, required this.cable});
 
   final Connection connection;
+
+  /// The wired cards: an address given by the app (Linux), a sharing's address left (Windows).
+  final CableWatch cable;
 
   void _create(BuildContext context) => unawaited(
     showDialog<void>(
@@ -329,19 +333,42 @@ class _ConnectionPanel extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
+        // DISC-13: a device reached by a cable says so; reached by a cable and by Wi-Fi, both
+        // are offered and the user chooses (decision E2 of the cable plan).
         for (final d in others)
-          _Device(
-            key: ValueKey('device-${d.ip}'),
-            name: d.name,
-            detail: d.trusted ? l.nearbyTrusted : l.nearbyAsksPin,
-            action: l.connect,
-            primary: true,
-            onAction: () => unawaited(connection.pairWith(d)),
-          ),
+          if (d.paths.length > 1)
+            _Device(
+              key: ValueKey('device-${d.ip}'),
+              name: d.name,
+              detail: '${d.trusted ? l.nearbyTrusted : l.nearbyAsksPin}\n${l.pathChoose}',
+              choices: [
+                for (final p in d.paths)
+                  (key: Key('device-${d.ip}-${p.kind.name}-${p.address}'), label: pathLabel(l, p.kind), onAction: () => unawaited(connection.pairWith(d.via(p)))),
+              ],
+            )
+          else
+            _Device(
+              key: ValueKey('device-${d.ip}'),
+              name: d.name,
+              detail: [d.trusted ? l.nearbyTrusted : l.nearbyAsksPin, if (d.kind == PathKind.cable) l.byCable].join(' · '),
+              action: l.connect,
+              primary: true,
+              onAction: () => unawaited(connection.pairWith(d)),
+            ),
         if (others.isEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
             child: Text(connection.scanning ? l.searching : l.nearbyEmpty, style: TextStyle(color: c.muted)),
+          ),
+        for (final card in cable.given)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+            child: Text(l.cableGiven(card), key: Key('cable-given-$card'), style: TextStyle(color: c.muted, fontSize: 13)),
+          ),
+        if (cable.sharingLeftOn case final card?)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+            child: Text(l.cableSharingLeft(card), key: const Key('cable-sharing-left'), style: TextStyle(color: c.danger, fontSize: 13)),
           ),
         // Discovery blocked by the Wi-Fi or a firewall: this computer's address and PIN.
         Align(
@@ -387,20 +414,41 @@ class _ConnectionPanel extends StatelessWidget {
   }
 }
 
-/// One device of the list, with its button.
+/// One device of the list, with its button, or one button per path when it has several.
 class _Device extends StatelessWidget {
-  const _Device({super.key, required this.name, required this.detail, required this.action, required this.primary, required this.onAction});
+  const _Device({
+    super.key,
+    required this.name,
+    required this.detail,
+    this.action = '',
+    this.primary = true,
+    this.onAction,
+    this.choices = const [],
+  });
 
   final String name;
   final String detail;
   final String action;
   final bool primary;
   final VoidCallback? onAction;
+  final List<({Key key, String label, VoidCallback onAction})> choices;
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
     final accent = Theme.of(context).colorScheme.primary;
+    Widget button(String label, VoidCallback? onPressed, {required bool primary}) => FilledButton(
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(0, 40),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        shape: const StadiumBorder(),
+        backgroundColor: primary ? accent : c.chip,
+        foregroundColor: primary ? Colors.white : c.text,
+        textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w700),
+      ),
+      onPressed: onPressed,
+      child: Text(label),
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Container(
@@ -423,18 +471,20 @@ class _Device extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                minimumSize: const Size(0, 40),
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                shape: const StadiumBorder(),
-                backgroundColor: primary ? accent : c.chip,
-                foregroundColor: primary ? Colors.white : c.text,
-                textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w700),
+            if (choices.isEmpty)
+              button(action, onAction, primary: primary)
+            else
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final (i, ch) in choices.indexed)
+                    Padding(
+                      padding: EdgeInsets.only(top: i == 0 ? 0 : 6),
+                      child: KeyedSubtree(key: ch.key, child: button(ch.label, ch.onAction, primary: i == 0)),
+                    ),
+                ],
               ),
-              onPressed: onAction,
-              child: Text(action),
-            ),
           ],
         ),
       ),

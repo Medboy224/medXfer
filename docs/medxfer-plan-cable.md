@@ -138,6 +138,17 @@ La sonde le montre : avec le profil par défaut, NetworkManager ne laisse aucune
 - Sous le PIN, l'adresse du câble quand il est branché.
 - Sous Linux, quand l'application donne l'adresse au câble (WP-E.2), elle le dit.
 - Rien d'autre à régler : brancher le câble suffit.
+- Ajouté après l'essai du 1er novembre : sous Windows, l'adresse `192.168.137.1` d'un partage de connexion arrêté depuis reste sur la carte Ethernet, et Windows ne lui donne plus d'adresse `169.254`. L'application le dit et dit comment remettre la carte en automatique ; elle ne change rien elle-même.
+
+**Fait** (1er novembre) :
+- La colonne « Connexion » du PC :
+  - un appareil vu par le câble seul porte « par câble » ;
+  - vu par le câble et par le Wi-Fi, il offre un bouton par chemin, « Câble » et « Wi-Fi », et la connexion passe par celui choisi.
+- La fenêtre du PIN montre une ligne par réseau : « Câble : … », « Wi-Fi : … ».
+- Les avis :
+  - sous Linux, l'adresse donnée à une carte ;
+  - sous Windows, l'adresse d'un partage restée sur la carte Ethernet (`WindowsCableLink`).
+- Tests de l'écran : les deux chemins et le choix, « par câble », les lignes du PIN, les avis.
 - Sous Windows, un câble sans DHCP est en profil Public. Si les règles du pare-feu manquent, l'application le dit, comme prévu en J8.
 
 ### WP-E.5 — Le débit sur le câble · M (demande de l'utilisateur, 30 octobre)
