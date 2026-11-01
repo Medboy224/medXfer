@@ -589,7 +589,7 @@ func SafeRelPath(p string) (string, error) {
 | `STO-01` | Les octets sont écrits dans `<nom>.part`, jamais sous le nom final. | ✅ |
 | `STO-02` | Le renommage final n'a lieu qu'après vérification du `digest`. | ✅ |
 | `STO-03` | Invariant J : `fsync` des données, puis écriture du journal, puis `fsync` du journal. | ✅ |
-| `STO-04` | Commit groupé : 64 Mio ou 2 s (paramètres). | 📏 |
+| `STO-04` | Commit groupé : 64 Mio ou 2 s (paramètres). Il tourne en arrière-plan : la réception continue pendant le `fsync`. Quand le suivant est dû et que le précédent n'est pas fini, l'écrivain attend : le disque donne le rythme, et une coupure de courant coûte au plus deux commits à renvoyer. L'erreur d'un commit est rendue à l'appel suivant. | 📏 ; arrière-plan en WP-E.5 du plan du câble : 40 → 57,7 MB/s vers un disque dur qui écrit 64 MB/s |
 | `STO-05` | Enregistrements du journal protégés par CRC ; queue déchirée ignorée. | ✅ |
 | `STO-06` | À la reprise, vérification des 8 derniers chunks ; mode complet disponible. | ✅ |
 | `STO-07` | Disque plein = pause propre, pas d'échec ni de suppression. | ✅ |

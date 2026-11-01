@@ -174,9 +174,45 @@ Sur le câble, le réseau n'est plus la limite : 110 MB/s bruts, mais 83 à 92 M
 2. lire le chunk directement dans le tampon de la trame, sans la copie actuelle ;
 3. mesurer avant et après, sur Zorin et sur le PC, en répétant. Le but : le débit brut, moins le coût que le matériel impose.
 
-Hors de ce lot :
-- changer de fonction de hachage : c'est un changement de protocole, qui passe par la revue G4 ;
-- le coût de `fsync` sur un disque dur (40 MB/s vers Zorin) : J8.
+Hors de ce lot : changer de fonction de hachage. C'est un changement de protocole, qui passe par la revue G4.
+
+**Refait le 1er novembre, à la demande de l'utilisateur** : le transfert complet (R6) dans les deux sens, chaque mesure faite 3 fois (médiane), puis chaque perte qui vient de medXfer corrigée, avec la mesure avant et après. Les premières mesures, faites une fois chacune et à l'étape R3 seulement, ne suffisaient pas.
+
+**Avant** (médianes de 3, 512 Mo, 4 connexions, chunks de 2 Mo, MB/s) :
+
+| Sens | R1 | R2 | R3 | R4 | R5 | R6 |
+|---|---|---|---|---|---|---|
+| Zorin → PC | 111,2 | 111,4 | 104,1 | 103,5 | 90,7 | 100,7 |
+| PC → Zorin | 111,0 | 110,9 | 98,7 | 88,6 | **39,4** (`fsync`) | **40,0** (`fsync`) |
+
+Le 83 MB/s du 30 octobre (Zorin → PC) venait d'une mesure unique : répétée, elle donne 100,7.
+
+**La grande perte : `fsync` sur un disque dur.**
+- Le disque de Zorin écrit **64 MB/s** avec `fsync` (`xfer bench disk` : 60,2 et 63,8 ; `dd` : 64,6 et 64,9). medXfer n'en tirait que 40 : 62 %.
+- Pas le rythme des commits : 256 Mio ou 8 s au lieu de 64 Mio ou 2 s donnent 40,4. Pas les écrivains concurrents : 1, 2 et 4 connexions donnent 30,6, 37,5 et 38,4.
+- `vmstat` pendant R5 : le disque écrit **par à-coups**, 65 MB/s une seconde, 8 à 30 la suivante. Le commit tournait dans l'écrivain : le réseau remplissait le cache pendant que le disque attendait, puis le disque vidait 64 Mio pendant que la connexion de cet écrivain s'arrêtait. Réception et `fsync` alternaient.
+
+**Correction** (`pkg/store`) : le commit groupé tourne en arrière-plan.
+- `CommitIfDue` le lance et rend la main : la réception continue pendant le `fsync`.
+- Quand le suivant est dû et que le précédent n'est pas fini, l'écrivain attend : le disque donne le rythme, et une coupure de courant coûte au plus deux commits à renvoyer.
+- L'ordre de l'invariant J ne change pas : le commit ne prend que des chunks déjà écrits, rend les données durables, puis les note au journal (`TestPowerLossNeverLies`).
+- L'erreur d'un commit en arrière-plan est rendue à l'appel suivant ; `Close`, `Suspend` et `Finalize` attendent celui qui tourne (`Settle`).
+- `STO-04` complétée dans la bible.
+
+**Après** (médianes de 3) :
+
+| Sens | R5 | R6 |
+|---|---|---|
+| PC → Zorin | 39,4 → **58,8** | 40,0 → **57,7** (+44 %, 90 % de ce que le disque écrit) |
+| Zorin → PC | 90,7 → **102,1** | 100,7 → **101,7** (91 % du TCP brut) |
+
+**Ce qui reste vient du matériel :**
+- de R2 à R3 (6 à 10 %), le SHA-256 de Zorin. Go y prend sa version générique : ses chemins rapides demandent AVX2 ou SHA-NI. Celui de Go fait 115 MB/s sur un cœur de Zorin, OpenSSL 277 ;
+- vers Zorin, son disque.
+
+Écartés, mesures à l'appui :
+- **plus de requêtes en vol** par connexion (4 ou 6 au lieu de 2) : sur une seule connexion, l'envoi attend le hachage (trace d'exécution, 80 % du temps), et 4 ou 6 requêtes l'aident (63 → 70 → 77 MB/s). Mais avec les 4 connexions par défaut, R3 donne 98,5, 96,1 et 90,4 : rien à gagner. Les deux requêtes de la bible (§8.3) restent ;
+- **la copie du chunk dans la trame** : environ 0,2 ms pour 2 Mo, contre 17 ms de hachage sur Zorin.
 
 ### WP-E.4 — Essais réels et rapport · S
 
