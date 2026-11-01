@@ -113,6 +113,20 @@ La sonde le montre : avec le profil par défaut, NetworkManager ne laisse aucune
 - Quand le déclencher : à l'échec du DHCP (45 s avec les réglages par défaut), ou plus tôt si l'essai montre qu'on peut le savoir sans risque pour un vrai réseau (une box qui répond lentement).
 - Derrière une interface, à côté de `LinuxHotspot`. Rien sous Windows, qui se donne déjà son adresse.
 
+**Fait** (1er novembre) :
+- `CableLink` (`app/lib/platform/cable.dart`) et `CableWatch` : une vérification toutes les 5 s.
+- L'application agit sur une carte filaire avec un lien et sans IPv4 :
+  - après 50 s sans interruption ;
+  - ou juste après un DHCP abandonné par NetworkManager.
+- Elle ne touche ni aux profils de l'utilisateur, ni à un profil connecté sans IPv4.
+- Le profil part :
+  - au débranchement ;
+  - à la fermeture, fenêtre fermée ou signal d'arrêt (SIGTERM, SIGINT : une fin de session laissait le profil sur la carte) ;
+  - au démarrage, s'il reste d'une fermeture brutale.
+- **Essai réel sur Zorin**, profil par défaut (DHCP, priorité au-dessus de celle du profil de l'utilisateur) :
+  - aucune IPv4, puis le profil de l'application à 52 et 60 s (deux essais), et l'adresse `169.254.57.98` 5 s plus tard ;
+  - application arrêtée par un signal : son profil supprimé, celui de l'utilisateur revenu seul.
+
 Écartées :
 - **l'IPv6 link-local seul** : inutilisable avec un PC dont l'IPv6 est désactivé, comme celui des essais ;
 - **le PC Windows qui distribue les adresses** (comme son réseau en J6c) : il perturberait un vrai réseau si le câble menait à une box ou à un switch, et Linux ↔ Linux resterait sans solution.

@@ -7,6 +7,7 @@ import 'app_state.dart';
 import 'core/ffi_core.dart';
 import 'perf.dart';
 import 'platform/background.dart';
+import 'platform/cable.dart';
 import 'platform/file_picker.dart';
 import 'platform/folders.dart';
 import 'platform/library.dart';
@@ -29,6 +30,7 @@ Future<void> main() async {
     folders: const SystemFolders(),
     network: systemNetworkInfo(),
     hotspot: systemHotspot(),
+    cable: systemCableLink(),
     qrScanner: systemQrScanner(),
     filePicker: systemFilePicker(),
     folderOpener: systemFolderOpener(),
@@ -38,5 +40,15 @@ Future<void> main() async {
     desktop: Platform.isWindows || Platform.isLinux || Platform.isMacOS,
   );
   state.start();
+  // A session that ends, or a kill, stops the app without closing its window: the same
+  // shutdown, or the cable's profile stayed on the card (WP-E.2, real test of 1 November).
+  if (Platform.isLinux || Platform.isMacOS) {
+    for (final signal in [ProcessSignal.sigterm, ProcessSignal.sigint]) {
+      signal.watch().listen((_) async {
+        await state.shutdown();
+        exit(0);
+      });
+    }
+  }
   runApp(MedxferApp(state: state, settings: settings));
 }
