@@ -263,6 +263,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(core.calls.where((c) => c.action == 'pair').single.payload, containsPair('ip', '192.168.42.91'),
         reason: 'the path the user picked, not the first one (decision E2)');
+    // Real test of 1 November: while the attempt runs, the button tried says so, and no other
+    // attempt starts (13 in 2 s then).
+    expect(find.descendant(of: wifi, matching: find.text('Connexion…')), findsOneWidget);
+    final cable = find.byKey(const Key('device-169.254.57.98-cable-169.254.57.98'));
+    expect(tester.widget<FilledButton>(find.descendant(of: cable, matching: find.byType(FilledButton))).onPressed, isNull);
+    // No answer at all: the buttons come back after connectingLimit.
+    await tester.pump(Connection.connectingLimit);
+    expect(find.descendant(of: wifi, matching: find.text('Wi-Fi')), findsOneWidget);
   });
 
   testWidgets("WP-E.3: the PIN gives an address per network; the cable's notices are said", (tester) async {

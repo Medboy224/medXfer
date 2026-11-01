@@ -228,6 +228,37 @@ void main() {
     expect(core.calls.last.payload, {'uri': 'medxfer://v1/pair?fp=AAAA'});
   });
 
+  test('real test of 1 November: one attempt at a time, and a device that does not answer is said so', () async {
+    final core = _core()
+      ..on('scan', (_) => const FakeAnswer(replies: [
+            CoreEvent('peers_list', data: [
+              {'device_name': 'medXfer-2926', 'host_ip': '192.168.42.172', 'port': 18887},
+            ]),
+          ]))
+      ..on('pair', (_) => const FakeAnswer()); // the core answers later, once its dial gave up
+    final c = Connection(core);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.scan();
+    final d = c.nearby.single;
+    await c.pairWith(d);
+    final id = 'ui-${core.calls.length}';
+    expect(c.connecting, '192.168.42.172');
+    await c.pairWith(d); // tapped again meanwhile: no second attempt
+    expect(core.calls.where((x) => x.action == 'pair'), hasLength(1));
+
+    c.take(CoreEvent('action_error', id: id, data: {
+      'error': 'failed to pair with 192.168.42.172:18887: dial tcp4 192.168.42.172:18887: i/o timeout',
+      'code': 'unreachable',
+      'target': '192.168.42.172:18887',
+    }));
+    await _settle();
+    expect(c.connecting, isNull);
+    expect(notices.single, isA<PeerUnreachable>().having((n) => n.name, 'name', 'medXfer-2926'));
+    await c.pairWith(d); // a new attempt is possible again
+    expect(core.calls.where((x) => x.action == 'pair'), hasLength(2));
+  });
+
   test('a device of the list asks for its PIN, which the user types', () async {
     final core = _core()
       ..on('pair', (_) => const FakeAnswer(broadcast: [CoreEvent('pin_needed', data: {'target': '192.168.1.30:18887'})]))

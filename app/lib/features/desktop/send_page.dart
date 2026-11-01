@@ -279,6 +279,7 @@ class _ConnectionPanel extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final c = context.colors;
     final session = connection.session;
+    final busy = connection.connecting != null;
     final others = [
       for (final d in connection.nearby)
         if (session == null || (d.ip != session.ip && d.name != session.name)) d,
@@ -334,7 +335,8 @@ class _ConnectionPanel extends StatelessWidget {
             ),
           ),
         // DISC-13: a device reached by a cable says so; reached by a cable and by Wi-Fi, both
-        // are offered and the user chooses (decision E2 of the cable plan).
+        // are offered and the user chooses (decision E2 of the cable plan). While one attempt
+        // runs, the buttons wait, and the one tried says so.
         for (final d in others)
           if (d.paths.length > 1)
             _Device(
@@ -343,7 +345,11 @@ class _ConnectionPanel extends StatelessWidget {
               detail: '${d.trusted ? l.nearbyTrusted : l.nearbyAsksPin}\n${l.pathChoose}',
               choices: [
                 for (final p in d.paths)
-                  (key: Key('device-${d.ip}-${p.kind.name}-${p.address}'), label: pathLabel(l, p.kind), onAction: () => unawaited(connection.pairWith(d.via(p)))),
+                  (
+                    key: Key('device-${d.ip}-${p.kind.name}-${p.address}'),
+                    label: connection.connecting == p.address ? l.connectingLabel : pathLabel(l, p.kind),
+                    onAction: busy ? null : () => unawaited(connection.pairWith(d.via(p))),
+                  ),
               ],
             )
           else
@@ -351,9 +357,9 @@ class _ConnectionPanel extends StatelessWidget {
               key: ValueKey('device-${d.ip}'),
               name: d.name,
               detail: [d.trusted ? l.nearbyTrusted : l.nearbyAsksPin, if (d.kind == PathKind.cable) l.byCable].join(' · '),
-              action: l.connect,
+              action: connection.connecting == d.ip ? l.connectingLabel : l.connect,
               primary: true,
-              onAction: () => unawaited(connection.pairWith(d)),
+              onAction: busy ? null : () => unawaited(connection.pairWith(d)),
             ),
         if (others.isEmpty)
           Padding(
@@ -431,7 +437,7 @@ class _Device extends StatelessWidget {
   final String action;
   final bool primary;
   final VoidCallback? onAction;
-  final List<({Key key, String label, VoidCallback onAction})> choices;
+  final List<({Key key, String label, VoidCallback? onAction})> choices;
 
   @override
   Widget build(BuildContext context) {

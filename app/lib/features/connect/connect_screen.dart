@@ -315,7 +315,8 @@ class _Nearby extends StatelessWidget {
               child: InkWell(
                 key: ValueKey('nearby-${d.ip}'),
                 borderRadius: BorderRadius.circular(16),
-                onTap: () => onPick(d),
+                // One attempt at a time: the device tried says so (real test of 1 November).
+                onTap: connection.connecting != null ? null : () => onPick(d),
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Row(
@@ -332,7 +333,10 @@ class _Nearby extends StatelessWidget {
                           children: [
                             Text(d.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
                             const SizedBox(height: 2),
-                            Text(d.trusted ? l.nearbyTrusted : l.nearbyAsksPin, style: TextStyle(color: c.muted, fontSize: 13)),
+                            Text(
+                              connection.connecting == d.ip ? l.connectingLabel : (d.trusted ? l.nearbyTrusted : l.nearbyAsksPin),
+                              style: TextStyle(color: c.muted, fontSize: 13),
+                            ),
                           ],
                         ),
                       ),
