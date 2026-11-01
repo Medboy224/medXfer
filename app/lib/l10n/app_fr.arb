@@ -255,5 +255,13 @@
   "noticeTransferStopped": "Le transfert avec {device} s'est arrêté ({error}). Ce qui a été reçu est gardé : le reprendre continue à partir de là.",
   "resendTransfer": "Reprendre",
   "connectionLostWaiting": "Connexion perdue avec {device} : en attente",
-  "connectionLostGoingOn": "Connexion perdue avec {device} : le transfert continue"
+  "connectionLostGoingOn": "Connexion perdue avec {device} : le transfert continue",
+  "pathCable": "Câble",
+  "pathWifi": "Wi-Fi",
+  "pathOther": "Autre réseau",
+  "byCable": "par câble",
+  "pathChoose": "Relié par câble et par Wi-Fi : choisissez",
+  "pinAddressLine": "{network} : {address}",
+  "cableGiven": "Câble : medXfer a donné une adresse à la carte {card}, que le système laissait sans adresse.",
+  "cableSharingLeft": "La carte « {card} » garde l'adresse 192.168.137.1 d'un partage de connexion : un PC relié par câble ne joindra pas ce PC. Si ce partage est arrêté, remettez la carte en automatique : Paramètres › Réseau et Internet › Ethernet › Attribution d'adresse IP."
 }

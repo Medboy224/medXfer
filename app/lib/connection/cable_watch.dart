@@ -1,7 +1,7 @@
-/// Watches the wired cards of a Linux PC (WP-E.2 of the cable plan): every [CableWatch.period],
-/// [CableLink.check] gives a link-local address to a cable the system left without one.
-/// [CableWatch.given] are the cards the app gave an address to, for the screen to say so
-/// (WP-E.3).
+/// Watches the wired cards of a PC (WP-E.2 and WP-E.3 of the cable plan): every
+/// [CableWatch.period], [CableLink.check] gives a link-local address to a cable Linux left
+/// without one, and [CableLink.sharingLeft] finds the address of a sharing left on a Windows
+/// card. The screen says both ([CableWatch.given], [CableWatch.sharingLeftOn]).
 library;
 
 import 'dart:async';
@@ -23,6 +23,10 @@ class CableWatch extends ChangeNotifier {
   /// The wired cards that have the app's address now.
   Set<String> get given => _given;
 
+  /// The wired card a stopped connection sharing left its address on (Windows), or null.
+  String? get sharingLeftOn => _sharingLeftOn;
+  String? _sharingLeftOn;
+
   /// Starts watching; nothing where the system gives the cable its address (Windows) or has
   /// no cable (the phones).
   void start() {
@@ -36,8 +40,10 @@ class CableWatch extends ChangeNotifier {
     _busy = true;
     try {
       final given = await link.check();
-      if (!setEquals(given, _given)) {
+      final left = await link.sharingLeft();
+      if (!setEquals(given, _given) || left != _sharingLeftOn) {
         _given = given;
+        _sharingLeftOn = left;
         notifyListeners();
       }
     } catch (_) {

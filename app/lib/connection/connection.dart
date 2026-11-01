@@ -13,10 +13,38 @@ import '../platform/hotspot.dart';
 import '../platform/network.dart';
 import 'pair_link.dart';
 
+/// The kind of link a path goes through (DISC-13): the core's `ethernet`, `wifi`, `other`.
+enum PathKind {
+  cable,
+  wifi,
+  other;
+
+  static PathKind parse(Object? kind) => switch (kind) {
+    'ethernet' => cable,
+    'wifi' => wifi,
+    _ => other,
+  };
+}
+
+/// One way to reach a device, or this one: an address on one of the networks, and its kind.
+@immutable
+class NetPath {
+  const NetPath(this.address, this.kind);
+
+  final String address;
+  final PathKind kind;
+
+  @override
+  bool operator ==(Object other) => other is NetPath && other.address == address && other.kind == kind;
+
+  @override
+  int get hashCode => Object.hash(address, kind);
+}
+
 /// A device found on the network (`peers_list`).
 @immutable
 class NearbyDevice {
-  const NearbyDevice({required this.name, required this.ip, required this.port, this.trusted = false});
+  const NearbyDevice({required this.name, required this.ip, required this.port, this.trusted = false, this.paths = const []});
 
   factory NearbyDevice.fromJson(Map<String, Object?> m) {
     final alias = (m['trusted_alias'] as String?) ?? '';
@@ -27,6 +55,10 @@ class NearbyDevice {
       ip: (m['host_ip'] as String?) ?? '',
       port: (m['port'] as num?)?.toInt() ?? 0,
       trusted: alias.isNotEmpty,
+      paths: [
+        for (final p in (m['paths'] as List?) ?? const [])
+          if (p is Map && p['ip'] is String) NetPath(p['ip'] as String, PathKind.parse(p['kind'])),
+      ],
     );
   }
 
@@ -35,7 +67,17 @@ class NearbyDevice {
   final int port;
   final bool trusted;
 
+  /// One per network the device was seen on, cable first (DISC-13); [ip] is the first one's.
+  /// Two of them: the user chooses (decision E2 of the cable plan).
+  final List<NetPath> paths;
+
   String get target => port > 0 ? '$ip:$port' : ip;
+
+  /// The kind of the path [ip] goes through.
+  PathKind get kind => paths.where((p) => p.address == ip).map((p) => p.kind).firstOrNull ?? PathKind.other;
+
+  /// The same device, reached by path.
+  NearbyDevice via(NetPath path) => NearbyDevice(name: name, ip: path.address, port: port, trusted: trusted, paths: paths);
 }
 
 /// This device's QR code (`pair_show`): single use, until [expires].
@@ -54,12 +96,24 @@ class QrInvitation {
 /// (`pin_requested`, PAIR-11). Empty and [stopped] after too many wrong PINs.
 @immutable
 class ShownPin {
-  const ShownPin({required this.pin, required this.expires, this.address = '', this.from = '', this.instance = '', this.stopped = false});
+  const ShownPin({
+    required this.pin,
+    required this.expires,
+    this.address = '',
+    this.addresses = const [],
+    this.from = '',
+    this.instance = '',
+    this.stopped = false,
+  });
 
   factory ShownPin.fromJson(Map<String, Object?> m) => ShownPin(
         pin: (m['pin'] as String?) ?? '',
         expires: _time(m['expires']),
         address: (m['address'] as String?) ?? '',
+        addresses: [
+          for (final a in (m['addresses'] as List?) ?? const [])
+            if (a is Map && a['address'] is String) NetPath(a['address'] as String, PathKind.parse(a['kind'])),
+        ],
         from: (m['from'] as String?) ?? '',
         instance: (m['instance'] as String?) ?? '',
         stopped: m['stopped'] == true,
@@ -70,6 +124,10 @@ class ShownPin {
 
   /// Where the other device reaches this one (pair_pin_shown), or who asked (pin_requested).
   final String address;
+
+  /// This device's address on each of its networks, cable first (DISC-13): a PC on a cable and
+  /// on Wi-Fi shows both, the other PC types the one of the network they share.
+  final List<NetPath> addresses;
   final String from;
   final String instance;
   final bool stopped;

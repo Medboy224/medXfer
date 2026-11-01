@@ -19,6 +19,12 @@ abstract interface class CableLink {
 
   /// Takes back every address the app gave: the app closes.
   Future<void> release();
+
+  /// The wired card that keeps the address of a connection sharing stopped since (Windows,
+  /// 192.168.137.1 set by hand): the system then gives it no 169.254 address, and a PC at the
+  /// other end of the cable cannot reach this one (real tests of J6c and of 1 November). null
+  /// when none does.
+  Future<String?> sharingLeft();
 }
 
 class NoCableLink implements CableLink {
@@ -29,6 +35,42 @@ class NoCableLink implements CableLink {
 
   @override
   Future<void> release() async {}
+
+  @override
+  Future<String?> sharingLeft() async => null;
+}
+
+/// Windows gives a cable its 169.254 address itself; what can block it is the address of a
+/// connection sharing (ICS) left on the card. Said, never changed: removing it needs the
+/// administrator, and the sharing may still be wanted (towards a router).
+class WindowsCableLink implements CableLink {
+  WindowsCableLink({Future<List<(String, List<String>)>> Function()? interfaces}) : _interfaces = interfaces ?? _system;
+
+  /// Each interface's name and IPv4 addresses.
+  final Future<List<(String, List<String>)>> Function() _interfaces;
+
+  static Future<List<(String, List<String>)>> _system() async => [
+    for (final i in await NetworkInterface.list(type: InternetAddressType.IPv4)) (i.name, [for (final a in i.addresses) a.address]),
+  ];
+
+  /// The address Windows's connection sharing puts on the card it shares to.
+  static const sharingAddress = '192.168.137.1';
+
+  @override
+  Future<Set<String>> check() async => const {};
+
+  @override
+  Future<void> release() async {}
+
+  @override
+  Future<String?> sharingLeft() async {
+    for (final (name, addresses) in await _interfaces()) {
+      // The wired cards only: the computer's own network (WP-C.2) may hold it rightly.
+      if (!name.toLowerCase().startsWith('ethernet')) continue;
+      if (addresses.contains(sharingAddress)) return name;
+    }
+    return null;
+  }
 }
 
 /// One wired card as NetworkManager reports it.
@@ -112,6 +154,9 @@ class LinuxCableLink implements CableLink {
   }
 
   @override
+  Future<String?> sharingLeft() async => null;
+
+  @override
   Future<void> release() async {
     for (final device in [..._given]) {
       await _nmcli(['connection', 'delete', '$prefix$device']);
@@ -186,4 +231,8 @@ class LinuxCableLink implements CableLink {
   }
 }
 
-CableLink systemCableLink() => Platform.isLinux ? LinuxCableLink() : const NoCableLink();
+CableLink systemCableLink() {
+  if (Platform.isLinux) return LinuxCableLink();
+  if (Platform.isWindows) return WindowsCableLink();
+  return const NoCableLink();
+}

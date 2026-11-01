@@ -57,6 +57,9 @@ class _FakeLink implements CableLink {
 
   @override
   Future<void> release() async => released = true;
+
+  @override
+  Future<String?> sharingLeft() async => null;
 }
 
 void main() {
@@ -197,5 +200,18 @@ void main() {
     await watch.stop();
     expect(watch.given, isEmpty);
     watch.dispose();
+  });
+
+  test('WP-E.3: Windows says the sharing address left on a wired card, never on its own network', () async {
+    var cards = <(String, List<String>)>[
+      ('Wi-Fi', ['192.168.42.174']),
+      ('Connexion au réseau local* 2', ['192.168.137.1']), // the computer's own network (WP-C.2)
+      ('Ethernet', ['169.254.185.66']),
+    ];
+    final link = WindowsCableLink(interfaces: () async => cards);
+    expect(await link.sharingLeft(), isNull);
+    cards = [('Wi-Fi', ['192.168.42.174']), ('Ethernet', ['192.168.137.1'])];
+    expect(await link.sharingLeft(), 'Ethernet');
+    expect(await link.check(), isEmpty, reason: 'Windows gives the cable its address itself');
   });
 }

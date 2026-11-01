@@ -312,5 +312,16 @@
   "connectionLostWaiting": "Connection with {device} lost: waiting for it",
   "@connectionLostWaiting": {"placeholders": {"device": {"type": "String"}}},
   "connectionLostGoingOn": "Connection with {device} lost: the transfer goes on",
-  "@connectionLostGoingOn": {"placeholders": {"device": {"type": "String"}}}
+  "@connectionLostGoingOn": {"placeholders": {"device": {"type": "String"}}},
+  "pathCable": "Cable",
+  "pathWifi": "Wi-Fi",
+  "pathOther": "Other network",
+  "byCable": "by cable",
+  "pathChoose": "Linked by cable and by Wi-Fi: choose",
+  "pinAddressLine": "{network}: {address}",
+  "@pinAddressLine": {"placeholders": {"network": {"type": "String"}, "address": {"type": "String"}}},
+  "cableGiven": "Cable: medXfer gave the card {card} an address, which the system had left without one.",
+  "@cableGiven": {"placeholders": {"card": {"type": "String"}}},
+  "cableSharingLeft": "The card “{card}” keeps the address 192.168.137.1 of a connection sharing: a PC linked by cable will not reach this one. If that sharing is stopped, set the card back to automatic: Settings › Network & internet › Ethernet › IP assignment.",
+  "@cableSharingLeft": {"placeholders": {"card": {"type": "String"}}}
 }

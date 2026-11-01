@@ -254,6 +254,13 @@ class _JoinCard extends StatelessWidget {
   }
 }
 
+/// The name of a kind of path, as the screens show it (DISC-13).
+String pathLabel(AppLocalizations l, PathKind kind) => switch (kind) {
+  PathKind.cable => l.pathCable,
+  PathKind.wifi => l.pathWifi,
+  PathKind.other => l.pathOther,
+};
+
 /// The devices already on the same Wi-Fi, under the name this one appears as.
 class _Nearby extends StatelessWidget {
   const _Nearby({required this.connection, required this.onPick, required this.onNotListed});
@@ -408,7 +415,18 @@ class _ManualCodeSheetState extends State<ManualCodeSheet> {
                 else if (pin.stopped)
                   Text(l.pinStopped, textAlign: TextAlign.center, style: TextStyle(color: c.danger))
                 else ...[
-                  SelectableText(pin.address, key: const Key('my-address'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                  // One address per network (DISC-13): the other PC types the one of the network
+                  // they share, the cable's or the Wi-Fi's.
+                  if (pin.addresses.length > 1)
+                    for (final a in pin.addresses)
+                      SelectableText(
+                        l.pinAddressLine(pathLabel(l, a.kind), a.address),
+                        key: Key('my-address-${a.kind.name}-${a.address}'),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                      )
+                  else
+                    SelectableText(pin.address, key: const Key('my-address'), textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 4),
                   SelectableText(
                     pin.pin,

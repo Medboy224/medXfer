@@ -7,6 +7,7 @@ import 'package:medxfer/app_state.dart';
 import 'package:medxfer/connection/connection.dart';
 import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
+import 'package:medxfer/platform/cable.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/platform/folders.dart';
 import 'package:medxfer/platform/hotspot.dart';
@@ -49,6 +50,23 @@ FakeCore _core() => FakeCore()
         ]),
       ]))
   ..on('send', (_) => const FakeAnswer(broadcast: [CoreEvent('file_offered', data: {'file_name': 'rapport.pdf', 'file_size': 2048})]));
+
+/// A PC's wired cards (WP-E.2, WP-E.3 of the cable plan): an address given, a sharing's left.
+class _Cable implements CableLink {
+  _Cable({this.given = const {}, this.left});
+
+  final Set<String> given;
+  final String? left;
+
+  @override
+  Future<Set<String>> check() async => given;
+
+  @override
+  Future<void> release() async {}
+
+  @override
+  Future<String?> sharingLeft() async => left;
+}
 
 /// The network a computer creates (WP-C.2 of the J6c plan), as WindowsHotspot gives it.
 class _PcHotspot implements Hotspot {
@@ -115,7 +133,7 @@ class _PcHotspot implements Hotspot {
   Future<bool> wifiOn() async => wifi;
 }
 
-Future<AppState> _app(WidgetTester tester, FakeCore core, {Hotspot hotspot = const NoHotspot()}) async {
+Future<AppState> _app(WidgetTester tester, FakeCore core, {Hotspot hotspot = const NoHotspot(), CableLink cable = const NoCableLink()}) async {
   final state = AppState(
     core: core,
     folders: const _TestFolders(),
@@ -123,6 +141,7 @@ Future<AppState> _app(WidgetTester tester, FakeCore core, {Hotspot hotspot = con
     history: MemoryHistoryStore(),
     desktop: true,
     hotspot: hotspot,
+    cable: cable,
   );
   tester.platformDispatcher.localesTestValue = [const Locale('fr')];
   addTearDown(tester.platformDispatcher.clearLocalesTestValue);
@@ -220,6 +239,48 @@ void main() {
     expect(core.calls.where((c) => c.action == 'pair').single.payload, containsPair('ip', '192.168.1.40'));
     expect(find.text('medXfer-91c0'), findsWidgets, reason: 'the PIN window names the device');
     expect(core.calls.where((c) => c.action == 'send'), isEmpty, reason: 'connecting sends nothing');
+  });
+
+  testWidgets('WP-E.3: a PC by cable and by Wi-Fi offers both, and the one picked is used; by cable alone, said', (tester) async {
+    final core = _core()
+      ..on('scan', (_) => const FakeAnswer(replies: [
+            CoreEvent('peers_list', data: [
+              {
+                'device_name': 'medXfer-1c6e', 'host_ip': '169.254.57.98', 'port': 18887,
+                'paths': [{'ip': '169.254.57.98', 'kind': 'ethernet'}, {'ip': '192.168.42.91', 'kind': 'wifi'}],
+              },
+              {'device_name': 'medXfer-77aa', 'host_ip': '169.254.9.9', 'port': 18887, 'paths': [{'ip': '169.254.9.9', 'kind': 'ethernet'}]},
+            ]),
+          ]))
+      ..on('pair', (_) => const FakeAnswer());
+    await _app(tester, core);
+    expect(find.textContaining('Relié par câble et par Wi-Fi : choisissez'), findsOneWidget);
+    expect(find.text('Il affichera un PIN à taper ici · par câble'), findsOneWidget);
+    final wifi = find.byKey(const Key('device-169.254.57.98-wifi-192.168.42.91'));
+    expect(find.descendant(of: wifi, matching: find.text('Wi-Fi')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const Key('device-169.254.57.98-cable-169.254.57.98')), matching: find.text('Câble')), findsOneWidget);
+    await tester.tap(find.descendant(of: wifi, matching: find.byType(FilledButton)));
+    await tester.pumpAndSettle();
+    expect(core.calls.where((c) => c.action == 'pair').single.payload, containsPair('ip', '192.168.42.91'),
+        reason: 'the path the user picked, not the first one (decision E2)');
+  });
+
+  testWidgets("WP-E.3: the PIN gives an address per network; the cable's notices are said", (tester) async {
+    final core = _core()
+      ..on('pair_pin_show', (_) => const FakeAnswer(replies: [
+            CoreEvent('pair_pin_shown', data: {
+              'pin': '054 461', 'expires': 1900000000, 'address': '192.168.42.174:18887', 'instance': 'medXfer-7810',
+              'addresses': [{'address': '169.254.185.66:18887', 'kind': 'ethernet'}, {'address': '192.168.42.174:18887', 'kind': 'wifi'}],
+            }),
+          ]));
+    final state = await _app(tester, core, cable: _Cable(given: {'enp0s25'}, left: 'Ethernet'));
+    expect(find.byKey(const Key('cable-given-enp0s25')), findsOneWidget);
+    expect(find.textContaining('192.168.137.1'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('not-listed')));
+    await tester.pumpAndSettle();
+    expect(find.text('Câble : 169.254.185.66:18887'), findsOneWidget);
+    expect(find.text('Wi-Fi : 192.168.42.174:18887'), findsOneWidget);
+    await state.cable.stop();
   });
 
   testWidgets('one item removed, then all', (tester) async {
