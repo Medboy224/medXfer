@@ -7,12 +7,14 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'connection/cable_watch.dart';
 import 'connection/connection.dart';
 import 'background_keeper.dart';
 import 'dev/dev_tools.dart';
 import 'library/explorer.dart';
 import 'library/selection.dart';
 import 'platform/background.dart';
+import 'platform/cable.dart';
 import 'core/core.dart';
 import 'platform/file_picker.dart';
 import 'platform/folders.dart';
@@ -35,6 +37,7 @@ class AppState extends ChangeNotifier {
     required this.folders,
     NetworkInfo network = const NoNetworkInfo(),
     Hotspot hotspot = const NoHotspot(),
+    CableLink cable = const NoCableLink(),
     this.qrScanner = const NoQrScanner(),
     this.filePicker = const NoFilePicker(),
     this.folderOpener = const NoFolderOpener(),
@@ -45,6 +48,7 @@ class AppState extends ChangeNotifier {
     AppSettings? settings,
     this.desktop = false,
   }) : connection = Connection(core, network: network, hotspot: hotspot),
+       cable = CableWatch(cable),
        settings = settings ?? AppSettings() {
     receiveFolders = ReceiveFolders(settings: this.settings, storage: storage, folders: folders);
     // Created now, not on first use: they listen to the core from its first event.
@@ -63,6 +67,9 @@ class AppState extends ChangeNotifier {
 
   /// The developer panel's telemetry, benchmarks, report and bundle (WP-B.5).
   late final DevTools dev;
+
+  /// A cable to another PC left without an address: the Linux app gives one (WP-E.2).
+  final CableWatch cable;
 
   /// The desktop layout (mockup « 10. Bureau »): a side menu and its pages, not the phone's
   /// tabs (DesktopHome).
@@ -124,6 +131,7 @@ class AppState extends ChangeNotifier {
         return _fail('schema ${started.schema}, this interface speaks $coreSchema');
       }
       await connection.pushNetwork(); // before the status: its address comes from it (DISC-10)
+      cable.start();
       final reply = await core.call('get_status');
       final status = reply.first('status');
       if (status != null) {
@@ -144,6 +152,8 @@ class AppState extends ChangeNotifier {
   Future<void> shutdown({Duration wait = const Duration(seconds: 3)}) async {
     // A network this computer made stops with the app: NetworkManager would keep it (WP-C.2).
     await connection.stopHotspot().timeout(wait, onTimeout: () {}).catchError((Object _) {});
+    // So does the address it gave a cable: the user's own profile comes back (WP-E.2).
+    await cable.stop().timeout(wait, onTimeout: () {}).catchError((Object _) {});
     await core.stop().timeout(wait, onTimeout: () {}).catchError((Object _) {});
   }
 
@@ -169,6 +179,7 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _events?.cancel();
     connection.dispose();
+    cable.dispose();
     keeper.dispose();
     explorer.dispose();
     selection.dispose();

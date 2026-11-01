@@ -7,6 +7,7 @@ import 'app_state.dart';
 import 'core/ffi_core.dart';
 import 'perf.dart';
 import 'platform/background.dart';
+import 'platform/cable.dart';
 import 'platform/file_picker.dart';
 import 'platform/folders.dart';
 import 'platform/library.dart';
@@ -29,6 +30,7 @@ Future<void> main() async {
     folders: const SystemFolders(),
     network: systemNetworkInfo(),
     hotspot: systemHotspot(),
+    cable: systemCableLink(),
     qrScanner: systemQrScanner(),
     filePicker: systemFilePicker(),
     folderOpener: systemFolderOpener(),
