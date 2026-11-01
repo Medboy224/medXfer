@@ -174,6 +174,24 @@ Sur le câble, le réseau n'est plus la limite : 110 MB/s bruts, mais 83 à 92 M
 2. lire le chunk directement dans le tampon de la trame, sans la copie actuelle ;
 3. mesurer avant et après, sur Zorin et sur le PC, en répétant. Le but : le débit brut, moins le coût que le matériel impose.
 
+**Résultat** (1er novembre) : pas de changement de code.
+- **Trace d'exécution** du côté qui envoie (Zorin, une connexion, R3) :
+  - Go y prend son SHA-256 **générique** (`sha256.blockGeneric`) : ses chemins rapides demandent AVX2 ou SHA-NI, que le processeur de 2011 n'a pas ;
+  - dans une connexion, la goroutine qui écrit attend celle qui hache 80 % du temps. L'écriture rend la main presque tout de suite (le noyau garde les données), et avec deux requêtes en vol, la suivante arrive trop tard pour que le hachage ne s'arrête pas.
+- **Plus de requêtes en vol** (côté receveur), mesuré en R3 :
+
+  | En vol | 1 connexion | 2 | 4 (par défaut) |
+  |---|---|---|---|
+  | 2 (actuel) | 63,3 | 86,3 | **98,5** |
+  | 4 | 69,6 | 93,6 | 96,1 |
+  | 6 | 76,5 | 91,8 | 90,4 |
+
+- **Conclusion** :
+  - l'attente ne coûte qu'à une connexion seule ; avec les 4 connexions par défaut, medXfer tient **98,5 MB/s** en R3 sur le câble, et plus de requêtes en vol n'apporte rien. Les deux restent comme le dit la bible (§8.3) ;
+  - l'écart restant, jusqu'aux 110 MB/s bruts, est le processeur de Zorin : le SHA-256 générique de Go sur deux cœurs de 2011 ;
+  - entre deux PC récents (AVX2), le hachage de Go va bien au-delà de 110 MB/s : l'essai Windows ↔ Windows (WP-E.4) le vérifiera ;
+  - la copie du chunk dans la trame coûte environ 0,2 ms pour 2 Mo, contre 17 ms de hachage sur Zorin : pas de gain qui vaille le changement.
+
 Hors de ce lot :
 - changer de fonction de hachage : c'est un changement de protocole, qui passe par la revue G4 ;
 - le coût de `fsync` sur un disque dur (40 MB/s vers Zorin) : J8.
