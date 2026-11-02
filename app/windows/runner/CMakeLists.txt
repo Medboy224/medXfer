@@ -7,11 +7,13 @@ project(runner LANGUAGES CXX)
 #
 # Any new source files that you add to the application should be added here.
 add_executable(${BINARY_NAME} WIN32
+  "firewall.cpp"
   "flutter_window.cpp"
   "hotspot.cpp"
   "main.cpp"
   "utils.cpp"
   "win32_window.cpp"
+  "wired.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
   "Runner.rc"
   "runner.exe.manifest"
@@ -38,6 +40,8 @@ target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 # C++/WinRT, for the Wi-Fi Direct group of hotspot.cpp: C++20 (its coroutines; C++17 would need
 # the deprecated /await).
 target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib" "iphlpapi.lib" "ws2_32.lib")
+# Windows' firewall and its networks (firewall.cpp): COM, BSTR and VARIANT.
+target_link_libraries(${BINARY_NAME} PRIVATE "ole32.lib" "oleaut32.lib")
 target_compile_features(${BINARY_NAME} PRIVATE cxx_std_20)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 

@@ -9,6 +9,7 @@ import 'perf.dart';
 import 'platform/background.dart';
 import 'platform/cable.dart';
 import 'platform/file_picker.dart';
+import 'platform/firewall.dart';
 import 'platform/folders.dart';
 import 'platform/library.dart';
 import 'platform/hotspot.dart';
@@ -31,6 +32,7 @@ Future<void> main() async {
     network: systemNetworkInfo(),
     hotspot: systemHotspot(),
     cable: systemCableLink(),
+    firewall: systemFirewall(),
     qrScanner: systemQrScanner(),
     filePicker: systemFilePicker(),
     folderOpener: systemFolderOpener(),
