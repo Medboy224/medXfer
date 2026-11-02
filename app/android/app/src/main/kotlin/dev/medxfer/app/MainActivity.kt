@@ -23,6 +23,7 @@ class MainActivity : FlutterActivity() {
     // The joined network lost, then joined again: the core gets the new one (DISC-10, J6c).
     private val join by lazy { WifiJoin(this) { runOnUiThread { channel?.invokeMethod("networkChanged", null) } } }
     private val p2p by lazy { WifiDirectGroup(this) }
+    private val ble by lazy { BleProbe(this) }
     private val network by lazy { Network(this) }
     private val storage by lazy { Storage(this) }
     private val library by lazy { Library(this) }
@@ -198,7 +199,7 @@ class MainActivity : FlutterActivity() {
     }
 
     // The probes of WP-B.7 and WP-C.0, driven by adb: `am start -n dev.medxfer.app/.MainActivity
-    // --es probe hotspot-start|hotspot-stop|join|p2p-start|p2p-stop --es ssid … --es pass …
+    // --es probe hotspot-start|hotspot-stop|join|p2p-start|p2p-stop|ble-… --es ssid … --es pass …
     // --ei security … --es band 5|2|auto`; they report in logcat under the tag medxfer-probe.
     // The passphrases are the probes' own test networks'.
     // Debuggable builds only: the activity is exported, any app could send these extras.
@@ -217,6 +218,12 @@ class MainActivity : FlutterActivity() {
             // Wi-Fi Direct at 5 GHz (WP-C.0 of the J6c plan): the band asked, the one obtained.
             "p2p-start" -> p2p.start(intent.getStringExtra("band") ?: "5", log)
             "p2p-stop" -> p2p.stop { log(null, null) }
+            // BLE (WP-D.0 of the J6d plan): --ei seconds … --ei bytes … --es addr …
+            "ble-caps" -> ble.caps(log)
+            "ble-serve" -> ble.serve(intent.getIntExtra("seconds", 60), intent.getIntExtra("bytes", 200), log)
+            "ble-scan" -> ble.scan(intent.getIntExtra("seconds", 15), log)
+            "ble-exchange" -> ble.exchange(intent.getStringExtra("addr"), intent.getIntExtra("bytes", 200), log)
+            "ble-stop" -> { ble.stop(); log(null, null) }
         }
     }
 
