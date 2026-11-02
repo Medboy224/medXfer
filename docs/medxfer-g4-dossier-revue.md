@@ -1,13 +1,13 @@
 # medXfer — Dossier pour la revue cryptographique externe (gate G4)
 
-> Version du 13 octobre 2026, à la fin du jalon J5. Complétée le 2 novembre 2026 (jalon J6d) par le chemin par BLE (§3.7), conçu et pas encore codé.
+> Version du 13 octobre 2026, à la fin du jalon J5. Complétée le 2 novembre 2026 (jalon J6d) par le chemin par BLE (§3.7) : protocole codé dans le cœur, pas encore relié à l'API ni aux radios.
 > Destinataire : la personne ou le prestataire chargé de la revue externe de l'appairage par PIN. Une version anglaise peut être fournie dès que le prestataire est choisi.
 > Périmètre de la revue (décision D8 du plan J5) :
 > - `pkg/pake` ;
 > - le chemin P2 dans `pkg/pairing` ;
 > - la liaison au canal dans `pkg/securechan` ;
 > - les chapitres 6 et 7 de la bible technique ;
-> - le chemin par BLE (bible §6.6) : la conception aujourd'hui, le code du lot WP-D.2 de J6d quand il sera fusionné.
+> - le chemin par BLE (bible §6.6) : `pkg/pairing/ble.go`, et `Session.Key` dans `pkg/pake`.
 >
 > La revue conditionne la **publication**, pas la fusion du code.
 
@@ -168,6 +168,8 @@ Puis `K_i2r ‖ K_r2i = HKDF-SHA-256(ISK, sel vide, "medXfer-ble-v1 pin", 64)`. 
 
 **Seul fichier dépendant de la bibliothèque de groupe :** `pkg/pake/group.go` (décision D9). Toute la logique du protocole est écrite dans `cpace.go`, sans arithmétique de corps ni de groupe (`PAIR-06`, reformulée à la gate G1).
 
+**Seule modification de `pkg/pake` depuis la version relue (J6d) :** la méthode `Session.Key(info, n)`, soit `HKDF-SHA-256(ISK, sel vide, info, n)` (`crypto/hkdf`), pour le chemin par BLE (§3.7). Le reste du paquet est inchangé, remarques du point 11 comprises.
+
 ## 5. Tests
 
 | Fichier | Vérifie |
@@ -187,9 +189,24 @@ Puis `K_i2r ‖ K_r2i = HKDF-SHA-256(ISK, sel vide, "medXfer-ble-v1 pin", 64)`. 
 - 3 PIN faux, puis un nouveau PIN, l'ancien PIN exact étant refusé ;
 - envoi ponctuel par PIN dans les deux sens, fichiers identiques au SHA-256 près.
 
-**Chemin par BLE (§3.7) :** les tests sont prévus par la bible (§14.1 : rejeu, relais, essais partagés entre BLE et TLS, 16 étiquettes indiscernables, messages altérés, `pair_ble`, journaux), à écrire avec le code (WP-D.2).
+**Chemin par BLE (§3.7)**, `pkg/pairing/ble_test.go` et `pkg/pake/pake_test.go` :
 
-**Reproduire :** `go test ./pkg/pake ./pkg/pairing ./pkg/securechan ./pkg/api` ; `go test -run XXX -fuzz FuzzRespondPIN ./pkg/pairing`.
+| Test | Vérifie |
+|---|---|
+| `TestKey` | Les deux côtés tirent la même clé de l'ISK ; une autre pour un autre usage, une autre exécution, un mauvais PIN |
+| `TestBLETrusted`, `TestBLETrustOneSided` | Reconnaissance et demande entre appareils de confiance mutuelle ; refus quand un côté a oublié l'autre (`PAIR-09`) |
+| `TestBLEHelloTags` | Toujours 16 étiquettes, neuves à chaque défi, avec 0, 1 ou 17 appareils de confiance ; un inconnu n'y reconnaît rien |
+| `TestBLEReplay` | Une demande enregistrée refusée dans un autre échange, et après la minute du défi |
+| `TestBLEPIN`, `TestBLEWrongPIN`, `TestBLEDecoy` | Appairage par le PIN, PIN consommé ; 3 mauvais PIN détruisent le PIN ; PIN expiré joué sur un PIN factice, indiscernable |
+| `TestBLEAndTLSShareAttempts` | **Un seul compteur** : 2 mauvais PIN sur TLS et 1 par BLE détruisent le PIN |
+| `TestBLERelayChangesNonce`, `TestBLETampered` | Un relais qui change un nonce casse la confirmation ; un message modifié, coupé, allongé ou d'un autre type est refusé |
+| `TestBLENothingStableInClear` | Aucune empreinte, aucun nom ni mot de passe de réseau en clair dans les messages |
+| `TestBLEOnePINRequest`, `TestBLEStalePINRequest` | Une seule demande de PIN à la fois ; « Refuser » ; une connexion perdue ne garde pas l'écran |
+| `FuzzBLEReceive` | Messages quelconques, dans n'importe quel ordre : jamais de panique, jamais de demande authentifiée. Environ 1,5 million d'exécutions en 60 s, sans défaut trouvé. |
+
+Restent à écrire avec l'API : `pair_ble` sur TLS, et l'absence de secret BLE dans les journaux.
+
+**Reproduire :** `go test ./pkg/pake ./pkg/pairing ./pkg/securechan ./pkg/api` ; `go test -run XXX -fuzz FuzzRespondPIN ./pkg/pairing` ; `go test -run XXX -fuzz FuzzBLEReceive ./pkg/pairing`.
 
 ## 6. Limites connues et questions pour la revue
 
