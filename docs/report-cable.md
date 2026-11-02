@@ -56,6 +56,11 @@ Ce rapport répond au critère de sortie du plan : *Windows ↔ Linux, sans rég
 | Arrêtée par un signal, l'application Linux laissait son profil sur la carte | Seule la fermeture de la fenêtre passait par l'arrêt propre | #236 |
 | Le câble du PC sans adresse `169.254` | L'adresse `192.168.137.1` d'un partage arrêté, restée sur la carte | #237 (l'avis) ; retirée par l'utilisateur |
 | Vers un disque dur, 40 MB/s pour un disque qui écrit 64 | Réception et `fsync` alternaient : le commit tournait dans l'écrivain | #239 |
+| Par le Wi-Fi, ce PC ne joignait pas le second, et le second ne pouvait pas envoyer | Le pare-feu du second PC n'autorisait medXfer qu'en profil Public, et son Wi-Fi était classé Privé | #244 |
+| « failed to pair … i/o timeout » brut ; rien ne disait qu'une connexion était en cours | Les erreurs du cœur montrées telles quelles | #243 |
+| À 1,3 MB/s, la barre restait immobile, puis sautait de 44 % | La progression ne comptait que les chunks écrits | #242 |
+| Une adresse réglée à la main sur le câble empêchait la liaison sans rien dire | Seule l'adresse d'un partage arrêté était signalée | #246 |
+| Le paquet Windows contenait `flutter_zxing.dll`, retirée dans #229 | La construction ajoute au dossier `Release` sans le vider | #247 |
 
 ## 6. Réserves et suite
 
@@ -64,7 +69,7 @@ Ce rapport répond au critère de sortie du plan : *Windows ↔ Linux, sans rég
 | 1 | Un PC qui partage sa connexion sur le câble (configuration 2) n'a pas été essayé en direct : le PC des essais risquait de perdre Internet | Avec le MikroTik de l'utilisateur, déjà prévu (rapport J6c) |
 | 2 | Sous Linux par défaut, la première adresse arrive en 50 à 65 s : l'application attend l'échec du DHCP pour ne jamais prendre la place d'un vrai réseau | Plus tôt quand NetworkManager a déjà abandonné avant le lancement, à étudier |
 | 3 | Sur Zorin, le SHA-256 générique de Go (processeur sans AVX2) et le disque dur limitent le débit | Matériel. Une autre fonction de hachage serait un changement de protocole (revue G4) |
-| 4 | Le pare-feu Windows : le second PC a dû autoriser medXfer sur les réseaux publics | L'installateur de J8 |
+| 4 | Le pare-feu Windows : l'application le vérifie et propose de l'autoriser (#244), avec l'accord de l'administrateur | L'installateur de J8 posera la règle dès l'installation |
 | 5 | Tests intermittents sur macOS : #184, #240 | À reproduire en boucle et corriger |
 | 6 | L'IPv6 link-local n'est pas pris en charge | Inutile avec E1 ; à revoir si un système n'a plus d'IPv4 |
 | 7 | Guide d'utilisation de l'application | **Reporté à la première version** : l'application change encore |
