@@ -137,6 +137,17 @@ void main() {
     expect((link.running, link.problem, radio.started), (true, null, true));
   });
 
+  test('D3: paused while a session is open, started again after it', () async {
+    await link.start();
+    expect(radio.started, isTrue);
+    connection.take(const CoreEvent('paired', data: {'ip': '10.34.109.23', 'device_name': 'TECNO'}));
+    await _settle();
+    expect((radio.started, link.running, link.paused), (false, false, true));
+    connection.take(const CoreEvent('disconnected', data: {'reason': 'peer requested disconnect'}));
+    await _settle();
+    expect((radio.started, link.running, link.paused), (true, true, false));
+  });
+
   test('touched by an unknown device: the core answers each message, the phone creates its network at 5 GHz, the answer is read', () async {
     core.on('ble_server', (p) => switch (p['step']) {
           'message' => _reply('ble_server', {

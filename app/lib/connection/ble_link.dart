@@ -51,6 +51,7 @@ const _band5 = 2;
 class BleLink extends ChangeNotifier {
   BleLink(this.core, this.ble, this.connection) {
     _events = ble.events.listen(_take);
+    connection.addListener(_sessionChanged);
   }
 
   final Core core;
@@ -115,12 +116,34 @@ class BleLink extends ChangeNotifier {
   }
 
   Future<void> stop() async {
+    _paused = false;
     if (!_running) return;
     _running = false;
     _devices.clear();
     _servedTrusted.clear();
     await ble.stop();
     notifyListeners();
+  }
+
+  bool _paused = false;
+
+  /// Stopped while a session is open, started again after it (D3): BLE only serves to find each
+  /// other. Its scan and advertisement at full rate shared the 2.4 GHz radio with the network
+  /// just joined, which a phone with one chip for both lost after 70 s (real test of 2 November
+  /// 2026).
+  bool get paused => _paused;
+
+  void _sessionChanged() {
+    final inSession = connection.session != null;
+    if (inSession && _running) {
+      unawaited(stop().then((_) {
+        _paused = true;
+        notifyListeners();
+      }));
+    } else if (!inSession && _paused) {
+      _paused = false;
+      unawaited(start());
+    }
   }
 
   void _take(BleEvent e) {
@@ -328,6 +351,7 @@ class BleLink extends ChangeNotifier {
 
   @override
   void dispose() {
+    connection.removeListener(_sessionChanged);
     unawaited(_events.cancel());
     super.dispose();
   }

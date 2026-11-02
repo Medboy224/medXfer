@@ -206,6 +206,7 @@
   "devBle": "Bluetooth (BLE)",
   "devBleRunning": "Annonce et recherche en cours",
   "devBleStopped": "Arrêté",
+  "devBlePaused": "En pause pendant la session",
   "devBleStart": "Démarrer",
   "devBleStop": "Arrêter",
   "devBleTurnOn": "Activer le Bluetooth",

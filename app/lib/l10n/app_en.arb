@@ -254,6 +254,7 @@
   "devBle": "Bluetooth (BLE)",
   "devBleRunning": "Advertising and scanning",
   "devBleStopped": "Stopped",
+  "devBlePaused": "Paused while a session is open",
   "devBleStart": "Start",
   "devBleStop": "Stop",
   "devBleTurnOn": "Turn Bluetooth on",

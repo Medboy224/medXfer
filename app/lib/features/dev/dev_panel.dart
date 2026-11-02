@@ -165,7 +165,7 @@ class _BleTryState extends State<_BleTry> {
           children: [
             Row(
               children: [
-                Expanded(child: Text(link.running ? l.devBleRunning : (link.problem ?? l.devBleStopped), key: const Key('ble-state'))),
+                Expanded(child: Text(link.running ? l.devBleRunning : (link.paused ? l.devBlePaused : (link.problem ?? l.devBleStopped)), key: const Key('ble-state'))),
                 if (link.problem == 'bluetooth_off')
                   TextButton(key: const Key('ble-turn-on'), onPressed: () => unawaited(link.turnOn()), child: Text(l.devBleTurnOn))
                 else

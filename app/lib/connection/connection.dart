@@ -315,6 +315,7 @@ class Connection extends ChangeNotifier {
   bool _wantHotspot = false; // asked by the user, not stopped yet
   bool _hotspotWifiOff = false;
   bool _hotspotLowBand = false; // asked at 2.4 GHz, until stopped (setHotspotFiveGhz)
+  Timer? _hotspotGiveUp; // this device's network kept after its session was lost
   bool _hotspotOtherWifi = false;
 
   /// This device's network is wanted, but its Wi-Fi is off: it comes once it is on (#219).
@@ -564,6 +565,8 @@ class Connection extends ChangeNotifier {
 
   /// Stops this device's access point; the core gets every interface back.
   Future<void> stopHotspot() async {
+    _hotspotGiveUp?.cancel();
+    _hotspotGiveUp = null;
     _wantHotspot = false;
     _hotspotWifiOff = false;
     _hotspotLowBand = false;
@@ -918,8 +921,20 @@ class Connection extends ChangeNotifier {
         _session = null;
         _reconnecting = false;
         _trustOffer = null;
-        // The network made for this session is no longer needed.
-        if (_myHotspot != null && !_showing) unawaited(stopHotspot());
+        // The network made for this session: no longer needed once left. Lost, it waits for the
+        // other device as long as that one comes back (rejoinFor, as on the joining side): it was
+        // stopped at once, and the phone that joined it again 8 s later found none (real test of
+        // 2 November 2026).
+        if (_myHotspot != null && !_showing) {
+          if (m['reason'] == 'connection timed out') {
+            _hotspotGiveUp?.cancel();
+            _hotspotGiveUp = Timer(rejoinFor, () {
+              if (_session == null && !_showing) unawaited(stopHotspot());
+            });
+          } else {
+            unawaited(stopHotspot());
+          }
+        }
         if (_joined != null) {
           if (m['reason'] == 'connection timed out') {
             // Lost, not left (J6c): the network is joined again (WifiJoin) and the session
@@ -1004,6 +1019,7 @@ class Connection extends ChangeNotifier {
     _connectingLimit?.cancel();
     _scanLimit?.cancel();
     _giveUp?.cancel();
+    _hotspotGiveUp?.cancel();
     _hotspotWatch?.cancel();
     _hotspotRetry?.cancel();
     _netSub?.cancel();
