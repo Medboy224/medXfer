@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../connection/connection.dart';
 import '../../l10n/app_localizations.dart';
+import '../../platform/hotspot.dart' show WifiBand;
 import '../../theme.dart';
 import '../../widgets/qr_view.dart';
 import 'connect_screen.dart';
@@ -139,7 +140,40 @@ class _HotspotScreenState extends State<HotspotScreen> {
                     showSelectedIcon: false,
                     onSelectionChanged: (s) => setState(() => _pinTab = s.first),
                   ),
+                  // The band obtained (WP-D.4 of the J6d plan): 5 GHz carries ten times more.
+                  if (h.band case final band?) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      l.hotspotBandLine(switch (band) { WifiBand.ghz24 => l.band24, WifiBand.ghz5 => l.band5, WifiBand.ghz6 => l.band6 }),
+                      key: const Key('hotspot-band'),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: c.muted, fontSize: 13),
+                    ),
+                  ],
                   const SizedBox(height: 18),
+                  // Connected to another Wi-Fi as well, the phone's radio switches between the two
+                  // channels: said, with the way to leave it (WP-C.0 of the J6c plan).
+                  if (_c.hotspotOtherWifi) ...[
+                    Container(
+                      key: const Key('hotspot-other-wifi'),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(border: Border.all(color: c.danger), borderRadius: BorderRadius.circular(12)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(l.hotspotOtherWifi, style: const TextStyle(fontSize: 13, height: 1.4)),
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            key: const Key('hotspot-wifi-settings'),
+                            onPressed: () => unawaited(_c.leaveOtherWifi()),
+                            icon: const Icon(Icons.wifi_rounded),
+                            label: Text(l.hotspotOpenWifiSettings),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                  ],
                   // Windows serves no addresses here: said before the phone is dropped, with the
                   // cause and the way to a stable connection (WP-C.5 of the J6c plan).
                   if (h.dropsClients) ...[
@@ -197,6 +231,15 @@ class _HotspotScreenState extends State<HotspotScreen> {
                       ),
                     ),
                   ],
+                  // A phone or a card without 5 GHz does not see the network (WP-D.4).
+                  if (h.band == WifiBand.ghz5)
+                    Center(
+                      child: TextButton(
+                        key: const Key('hotspot-lower-band'),
+                        onPressed: () => unawaited(_c.lowerHotspotBand()),
+                        child: Text(l.hotspotLowerBand, textAlign: TextAlign.center),
+                      ),
+                    ),
                   const SizedBox(height: 8),
                   Center(child: CodeCountdown(until: pin.expires, onExpired: () => unawaited(_c.showCode()))),
                   const SizedBox(height: 12),

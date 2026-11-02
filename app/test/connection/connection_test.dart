@@ -79,7 +79,7 @@ class _FakeHotspot implements Hotspot {
   }
 
   @override
-  Future<HotspotInfo> start() async {
+  Future<HotspotInfo> start({bool fiveGhz = true}) async {
     log.add('start');
     return const HotspotInfo(ssid: 'AndroidShare_1732', passphrase: 'vvrtsy', security: 2, address: '10.46.56.232');
   }
@@ -102,7 +102,7 @@ class _FakeHotspot implements Hotspot {
   Future<int> joinedNetwork() async => 643355824141;
 
   @override
-  Future<bool> openWifiPanel() async {
+  Future<bool> openWifiPanel({bool always = false}) async {
     log.add('wifi panel');
     if (panelTurnsOn) wifiOff = false;
     return !wifiOff;
@@ -110,6 +110,9 @@ class _FakeHotspot implements Hotspot {
 
   @override
   Future<bool> alive() async => true;
+
+  @override
+  Future<bool> otherWifi() async => false;
 
   @override
   Future<bool> wifiOn() async => true;
@@ -141,7 +144,7 @@ class _DesktopHotspot implements Hotspot {
   Future<bool> permission() async => true;
 
   @override
-  Future<HotspotInfo> start() async {
+  Future<HotspotInfo> start({bool fiveGhz = true}) async {
     log.add('start');
     if (failingStarts > 0) {
       failingStarts--;
@@ -173,13 +176,16 @@ class _DesktopHotspot implements Hotspot {
   Future<int> joinedNetwork() async => 0;
 
   @override
-  Future<bool> openWifiPanel() async {
+  Future<bool> openWifiPanel({bool always = false}) async {
     log.add('wifi on');
     return wifi = true;
   }
 
   @override
   Future<bool> alive() async => running;
+
+  @override
+  Future<bool> otherWifi() async => false;
 
   @override
   Future<bool> wifiOn() async => wifi;

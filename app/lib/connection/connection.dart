@@ -300,9 +300,15 @@ class Connection extends ChangeNotifier {
   bool _checkingHotspot = false;
   bool _wantHotspot = false; // asked by the user, not stopped yet
   bool _hotspotWifiOff = false;
+  bool _hotspotLowBand = false; // asked at 2.4 GHz, until stopped (lowerHotspotBand)
+  bool _hotspotOtherWifi = false;
 
   /// This device's network is wanted, but its Wi-Fi is off: it comes once it is on (#219).
   bool get hotspotWifiOff => _hotspotWifiOff;
+
+  /// This device's Wi-Fi is connected to another network as well, which slows its own to a crawl
+  /// ([Hotspot.otherWifi]): the screen says so, until the user leaves it.
+  bool get hotspotOtherWifi => _hotspotOtherWifi;
 
   /// This device is on another's network, joined by its QR code, or joining it again (J6c).
   bool get joining => _joined != null;
@@ -525,7 +531,8 @@ class Connection extends ChangeNotifier {
         _keepHotspot();
         return;
       }
-      _myHotspot = await hotspot.start();
+      _myHotspot = await hotspot.start(fiveGhz: !_hotspotLowBand);
+      _hotspotOtherWifi = await hotspot.otherWifi();
       _hotspotWatch = Timer.periodic(hotspotCheck, (_) => unawaited(_checkHotspot()));
       await pushNetwork();
       if (_codeOpen) await showCode();
@@ -545,6 +552,8 @@ class Connection extends ChangeNotifier {
   Future<void> stopHotspot() async {
     _wantHotspot = false;
     _hotspotWifiOff = false;
+    _hotspotLowBand = false;
+    _hotspotOtherWifi = false;
     _hotspotRetry?.cancel();
     _hotspotRetry = null;
     await _dropHotspot();
@@ -565,6 +574,29 @@ class Connection extends ChangeNotifier {
   /// then comes by itself ([_keepHotspot]).
   Future<void> turnWifiOn() => hotspot.openWifiPanel();
 
+  /// Opens the system's Wi-Fi settings for the user to leave the other network
+  /// ([hotspotOtherWifi]); read again once they close.
+  Future<void> leaveOtherWifi() async {
+    await hotspot.openWifiPanel(always: true);
+    await _readOtherWifi();
+  }
+
+  Future<void> _readOtherWifi() async {
+    final other = _myHotspot != null && await hotspot.otherWifi();
+    if (other == _hotspotOtherWifi) return;
+    _hotspotOtherWifi = other;
+    notifyListeners();
+  }
+
+  /// This device's network again, at 2.4 GHz: the other device does not see it at 5 GHz (a
+  /// phone or a card without 5 GHz). Kept until the network is stopped.
+  Future<void> lowerHotspotBand() async {
+    if (_myHotspot?.band != WifiBand.ghz5 || _hotspotBusy) return;
+    _hotspotLowBand = true;
+    await _dropHotspot();
+    await _startHotspot();
+  }
+
   /// The access point stopped by the system (#219), stopped here too. Nobody on it yet: another
   /// is created ([_keepHotspot]), the screen showing what goes on, its Wi-Fi off included. During
   /// a session, said, and none behind it.
@@ -572,7 +604,10 @@ class Connection extends ChangeNotifier {
     if (_myHotspot == null || _hotspotBusy || _checkingHotspot) return;
     _checkingHotspot = true;
     try {
-      if (await hotspot.alive() || _myHotspot == null) return;
+      if (await hotspot.alive() || _myHotspot == null) {
+        await _readOtherWifi();
+        return;
+      }
       if (_session != null) {
         _notices.add(const HotspotLost());
         await stopHotspot();

@@ -63,6 +63,13 @@ class MainActivity : FlutterActivity() {
                     "hotspotStop" -> { hotspot.stop(); result.success(null) }
                     // Android may stop it on its own (onStopped), without a word to the app (#219).
                     "hotspotAlive" -> result.success(hotspot.running)
+                    // The Wi-Fi Direct group at 5 GHz, kept by the app when it gets it (WP-D.4).
+                    "groupStart" -> p2p.start(call.argument<String>("band") ?: "5") { info, err ->
+                        if (err != null) result.error("group", err, null) else result.success(info)
+                    }
+                    "groupStop" -> p2p.stop { result.success(null) }
+                    "groupAlive" -> p2p.alive { result.success(it) }
+                    "otherWifi" -> result.success(p2p.otherWifi())
                     "hotspotJoin" -> join.join(
                         call.argument<String>("ssid") ?: "",
                         call.argument<String>("passphrase") ?: "",
@@ -70,7 +77,7 @@ class MainActivity : FlutterActivity() {
                     ) { info, err ->
                         if (err != null) result.error(if (err == WifiJoin.WIFI_OFF) WifiJoin.WIFI_OFF else "join", err, null) else result.success(info)
                     }
-                    "openWifiPanel" -> openWifiPanel { result.success(it) }
+                    "openWifiPanel" -> openWifiPanel(call.argument<Boolean>("always") == true) { result.success(it) }
                     // A QR code read by the app's camera screen (QrScanActivity.kt); null: back.
                     "scanQr" -> {
                         scanAnswer?.invoke(null)
@@ -139,9 +146,10 @@ class MainActivity : FlutterActivity() {
     private var scanAnswer: ((String?) -> Unit)? = null
 
     // The system's Wi-Fi panel, for the user to turn Wi-Fi on: an app cannot, from Android 10 on
-    // (#218). done gets whether it is on once the panel closes.
-    private fun openWifiPanel(done: (Boolean) -> Unit) {
-        if (join.wifiOn) return done(true)
+    // (#218). always: opened with Wi-Fi on too, for the user to leave a network (WP-D.4). done
+    // gets whether it is on once the panel closes.
+    private fun openWifiPanel(always: Boolean, done: (Boolean) -> Unit) {
+        if (!always && join.wifiOn) return done(true)
         wifiPanelAnswer?.invoke(false) // a panel still open counts as closed with Wi-Fi off
         wifiPanelAnswer = done
         startActivityForResult(Intent(Settings.Panel.ACTION_WIFI), WIFI_PANEL_REQUEST)
@@ -215,7 +223,7 @@ class MainActivity : FlutterActivity() {
             "join" -> join.join(intent.getStringExtra("ssid") ?: "", intent.getStringExtra("pass") ?: "", intent.getIntExtra("security", 1), log)
             "leave" -> { join.leave(); log(null, null) }
             "interfaces" -> log(mapOf("interfaces" to LocalHotspot.interfaces()), null)
-            // Wi-Fi Direct at 5 GHz (WP-C.0 of the J6c plan): the band asked, the one obtained.
+            // Wi-Fi Direct (WP-C.0 of the J6c plan): the band asked, the one obtained.
             "p2p-start" -> p2p.start(intent.getStringExtra("band") ?: "5", log)
             "p2p-stop" -> p2p.stop { log(null, null) }
             // BLE (WP-D.0 of the J6d plan): --ei seconds … --ei bytes … --es addr …
