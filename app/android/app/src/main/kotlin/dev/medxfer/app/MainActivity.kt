@@ -74,8 +74,9 @@ class MainActivity : FlutterActivity() {
                         call.argument<String>("ssid") ?: "",
                         call.argument<String>("passphrase") ?: "",
                         call.argument<Int>("security") ?: 1,
+                        call.argument<String>("band"),
                     ) { info, err ->
-                        if (err != null) result.error(if (err == WifiJoin.WIFI_OFF) WifiJoin.WIFI_OFF else "join", err, null) else result.success(info)
+                        if (err != null) result.error(if (err == WifiJoin.WIFI_OFF || err == WifiJoin.NO_BAND) err else "join", err, null) else result.success(info)
                     }
                     "openWifiPanel" -> openWifiPanel(call.argument<Boolean>("always") == true) { result.success(it) }
                     // A QR code read by the app's camera screen (QrScanActivity.kt); null: back.
@@ -220,7 +221,7 @@ class MainActivity : FlutterActivity() {
         when (what) {
             "hotspot-start" -> hotspot.start(log)
             "hotspot-stop" -> { hotspot.stop(); log(null, null) }
-            "join" -> join.join(intent.getStringExtra("ssid") ?: "", intent.getStringExtra("pass") ?: "", intent.getIntExtra("security", 1), log)
+            "join" -> join.join(intent.getStringExtra("ssid") ?: "", intent.getStringExtra("pass") ?: "", intent.getIntExtra("security", 1), intent.getStringExtra("band"), log)
             "leave" -> { join.leave(); log(null, null) }
             "interfaces" -> log(mapOf("interfaces" to LocalHotspot.interfaces()), null)
             // Wi-Fi Direct (WP-C.0 of the J6c plan): the band asked, the one obtained.

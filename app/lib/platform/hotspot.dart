@@ -29,6 +29,12 @@ enum WifiBand {
         >= 5925 && < 7125 => ghz6,
         _ => null,
       };
+
+  /// Its code in a QR code (wb) and to the platform: 2, 5 or 6.
+  String get code => switch (this) { ghz24 => '2', ghz5 => '5', ghz6 => '6' };
+
+  /// The band of a code; null for none, or one unknown.
+  static WifiBand? ofCode(String? code) => switch (code) { '2' => ghz24, '5' => ghz5, '6' => ghz6, _ => null };
 }
 
 /// A network created, or joined, by the app.
@@ -110,8 +116,10 @@ abstract interface class Hotspot {
   Future<void> stop();
 
   /// Joins another device's access point (the QR gives ssid and passphrase): the app's
-  /// connections, the core's included, then go through it.
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1});
+  /// connections, the core's included, then go through it. [band], when the QR gives it: a
+  /// device whose radio lacks it refuses at once, with the code no_band (WP-D.4), rather than
+  /// let Android search for a network it cannot see.
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band});
   Future<void> leave();
 
   /// The joined network's handle, for the core's sockets (pkg/netbind); 0 for none. It changes
@@ -191,8 +199,8 @@ class AndroidHotspot implements Hotspot {
   }
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async => HotspotInfo.fromMap(
-      (await channel.invokeMethod<Map<Object?, Object?>>('hotspotJoin', {'ssid': ssid, 'passphrase': passphrase, 'security': security}))!);
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) async => HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>(
+      'hotspotJoin', {'ssid': ssid, 'passphrase': passphrase, 'security': security, if (band != null) 'band': band.code}))!);
 
   @override
   Future<void> leave() => channel.invokeMethod<void>('hotspotLeave');
@@ -236,7 +244,7 @@ class NoHotspot implements Hotspot {
   Future<void> stop() async {}
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) => throw UnsupportedError('no joining on this platform');
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) => throw UnsupportedError('no joining on this platform');
 
   @override
   Future<void> leave() async {}
@@ -331,7 +339,7 @@ class WindowsHotspot implements Hotspot {
   }
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) => throw UnsupportedError('a computer joins in the system settings');
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) => throw UnsupportedError('a computer joins in the system settings');
 
   @override
   Future<void> leave() async {}
@@ -435,7 +443,7 @@ class LinuxHotspot implements Hotspot {
   }
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) => throw UnsupportedError('joining is the system settings\' job');
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) => throw UnsupportedError('joining is the system settings\' job');
 
   @override
   Future<void> leave() async {}

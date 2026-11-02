@@ -142,12 +142,18 @@ class _HotspotScreenState extends State<HotspotScreen> {
                   ),
                   // The band obtained (WP-D.4 of the J6d plan): 5 GHz carries ten times more.
                   if (h.band case final band?) ...[
-                    const SizedBox(height: 10),
-                    Text(
-                      l.hotspotBandLine(switch (band) { WifiBand.ghz24 => l.band24, WifiBand.ghz5 => l.band5, WifiBand.ghz6 => l.band6 }),
+                    const SizedBox(height: 12),
+                    Row(
                       key: const Key('hotspot-band'),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: c.muted, fontSize: 13),
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(band == WifiBand.ghz24 ? Icons.wifi_rounded : Icons.speed_rounded, size: 18, color: Theme.of(context).colorScheme.primary),
+                        const SizedBox(width: 6),
+                        Text(
+                          l.hotspotBandLine(switch (band) { WifiBand.ghz24 => l.band24, WifiBand.ghz5 => l.band5, WifiBand.ghz6 => l.band6 }),
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                        ),
+                      ],
                     ),
                   ],
                   const SizedBox(height: 18),
@@ -231,15 +237,6 @@ class _HotspotScreenState extends State<HotspotScreen> {
                       ),
                     ),
                   ],
-                  // A phone or a card without 5 GHz does not see the network (WP-D.4).
-                  if (h.band == WifiBand.ghz5)
-                    Center(
-                      child: TextButton(
-                        key: const Key('hotspot-lower-band'),
-                        onPressed: () => unawaited(_c.lowerHotspotBand()),
-                        child: Text(l.hotspotLowerBand, textAlign: TextAlign.center),
-                      ),
-                    ),
                   const SizedBox(height: 8),
                   Center(child: CodeCountdown(until: pin.expires, onExpired: () => unawaited(_c.showCode()))),
                   const SizedBox(height: 12),
@@ -252,6 +249,17 @@ class _HotspotScreenState extends State<HotspotScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
+                  // 5 GHz by default (decision of 2 November 2026); off for a phone or a card
+                  // without it (WP-D.4). Shown when there is a choice: the phone got 5 GHz, or
+                  // left it. Not during a session: the network made again would cut it.
+                  if (h.band == WifiBand.ghz5 || _c.hotspotLowBand)
+                    SwitchListTile(
+                      key: const Key('hotspot-five-ghz'),
+                      value: !_c.hotspotLowBand,
+                      onChanged: _c.session == null ? (v) => unawaited(_c.setHotspotFiveGhz(v)) : null,
+                      title: Text(l.hotspotFiveGhz),
+                      subtitle: Text(l.hotspotFiveGhzHint),
+                    ),
                   SwitchListTile(
                     key: const Key('remember'),
                     value: _c.remember,

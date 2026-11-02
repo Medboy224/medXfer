@@ -65,7 +65,7 @@ class _Hotspot implements Hotspot {
   @override
   Future<void> stop() async {}
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async => const HotspotInfo();
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) async => const HotspotInfo();
   @override
   Future<void> leave() async {}
   @override
@@ -90,7 +90,7 @@ class _WifiOffHotspot extends _Hotspot {
   final log = <String>[];
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async {
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) async {
     log.add('join');
     if (!on) throw PlatformException(code: 'wifi_off');
     return const HotspotInfo();
@@ -327,7 +327,7 @@ void main() {
     expect(state.connection.myHotspot, isNull);
   });
 
-  testWidgets('WP-D.4: the group at 5 GHz said; the other Wi-Fi said, then left; 2.4 GHz on request', (tester) async {
+  testWidgets('WP-D.4: the group at 5 GHz said; the other Wi-Fi said, then left; the 5 GHz switch both ways', (tester) async {
     final core = _core();
     final h = _GroupHotspot();
     final (_, state) = await _app(tester, core, hotspot: h);
@@ -341,21 +341,29 @@ void main() {
     }
     await pumpABit();
     expect(find.text('Réseau à 5 GHz'), findsOneWidget);
-    expect(state.connection.qrData, contains('ws=DIRECT-KQ-medXfer'));
+    expect(state.connection.qrData, allOf(contains('ws=DIRECT-KQ-medXfer'), contains('wb=5')));
     // Also on another Wi-Fi: said, and the settings opened to leave it.
     expect(find.byKey(const Key('hotspot-other-wifi')), findsOneWidget);
     await tester.tap(find.byKey(const Key('hotspot-wifi-settings')));
     await pumpABit();
     expect(find.byKey(const Key('hotspot-other-wifi')), findsNothing);
-    // The other device does not see 5 GHz: the network again, at 2.4 GHz, in the QR code too.
+    // The other device does not see 5 GHz: high speed off, the network again at 2.4 GHz, in
+    // the QR code too; the switch stays, to come back.
     final list = find.descendant(of: find.byType(HotspotScreen), matching: find.byType(Scrollable)).first;
-    await tester.scrollUntilVisible(find.byKey(const Key('hotspot-lower-band')), 200, scrollable: list);
-    await tester.tap(find.byKey(const Key('hotspot-lower-band')));
+    final fiveGhz = find.byKey(const Key('hotspot-five-ghz'));
+    await tester.scrollUntilVisible(fiveGhz, 200, scrollable: list);
+    expect(tester.widget<SwitchListTile>(fiveGhz).value, isTrue);
+    await tester.tap(fiveGhz);
     await pumpABit();
     expect(h.starts, [true, false]);
-    expect(state.connection.qrData, contains('ws=AndroidShare_1732'));
+    expect(state.connection.qrData, allOf(contains('ws=AndroidShare_1732'), isNot(contains('wb='))));
     expect(find.byKey(const Key('hotspot-band')), findsNothing);
-    expect(find.byKey(const Key('hotspot-lower-band')), findsNothing);
+    await tester.scrollUntilVisible(fiveGhz, 200, scrollable: list);
+    expect(tester.widget<SwitchListTile>(fiveGhz).value, isFalse);
+    await tester.tap(fiveGhz);
+    await pumpABit();
+    expect(h.starts, [true, false, true]);
+    expect(state.connection.qrData, contains('ws=DIRECT-KQ-medXfer'));
     await tester.scrollUntilVisible(find.byKey(const Key('hotspot-stop')), 200, scrollable: list);
     await pumpABit();
     await tester.tap(find.byKey(const Key('hotspot-stop')));

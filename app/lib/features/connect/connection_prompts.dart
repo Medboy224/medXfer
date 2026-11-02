@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../../connection/connection.dart';
 import '../../connection/pair_link.dart';
 import '../../l10n/app_localizations.dart';
+import '../../platform/hotspot.dart' show WifiBand;
 import '../../theme.dart';
 
 /// Wraps the app (MaterialApp.builder): it opens its windows through [navigator] and shows
@@ -87,13 +88,23 @@ class _ConnectionPromptsState extends State<ConnectionPrompts> {
       TrustIncomplete(:final name, :final local) => local ? l.noticeTrustIncompleteLocal(name) : l.noticeTrustIncompleteRemote(name),
       HotspotFailed(:final permission, :final reason) => permission ? l.noticeHotspotPermission : l.noticeHotspotFailed(reason),
       HotspotLost() => l.noticeHotspotLost,
+      HotspotSlowed() => l.noticeHotspotSlowed,
       JoinFailed(:final ssid) => l.noticeJoinFailed(ssid),
+      JoinBandMissing(:final band) => l.noticeJoinBandMissing(switch (band) { WifiBand.ghz24 => l.band24, WifiBand.ghz5 => l.band5, WifiBand.ghz6 => l.band6 }),
       KeyChanged() || WifiOff() => '',
     };
     widget.messenger.currentState
       ?..clearSnackBars()
-      // Long enough to read, and to act on: a device out of reach says what to do.
-      ..showSnackBar(SnackBar(content: Text(text), behavior: SnackBarBehavior.floating, duration: n is PeerUnreachable ? const Duration(seconds: 12) : const Duration(seconds: 4)));
+      // Long enough to read, and to act on: a device out of reach says what to do; a network
+      // slowed by another Wi-Fi opens the settings to leave it.
+      ..showSnackBar(SnackBar(
+        content: Text(text),
+        behavior: SnackBarBehavior.floating,
+        duration: n is PeerUnreachable || n is HotspotSlowed || n is JoinBandMissing ? const Duration(seconds: 12) : const Duration(seconds: 4),
+        action: n is HotspotSlowed
+            ? SnackBarAction(key: const Key('notice-wifi-settings'), label: l.hotspotOpenWifiSettings, onPressed: () => unawaited(_c.leaveOtherWifi()))
+            : null,
+      ));
   }
 
   @override

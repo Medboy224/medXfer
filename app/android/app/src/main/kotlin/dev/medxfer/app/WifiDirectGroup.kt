@@ -114,23 +114,28 @@ class WifiDirectGroup(context: Context) {
     /**
      * Whether this device's Wi-Fi is connected to a network as well: its single radio then
      * switches between the two channels, and the group slows to a crawl (215 ms of ping, 5 to
-     * 7 MB/s, in WP-C.0 of the J6c plan).
+     * 7 MB/s, in WP-C.0 of the J6c plan). Android 16 lists the group itself as a Wi-Fi network
+     * (p2p-wlan0-0, real test of 2 November 2026): Wi-Fi Direct interfaces are left out.
      */
     @Suppress("DEPRECATION") // allNetworks: a callback would only say the same, later
-    fun otherWifi(): Boolean = cm.allNetworks.any { cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true }
+    fun otherWifi(): Boolean = cm.allNetworks.any {
+        cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
+            cm.getLinkProperties(it)?.interfaceName?.startsWith("p2p") != true
+    }
 
     @SuppressLint("MissingPermission")
     private fun describe(done: (Map<String, Any?>?, String?) -> Unit, tries: Int) {
+        val again = { main.postDelayed({ describe(done, tries - 1) }, 500); Unit }
         manager!!.requestGroupInfo(channel!!) { g: WifiP2pGroup? ->
             if (g == null || !g.isGroupOwner) {
-                if (tries > 1) return@requestGroupInfo main.postDelayed({ describe(done, tries - 1) }, 500)
+                if (tries > 1) return@requestGroupInfo again()
                 running = false
                 return@requestGroupInfo done(null, "failed:no_group")
             }
             // The group's address comes from Android's address server, a moment after the group.
             val address = g.`interface`?.let { NetworkInterface.getByName(it) }?.inetAddresses?.toList()
                 ?.filterIsInstance<Inet4Address>()?.firstOrNull()?.hostAddress
-            if (address == null && tries > 1) return@requestGroupInfo main.postDelayed({ describe(done, tries - 1) }, 500)
+            if (address == null && tries > 1) return@requestGroupInfo again()
             done(
                 mapOf(
                     "ssid" to g.networkName,

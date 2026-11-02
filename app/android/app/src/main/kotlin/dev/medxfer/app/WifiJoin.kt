@@ -33,11 +33,15 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
     /**
      * Joins ssid; done gets the network's local address, or an error: "wifi_off" when Wi-Fi is off,
      * Android refusing the request then (real tests of 29 October 2026). security: as LocalHotspot
-     * reports it.
+     * reports it. band: the network's ("2", "5", "6"), when the QR gives it; "no_band" when this
+     * radio lacks it.
      */
-    fun join(ssid: String, passphrase: String, security: Int, done: (Map<String, Any?>?, String?) -> Unit) {
+    fun join(ssid: String, passphrase: String, security: Int, band: String?, done: (Map<String, Any?>?, String?) -> Unit) {
         leave()
         if (!wifiOn) return done(null, WIFI_OFF)
+        // A radio without the network's band does not see it, and Android only says, after a
+        // search, that it cannot find it (TECNO BF6, real test of 2 November 2026).
+        if (band == "5" && !wifi.is5GHzBandSupported || band == "6" && !wifi.is6GHzBandSupported) return done(null, NO_BAND)
         val spec = WifiNetworkSpecifier.Builder().setSsid(ssid).apply {
             if (security == 3) setWpa3Passphrase(passphrase) else setWpa2Passphrase(passphrase)
         }.build()
@@ -97,5 +101,6 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
 
     companion object {
         const val WIFI_OFF = "wifi_off"
+        const val NO_BAND = "no_band"
     }
 }

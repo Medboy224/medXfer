@@ -136,6 +136,21 @@ Sous Windows, chercher directement le service de medXfer chez le Galaxy A57, san
 - Un second téléphone le rejoint par `WifiNetworkSpecifier` (réserve 2 du rapport J6c).
 - Valable aussi pour le QR : le QR porte le réseau du groupe.
 
+**Essai réel du 2 novembre 2026** (Galaxy A57 sous Android 16, PC Windows 11 avec Intel AC 8265, TECNO BF6 sous Android 12 ; le PC gardait Internet par le partage de connexion USB du TECNO) :
+
+| Mesure | Résultat |
+|---|---|
+| Groupe créé par l'application | ✅ À 5 GHz à chaque essai : canaux 48, 157 et 161, choisis par Android. Un groupe laissé par une application tuée est retiré au démarrage suivant. |
+| 1 Gio du PC vers le téléphone, téléphone connecté à aucun autre Wi-Fi | ✅ **18,8 s, 54,4 MB/s** (pic 56,8, minimum 50,2), aucune reprise. Côté téléphone, l'attente du réseau occupe tout le transfert : la limite est le lien à 5 GHz, ni le disque ni le hachage. |
+| Le même, téléphone aussi connecté au Wi-Fi du TECNO (2,4 GHz, canal 1) | ⚠️ **54,9 s, 18,6 MB/s** (minimum 2,5) : le groupe reste à 5 GHz, mais la radio alterne entre les deux canaux. L'avertissement est justifié. |
+| L'avertissement « aussi connecté à un Wi-Fi » | ❌ puis ✅ Android 16 compte le groupe lui-même parmi les réseaux Wi-Fi (`p2p-wlan0-0`) : l'avertissement ne partait jamais. Corrigé (les interfaces Wi-Fi Direct sont écartées). Il se voyait aussi seulement sur l'écran du réseau, fermé une fois l'appairage fait : un message le dit maintenant pendant la session. |
+| Se déconnecter du Wi-Fi tout seul | Impossible : depuis Android 10, une application ne peut ni déconnecter ni couper le Wi-Fi. L'application ouvre les réglages. |
+| TECNO BF6 face au QR à 5 GHz | ❌ puis ✅ Sa puce ne capte que le 2,4 GHz. Android disait seulement « impossible de détecter le réseau ». Le QR porte maintenant la bande (`wb`) : le TECNO dit aussitôt qu'il ne capte pas le 5 GHz et ce qu'il faut faire (vu sur l'appareil). |
+| Réseau recréé à 2,4 GHz pour le TECNO | ✅ Point d'accès local du Galaxy A57, rejoint par le QR (802.11n, 52 à 72 Mbit/s). |
+| Second téléphone dans le groupe à 5 GHz (réserve 2 du rapport J6c) | Reportée : aucun second téléphone à 5 GHz disponible. |
+
+Décision du 2 novembre : **5 GHz par défaut**, avec un interrupteur « Haute vitesse (5 GHz) » pour un appareil qui ne capte que le 2,4 GHz.
+
 ### WP-D.5 — Écran et parcours · M
 
 - La liste « À proximité » réunit les appareils du même réseau (inchangé) et ceux trouvés par BLE, avec le chemin.

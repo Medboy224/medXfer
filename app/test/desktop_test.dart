@@ -125,7 +125,7 @@ class _PcHotspot implements Hotspot {
   Future<void> stop() async => log.add('stop');
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) => throw UnsupportedError('no');
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) => throw UnsupportedError('no');
 
   @override
   Future<void> leave() async {}
