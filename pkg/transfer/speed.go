@@ -87,6 +87,25 @@ func (c countingReader) Read(p []byte) (int, error) {
 	return k, err
 }
 
+// onTheWayReader counts what a data connection reads: the speed (received), and the bytes of
+// the chunk being read, for the bar (onTheWay, of the run and of the item, and frame), until
+// the chunk is counted or dropped (onBar).
+type onTheWayReader struct {
+	r                   io.Reader
+	received, run, item *atomic.Int64
+	frame               *int64
+}
+
+func (c onTheWayReader) Read(p []byte) (int, error) {
+	k, err := c.r.Read(p)
+	n := int64(k)
+	c.received.Add(n)
+	c.run.Add(n)
+	c.item.Add(n)
+	*c.frame += n
+	return k, err
+}
+
 // writeSlice is how much writeCounted hands the connection at once.
 const writeSlice = 128 << 10
 

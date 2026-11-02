@@ -290,7 +290,11 @@ type run struct {
 	// received counts the bytes read from the data connections: the speed. bytes also counts
 	// what a resume finds on disk and the files already there, which arrive in no time.
 	received atomic.Int64
-	chunks   uint32 // chunk size
+	// onTheWay counts the bytes of the chunks being read and not yet counted in bytes: the bar
+	// moves with them (onBar). shown and seen are the bar's last figure and bytes then (evMu).
+	onTheWay    atomic.Int64
+	shown, seen int64
+	chunks      uint32 // chunk size
 
 	stages  StageEvents // nil: the stages are not measured
 	workers int
@@ -445,12 +449,16 @@ type item struct {
 	// The digest (bible §8.3, step 6). hashes[i] is chunk i's SHA-256 from its verified CHUNK
 	// (fresh[i]); the chunks of an earlier session keep the hash of their journal. Distinct
 	// chunks are written by distinct goroutines; local is set once they are all handled.
-	hashes    [][32]byte
-	fresh     []bool
-	local     [32]byte
-	counted   atomic.Int64 // bytes of this item in the progress, given back if it starts over
-	digest    bool         // under r.mu: the DIGEST_REQ waits to be sent
-	restarted bool         // under r.mu: started over once after a digest mismatch
+	hashes  [][32]byte
+	fresh   []bool
+	local   [32]byte
+	counted atomic.Int64 // bytes of this item in the progress, given back if it starts over
+	// The bytes of its chunks being read, not yet counted, and its bar's last figure and
+	// counted bytes then (onBar, under the run's evMu).
+	onTheWay    atomic.Int64
+	shown, seen int64
+	digest      bool // under r.mu: the DIGEST_REQ waits to be sent
+	restarted   bool // under r.mu: started over once after a digest mismatch
 	// gen changes when the item is set aside on a full disk (under st.mu and r.mu): the
 	// answers to the tasks of an earlier generation are dropped, every chunk is asked again.
 	gen atomic.Uint32
@@ -1132,14 +1140,40 @@ func (ru *run) emitProgress(speed float64) {
 	ru.r.mu.Lock()
 	ended := ru.ended
 	ru.r.mu.Unlock()
-	ru.activeMu.Lock()
-	active := activeOf(ru.active, func(i int) (int64, int64) { return ru.items[i].counted.Load(), ru.items[i].it.Size })
-	ru.activeMu.Unlock()
-	p := Progress{Bytes: ru.bytes.Load(), Total: ru.offer.TotalBytes, SpeedMBps: speed,
-		Streams: int(ru.conns.Load()), ItemsDone: ended, Items: len(ru.items), Active: active}
 	ru.evMu.Lock()
 	defer ru.evMu.Unlock()
+	ru.activeMu.Lock()
+	active := activeOf(ru.active, func(i int) (int64, int64) {
+		st := ru.items[i]
+		return onBar(&st.shown, &st.seen, st.counted.Load(), st.onTheWay.Load(), st.it.Size), st.it.Size
+	})
+	ru.activeMu.Unlock()
+	p := Progress{Bytes: onBar(&ru.shown, &ru.seen, ru.bytes.Load(), ru.onTheWay.Load(), ru.offer.TotalBytes),
+		Total: ru.offer.TotalBytes, SpeedMBps: speed, Streams: int(ru.conns.Load()), ItemsDone: ended,
+		Items: len(ru.items), Active: active}
 	ru.r.Events.OnProgress(p)
+}
+
+// onBar is the figure a bar shows: the bytes counted (verified and written) and those on their
+// way (read, their chunk not yet counted). A chunk is counted whole, and the connections finish
+// theirs nearly together: at 1.3 MB/s, four chunks of 2 MB came every 6 s or so, 44 % of an
+// 18 MB file at once, the bar standing still in between (real test of 1 November, WP-E.6 of the
+// cable plan). Below total until everything is counted, 100 % meaning done. It never goes back
+// (a chunk lost with its connection comes again), unless the bytes counted do: an item starting
+// over. shown and seen keep the last figure and the bytes counted then.
+func onBar(shown, seen *int64, counted, onTheWay, total int64) int64 {
+	if total <= 0 || counted >= total {
+		*shown, *seen = counted, counted
+		return counted
+	}
+	v := min(counted+max(onTheWay, 0), total-1)
+	if counted < *seen {
+		*shown = v
+	} else {
+		*shown = max(*shown, v)
+	}
+	*seen = counted
+	return *shown
 }
 
 func (ru *run) reportProgress(ctx context.Context) {
@@ -1220,10 +1254,11 @@ func (ru *run) connect(ctx context.Context, addr string) (net.Conn, error) {
 
 // received is a chunk read from the network, waiting to be checked and written.
 type received struct {
-	t    task
-	buf  []byte // the whole buffer, given back once written
-	data []byte
-	sum  [32]byte
+	t     task
+	buf   []byte // the whole buffer, given back once written
+	data  []byte
+	sum   [32]byte
+	frame int64 // the bytes read for it, on the way until it is counted (onBar)
 }
 
 // worker keeps one data connection busy: up to two requests in flight. Each answer is handed
@@ -1256,6 +1291,10 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 			} else {
 				_ = ru.write(rc.t, rc.data, rc.sum)
 			}
+			// Counted now (or dropped): no longer on the way. After the count, so the bar never
+			// misses it in between.
+			ru.onTheWay.Add(-rc.frame)
+			ru.items[rc.t.item].onTheWay.Add(-rc.frame)
 			free <- rc.buf
 		}
 	}()
@@ -1355,15 +1394,25 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 		// buffers back, and must not count as network time (DEV-04).
 		readStart := time.Now()
 		_ = conn.SetReadDeadline(readStart.Add(chunkReadTimeout))
-		h, p, err := protocol.ReadFrame(countingReader{conn, &ru.received}, limits, buf)
+		t := inflight[0]
+		st := ru.items[t.item]
+		var frame int64 // its bytes on the way, given back once the chunk is counted or dropped
+		h, p, err := protocol.ReadFrame(onTheWayReader{conn, &ru.received, &ru.onTheWay, &st.onTheWay, &frame}, limits, buf)
+		arrived := func(n int64) {
+			ru.onTheWay.Add(-n)
+			st.onTheWay.Add(-n)
+		}
 		if err != nil {
+			arrived(frame)
 			free <- buf
 			drop()
 			continue
 		}
 		ru.reached.Store(true)
-		t := inflight[0]
 		inflight = inflight[1:]
+		if h.Type != protocol.TypeChunkData {
+			arrived(frame) // an error or a digest: no chunk to count
+		}
 		if h.Type == protocol.TypeChunkError {
 			_, _, code, _ := protocol.ParseChunkError(p)
 			free <- buf
@@ -1386,12 +1435,15 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 		item, index, sum, data, err := protocol.ParseChunkData(p)
 		ru.stage(StageNetWait, ru.workers, readStart, int64(len(data)))
 		if err != nil || h.Type != protocol.TypeChunkData || int(item) != t.item || index != t.index {
+			if h.Type == protocol.TypeChunkData {
+				arrived(frame)
+			}
 			free <- buf
 			inflight = append([]task{t}, inflight...)
 			drop() // a peer that answers out of order is not trusted further on this connection
 			continue
 		}
 		reconnects = 0 // the connection carries data: a cut later is not a dead sender
-		writes <- received{t: t, buf: buf, data: data, sum: sum}
+		writes <- received{t: t, buf: buf, data: data, sum: sum, frame: frame}
 	}
 }
