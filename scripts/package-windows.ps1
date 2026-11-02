@@ -16,13 +16,16 @@ $version = ((Select-String -Path (Join-Path $root "app\pubspec.yaml") -Pattern '
 & (Join-Path $root "scripts\build-lib.ps1") -Targets windows
 & (Join-Path $root "scripts\stage-app-native.ps1")
 
+$release = Join-Path $root "app\build\windows\x64\runner\Release"
+# The build adds to this folder, never empties it: a library of an earlier build stayed and was
+# shipped (flutter_zxing.dll, removed in #229, still in the packages of 2 November). Built afresh.
+Remove-Item -Recurse -Force $release -ErrorAction SilentlyContinue
 Push-Location (Join-Path $root "app")
 try {
     flutter build windows --release
     if ($LASTEXITCODE -ne 0) { throw "flutter build windows failed" }
 } finally { Pop-Location }
 
-$release = Join-Path $root "app\build\windows\x64\runner\Release"
 # What a Windows without development tools lacks (G2A-08): the core and the C++ runtime.
 foreach ($f in "medxfer.exe", "medxfer.dll", "flutter_windows.dll", "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") {
     if (-not (Test-Path (Join-Path $release $f))) { throw "missing in the package: $f" }
