@@ -15,6 +15,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/session"
+	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
 func (s *DaemonServer) dispatch(rs Responder, req RequestMessage) {
@@ -233,11 +234,25 @@ func (s *DaemonServer) handlePair(rs Responder, req RequestMessage) {
 // handshake cut short), its cause kept in the journal too: the application shows it in a toast
 // that goes in seconds, and a failure seen once in a real test stayed unexplained (#169,
 // 30 October 2026).
+//
+// code "unreachable": the connection never opened (no answer, refused, no route), the other
+// device's firewall the likely cause; the application says so instead of the raw error (real
+// test of 1 November: a PC let medXfer in on its cable only, not on its Wi-Fi).
 func pairFailed(target string, err error, id string) EventMessage {
 	msg := fmt.Sprintf("failed to pair with %s: %v", target, err)
 	journalf("log WARN %s", msg)
-	return NewEvent("action_error", map[string]string{"error": msg}, id)
+	data := map[string]string{"error": msg, "target": target}
+	if transfer.DialFailed(err) {
+		data["code"] = codeUnreachable
+	}
+	return NewEvent("action_error", data, id)
 }
+
+// The codes of action_error and transfer_failed that the application turns into its own words.
+const (
+	codeUnreachable       = "unreachable"        // pairing: the other device never answered
+	codeSenderUnreachable = "sender_unreachable" // transfer: the receiver never reached the sender
+)
 
 func (s *DaemonServer) handleDisconnect(rs Responder, req RequestMessage) {
 	s.mu.Lock()

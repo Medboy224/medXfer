@@ -225,6 +225,20 @@ void main() {
     expect(t.canResend, isFalse);
   });
 
+  test('real test of 1 November: the receiver never reached the sender, each side is told why', () async {
+    for (final by in ['self', 'peer']) {
+      final (_, t, _) = _model();
+      final notices = <TransferNotice>[];
+      t.notices.listen(notices.add);
+      t.take(const CoreEvent('file_offered', data: {'file_name': 'medxfer.zip', 'file_size': 18053847}));
+      t.take(const CoreEvent('transfer_accepted', data: {}));
+      t.take(CoreEvent('transfer_failed', data: {'transfer_id': 'x', 'error': 'no answer', 'by': by, 'code': 'sender_unreachable'}));
+      await _settle();
+      final n = notices.whereType<TransferStopped>().single;
+      expect((n.code, n.byPeer), ('sender_unreachable', by == 'peer'));
+    }
+  });
+
   test('WP-B.8: descriptors are opened again to resume; without a way to, no resume', () async {
     final (core, t, _) = _model();
     var opened = 0;

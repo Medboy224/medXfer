@@ -207,6 +207,14 @@ class ConnectError extends ConnectionNotice {
   final String message;
 }
 
+/// The device did not answer on this network (the core's code "unreachable"): its firewall
+/// likely keeps medXfer out on this kind of network. Real test of 1 November: a PC let medXfer
+/// in on its cable only, and the other one got « failed to pair … i/o timeout ».
+class PeerUnreachable extends ConnectionNotice {
+  const PeerUnreachable(this.name);
+  final String name;
+}
+
 class Disconnected extends ConnectionNotice {
   const Disconnected({required this.byPeer});
 
@@ -310,6 +318,25 @@ class Connection extends ChangeNotifier {
 
   /// The requests of this model whose errors are the user's to see.
   final _mine = <String>{};
+
+  String? _connecting;
+  Timer? _connectingLimit;
+
+  /// The address a tap on a device of the list is connecting to, until it is paired, refused,
+  /// asks for a PIN or fails: its button says so, and no other attempt starts meanwhile (real
+  /// test of 1 November: 13 attempts in 2 s, nothing on the screen while each took 6 s).
+  String? get connecting => _connecting;
+
+  /// The longest an attempt holds the buttons, whatever the core says.
+  static const connectingLimit = Duration(seconds: 30);
+
+  void _doneConnecting() {
+    _connectingLimit?.cancel();
+    _connectingLimit = null;
+    if (_connecting == null) return;
+    _connecting = null;
+    notifyListeners();
+  }
 
   List<NearbyDevice> _nearby = const [];
   bool _scanning = false;
@@ -649,7 +676,13 @@ class Connection extends ChangeNotifier {
 
   /// Pairs with a device of the list: directly with a device of mutual trust; any other
   /// shows a PIN on its screen, which this user types ([pinNeeded]).
-  Future<void> pairWith(NearbyDevice d) => _call('pair', {'ip': d.ip, if (d.port > 0) 'port': d.port, if (remember) 'trust': true});
+  Future<void> pairWith(NearbyDevice d) async {
+    if (_connecting != null) return;
+    _connecting = d.ip;
+    _connectingLimit = Timer(connectingLimit, _doneConnecting);
+    notifyListeners();
+    await _call('pair', {'ip': d.ip, if (d.port > 0) 'port': d.port, if (remember) 'trust': true});
+  }
 
   /// Pairs with the device whose QR code was scanned, or whose link was pasted.
   Future<void> pairUri(String uri) => _call('pair_uri', {'uri': uri.trim(), if (remember) 'trust': true});
@@ -718,6 +751,7 @@ class Connection extends ChangeNotifier {
 
   @visibleForTesting
   void take(CoreEvent e) {
+    if (const {'paired', 'pair_failed', 'pin_needed', 'action_error'}.contains(e.name)) _doneConnecting();
     final m = e.map;
     switch (e.name) {
       case 'peers_list':
@@ -827,11 +861,25 @@ class Connection extends ChangeNotifier {
         // refusal of ID-05 is shown whatever request it answers.
         if (!error.contains('REFUSED:') && (e.id == null || !_mine.contains(e.id))) return;
         _scanning = false;
-        _error(error);
+        if (m['code'] == 'unreachable') {
+          _notices.add(PeerUnreachable(nameAt(_host((m['target'] as String?) ?? ''))));
+        } else {
+          _error(error);
+        }
       default:
         return;
     }
     notifyListeners();
+  }
+
+  /// The host of an address with its port: "192.0.2.7:18887", "[fe80::1]:18887".
+  static String _host(String target) {
+    if (target.startsWith('[')) {
+      final end = target.indexOf(']');
+      return end > 0 ? target.substring(1, end) : target;
+    }
+    final i = target.lastIndexOf(':');
+    return i > 0 && target.indexOf(':') == i ? target.substring(0, i) : target;
   }
 
   void _error(String message) {
@@ -843,6 +891,7 @@ class Connection extends ChangeNotifier {
 
   @override
   void dispose() {
+    _connectingLimit?.cancel();
     _scanLimit?.cancel();
     _giveUp?.cancel();
     _hotspotWatch?.cancel();

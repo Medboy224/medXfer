@@ -80,6 +80,7 @@ class _ConnectionPromptsState extends State<ConnectionPrompts> {
       Paired(:final name) => l.noticePaired(name),
       PairFailed() => l.noticePairFailed,
       ConnectError(:final message) => message,
+      PeerUnreachable(:final name) => l.noticePeerUnreachable(name),
       Disconnected(:final byPeer) => byPeer ? l.noticeDisconnectedPeer : l.noticeDisconnected,
       TrustEstablished(:final name) => l.noticeTrustEstablished(name),
       TrustDeclined(:final noAnswer) => noAnswer ? l.noticeTrustNoAnswer : l.noticeTrustDeclined,
@@ -91,7 +92,8 @@ class _ConnectionPromptsState extends State<ConnectionPrompts> {
     };
     widget.messenger.currentState
       ?..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(text), behavior: SnackBarBehavior.floating));
+      // Long enough to read, and to act on: a device out of reach says what to do.
+      ..showSnackBar(SnackBar(content: Text(text), behavior: SnackBarBehavior.floating, duration: n is PeerUnreachable ? const Duration(seconds: 12) : const Duration(seconds: 4)));
   }
 
   @override

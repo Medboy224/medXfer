@@ -197,9 +197,16 @@ class DiskFull extends TransferNotice {
 /// The transfer with [device] stopped, here or there ([error]): what was received is kept,
 /// and sending again resumes it (bible §9.5). Before WP-B.8 neither side was told.
 class TransferStopped extends TransferNotice {
-  const TransferStopped(this.device, this.error);
+  const TransferStopped(this.device, this.error, {this.code = '', this.byPeer = false});
   final String device;
   final String error;
+
+  /// The core's reason, when it has one: "sender_unreachable", the receiver never reached the
+  /// sender (its firewall the likely cause; real test of 1 November).
+  final String code;
+
+  /// Said by the other device: here, this device was the sender.
+  final bool byPeer;
 }
 
 /// One file could not be sent or written; the others go on.
@@ -447,7 +454,7 @@ class Transfers extends ChangeNotifier {
         _finish(a, Outcome.canceled);
       case 'transfer_failed': // the whole transfer, on either side; the session lives on
         if (a == null || a.stage == Stage.done) return;
-        _notices.add(TransferStopped(a.device, (m['error'] as String?) ?? ''));
+        _notices.add(TransferStopped(a.device, (m['error'] as String?) ?? '', code: (m['code'] as String?) ?? '', byPeer: m['by'] == 'peer'));
         _finish(a, Outcome.failed);
       case 'transfer_complete':
         if (a == null || a.stage == Stage.done) return;

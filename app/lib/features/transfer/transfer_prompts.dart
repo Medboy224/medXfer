@@ -87,11 +87,16 @@ class _TransferPromptsState extends State<TransferPrompts> {
       DiskFull() => l.noticeDiskFull,
       ReceiveFolderGone(:final folder, :final used) => l.noticeReceiveFolderGone(folder, used),
       FileError(:final file, :final error) => l.noticeFileError(file, error),
+      // The receiver never reached the sender: the sender's firewall, likely (real test of
+      // 1 November). Each side says what its user can do.
+      TransferStopped(:final device, code: 'sender_unreachable', :final byPeer) =>
+        byPeer ? l.noticeThisUnreachable(device) : l.noticeSenderUnreachable(device),
       TransferStopped(:final device, :final error) => l.noticeTransferStopped(device, error),
     };
+    final long = n is TransferStopped && n.code == 'sender_unreachable';
     widget.messenger.currentState
       ?..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(text), behavior: SnackBarBehavior.floating));
+      ..showSnackBar(SnackBar(content: Text(text), behavior: SnackBarBehavior.floating, duration: Duration(seconds: long ? 12 : 4)));
   }
 
   @override

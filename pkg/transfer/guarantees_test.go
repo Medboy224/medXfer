@@ -129,8 +129,13 @@ func TestRefusedReceiverDoesNotWaitForTheSender(t *testing.T) {
 	r.ReconnectWindow = time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := r.Run(ctx, p.addr, offer); err == nil || ctx.Err() != nil {
+	_, err := r.Run(ctx, p.addr, offer)
+	if err == nil || ctx.Err() != nil {
 		t.Fatalf("Run = %v; want a failure before the timeout", err)
+	}
+	// It answered, then refused: not a sender out of reach (its firewall is not the cause).
+	if errors.Is(err, ErrSenderUnreachable) {
+		t.Fatalf("Run = %v: a sender that answered is not unreachable", err)
 	}
 }
 
@@ -143,8 +148,14 @@ func TestUnreachableSenderIsGivenUp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	start := time.Now()
-	if _, err := r.Run(ctx, "127.0.0.1:1", offer); err == nil || ctx.Err() != nil {
+	_, err := r.Run(ctx, "127.0.0.1:1", offer)
+	if err == nil || ctx.Err() != nil {
 		t.Fatalf("Run = %v after %v; want an error before the timeout", err, time.Since(start))
+	}
+	// Never reached, every dial failing: said apart, its firewall the likely cause (real test of
+	// 1 November); still a failed transfer for the callers that only know that.
+	if !errors.Is(err, ErrSenderUnreachable) || !errors.Is(err, ErrTransferFailed) {
+		t.Fatalf("Run = %v; want ErrSenderUnreachable, an ErrTransferFailed", err)
 	}
 }
 
