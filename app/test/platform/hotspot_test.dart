@@ -133,6 +133,80 @@ void main() {
     });
   });
 
+  group('WP-D.4: Android, the Wi-Fi Direct group at 5 GHz or the local hotspot', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    const channel = MethodChannel('test/android-hotspot');
+    final calls = <String>[];
+    var frequency = 5180;
+    String? groupError;
+    setUp(() {
+      calls.clear();
+      frequency = 5180;
+      groupError = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.arguments == null ? call.method : '${call.method} ${call.arguments}');
+        return switch (call.method) {
+          'groupStart' when groupError != null => throw PlatformException(code: 'group', message: groupError),
+          'groupStart' => {'ssid': 'DIRECT-KQ-medXfer', 'passphrase': 'secret', 'security': 1, 'frequency': frequency, 'address': '192.168.49.1'},
+          'hotspotStart' => {'ssid': 'AndroidShare_1732', 'passphrase': 'secret', 'security': 2, 'address': '10.46.56.232'},
+          'groupAlive' || 'hotspotAlive' || 'otherWifi' => true,
+          _ => null,
+        };
+      });
+    });
+    tearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+
+    test('the group obtained at 5 GHz is kept; it is the one checked and stopped', () async {
+      final h = AndroidHotspot(channel: channel);
+      final info = await h.start();
+      expect((info.ssid, info.security, info.address, info.band), ('DIRECT-KQ-medXfer', 1, '192.168.49.1', WifiBand.ghz5));
+      expect(await h.alive(), isTrue);
+      expect(await h.otherWifi(), isTrue);
+      await h.stop();
+      expect(calls, ['groupStart {band: 5}', 'groupAlive', 'otherWifi', 'groupStop']);
+    });
+
+    test('a group at 2.4 GHz is removed: the local hotspot, checked and stopped', () async {
+      frequency = 2437;
+      final h = AndroidHotspot(channel: channel);
+      final info = await h.start();
+      expect((info.ssid, info.band), ('AndroidShare_1732', null));
+      expect(await h.alive(), isTrue);
+      expect(await h.otherWifi(), isFalse, reason: 'measured for the group only');
+      await h.stop();
+      expect(calls, ['groupStart {band: 5}', 'groupStop', 'hotspotStart', 'hotspotAlive', 'hotspotStop']);
+    });
+
+    test('no group (Wi-Fi off, no Wi-Fi Direct, the radio busy): the local hotspot', () async {
+      groupError = 'wifi_off';
+      final info = await AndroidHotspot(channel: channel).start();
+      expect(info.ssid, 'AndroidShare_1732');
+      expect(calls, ['groupStart {band: 5}', 'hotspotStart']);
+    });
+
+    test('asked at 2.4 GHz: the local hotspot, without trying the group', () async {
+      await AndroidHotspot(channel: channel).start(fiveGhz: false);
+      expect(calls, ['hotspotStart']);
+    });
+
+    test('the Wi-Fi panel opens with Wi-Fi on, to leave the other network', () async {
+      await AndroidHotspot(channel: channel).openWifiPanel(always: true);
+      expect(calls, ['openWifiPanel {always: true}']);
+    });
+  });
+
+  test('WP-D.4: the band of a frequency', () {
+    expect([for (final mhz in [2412, 2484, 5180, 5825, 5955, 0, 60480]) WifiBand.of(mhz)], [
+      WifiBand.ghz24,
+      WifiBand.ghz24,
+      WifiBand.ghz5,
+      WifiBand.ghz5,
+      WifiBand.ghz6,
+      null,
+      null,
+    ]);
+  });
+
   test('HotspotInfo reads what LocalHotspot.kt sends', () {
     final info = HotspotInfo.fromMap({
       'ssid': 'AndroidShare_1732',

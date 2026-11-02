@@ -107,7 +107,7 @@ class _PcHotspot implements Hotspot {
   Future<bool> permission() async => true;
 
   @override
-  Future<HotspotInfo> start() async {
+  Future<HotspotInfo> start({bool fiveGhz = true}) async {
     log.add('start');
     return HotspotInfo(
       ssid: 'DIRECT-AB-medXfer',
@@ -125,7 +125,7 @@ class _PcHotspot implements Hotspot {
   Future<void> stop() async => log.add('stop');
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) => throw UnsupportedError('no');
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) => throw UnsupportedError('no');
 
   @override
   Future<void> leave() async {}
@@ -134,13 +134,16 @@ class _PcHotspot implements Hotspot {
   Future<int> joinedNetwork() async => 0;
 
   @override
-  Future<bool> openWifiPanel() async {
+  Future<bool> openWifiPanel({bool always = false}) async {
     log.add('wifi on');
     return wifi = true;
   }
 
   @override
   Future<bool> alive() async => true;
+
+  @override
+  Future<bool> otherWifi() async => false;
 
   @override
   Future<bool> wifiOn() async => wifi;

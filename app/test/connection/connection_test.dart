@@ -61,6 +61,12 @@ class _FakeHotspot implements Hotspot {
   /// Wi-Fi off: the join refused (#218), until the panel turns it on if [panelTurnsOn].
   bool wifiOff = false;
   bool panelTurnsOn = true;
+
+  /// The phone's Wi-Fi on another network beside its own (WP-D.4).
+  bool other = false;
+
+  /// A radio at 2.4 GHz only, as the TECNO BF6's (WP-D.4).
+  bool only24 = false;
   final log = <String>[];
 
   @override
@@ -79,7 +85,7 @@ class _FakeHotspot implements Hotspot {
   }
 
   @override
-  Future<HotspotInfo> start() async {
+  Future<HotspotInfo> start({bool fiveGhz = true}) async {
     log.add('start');
     return const HotspotInfo(ssid: 'AndroidShare_1732', passphrase: 'vvrtsy', security: 2, address: '10.46.56.232');
   }
@@ -88,9 +94,10 @@ class _FakeHotspot implements Hotspot {
   Future<void> stop() async => log.add('stop');
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async {
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) async {
     log.add('join $ssid $passphrase $security');
     if (wifiOff) throw PlatformException(code: 'wifi_off', message: 'wifi_off');
+    if (only24 && band == WifiBand.ghz5) throw PlatformException(code: 'no_band', message: 'no_band');
     if (joinFails) throw PlatformException(code: 'join', message: 'unavailable');
     return const HotspotInfo(address: '10.46.56.91');
   }
@@ -102,7 +109,7 @@ class _FakeHotspot implements Hotspot {
   Future<int> joinedNetwork() async => 643355824141;
 
   @override
-  Future<bool> openWifiPanel() async {
+  Future<bool> openWifiPanel({bool always = false}) async {
     log.add('wifi panel');
     if (panelTurnsOn) wifiOff = false;
     return !wifiOff;
@@ -110,6 +117,9 @@ class _FakeHotspot implements Hotspot {
 
   @override
   Future<bool> alive() async => true;
+
+  @override
+  Future<bool> otherWifi() async => other;
 
   @override
   Future<bool> wifiOn() async => true;
@@ -141,7 +151,7 @@ class _DesktopHotspot implements Hotspot {
   Future<bool> permission() async => true;
 
   @override
-  Future<HotspotInfo> start() async {
+  Future<HotspotInfo> start({bool fiveGhz = true}) async {
     log.add('start');
     if (failingStarts > 0) {
       failingStarts--;
@@ -161,7 +171,7 @@ class _DesktopHotspot implements Hotspot {
   Future<void> stop() async => log.add('stop');
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async {
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) async {
     log.add('join');
     return const HotspotInfo();
   }
@@ -173,13 +183,16 @@ class _DesktopHotspot implements Hotspot {
   Future<int> joinedNetwork() async => 0;
 
   @override
-  Future<bool> openWifiPanel() async {
+  Future<bool> openWifiPanel({bool always = false}) async {
     log.add('wifi on');
     return wifi = true;
   }
 
   @override
   Future<bool> alive() async => running;
+
+  @override
+  Future<bool> otherWifi() async => false;
 
   @override
   Future<bool> wifiOn() async => wifi;
@@ -517,6 +530,24 @@ void main() {
     expect(core.calls.where((x) => x.action == 'pair_uri'), isEmpty);
   });
 
+  test('WP-D.4: a 5 GHz network and a radio at 2.4 GHz only: said at once, with the band', () async {
+    final core = _core()..on('pair_uri', (_) => const FakeAnswer());
+    final h = _FakeHotspot()..only24 = true;
+    final c = Connection(core, hotspot: h);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.pairLink(PairLink.parse('medxfer://v1/pair?fp=A&ws=DIRECT-ZA-medXfer&wp=x&wt=1&wb=5')!);
+    await _settle();
+    expect((notices.single as JoinBandMissing).band, WifiBand.ghz5);
+    expect(core.calls.where((x) => x.action == 'pair_uri'), isEmpty);
+    // The other device made it again at 2.4 GHz: the new QR code joins.
+    notices.clear();
+    await c.pairLink(PairLink.parse('medxfer://v1/pair?fp=A&ws=AndroidShare_1853&wp=x&wt=2&wb=2')!);
+    await _settle();
+    expect(notices, isEmpty);
+    expect(core.calls.where((x) => x.action == 'pair_uri'), hasLength(1));
+  });
+
   test('#218: Wi-Fi off, said as such; turned on in the panel, the same link joined without a new scan', () async {
     final core = _core()
       ..on('set_network_info', (_) => const FakeAnswer())
@@ -681,6 +712,31 @@ void main() {
     expect(notices.whereType<HotspotLost>(), hasLength(1));
     expect(h.log, ['start', 'stop']);
     expect(c.myHotspot, isNull);
+  });
+
+  test('WP-D.4: the phone joins another Wi-Fi during a session: said once, gone once it leaves', () async {
+    final old = Connection.hotspotCheck;
+    Connection.hotspotCheck = const Duration(milliseconds: 20);
+    addTearDown(() => Connection.hotspotCheck = old);
+    final core = _core()..on('set_network_info', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, hotspot: h);
+    addTearDown(c.dispose);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.openCode();
+    await c.startHotspot();
+    expect(c.hotspotOtherWifi, isFalse);
+    c.take(const CoreEvent('paired', data: {'ip': '10.46.56.91', 'device_name': 'Naruto'}));
+    h.other = true; // the TECNO's Wi-Fi joined again, during the transfer (real test)
+    await _until(() => c.hotspotOtherWifi);
+    await Future<void>.delayed(const Duration(milliseconds: 60)); // said once, not at each check
+    expect(notices.whereType<HotspotSlowed>(), hasLength(1));
+    h.other = false; // left in the settings the notice opens
+    await c.leaveOtherWifi();
+    expect(c.hotspotOtherWifi, isFalse);
+    expect(h.log, contains('wifi panel'));
+    await c.stopHotspot();
   });
 
   test('WP-C.2: a desktop joins no network itself: the link pairs, the user joined it first', () async {

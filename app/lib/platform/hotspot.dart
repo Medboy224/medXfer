@@ -1,5 +1,6 @@
 /// The local access point (DISC-12, WP-B.7 of the J6b plan): the platform creates it, never
-/// the core. Android: the local hotspot. Windows and Linux (WP-C.2 of the J6c plan): a network
+/// the core. Android: a Wi-Fi Direct group at 5 GHz when the phone gets it, else the local
+/// hotspot (WP-D.4 of the J6d plan). Windows and Linux (WP-C.2 of the J6c plan): a network
 /// the computer creates at 2.4 GHz, its cards refusing 5 GHz on their own (probe WP-C.1);
 /// Windows by Wi-Fi Direct with a name and passphrase of the app's (decision C4), Linux by
 /// NetworkManager. A computer does not join another's network itself: the user does, in the
@@ -15,6 +16,27 @@ import 'dhcp_server.dart';
 import 'folders.dart' show platformChannel;
 import 'network.dart';
 
+/// A Wi-Fi band.
+enum WifiBand {
+  ghz24,
+  ghz5,
+  ghz6;
+
+  /// The band of a frequency in MHz; null for none.
+  static WifiBand? of(int mhz) => switch (mhz) {
+        >= 2400 && < 2500 => ghz24,
+        >= 4900 && < 5925 => ghz5,
+        >= 5925 && < 7125 => ghz6,
+        _ => null,
+      };
+
+  /// Its code in a QR code (wb) and to the platform: 2, 5 or 6.
+  String get code => switch (this) { ghz24 => '2', ghz5 => '5', ghz6 => '6' };
+
+  /// The band of a code; null for none, or one unknown.
+  static WifiBand? ofCode(String? code) => switch (code) { '2' => ghz24, '5' => ghz5, '6' => ghz6, _ => null };
+}
+
 /// A network created, or joined, by the app.
 class HotspotInfo {
   const HotspotInfo({
@@ -27,6 +49,7 @@ class HotspotInfo {
     this.dropsClients = false,
     this.addressHeldBy,
     this.sharingAddress,
+    this.band,
   });
 
   factory HotspotInfo.fromMap(Map<Object?, Object?> m) => HotspotInfo(
@@ -35,7 +58,11 @@ class HotspotInfo {
         security: (m['security'] as num?)?.toInt() ?? 0,
         address: m['address'] as String?,
         interfaces: [for (final i in (m['interfaces'] as List?) ?? const []) '$i'],
+        band: WifiBand.of((m['frequency'] as num?)?.toInt() ?? 0),
       );
+
+  /// The band obtained; null when the system does not say (Android's local hotspot, Windows).
+  final WifiBand? band;
 
   /// Name and passphrase, chosen by Android: secrets of the network, never logged.
   final String? ssid;
@@ -83,13 +110,16 @@ abstract interface class Hotspot {
   /// granted.
   Future<bool> permission();
 
-  /// Creates the access point: its name, passphrase and this device's address on it.
-  Future<HotspotInfo> start();
+  /// Creates the access point: its name, passphrase and this device's address on it. [fiveGhz]
+  /// false: at 2.4 GHz, for a device that cannot join 5 GHz (Android; a desktop's is at 2.4).
+  Future<HotspotInfo> start({bool fiveGhz = true});
   Future<void> stop();
 
   /// Joins another device's access point (the QR gives ssid and passphrase): the app's
-  /// connections, the core's included, then go through it.
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1});
+  /// connections, the core's included, then go through it. [band], when the QR gives it: a
+  /// device whose radio lacks it refuses at once, with the code no_band (WP-D.4), rather than
+  /// let Android search for a network it cannot see.
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band});
   Future<void> leave();
 
   /// The joined network's handle, for the core's sockets (pkg/netbind); 0 for none. It changes
@@ -98,8 +128,14 @@ abstract interface class Hotspot {
 
   /// Turns this device's Wi-Fi on, or lets the user do it: Android before [join], by the
   /// system's panel (an app cannot since Android 10, and joins with Wi-Fi off are refused, #218);
-  /// a desktop before [start] (#219). Whether Wi-Fi is on afterwards.
-  Future<bool> openWifiPanel();
+  /// a desktop before [start] (#219). [always]: the panel opens with Wi-Fi on too, for the user
+  /// to leave a network ([otherWifi]). Whether Wi-Fi is on afterwards.
+  Future<bool> openWifiPanel({bool always = false});
+
+  /// Whether this device's Wi-Fi is connected to another network while the access point runs,
+  /// which slows the access point to a crawl: Android's Wi-Fi Direct group, whose radio then
+  /// switches between the two channels (215 ms of ping, WP-C.0 of the J6c plan).
+  Future<bool> otherWifi();
 
   /// Whether the Wi-Fi [start] needs is on: a desktop's network needs it (#219); Android's local
   /// hotspot starts with Wi-Fi off.
@@ -111,9 +147,18 @@ abstract interface class Hotspot {
   Future<bool> alive();
 }
 
-/// Android's local hotspot, through the app's Kotlin (LocalHotspot.kt, WifiJoin.kt).
+/// Android, through the app's Kotlin: a Wi-Fi Direct group at 5 GHz when this phone gets it
+/// (WifiDirectGroup.kt, 53 MB/s in WP-C.0 of the J6c plan), else the local hotspot
+/// (LocalHotspot.kt), which stays at 2.4 GHz (4 to 12 MB/s): decision C7 of the J6c plan. The
+/// group needs Wi-Fi on, the local hotspot does not. Joining: WifiJoin.kt.
 class AndroidHotspot implements Hotspot {
-  const AndroidHotspot();
+  AndroidHotspot({this.channel = platformChannel});
+
+  final MethodChannel channel;
+
+  /// The group runs rather than the local hotspot. Each is stopped by its own call: removing a
+  /// group that is not ours would end another app's.
+  bool _group = false;
 
   @override
   bool get supported => Platform.isAndroid;
@@ -125,30 +170,52 @@ class AndroidHotspot implements Hotspot {
   bool get leavesWifi => false;
 
   @override
-  Future<bool> permission() async => await platformChannel.invokeMethod<bool>('hotspotPermission') ?? false;
+  Future<bool> permission() async => await channel.invokeMethod<bool>('hotspotPermission') ?? false;
 
   @override
-  Future<HotspotInfo> start() async =>
-      HotspotInfo.fromMap((await platformChannel.invokeMethod<Map<Object?, Object?>>('hotspotStart'))!);
+  Future<HotspotInfo> start({bool fiveGhz = true}) async {
+    if (fiveGhz) {
+      try {
+        final group = HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>('groupStart', {'band': '5'}))!);
+        if (group.band == WifiBand.ghz5) {
+          _group = true;
+          return group;
+        }
+        // At 2.4 GHz, the local hotspot does as well, and has been tried for longer.
+        await channel.invokeMethod<void>('groupStop');
+      } on PlatformException {
+        // No Wi-Fi Direct, Wi-Fi off, or the radio busy: the local hotspot needs none of them.
+      }
+    }
+    _group = false;
+    return HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>('hotspotStart'))!);
+  }
 
   @override
-  Future<void> stop() => platformChannel.invokeMethod<void>('hotspotStop');
+  Future<void> stop() async {
+    final group = _group;
+    _group = false;
+    await channel.invokeMethod<void>(group ? 'groupStop' : 'hotspotStop');
+  }
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) async => HotspotInfo.fromMap(
-      (await platformChannel.invokeMethod<Map<Object?, Object?>>('hotspotJoin', {'ssid': ssid, 'passphrase': passphrase, 'security': security}))!);
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) async => HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>(
+      'hotspotJoin', {'ssid': ssid, 'passphrase': passphrase, 'security': security, if (band != null) 'band': band.code}))!);
 
   @override
-  Future<void> leave() => platformChannel.invokeMethod<void>('hotspotLeave');
+  Future<void> leave() => channel.invokeMethod<void>('hotspotLeave');
 
   @override
-  Future<int> joinedNetwork() async => await platformChannel.invokeMethod<int>('hotspotJoinedNetwork') ?? 0;
+  Future<int> joinedNetwork() async => await channel.invokeMethod<int>('hotspotJoinedNetwork') ?? 0;
 
   @override
-  Future<bool> openWifiPanel() async => await platformChannel.invokeMethod<bool>('openWifiPanel') ?? false;
+  Future<bool> openWifiPanel({bool always = false}) async => await channel.invokeMethod<bool>('openWifiPanel', {'always': always}) ?? false;
 
   @override
-  Future<bool> alive() async => await platformChannel.invokeMethod<bool>('hotspotAlive') ?? false;
+  Future<bool> otherWifi() async => _group && (await channel.invokeMethod<bool>('otherWifi') ?? false);
+
+  @override
+  Future<bool> alive() async => await channel.invokeMethod<bool>(_group ? 'groupAlive' : 'hotspotAlive') ?? false;
 
   @override
   Future<bool> wifiOn() async => true; // the local hotspot starts with Wi-Fi off
@@ -171,13 +238,13 @@ class NoHotspot implements Hotspot {
   Future<bool> permission() async => false;
 
   @override
-  Future<HotspotInfo> start() => throw UnsupportedError('no hotspot on this platform');
+  Future<HotspotInfo> start({bool fiveGhz = true}) => throw UnsupportedError('no hotspot on this platform');
 
   @override
   Future<void> stop() async {}
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) => throw UnsupportedError('no joining on this platform');
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) => throw UnsupportedError('no joining on this platform');
 
   @override
   Future<void> leave() async {}
@@ -186,7 +253,10 @@ class NoHotspot implements Hotspot {
   Future<int> joinedNetwork() async => 0;
 
   @override
-  Future<bool> openWifiPanel() async => false;
+  Future<bool> openWifiPanel({bool always = false}) async => false;
+
+  @override
+  Future<bool> otherWifi() async => false;
 
   @override
   Future<bool> alive() async => false;
@@ -232,7 +302,7 @@ class WindowsHotspot implements Hotspot {
   Future<bool> permission() async => true;
 
   @override
-  Future<HotspotInfo> start() async {
+  Future<HotspotInfo> start({bool fiveGhz = true}) async {
     final net = drawNetwork();
     final group = (await channel.invokeMapMethod<String, Object?>('start', {'ssid': net.ssid, 'passphrase': net.passphrase}))!;
     final address = '${group['address']}';
@@ -269,7 +339,7 @@ class WindowsHotspot implements Hotspot {
   }
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) => throw UnsupportedError('a computer joins in the system settings');
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) => throw UnsupportedError('a computer joins in the system settings');
 
   @override
   Future<void> leave() async {}
@@ -279,7 +349,11 @@ class WindowsHotspot implements Hotspot {
 
   /// Turned on through Windows' radios, when the user lets apps do it; else its settings open.
   @override
-  Future<bool> openWifiPanel() async => await channel.invokeMethod<bool>('turnWifiOn') ?? false;
+  Future<bool> openWifiPanel({bool always = false}) async => await channel.invokeMethod<bool>('turnWifiOn') ?? false;
+
+  /// The group is a second, virtual interface beside the computer's Wi-Fi (WP-C.1).
+  @override
+  Future<bool> otherWifi() async => false;
 
   @override
   Future<bool> alive() async => await channel.invokeMethod<bool>('alive') ?? false;
@@ -316,7 +390,7 @@ class LinuxHotspot implements Hotspot {
   Future<ProcessResult> _nmcli(List<String> args) => _run('nmcli', args);
 
   @override
-  Future<HotspotInfo> start() async {
+  Future<HotspotInfo> start({bool fiveGhz = true}) async {
     final devices = await _nmcli(['-t', '-f', 'DEVICE,TYPE', 'device']);
     final device = [
       for (final l in '${devices.stdout}'.split('\n'))
@@ -355,6 +429,7 @@ class LinuxHotspot implements Hotspot {
       security: 1,
       address: cidr.split('/').first,
       net: NetInterface(name: device, index: index, addrs: [cidr]),
+      band: WifiBand.ghz24, // band bg
     );
   }
 
@@ -368,7 +443,7 @@ class LinuxHotspot implements Hotspot {
   }
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1}) => throw UnsupportedError('joining is the system settings\' job');
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) => throw UnsupportedError('joining is the system settings\' job');
 
   @override
   Future<void> leave() async {}
@@ -377,7 +452,11 @@ class LinuxHotspot implements Hotspot {
   Future<int> joinedNetwork() async => 0;
 
   @override
-  Future<bool> openWifiPanel() async => (await _nmcli(['radio', 'wifi', 'on'])).exitCode == 0;
+  Future<bool> openWifiPanel({bool always = false}) async => (await _nmcli(['radio', 'wifi', 'on'])).exitCode == 0;
+
+  /// The card is the network's only: the Wi-Fi it was on is left ([leavesWifi]).
+  @override
+  Future<bool> otherWifi() async => false;
 
   /// The connection still active: NetworkManager gives the Wi-Fi device back to another network
   /// the user picks, ending it.
@@ -392,7 +471,7 @@ class LinuxHotspot implements Hotspot {
 }
 
 Hotspot systemHotspot() {
-  if (Platform.isAndroid) return const AndroidHotspot();
+  if (Platform.isAndroid) return AndroidHotspot();
   if (Platform.isWindows) return WindowsHotspot();
   if (Platform.isLinux) return LinuxHotspot();
   return const NoHotspot();

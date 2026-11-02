@@ -254,10 +254,24 @@ class HotspotLost extends ConnectionNotice {
   const HotspotLost();
 }
 
+/// This device's Wi-Fi joined another network during a session: its own network slows down
+/// (54 → 19 MB/s in the real test of 2 November 2026), and the access point's screen, which
+/// says so, is closed by then.
+class HotspotSlowed extends ConnectionNotice {
+  const HotspotSlowed();
+}
+
 /// The other device's access point could not be joined (refused by the user, not found).
 class JoinFailed extends ConnectionNotice {
   const JoinFailed(this.ssid);
   final String ssid;
+}
+
+/// The other device's access point is on a band this phone's radio lacks (a 5 GHz network, a
+/// phone at 2.4 GHz only): the other device can make it again at 2.4 GHz (WP-D.4).
+class JoinBandMissing extends ConnectionNotice {
+  const JoinBandMissing(this.band);
+  final WifiBand band;
 }
 
 /// This phone's Wi-Fi is off: Android refuses to join [link]'s network then, and an app cannot
@@ -300,9 +314,15 @@ class Connection extends ChangeNotifier {
   bool _checkingHotspot = false;
   bool _wantHotspot = false; // asked by the user, not stopped yet
   bool _hotspotWifiOff = false;
+  bool _hotspotLowBand = false; // asked at 2.4 GHz, until stopped (setHotspotFiveGhz)
+  bool _hotspotOtherWifi = false;
 
   /// This device's network is wanted, but its Wi-Fi is off: it comes once it is on (#219).
   bool get hotspotWifiOff => _hotspotWifiOff;
+
+  /// This device's Wi-Fi is connected to another network as well, which slows its own to a crawl
+  /// ([Hotspot.otherWifi]): the screen says so, until the user leaves it.
+  bool get hotspotOtherWifi => _hotspotOtherWifi;
 
   /// This device is on another's network, joined by its QR code, or joining it again (J6c).
   bool get joining => _joined != null;
@@ -398,7 +418,7 @@ class Connection extends ChangeNotifier {
     if (inv == null || inv.uri.isEmpty) return null;
     final h = _myHotspot;
     if (h == null || (h.ssid ?? '').isEmpty) return inv.uri;
-    return PairLink.withNetwork(inv.uri, LinkNetwork(ssid: h.ssid!, passphrase: h.passphrase ?? '', security: h.security));
+    return PairLink.withNetwork(inv.uri, LinkNetwork(ssid: h.ssid!, passphrase: h.passphrase ?? '', security: h.security, band: h.band));
   }
 
   /// The Connect screen is open: this device announces itself.
@@ -525,7 +545,8 @@ class Connection extends ChangeNotifier {
         _keepHotspot();
         return;
       }
-      _myHotspot = await hotspot.start();
+      _myHotspot = await hotspot.start(fiveGhz: !_hotspotLowBand);
+      _hotspotOtherWifi = await hotspot.otherWifi();
       _hotspotWatch = Timer.periodic(hotspotCheck, (_) => unawaited(_checkHotspot()));
       await pushNetwork();
       if (_codeOpen) await showCode();
@@ -545,6 +566,8 @@ class Connection extends ChangeNotifier {
   Future<void> stopHotspot() async {
     _wantHotspot = false;
     _hotspotWifiOff = false;
+    _hotspotLowBand = false;
+    _hotspotOtherWifi = false;
     _hotspotRetry?.cancel();
     _hotspotRetry = null;
     await _dropHotspot();
@@ -565,6 +588,34 @@ class Connection extends ChangeNotifier {
   /// then comes by itself ([_keepHotspot]).
   Future<void> turnWifiOn() => hotspot.openWifiPanel();
 
+  /// Opens the system's Wi-Fi settings for the user to leave the other network
+  /// ([hotspotOtherWifi]); read again once they close.
+  Future<void> leaveOtherWifi() async {
+    await hotspot.openWifiPanel(always: true);
+    await _readOtherWifi();
+  }
+
+  Future<void> _readOtherWifi() async {
+    final other = _myHotspot != null && await hotspot.otherWifi();
+    if (other == _hotspotOtherWifi) return;
+    _hotspotOtherWifi = other;
+    if (other && _session != null) _notices.add(const HotspotSlowed());
+    notifyListeners();
+  }
+
+  /// This device's network at 2.4 GHz, asked by the user ([setHotspotFiveGhz]).
+  bool get hotspotLowBand => _hotspotLowBand;
+
+  /// This device's network made again at 5 GHz, the default, or at 2.4 GHz for a device that
+  /// does not see 5 GHz (a phone or a card without it). Kept until the network is stopped; not
+  /// during a session, which the network made again would cut.
+  Future<void> setHotspotFiveGhz(bool on) async {
+    if (on != _hotspotLowBand || _myHotspot == null || _hotspotBusy || _session != null) return;
+    _hotspotLowBand = !on;
+    await _dropHotspot();
+    await _startHotspot();
+  }
+
   /// The access point stopped by the system (#219), stopped here too. Nobody on it yet: another
   /// is created ([_keepHotspot]), the screen showing what goes on, its Wi-Fi off included. During
   /// a session, said, and none behind it.
@@ -572,7 +623,10 @@ class Connection extends ChangeNotifier {
     if (_myHotspot == null || _hotspotBusy || _checkingHotspot) return;
     _checkingHotspot = true;
     try {
-      if (await hotspot.alive() || _myHotspot == null) return;
+      if (await hotspot.alive() || _myHotspot == null) {
+        await _readOtherWifi();
+        return;
+      }
       if (_session != null) {
         _notices.add(const HotspotLost());
         await stopHotspot();
@@ -620,11 +674,15 @@ class Connection extends ChangeNotifier {
           _notices.add(const HotspotFailed(permission: true));
           return;
         }
-        await hotspot.join(n.ssid, n.passphrase, security: n.security);
+        await hotspot.join(n.ssid, n.passphrase, security: n.security, band: n.band);
         _joined = n;
         await pushNetwork();
       } on PlatformException catch (e) {
-        _notices.add(e.code == 'wifi_off' ? WifiOff(link) : JoinFailed(n.ssid));
+        _notices.add(switch (e.code) {
+          'wifi_off' => WifiOff(link),
+          'no_band' when n.band != null => JoinBandMissing(n.band!),
+          _ => JoinFailed(n.ssid),
+        });
         return;
       } finally {
         _hotspotBusy = false;
