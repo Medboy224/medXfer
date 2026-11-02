@@ -124,7 +124,7 @@ Sous Windows, chercher directement le service de medXfer chez le Galaxy A57, san
 
 En deux PR, pour que la partie cryptographique se relise seule :
 1. **Le protocole** (2 novembre) : `pkg/pairing/ble.go`, sans radio ni API. Il contient le format, les clés, le chiffrement, les étiquettes, CPace sans TLS sur le même `PIN` que TLS, la règle de qui crée le réseau et les clés authentifiées pour le Wi-Fi. `pkg/pake` gagne seulement `Session.Key`. 16 tests et un fuzzing (1,5 million d'exécutions, sans défaut).
-2. **L'API** : actions et événements dans `internal/cabi`, `pair_ble` sur TLS, la demande de PIN à l'écran et « Refuser », les journaux sans secret.
+2. **L'API** (2 novembre) : deux actions, `ble_server` et `ble_client`, une étape par appel sur une connexion GATT nommée par la plateforme, 4 de chaque côté au plus. `pair_ble` ouvre la session sur le réseau, la clé authentifiée par BLE épinglée, acceptée une fois. La demande de PIN passe par le PIN à la demande (`pin_requested` avec le nom générique du demandeur, `pin_refuse`), et le mot de passe du réseau est masqué dans le journal. Le suffixe est en minuscules, comme le nom générique, pour que la liste réunisse un appareil vu par BLE et sur le réseau.
 
 ### WP-D.3 — Adaptateurs BLE · L
 

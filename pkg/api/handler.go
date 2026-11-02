@@ -47,6 +47,15 @@ func (s *DaemonServer) dispatch(rs Responder, req RequestMessage) {
 	case "pair_pin":
 		s.handlePairPIN(rs, req)
 
+	case "ble_server":
+		s.handleBLEServer(rs, req)
+
+	case "ble_client":
+		s.handleBLEClient(rs, req)
+
+	case "pair_ble":
+		s.handlePairBLE(rs, req)
+
 	case "set_discoverable":
 		s.handleSetDiscoverable(rs, req)
 

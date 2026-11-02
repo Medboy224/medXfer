@@ -53,7 +53,7 @@ func bleResponder(t *testing.T, o Options, shown *shownPINs, cfg PINConfig) (*BL
 	t.Helper()
 	cfg.Show = shown.show
 	pins := NewPINOnDemand(cfg)
-	r, err := NewBLEResponder(BLEResponderConfig{Self: o.Identity.Fingerprint, Suffix: "4F2A", Trust: o.Trust, Own: bleAll,
+	r, err := NewBLEResponder(BLEResponderConfig{Self: o.Identity.Fingerprint, Suffix: "4f2a", Trust: o.Trust, Own: func() BLERequest { return bleAll },
 		PIN: func(string) (*PIN, error) { return pins.Get() }})
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func bleResponder(t *testing.T, o Options, shown *shownPINs, cfg PINConfig) (*BL
 
 func bleClient(t *testing.T, o Options) *BLEClient {
 	t.Helper()
-	c, err := NewBLEClient(BLEClientConfig{Self: o.Identity.Fingerprint, Suffix: "9C1B", Trust: o.Trust})
+	c, err := NewBLEClient(BLEClientConfig{Self: o.Identity.Fingerprint, Suffix: "9c1b", Trust: o.Trust})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestBLETrusted(t *testing.T) {
 	c := bleClient(t, a)
 	conn := r.Conn()
 	p := recognize(t, c, conn)
-	if p.Suffix != "4F2A" || p.Trusted == nil || p.Trusted.Fingerprint != b.Identity.Fingerprint {
+	if p.Suffix != "4f2a" || p.Trusted == nil || p.Trusted.Fingerprint != b.Identity.Fingerprint {
 		t.Fatalf("recognized %+v", p)
 	}
 	req, err := c.Trusted(BLERequest{Join: BLEBand24 | BLEBand5}) // a PC: it joins
@@ -224,7 +224,7 @@ func TestBLEReplay(t *testing.T) {
 	a, b := device(t, "a"), device(t, "b")
 	trustThrough(t, a, b)
 	now := time.Now()
-	r, err := NewBLEResponder(BLEResponderConfig{Self: b.Identity.Fingerprint, Suffix: "4F2A", Trust: b.Trust, Own: bleAll, Now: func() time.Time { return now }})
+	r, err := NewBLEResponder(BLEResponderConfig{Self: b.Identity.Fingerprint, Suffix: "4f2a", Trust: b.Trust, Own: func() BLERequest { return bleAll }, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestBLEPIN(t *testing.T) {
 	a, b := device(t, "a"), device(t, "b")
 	shown := &shownPINs{}
 	r, pins := bleResponder(t, b, shown, PINConfig{})
-	r.cfg.Own = BLERequest{Join: BLEBand24 | BLEBand5} // a PC that cannot create at 5 GHz, here not at all
+	r.cfg.Own = func() BLERequest { return BLERequest{Join: BLEBand24 | BLEBand5} } // a PC that cannot create at 5 GHz, here not at all
 	c := bleClient(t, a)
 	c.cfg.Trust = nil
 	conn := r.Conn()
@@ -470,7 +470,7 @@ func TestBLEAndTLSShareAttempts(t *testing.T) {
 			t.Fatalf("over TLS: %v", err)
 		}
 	}
-	r, err := NewBLEResponder(BLEResponderConfig{Self: responder.Identity.Fingerprint, Suffix: "4F2A", Trust: responder.Trust, Own: bleAll,
+	r, err := NewBLEResponder(BLEResponderConfig{Self: responder.Identity.Fingerprint, Suffix: "4f2a", Trust: responder.Trust, Own: func() BLERequest { return bleAll },
 		PIN: func(string) (*PIN, error) { return p, nil }})
 	if err != nil {
 		t.Fatal(err)
@@ -596,12 +596,12 @@ func TestBLENetworkChecked(t *testing.T) {
 func FuzzBLEReceive(f *testing.F) {
 	a, b := device(f, "a"), device(f, "b")
 	pins := NewPINOnDemand(PINConfig{})
-	r, err := NewBLEResponder(BLEResponderConfig{Self: b.Identity.Fingerprint, Suffix: "4F2A", Trust: b.Trust, Own: bleAll,
+	r, err := NewBLEResponder(BLEResponderConfig{Self: b.Identity.Fingerprint, Suffix: "4f2a", Trust: b.Trust, Own: func() BLERequest { return bleAll },
 		PIN: func(string) (*PIN, error) { return pins.Get() }})
 	if err != nil {
 		f.Fatal(err)
 	}
-	c, err := NewBLEClient(BLEClientConfig{Self: a.Identity.Fingerprint, Suffix: "9C1B"})
+	c, err := NewBLEClient(BLEClientConfig{Self: a.Identity.Fingerprint, Suffix: "9c1b"})
 	if err != nil {
 		f.Fatal(err)
 	}

@@ -30,7 +30,7 @@ import (
 // trusted_devices, bundle_exported; send takes descriptors (items); transfer_progress lists the
 // files in progress (items). Added since, without a break: transfer_progress's stages
 // (stage_ms, bottleneck_confidence, WP-B.5); pin_refuse and pin_refused (the refusal of a PIN
-// asked for).
+// asked for); ble_server, ble_client and pair_ble (the path by BLE, J6d WP-D.2).
 const SchemaVersion = 4
 
 // DefaultQueueSize bounds the event queue (B11): past it, an event is dropped and counted, and

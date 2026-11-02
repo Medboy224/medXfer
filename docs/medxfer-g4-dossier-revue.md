@@ -1,6 +1,6 @@
 # medXfer — Dossier pour la revue cryptographique externe (gate G4)
 
-> Version du 13 octobre 2026, à la fin du jalon J5. Complétée le 2 novembre 2026 (jalon J6d) par le chemin par BLE (§3.7) : protocole codé dans le cœur, pas encore relié à l'API ni aux radios.
+> Version du 13 octobre 2026, à la fin du jalon J5. Complétée le 2 novembre 2026 (jalon J6d) par le chemin par BLE (§3.7) : protocole codé dans le cœur et l'API, pas encore relié aux radios.
 > Destinataire : la personne ou le prestataire chargé de la revue externe de l'appairage par PIN. Une version anglaise peut être fournie dès que le prestataire est choisi.
 > Périmètre de la revue (décision D8 du plan J5) :
 > - `pkg/pake` ;
@@ -203,8 +203,7 @@ Puis `K_i2r ‖ K_r2i = HKDF-SHA-256(ISK, sel vide, "medXfer-ble-v1 pin", 64)`. 
 | `TestBLENothingStableInClear` | Aucune empreinte, aucun nom ni mot de passe de réseau en clair dans les messages |
 | `TestBLEOnePINRequest`, `TestBLEStalePINRequest` | Une seule demande de PIN à la fois ; « Refuser » ; une connexion perdue ne garde pas l'écran |
 | `FuzzBLEReceive` | Messages quelconques, dans n'importe quel ordre : jamais de panique, jamais de demande authentifiée. Environ 1,5 million d'exécutions en 60 s, sans défaut trouvé. |
-
-Restent à écrire avec l'API : `pair_ble` sur TLS, et l'absence de secret BLE dans les journaux.
+| `pkg/api/ble_test.go` : `TestBLEByPINThenPairBLE`, `TestPairBLEWithoutBLEIsRefused`, `TestBLEPINRefused` | Le chemin du PIN entre deux daemons, jusqu'à la session par `pair_ble` ; rien d'écrit (`PAIR-08`) ; **ni le mot de passe du réseau ni le PIN dans le journal**, même écrits par une ligne maladroite ; `pair_ble` sans BLE refusé ; « Refuser » arrête la demande. |
 
 **Reproduire :** `go test ./pkg/pake ./pkg/pairing ./pkg/securechan ./pkg/api` ; `go test -run XXX -fuzz FuzzRespondPIN ./pkg/pairing` ; `go test -run XXX -fuzz FuzzBLEReceive ./pkg/pairing`.
 
