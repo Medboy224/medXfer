@@ -247,6 +247,20 @@ Les deux limites sont le disque de Zorin (2011, plein à 98 %). L'échelle, donn
 
 Entre deux PC récents, medXfer tient 91 à 96 % des 110 MB/s bruts du câble : la limite est le câble lui-même, comme le prévoyait WP-E.5.
 
+**Ensuite, par le Wi-Fi** (1er novembre au soir, câble débranché, le Wi-Fi d'un téléphone entre les deux PC Windows) :
+- **Ce PC ne parvenait pas à se connecter au second, et le second ne parvenait pas à envoyer.** Vérifié par SSH sur le second PC :
+  - son pare-feu n'autorisait medXfer qu'en profil Public (son câble), et son Wi-Fi était classé Privé ;
+  - quand il envoie, c'est le receveur qui le joint : refusé aussi, échec au bout de 43 s.
+- **À l'écran** : « failed to pair … i/o timeout » brut ; 13 tentatives en 2 s, rien ne disant qu'une était en cours.
+- **La barre sautait** : à 1,3 MB/s, les quatre connexions finissaient leurs chunks de 2 Mo presque ensemble, soit 44 % d'un fichier de 18 Mo d'un coup.
+
+Corrigés :
+- la barre suit les octets reçus (#242) ;
+- un appareil injoignable est nommé, de chaque côté, et le bouton dit qu'il essaie (#243, bible `XFER-08`) ;
+- l'application vérifie le pare-feu de Windows et propose de l'autoriser (avancé de J8).
+
+**Vérifié sur le second PC** : la colonne « Connexion » disait « Le pare-feu de Windows bloque medXfer sur le réseau « TECNO POP 7 » (privé) ». Après « Autoriser medXfer » et l'accord de Windows, sa règle unique est `medXfer | Inbound | Allow | Any`, et ce PC le joint sur son Wi-Fi (TCP 18887), ce qui échouait avant.
+
 **Rapport du lot** : [report-cable.md](report-cable.md).
 
 ## 3. Hors périmètre

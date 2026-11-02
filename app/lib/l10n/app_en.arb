@@ -330,5 +330,17 @@
   "noticeSenderUnreachable": "Could not reach {device} to receive: its firewall may be keeping medXfer out on this network. On {device}, allow medXfer for this type of network (private or public).",
   "@noticeSenderUnreachable": {"placeholders": {"device": {"type": "String"}}},
   "noticeThisUnreachable": "{device} could not connect to this device to receive: this device's firewall may be keeping medXfer out on this network. Allow medXfer for this type of network (private or public).",
-  "@noticeThisUnreachable": {"placeholders": {"device": {"type": "String"}}}
+  "@noticeThisUnreachable": {"placeholders": {"device": {"type": "String"}}},
+  "firewallBlocks": "Windows' firewall blocks medXfer on the network “{network}” ({kind}): other devices can neither reach this PC nor receive from it.",
+  "@firewallBlocks": {"placeholders": {"network": {"type": "String"}, "kind": {"type": "String"}}},
+  "firewallAllow": "Allow medXfer",
+  "firewallAsking": "Windows is asking for your permission…",
+  "firewallRefused": "The firewall was not changed.",
+  "networkPrivate": "private",
+  "networkPublic": "public",
+  "networkDomain": "domain",
+  "cableManual": "The IP address of the card “{card}” is set by hand ({address}). Over a direct cable, the other PC reaches this one only with an address of the same network. For the cable to work without settings, set the card back to automatic: {how}.",
+  "@cableManual": {"placeholders": {"card": {"type": "String"}, "address": {"type": "String"}, "how": {"type": "String"}}},
+  "cableManualHowWindows": "Settings › Network & internet › Ethernet › IP assignment › Edit › Automatic (DHCP)",
+  "cableManualHowLinux": "Settings › Network › Wired › IPv4 › Automatic (DHCP)"
 }

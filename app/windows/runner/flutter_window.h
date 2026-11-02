@@ -8,8 +8,10 @@
 
 #include <memory>
 
+#include "firewall.h"
 #include "hotspot.h"
 #include "win32_window.h"
+#include "wired.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -35,6 +37,12 @@ class FlutterWindow : public Win32Window {
   // The network this computer creates (lib/platform/hotspot.dart, WindowsHotspot).
   WifiDirectHotspot hotspot_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> hotspot_channel_;
+
+  // Windows' firewall (lib/platform/firewall.dart, WindowsFirewall).
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> firewall_channel_;
+
+  // The wired cards' addresses set by hand (lib/platform/cable.dart, WindowsCableLink).
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> network_channel_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

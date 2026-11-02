@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 
 import 'connection/cable_watch.dart';
 import 'connection/connection.dart';
+import 'connection/firewall_watch.dart';
 import 'background_keeper.dart';
 import 'dev/dev_tools.dart';
 import 'library/explorer.dart';
@@ -17,6 +18,7 @@ import 'platform/background.dart';
 import 'platform/cable.dart';
 import 'core/core.dart';
 import 'platform/file_picker.dart';
+import 'platform/firewall.dart';
 import 'platform/folders.dart';
 import 'platform/library.dart';
 import 'platform/hotspot.dart';
@@ -38,6 +40,7 @@ class AppState extends ChangeNotifier {
     NetworkInfo network = const NoNetworkInfo(),
     Hotspot hotspot = const NoHotspot(),
     CableLink cable = const NoCableLink(),
+    Firewall firewall = const NoFirewall(),
     this.qrScanner = const NoQrScanner(),
     this.filePicker = const NoFilePicker(),
     this.folderOpener = const NoFolderOpener(),
@@ -49,6 +52,7 @@ class AppState extends ChangeNotifier {
     this.desktop = false,
   }) : connection = Connection(core, network: network, hotspot: hotspot),
        cable = CableWatch(cable),
+       firewall = FirewallWatch(firewall),
        settings = settings ?? AppSettings() {
     receiveFolders = ReceiveFolders(settings: this.settings, storage: storage, folders: folders);
     // Created now, not on first use: they listen to the core from its first event.
@@ -70,6 +74,9 @@ class AppState extends ChangeNotifier {
 
   /// A cable to another PC left without an address: the Linux app gives one (WP-E.2).
   final CableWatch cable;
+
+  /// The networks Windows' firewall keeps medXfer out of, and the permission to be let in.
+  final FirewallWatch firewall;
 
   /// The desktop layout (mockup « 10. Bureau »): a side menu and its pages, not the phone's
   /// tabs (DesktopHome).
@@ -132,6 +139,7 @@ class AppState extends ChangeNotifier {
       }
       await connection.pushNetwork(); // before the status: its address comes from it (DISC-10)
       cable.start();
+      firewall.start();
       final reply = await core.call('get_status');
       final status = reply.first('status');
       if (status != null) {
@@ -154,6 +162,7 @@ class AppState extends ChangeNotifier {
     await connection.stopHotspot().timeout(wait, onTimeout: () {}).catchError((Object _) {});
     // So does the address it gave a cable: the user's own profile comes back (WP-E.2).
     await cable.stop().timeout(wait, onTimeout: () {}).catchError((Object _) {});
+    firewall.stop();
     await core.stop().timeout(wait, onTimeout: () {}).catchError((Object _) {});
   }
 
@@ -180,6 +189,7 @@ class AppState extends ChangeNotifier {
     _events?.cancel();
     connection.dispose();
     cable.dispose();
+    firewall.dispose();
     keeper.dispose();
     explorer.dispose();
     selection.dispose();

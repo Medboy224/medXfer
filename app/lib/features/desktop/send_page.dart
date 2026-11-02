@@ -8,12 +8,14 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 
 import '../../app.dart';
 import '../../app_state.dart';
 import '../../connection/cable_watch.dart';
+import '../../connection/firewall_watch.dart';
 import '../../connection/connection.dart';
 import '../../l10n/app_localizations.dart';
 import '../../library/desktop_picks.dart';
@@ -64,11 +66,11 @@ class _SendPageState extends State<SendPage> {
       hint: l.dropHere,
       onPaths: _add,
       child: ListenableBuilder(
-        listenable: Listenable.merge([_state.connection, _state.selection, _state.cable]),
+        listenable: Listenable.merge([_state.connection, _state.selection, _state.cable, _state.firewall]),
         builder: (context, _) => LayoutBuilder(
           builder: (context, box) {
             final pick = _Pick(onFiles: _chooseFiles, onFolder: _chooseFolder, selection: _state.selection, session: _state.connection.session, onSend: _send);
-            final connection = _ConnectionPanel(connection: _state.connection, cable: _state.cable);
+            final connection = _ConnectionPanel(connection: _state.connection, cable: _state.cable, firewall: _state.firewall);
             return SingleChildScrollView(
               padding: const EdgeInsets.all(24),
               child: box.maxWidth >= 860
@@ -242,9 +244,12 @@ class _Pick extends StatelessWidget {
 /// The right column, the phone's way of connecting: the device connected; those of the same
 /// network, which see this one too; else create a connection, or join another's.
 class _ConnectionPanel extends StatelessWidget {
-  const _ConnectionPanel({required this.connection, required this.cable});
+  const _ConnectionPanel({required this.connection, required this.cable, required this.firewall});
 
   final Connection connection;
+
+  /// The networks Windows' firewall keeps medXfer out of, with the button to let it in.
+  final FirewallWatch firewall;
 
   /// The wired cards: an address given by the app (Linux), a sharing's address left (Windows).
   final CableWatch cable;
@@ -304,6 +309,9 @@ class _ConnectionPanel extends StatelessWidget {
       children: [
         Text(l.connectionTitle, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
         const SizedBox(height: 12),
+        // First of all: kept out by the firewall, this PC is reached by nobody, whatever else
+        // the column offers (real test of 1 November).
+        if (firewall.blocked.isNotEmpty) _FirewallNotice(firewall: firewall),
         if (session != null)
           _Device(
             key: const Key('device-session'),
@@ -371,10 +379,18 @@ class _ConnectionPanel extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
             child: Text(l.cableGiven(card), key: Key('cable-given-$card'), style: TextStyle(color: c.muted, fontSize: 13)),
           ),
-        if (cable.sharingLeftOn case final card?)
+        // A wired card's address set by hand (asked by the user on 2 November): a stopped
+        // connection sharing's trace, or the user's own; the way back to automatic is said.
+        if (cable.manual case final m?)
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-            child: Text(l.cableSharingLeft(card), key: const Key('cable-sharing-left'), style: TextStyle(color: c.danger, fontSize: 13)),
+            child: m.sharing
+                ? Text(l.cableSharingLeft(m.card), key: const Key('cable-sharing-left'), style: TextStyle(color: c.danger, fontSize: 13))
+                : Text(
+                    l.cableManual(m.card, m.address, Platform.isLinux ? l.cableManualHowLinux : l.cableManualHowWindows),
+                    key: const Key('cable-manual'),
+                    style: TextStyle(color: c.danger, fontSize: 13),
+                  ),
           ),
         // Discovery blocked by the Wi-Fi or a firewall: this computer's address and PIN.
         Align(
@@ -416,6 +432,54 @@ class _ConnectionPanel extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// The networks Windows' firewall keeps medXfer out of, and the button that asks the user's
+/// permission (the system's prompt) to let it in.
+class _FirewallNotice extends StatelessWidget {
+  const _FirewallNotice({required this.firewall});
+
+  final FirewallWatch firewall;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    String kind(String category) => switch (category) {
+      'private' => l.networkPrivate,
+      'domain' => l.networkDomain,
+      _ => l.networkPublic,
+    };
+    return Container(
+      key: const Key('firewall-blocks'),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(border: Border.all(color: c.danger), borderRadius: BorderRadius.circular(16)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final n in firewall.blocked)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(l.firewallBlocks(n.name, kind(n.category)), style: TextStyle(color: c.danger, fontSize: 13)),
+            ),
+          Row(
+            children: [
+              FilledButton(
+                key: const Key('firewall-allow'),
+                onPressed: firewall.asking ? null : () => unawaited(firewall.allow()),
+                child: Text(firewall.asking ? l.firewallAsking : l.firewallAllow),
+              ),
+              if (firewall.lastAnswer == false && !firewall.asking) ...[
+                const SizedBox(width: 12),
+                Flexible(child: Text(l.firewallRefused, style: TextStyle(color: c.muted, fontSize: 13))),
+              ],
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
