@@ -7,6 +7,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'connection/ble_link.dart';
 import 'connection/cable_watch.dart';
 import 'connection/connection.dart';
 import 'connection/firewall_watch.dart';
@@ -15,6 +16,7 @@ import 'dev/dev_tools.dart';
 import 'library/explorer.dart';
 import 'library/selection.dart';
 import 'platform/background.dart';
+import 'platform/ble.dart';
 import 'platform/cable.dart';
 import 'core/core.dart';
 import 'platform/file_picker.dart';
@@ -39,6 +41,7 @@ class AppState extends ChangeNotifier {
     required this.folders,
     NetworkInfo network = const NoNetworkInfo(),
     Hotspot hotspot = const NoHotspot(),
+    this.ble = const NoBle(),
     CableLink cable = const NoCableLink(),
     Firewall firewall = const NoFirewall(),
     this.qrScanner = const NoQrScanner(),
@@ -102,6 +105,12 @@ class AppState extends ChangeNotifier {
   /// The other device: pairing, session, trust (WP-B.2). Listens to the core from the start.
   final Connection connection;
 
+  /// The BLE radio (WP-D.3); none where the device has none (D4).
+  final Ble ble;
+
+  /// The path by BLE (bible §6.6, WP-D.3): the radio, the core, and this device's networks.
+  late final BleLink bleLink = BleLink(core, ble, connection);
+
   /// The camera that reads QR codes (decision J5); none on the desktops.
   final QrScanner qrScanner;
 
@@ -158,6 +167,7 @@ class AppState extends ChangeNotifier {
   /// wakes its event reader (B9). A reader left waiting keeps the process alive, without a
   /// window, holding the core's port. At most [wait]: the window closes anyway.
   Future<void> shutdown({Duration wait = const Duration(seconds: 3)}) async {
+    await bleLink.stop().timeout(wait, onTimeout: () {}).catchError((Object _) {});
     // A network this computer made stops with the app: NetworkManager would keep it (WP-C.2).
     await connection.stopHotspot().timeout(wait, onTimeout: () {}).catchError((Object _) {});
     // So does the address it gave a cable: the user's own profile comes back (WP-E.2).
@@ -187,6 +197,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _events?.cancel();
+    bleLink.dispose();
     connection.dispose();
     cable.dispose();
     firewall.dispose();

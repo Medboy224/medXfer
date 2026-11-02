@@ -381,7 +381,7 @@ Un message : `version` (1 octet, `1`) ‖ `type` (1 octet) ‖ `lv_cat(champs)`,
 | 6 | `pin` | I → R | suite (`CPACE-RISTR255-SHA512`), `Ya` | — |
 | 7 | `pin_reply` | R → I | `Yb`, `Tb` | — |
 | 8 | `pin_confirm` | I → R | `Ta` | `seal(K_i2r, 0)` : `fp_I`, demande |
-| 9 | `reply` | R → I | — | `seal(K_r2i, 0)` : `fp_R` (chemin du PIN seulement), issue, réseau |
+| 9 | `reply` | R → I | — | `seal(K_r2i, 0)` : `fp_R` (chemin du PIN seulement), issue, réseau ou bande |
 | 10 | `network` | I → R | — | `seal(K_i2r, 1)` : le réseau créé par I |
 | 11 | `ack` | R → I | — | `seal(K_r2i, 1)` : vide |
 | 15 | `refuse` | R → I | — | — |
@@ -391,7 +391,7 @@ Le contenu des champs :
 - **Demande** : `create` et `join`, 1 octet chacun (bit 0 : 2,4 GHz, bit 1 : 5 GHz), ce que I peut créer et rejoindre.
 - **Issue** : 1 octet :
   - `1` : R a créé le réseau, qui suit ;
-  - `2` : I doit le créer ;
+  - `2` : I doit le créer, sur la bande de l'octet qui suit (mêmes bits que la demande) : R connaît les bandes des deux côtés, I ne connaît que les siennes ;
   - `3` : aucun des deux ne le peut.
 - **Réseau** :
   - `ssid` (1 à 32 octets) et `pass` (8 à 63) ;

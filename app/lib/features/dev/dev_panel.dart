@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app.dart';
+import '../../connection/ble_link.dart';
 import '../../dev/dev_tools.dart';
 import '../../l10n/app_localizations.dart';
 import '../../theme.dart';
@@ -102,6 +103,8 @@ class DevPanel extends StatelessWidget {
                   ],
                 ),
               ),
+              // The path by BLE, to try it on the devices until its screens (WP-D.3, WP-D.5).
+              if (state.bleLink.supported) _Section(title: l.devBle, child: _BleTry(link: state.bleLink)),
               _Section(title: l.devReport, child: _Report(dev: dev)),
               _Section(
                 title: l.devBundle,
@@ -125,6 +128,73 @@ class DevPanel extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+/// The path by BLE (bible §6.6): the radio's state, the devices recognized, and the exchange
+/// with one of them, until its own screens (WP-D.5).
+class _BleTry extends StatefulWidget {
+  const _BleTry({required this.link});
+
+  final BleLink link;
+
+  @override
+  State<_BleTry> createState() => _BleTryState();
+}
+
+class _BleTryState extends State<_BleTry> {
+  final _pin = TextEditingController();
+
+  @override
+  void dispose() {
+    _pin.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    return ListenableBuilder(
+      listenable: widget.link,
+      builder: (context, _) {
+        final link = widget.link;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(child: Text(link.running ? l.devBleRunning : (link.problem ?? l.devBleStopped), key: const Key('ble-state'))),
+                if (link.problem == 'bluetooth_off')
+                  TextButton(key: const Key('ble-turn-on'), onPressed: () => unawaited(link.turnOn()), child: Text(l.devBleTurnOn))
+                else
+                  TextButton(
+                    key: const Key('ble-toggle'),
+                    onPressed: () => unawaited(link.running ? link.stop() : link.start()),
+                    child: Text(link.running ? l.devBleStop : l.devBleStart),
+                  ),
+              ],
+            ),
+            for (final d in link.devices)
+              ListTile(
+                key: Key('ble-device-${d.suffix}'),
+                contentPadding: EdgeInsets.zero,
+                title: Text(d.name),
+                subtitle: Text('${d.trusted ? l.devBleTrusted : l.devBleUnknown} · ${d.rssi} dBm', style: TextStyle(color: c.muted)),
+                trailing: TextButton(onPressed: () => unawaited(link.connect(d)), child: Text(l.devBleConnect)),
+              ),
+            if (link.stage != BleStage.idle) Text(l.devBleStage(link.stage.name, link.failure ?? ''), key: const Key('ble-stage')),
+            if (link.stage == BleStage.pinNeeded)
+              Row(
+                children: [
+                  Expanded(child: TextField(key: const Key('ble-pin'), controller: _pin, keyboardType: TextInputType.number)),
+                  TextButton(onPressed: () => unawaited(link.typePin(_pin.text)), child: const Text('OK')),
+                ],
+              ),
+          ],
+        );
+      },
     );
   }
 }

@@ -278,17 +278,18 @@ const (
 )
 
 // Creator is the rule of bible §6.6: the one that can create the network at 5 GHz when the
-// other can join it there, else at 2.4 GHz; the responder when both can; none otherwise.
-func Creator(initiator, responder BLERequest) BLEOutcome {
+// other can join it there, else at 2.4 GHz; the responder when both can; none otherwise. band
+// is the one to create it on.
+func Creator(initiator, responder BLERequest) (outcome BLEOutcome, band BLEBands) {
 	for _, band := range []BLEBands{BLEBand5, BLEBand24} {
 		if responder.Create&band != 0 && initiator.Join&band != 0 {
-			return BLEResponderCreates
+			return BLEResponderCreates, band
 		}
 		if initiator.Create&band != 0 && responder.Join&band != 0 {
-			return BLEInitiatorCreates
+			return BLEInitiatorCreates, band
 		}
 	}
-	return BLENoNetwork
+	return BLENoNetwork, 0
 }
 
 // BLENetwork is the network a device created for the occasion (DISC-12), as BLE carries it,
@@ -460,6 +461,7 @@ type BLEAuthRequest struct {
 	Trusted bool
 	Request BLERequest
 	Outcome BLEOutcome // Creator(Request, own)
+	Band    BLEBands   // the band to create the network on
 }
 
 const (
@@ -492,6 +494,7 @@ type BLEConn struct {
 
 	peer     identity.Fingerprint
 	trusted  bool
+	band     BLEBands // the band to create the network on (Creator)
 	i2r, r2i *bleBox
 }
 
@@ -619,7 +622,7 @@ func (c *BLEConn) trustedRequest(f [][]byte) (BLEStep, error) {
 			break
 		}
 		c.peer, c.trusted, c.i2r, c.r2i, c.stage = p.Fingerprint, true, i2r, r2i, bleAuthenticated
-		return BLEStep{Request: &BLEAuthRequest{Peer: p.Fingerprint, Trusted: true, Request: req, Outcome: Creator(req, cfg.own())}}, nil
+		return c.authenticated(p.Fingerprint, true, req), nil
 	}
 	return c.refuse()
 }
@@ -714,7 +717,15 @@ func (c *BLEConn) pinConfirm(f [][]byte) (BLEStep, error) {
 	c.r.mu.Unlock()
 	c.peer = identity.Fingerprint(body[0])
 	c.i2r, c.r2i, c.stage = i2r, r2i, bleAuthenticated
-	return BLEStep{Request: &BLEAuthRequest{Peer: c.peer, Request: req, Outcome: Creator(req, c.r.cfg.own())}}, nil
+	return c.authenticated(c.peer, false, req), nil
+}
+
+// authenticated is the step of a request authenticated: who creates the network, on which band
+// (bible §6.6), kept for Answer.
+func (c *BLEConn) authenticated(peer identity.Fingerprint, trusted bool, req BLERequest) BLEStep {
+	outcome, band := Creator(req, c.r.cfg.own())
+	c.band = band
+	return BLEStep{Request: &BLEAuthRequest{Peer: peer, Trusted: trusted, Request: req, Outcome: outcome, Band: band}}
 }
 
 // Answer replies to the request authenticated: outcome, and the network when this device
@@ -731,6 +742,9 @@ func (c *BLEConn) Answer(outcome BLEOutcome, n *BLENetwork) ([]byte, error) {
 		body = append(body, c.r.cfg.Self[:])
 	}
 	body = append(body, []byte{byte(outcome)})
+	if outcome == BLEInitiatorCreates {
+		body = append(body, []byte{byte(c.band)}) // the band to create it on
+	}
 	if n != nil {
 		nf, err := n.fields()
 		if err != nil {
@@ -935,6 +949,7 @@ func (c *BLEClient) PINReply(msg []byte, req BLERequest) ([]byte, error) {
 type BLEAnswer struct {
 	Peer    identity.Fingerprint
 	Outcome BLEOutcome
+	Band    BLEBands // the network's band; the band to create it on (BLEInitiatorCreates)
 	Network *BLENetwork
 }
 
@@ -964,8 +979,10 @@ func (c *BLEClient) Reply(msg []byte) (BLEAnswer, error) {
 		if !ok {
 			return BLEAnswer{}, ErrRefused
 		}
-		a.Network = &n
-	case (a.Outcome == BLEInitiatorCreates || a.Outcome == BLENoNetwork) && len(body) == 1:
+		a.Network, a.Band = &n, n.Band
+	case a.Outcome == BLEInitiatorCreates && sized(body[1:], 1) && (BLEBands(body[1][0]) == BLEBand24 || BLEBands(body[1][0]) == BLEBand5):
+		a.Band = BLEBands(body[1][0])
+	case a.Outcome == BLENoNetwork && len(body) == 1:
 	default:
 		return BLEAnswer{}, ErrRefused
 	}

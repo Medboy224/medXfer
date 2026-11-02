@@ -306,7 +306,8 @@ func TestBLEPIN(t *testing.T) {
 		t.Fatal(err)
 	}
 	ans, err := c.Reply(reply)
-	if err != nil || ans.Peer != b.Identity.Fingerprint || ans.Outcome != BLEInitiatorCreates || ans.Network != nil {
+	// The initiator creates the network, and learns on which band: the responder joins 5 GHz.
+	if err != nil || ans.Peer != b.Identity.Fingerprint || ans.Outcome != BLEInitiatorCreates || ans.Band != BLEBand5 || ans.Network != nil {
 		t.Fatalf("answer %+v, %v", ans, err)
 	}
 	netMsg, err := c.Network(bleNet())
@@ -545,19 +546,22 @@ func TestBLECreator(t *testing.T) {
 	phone := BLERequest{Create: BLEBand24 | BLEBand5, Join: BLEBand24 | BLEBand5}
 	pc := BLERequest{Create: BLEBand24, Join: BLEBand24 | BLEBand5}
 	old := BLERequest{Create: BLEBand24, Join: BLEBand24} // a phone at 2.4 GHz only
+	cannot := BLERequest{Join: BLEBand24}                 // creates no network
 	for _, tc := range []struct {
 		i, r BLERequest
 		want BLEOutcome
+		band BLEBands
 	}{
-		{pc, phone, BLEResponderCreates},    // the phone, at 5 GHz
-		{phone, pc, BLEInitiatorCreates},    // the phone, at 5 GHz
-		{phone, phone, BLEResponderCreates}, // both can: the responder
-		{old, phone, BLEResponderCreates},   // at 2.4 GHz: the old one cannot join 5 GHz
-		{pc, pc, BLEResponderCreates},       // two PCs, at 2.4 GHz
-		{BLERequest{Join: BLEBand24}, BLERequest{Join: BLEBand24}, BLENoNetwork},
+		{pc, phone, BLEResponderCreates, BLEBand5},    // the phone, at 5 GHz
+		{phone, pc, BLEInitiatorCreates, BLEBand5},    // the phone, at 5 GHz
+		{phone, phone, BLEResponderCreates, BLEBand5}, // both can: the responder
+		{old, phone, BLEResponderCreates, BLEBand24},  // at 2.4 GHz: the old one cannot join 5 GHz
+		{phone, cannot, BLEInitiatorCreates, BLEBand24},
+		{pc, pc, BLEResponderCreates, BLEBand24}, // two PCs, at 2.4 GHz
+		{cannot, cannot, BLENoNetwork, 0},
 	} {
-		if got := Creator(tc.i, tc.r); got != tc.want {
-			t.Errorf("Creator(%+v, %+v) = %d, want %d", tc.i, tc.r, got, tc.want)
+		if got, band := Creator(tc.i, tc.r); got != tc.want || band != tc.band {
+			t.Errorf("Creator(%+v, %+v) = %d at %d, want %d at %d", tc.i, tc.r, got, band, tc.want, tc.band)
 		}
 	}
 }
