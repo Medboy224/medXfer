@@ -3,20 +3,35 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"math/rand/v2"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 )
 
+// freeAddr is a loopback address with a free port below every system's ephemeral range (Linux
+// from 32768, Windows and macOS from 49152). A port the system gave from that range may go to
+// another test's connection between the moment it is freed here and the moment the responder
+// binds it: the packages' tests run side by side (CI of #253, port 45117 found held).
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	start := 20000 + rand.IntN(10000)
+	for p := start; p < start+200; p++ {
+		l, err := net.Listen("tcp4", "127.0.0.1:"+strconv.Itoa(p))
+		if err == nil {
+			l.Close()
+			return l.Addr().String()
+		}
+	}
+	t.Fatal("no free port")
+	return ""
+}
+
 // Audit 15b (#156): visibility turned off then on again at once answers the probes: the new
 // responder does not find its port still held by the old one.
 func TestProbesComeBackAtOnce(t *testing.T) {
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	l.Close()
+	addr := freeAddr(t)
 	s := NewDiscoveryServer("node", 18887, &TransferOffer{})
 	for i := range 20 {
 		ctx, cancel := context.WithCancel(context.Background())
