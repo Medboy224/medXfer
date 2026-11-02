@@ -110,6 +110,11 @@ Sous Windows, chercher directement le service de medXfer chez le Galaxy A57, san
 - **Qui crée le réseau** : celui qui peut le créer à 5 GHz, c'est-à-dire le téléphone (règle du rapport J6c). Le code de pays peut circuler pour choisir, jamais pour imposer : le système et le pilote appliquent la réglementation.
 - Le mot de passe du réseau ne passe **jamais en clair** par BLE, et n'est jamais journalisé.
 
+**Fait (2 novembre)** : bible §6.6 (exigences `BLE-01` à `BLE-12`), avec l'adversaire A7 (§2), `CHAN-04`, les journaux (§13), les tests (§14.1) et les sources (annexe B) ; dossier G4, §3.7 et questions 12 à 17. Trois écarts avec ce qui précède :
+- **Les empreintes ne sont pas dans le CI.** Il aurait fallu les envoyer en clair avant CPace, et une empreinte ne change jamais : n'importe qui à portée radio aurait pu suivre un appareil en demandant un PIN. Elles passent chiffrées juste après la confirmation, sous une clé tirée de l'ISK (question 12 du dossier G4).
+- **Le code de pays ne circule pas.** Chaque côté dit seulement les bandes qu'il peut créer et rejoindre ; le système du créateur applique la réglementation.
+- **La demande d'un inconnu s'affiche avec le PIN et « Refuser »**, sans « Accepter » à part (décision D6, proposée).
+
 ### WP-D.2 — Le cœur · M
 
 - Les messages de WP-D.1, chiffrés et déchiffrés dans le cœur : la plateforme ne fait que les porter. Actions et événements dans `internal/cabi` et l'API.
@@ -161,3 +166,4 @@ Sous Windows, chercher directement le service de medXfer chez le Galaxy A57, san
 | D3 | Quand annoncer et balayer | Proposé : **seulement quand l'application est ouverte**. Moins de batterie, pas de service en arrière-plan à justifier auprès d'Android, rien d'annoncé quand l'utilisateur ne s'en sert pas. | En arrière-plan aussi : plus tard, si l'usage le demande. |
 | D4 | Un appareil sans BLE (Zorin : Bluetooth 2.1) | ✅ **Le QR et le PIN, comme aujourd'hui** (2 novembre) : les essais couvrent ce cas. Le BLE sous Linux sera essayé quand l'utilisateur aura installé Zorin sur le second PC (Intel AC 8260, BLE) ; d'ici là, des tests automatiques. | Un adaptateur USB Bluetooth 5 : introuvable là où se trouve l'utilisateur. |
 | D5 | Les API BLE de chaque système | ✅ Les API du système, une par adaptateur, sans dépendance. **Android** : `android.bluetooth.le`, balayage filtré sur le service. **Windows** (C++/WinRT, dans le runner) : `GattServiceProvider` en mode caché, `BluetoothLEAdvertisementWatcher`, `BluetoothLEDevice` et `GattSession`. **Linux** : BlueZ par D-Bus, sondé plus tard (D4). | — |
+| D6 | Comment l'appareil qui crée le réseau accepte un inconnu | Proposé : **la demande s'affiche avec le PIN et un bouton « Refuser »**. Taper le bon PIN de l'autre côté vaut accord, puisque seul celui qui voit cet écran le connaît. Quand c'est l'initiateur qui crée le réseau, son toucher vaut accord. Une étape de moins, et aucun réseau n'est créé avant que le PIN soit vérifié. | « Accepter » puis le PIN : deux étapes chez le répondant pour la même garantie. |
