@@ -11,9 +11,13 @@ import (
 
 // fastHeartbeat shortens the pings and the silence that loses a session.
 func fastHeartbeat(t *testing.T) {
-	every, silence := pingEvery, sessionSilence
-	pingEvery, sessionSilence = 100*time.Millisecond, 600*time.Millisecond
-	t.Cleanup(func() { pingEvery, sessionSilence = every, silence })
+	every, silence := pingEvery.get(), sessionSilence.get()
+	pingEvery.set(100 * time.Millisecond)
+	sessionSilence.set(600 * time.Millisecond)
+	t.Cleanup(func() {
+		pingEvery.set(every)
+		sessionSilence.set(silence)
+	})
 }
 
 // WP-B.8, found on the real devices: a device gone without a word (its network off) was seen
@@ -49,10 +53,10 @@ func TestQuietSessionStaysUp(t *testing.T) {
 	_, nb := startOwnIdentity(t, "Phone")
 	pairByQR(t, na, nb, false)
 	lost := func(e testkit.Event) bool { return e.Event == "reconnecting" }
-	if _, ok := na.TryWaitFor(lost, 5*sessionSilence); ok {
+	if _, ok := na.TryWaitFor(lost, 5*sessionSilence.get()); ok {
 		t.Fatal("a quiet session was lost on the side that showed the code")
 	}
-	if _, ok := nb.TryWaitFor(lost, sessionSilence); ok {
+	if _, ok := nb.TryWaitFor(lost, sessionSilence.get()); ok {
 		t.Fatal("a quiet session was lost on the side that scanned it")
 	}
 }
