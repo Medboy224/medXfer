@@ -323,5 +323,13 @@
   "cableGiven": "Cable: medXfer gave the card {card} an address, which the system had left without one.",
   "@cableGiven": {"placeholders": {"card": {"type": "String"}}},
   "cableSharingLeft": "The card “{card}” keeps the address 192.168.137.1 of a connection sharing: a PC linked by cable will not reach this one. If that sharing is stopped, set the card back to automatic: Settings › Network & internet › Ethernet › IP assignment.",
-  "@cableSharingLeft": {"placeholders": {"card": {"type": "String"}}}
+  "@cableSharingLeft": {"placeholders": {"card": {"type": "String"}}},
+  "firewallBlocks": "Windows' firewall blocks medXfer on the network “{network}” ({kind}): other devices can neither reach this PC nor receive from it.",
+  "@firewallBlocks": {"placeholders": {"network": {"type": "String"}, "kind": {"type": "String"}}},
+  "firewallAllow": "Allow medXfer",
+  "firewallAsking": "Windows is asking for your permission…",
+  "firewallRefused": "The firewall was not changed.",
+  "networkPrivate": "private",
+  "networkPublic": "public",
+  "networkDomain": "domain"
 }

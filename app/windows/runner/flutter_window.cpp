@@ -76,6 +76,28 @@ bool FlutterWindow::OnCreate() {
       result->NotImplemented();
     }
   });
+  // Windows' firewall (lib/platform/firewall.dart): the networks it keeps this program out of,
+  // and the user's permission to let it in.
+  firewall_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "dev.medxfer.app/firewall",
+      &flutter::StandardMethodCodec::GetInstance());
+  firewall_channel_->SetMethodCallHandler([](const auto& call, auto result) {
+    if (call.method_name() == "status") {
+      flutter::EncodableList networks;
+      for (const auto& n : FirewallStatus()) {
+        networks.push_back(flutter::EncodableValue(flutter::EncodableMap{
+            {flutter::EncodableValue("name"), flutter::EncodableValue(n.name)},
+            {flutter::EncodableValue("category"), flutter::EncodableValue(n.category)},
+            {flutter::EncodableValue("allowed"), flutter::EncodableValue(n.allowed)},
+        }));
+      }
+      result->Success(flutter::EncodableValue(networks));
+    } else if (call.method_name() == "allow") {
+      result->Success(flutter::EncodableValue(FirewallAllow()));
+    } else {
+      result->NotImplemented();
+    }
+  });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -93,6 +115,7 @@ bool FlutterWindow::OnCreate() {
 void FlutterWindow::OnDestroy() {
   hotspot_.Stop();
   hotspot_channel_ = nullptr;
+  firewall_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

@@ -9,6 +9,7 @@ import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/platform/cable.dart';
 import 'package:medxfer/platform/file_picker.dart';
+import 'package:medxfer/platform/firewall.dart';
 import 'package:medxfer/platform/folders.dart';
 import 'package:medxfer/platform/hotspot.dart';
 import 'package:medxfer/platform/network.dart';
@@ -66,6 +67,18 @@ class _Cable implements CableLink {
 
   @override
   Future<String?> sharingLeft() async => left;
+}
+
+/// Windows' firewall of the second PC of the real test of 1 November: medXfer let in on the
+/// cable only; allowed once the user agrees.
+class _Firewall implements Firewall {
+  bool allowed = false;
+
+  @override
+  Future<List<FirewallNetwork>> status() async => [FirewallNetwork(name: 'TECNO POP 7', category: 'private', allowed: allowed)];
+
+  @override
+  Future<bool> allow() async => allowed = true;
 }
 
 /// The network a computer creates (WP-C.2 of the J6c plan), as WindowsHotspot gives it.
@@ -133,7 +146,13 @@ class _PcHotspot implements Hotspot {
   Future<bool> wifiOn() async => wifi;
 }
 
-Future<AppState> _app(WidgetTester tester, FakeCore core, {Hotspot hotspot = const NoHotspot(), CableLink cable = const NoCableLink()}) async {
+Future<AppState> _app(
+  WidgetTester tester,
+  FakeCore core, {
+  Hotspot hotspot = const NoHotspot(),
+  CableLink cable = const NoCableLink(),
+  Firewall firewall = const NoFirewall(),
+}) async {
   final state = AppState(
     core: core,
     folders: const _TestFolders(),
@@ -142,6 +161,7 @@ Future<AppState> _app(WidgetTester tester, FakeCore core, {Hotspot hotspot = con
     desktop: true,
     hotspot: hotspot,
     cable: cable,
+    firewall: firewall,
   );
   tester.platformDispatcher.localesTestValue = [const Locale('fr')];
   addTearDown(tester.platformDispatcher.clearLocalesTestValue);
@@ -281,6 +301,16 @@ void main() {
     expect(find.text('Câble : 169.254.185.66:18887'), findsOneWidget);
     expect(find.text('Wi-Fi : 192.168.42.174:18887'), findsOneWidget);
     await state.cable.stop();
+  });
+
+  testWidgets('real test of 1 November: the firewall keeps medXfer out of a network, said first, let in by the button', (tester) async {
+    final state = await _app(tester, _core(), firewall: _Firewall());
+    expect(find.byKey(const Key('firewall-blocks')), findsOneWidget);
+    expect(find.textContaining('« TECNO POP 7 » (privé)'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('firewall-allow')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('firewall-blocks')), findsNothing);
+    state.firewall.stop();
   });
 
   testWidgets('one item removed, then all', (tester) async {
