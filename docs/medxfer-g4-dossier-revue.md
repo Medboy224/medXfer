@@ -1,12 +1,13 @@
 # medXfer — Dossier pour la revue cryptographique externe (gate G4)
 
-> Version du 13 octobre 2026, à la fin du jalon J5.
+> Version du 13 octobre 2026, à la fin du jalon J5. Complétée le 2 novembre 2026 (jalon J6d) par le chemin par BLE (§3.7), conçu et pas encore codé.
 > Destinataire : la personne ou le prestataire chargé de la revue externe de l'appairage par PIN. Une version anglaise peut être fournie dès que le prestataire est choisi.
 > Périmètre de la revue (décision D8 du plan J5) :
 > - `pkg/pake` ;
 > - le chemin P2 dans `pkg/pairing` ;
 > - la liaison au canal dans `pkg/securechan` ;
-> - les chapitres 6 et 7 de la bible technique.
+> - les chapitres 6 et 7 de la bible technique ;
+> - le chemin par BLE (bible §6.6) : la conception aujourd'hui, le code du lot WP-D.2 de J6d quand il sera fusionné.
 >
 > La revue conditionne la **publication**, pas la fusion du code.
 
@@ -21,6 +22,7 @@ Chemins d'appairage (bible §6) :
 | P1, QR | Le QR porte l'empreinte du montreur et un secret de 128 bits. La caméra sert de canal authentifié. | Hors périmètre : pas de PAKE |
 | **P2, PIN** | Le répondant affiche un PIN de 6 chiffres, que l'initiateur saisit. Un PAKE lié au canal TLS prouve la connaissance commune du PIN. Variante « PIN à la demande » : l'appareil choisi dans une liste affiche le PIN quand on le lui demande (§3.6). | **Objet de la revue** |
 | P3, confiance mutuelle | Les deux appareils ont déjà la clé de l'autre, et chacun le déclare dans le canal. | Hors périmètre : pas de PAKE |
+| **P2 et P3 par BLE** | Deux appareils qui ne sont pas sur le même réseau se trouvent par BLE. L'un crée un réseau, l'autre en reçoit le nom et le mot de passe, chiffrés sous une clé tirée du PIN (CPace sans TLS) ou de la clé de la paire. | **Objet de la revue** (§3.7) |
 
 La **comparaison d'empreintes à l'œil**, qui existait aussi, est retirée (lot « Modèle de confiance », `PAIR-12`) : un premier contact passe toujours par P1 ou P2.
 
@@ -31,6 +33,7 @@ La **comparaison d'empreintes à l'œil**, qui existait aussi, est retirée (lot
 | A2, homme du milieu sur le LAN | Intercepte, relaie, modifie et injecte du trafic ; ouvre ses propres sessions TLS avec chaque côté | Il ne peut pas faire appairer les deux appareils honnêtes l'un avec l'autre à travers lui, même en relayant les messages tels quels. Sans le PIN, il ne peut s'appairer avec personne. |
 | A3, devineur de PIN | Se connecte autant de fois qu'il veut au répondant | Un seul essai de PIN par connexion, aucun essai hors ligne, et un nombre d'essais par heure borné (§4.4) |
 | Observateur des journaux | Lit les journaux et le paquet de diagnostic | Aucun PIN, ISK, `ekm` ou partage n'y apparaît |
+| A7, appareil à portée radio (BLE) | Écoute, se connecte, relaie et rejoue des messages BLE, hors du réseau local | Il n'obtient pas le mot de passe du réseau, ne s'appaire pas sans le PIN, et ne peut pas suivre un appareil d'un lieu à l'autre (§3.7) |
 
 **Hors modèle :**
 - un attaquant qui **connaît le PIN** : il s'appaire avec chaque côté en son propre nom, avec sa propre clé. C'est inhérent à tout PAKE ;
@@ -66,7 +69,7 @@ Mode initiateur-répondant. A est l'initiateur, qui saisit le PIN ; B est le ré
 - `Ta = HMAC-SHA-512(mac_key, lv_cat(Ya, ADa))` et `Tb = HMAC-SHA-512(mac_key, lv_cat(Yb, ADb))` ;
 - chaque tag est comparé en temps constant (`hmac.Equal`).
 
-**Usage de l'ISK :** il ne sert qu'à la confirmation. Il n'est ni exporté ni utilisé pour chiffrer, car le transport reste la session TLS. Le PAKE n'apporte que l'authentification mutuelle des clés TLS par le PIN.
+**Usage de l'ISK :** sur TLS, il ne sert qu'à la confirmation. Il n'est ni exporté ni utilisé pour chiffrer, car le transport reste la session TLS. Le PAKE n'apporte que l'authentification mutuelle des clés TLS par le PIN. Sur BLE (§3.7), où il n'y a pas de TLS, il sert aussi à tirer par HKDF les clés qui chiffrent le réseau et les empreintes : c'est son seul nouvel usage.
 
 ### 3.3 Messages (`pkg/pairing`)
 
@@ -109,6 +112,44 @@ Ces ajouts n'apportent **aucune cryptographie** : ce sont des messages dans un c
 - **PIN à la demande** (`PAIR-11`) : A envoie `pair_pin_wanted` ; B affiche un PIN et répond `pair_pin_ready` ; l'échange P2 suit sur la **même** connexion, à partir de `pair_pin`. Tant que le PIN est valable, chaque nouvelle demande reçoit le même PIN, avec ses essais et ses délais : la borne du §3.5 ne change pas. Après les 2 séries de PIN détruits, aucune demande ne fait plus tirer de PIN tant que l'utilisateur ne relance pas.
 - **Confiance mutuelle** (`PAIR-09`, `PAIR-10`) : dans une session authentifiée par P1, P2 ou P3, `trust_offer` → `trust_accept` (ou `trust_decline`) → `trust_commit`. Chaque côté n'écrit la clé de l'autre qu'après son propre oui : l'offrant à l'envoi du commit, l'autre à sa réception. Un `trust_accept` ou un `trust_commit` non sollicité est ignoré. Le chemin P3 exige en plus que chaque côté déclare, à chaque session, avoir l'autre dans sa liste (`trusts_you`).
 
+### 3.7 Chemin par BLE (jalon J6d, bible §6.6)
+
+Deux appareils qui ne sont pas sur le même réseau se trouvent par BLE. L'un crée un réseau Wi-Fi (un groupe Wi-Fi Direct, un point d'accès local) ; l'autre en reçoit par BLE le nom et le mot de passe, chiffrés, et le rejoint. La session s'ouvre ensuite en TLS, sur ce réseau. Il n'y a **pas de TLS sous BLE** : c'est la différence avec le reste du dossier.
+
+La spécification complète est au §6.6 de la bible : format, tableau des messages, déroulement, exigences `BLE-01` à `BLE-12`. Sont résumés ici les choix cryptographiques.
+
+**Primitives.** Rien de nouveau : CPace tel que ci-dessus, HMAC-SHA-256, HKDF-SHA-256 (`crypto/hkdf`) et AES-256-GCM (`crypto/cipher`), de la bibliothèque standard de Go. Notations :
+- `I` : l'initiateur, client GATT, celui qui touche l'autre appareil ;
+- `R` : le répondant, serveur GATT ;
+- `K_AB` : la clé de reconnaissance de 32 octets de la paire, échangée dans `trust_commit` (question 10) ;
+- `c_I`, `c_R`, `n_I`, `n_R` : 16 octets aléatoires, neufs à chaque échange.
+
+**Reconnaissance.** L'annonce ne porte que l'UUID du service : un PC Windows ne peut rien y mettre d'autre (sonde WP-D.0).
+- I envoie un défi `c_I`.
+- R répond par 16 étiquettes `HMAC-SHA-256(K_tag, fp_R ‖ c_I)[:8]`, une par appareil de confiance (`K_tag = HKDF(K_AB, "medXfer-ble-v1 tag")`), complétées par des octets aléatoires, dans un ordre aléatoire. Il y joint le suffixe du nom générique, tiré à chaque lancement, et son propre défi `c_R`.
+
+**Appareil de confiance mutuelle** (P3 par BLE) :
+- `K_i2r ‖ K_r2i = HKDF-SHA-256(K_AB, sel = c_I ‖ c_R, "medXfer-ble-v1 trusted" ‖ fp_I ‖ fp_R, 64)` ;
+- I envoie `HMAC-SHA-256(K_tag, fp_I ‖ c_R)[:8]`, qui ne fait que désigner la paire, et sa demande chiffrée sous `K_i2r` ;
+- R répond, chiffré sous `K_r2i`, par le réseau.
+
+Le déchiffrement authentifie chaque côté, sur un défi qu'il a lui-même tiré.
+
+**Appareil inconnu** (P2 par BLE) : CPace en mode initiateur-répondant, avec :
+- `PRS` : le PIN ;
+- `CI` : `lv_cat("medXfer-ble-pair-v1")`, **sans les empreintes** ;
+- `sid` : `n_I ‖ n_R`, échangés juste avant (brouillon §10.9) ;
+- AD vides ;
+- même confirmation (§3.2), et R confirme le premier.
+
+Puis `K_i2r ‖ K_r2i = HKDF-SHA-256(ISK, sel vide, "medXfer-ble-v1 pin", 64)`. Avec `Ta`, I envoie chiffrés son empreinte et sa demande ; R répond, chiffrés, par son empreinte et le réseau.
+
+**Chiffrement.** AES-256-GCM. Le nonce est le compteur des messages chiffrés sous cette clé, à partir de 0, et ne circule pas ; l'AD est `version ‖ type`. Chaque clé est neuve à chaque échange et ne sert que dans un sens, pour un ou deux messages.
+
+**Sur le Wi-Fi.** Celui qui rejoint le réseau épingle l'empreinte du créateur, comme le QR (P1). Sur le chemin du PIN, il envoie `pair_ble`. Le créateur n'accepte que l'empreinte que BLE vient d'authentifier, une fois, dans les 2 minutes. **Un seul PIN** sert au réseau et à l'appairage, avec **un seul compteur d'essais**, partagé avec le PIN sur TLS : la borne du §3.5 ne change pas.
+
+**Pourquoi les empreintes ne sont pas dans le CI.** Le brouillon préfère les identités dans le CI (§10.1). Mais elles devraient alors circuler en clair avant l'échange, et une empreinte ne change jamais : n'importe qui à portée radio pourrait suivre un appareil d'un lieu à l'autre en demandant un PIN. Elles circulent donc chiffrées, juste après la confirmation, sous une clé que seul un côté qui avait le PIN peut tirer de l'ISK.
+
 ## 4. Correspondance avec le brouillon 21
 
 | Brouillon | Code |
@@ -146,6 +187,8 @@ Ces ajouts n'apportent **aucune cryptographie** : ce sont des messages dans un c
 - 3 PIN faux, puis un nouveau PIN, l'ancien PIN exact étant refusé ;
 - envoi ponctuel par PIN dans les deux sens, fichiers identiques au SHA-256 près.
 
+**Chemin par BLE (§3.7) :** les tests sont prévus par la bible (§14.1 : rejeu, relais, essais partagés entre BLE et TLS, 16 étiquettes indiscernables, messages altérés, `pair_ble`, journaux), à écrire avec le code (WP-D.2).
+
 **Reproduire :** `go test ./pkg/pake ./pkg/pairing ./pkg/securechan ./pkg/api` ; `go test -run XXX -fuzz FuzzRespondPIN ./pkg/pairing`.
 
 ## 6. Limites connues et questions pour la revue
@@ -166,11 +209,18 @@ Ces ajouts n'apportent **aucune cryptographie** : ce sont des messages dans un c
     - Les fonctions du mode « initiateur-répondeur » et du mode « ordonné » (`transcriptOC`, `oCat`, `lexLarger`) sont compilées dans le binaire, alors que medXfer n'utilise que le premier ; les autres ne servent qu'aux vecteurs de test.
 
     **Faut-il corriger l'un de ces points avant la publication ?**
+12. **CPace sans TLS, empreintes hors du CI** (§3.7). Le CI ne porte qu'une étiquette, le `sid` est fait des deux nonces, et les empreintes passent ensuite chiffrées sous une clé tirée de l'ISK. **Cela donne-t-il la même garantie que des empreintes dans le CI, contre un homme du milieu et contre un partage de clé avec un tiers ?**
+13. **Clés tirées de l'ISK.** `mac_key = SHA-512("CPaceMac" ‖ sid ‖ ISK)` pour la confirmation, et `HKDF-SHA-256(ISK, "medXfer-ble-v1 pin")` pour le chiffrement. **Cette séparation des clés vous paraît-elle suffisante ?**
+14. **Chemin de confiance sans confidentialité persistante.** Les clés sont tirées de `K_AB`, statique, et des deux défis. Qui obtiendrait `K_AB` plus tard lirait le mot de passe d'un réseau enregistré, déjà arrêté et jamais réutilisé. **Faut-il ajouter un échange X25519 (`crypto/ecdh`, bibliothèque standard) ?**
+15. **AES-GCM à nonce compté et implicite**, sous des clés neuves à chaque échange, un sens par clé. **Une objection ?**
+16. **Suivi par BLE.** Un inconnu voit l'UUID tant que l'application cherche ou attend un appareil, et le suffixe tiré à chaque lancement : il peut relier les annonces d'un appareil pendant un lancement, pas au-delà. Les étiquettes sont toujours 16, tronquées à 8 octets, et ne servent qu'à désigner une clé. **Ce niveau vous paraît-il acceptable ?**
+17. **Demande de PIN par radio.** La question 9 s'étend à toute personne à portée Bluetooth, hors du réseau. L'appareil montre la demande avec le suffixe du demandeur et un bouton « Refuser », une demande à la fois. **Faut-il une limite de plus ?**
 
 ## 7. Références
 
 - [draft-irtf-cfrg-cpace-21](https://datatracker.ietf.org/doc/draft-irtf-cfrg-cpace/)
-- [RFC 9496](https://www.rfc-editor.org/rfc/rfc9496) (ristretto255) ; [RFC 8446 §7.5](https://www.rfc-editor.org/rfc/rfc8446#section-7.5) (exporteurs TLS)
+- [RFC 9496](https://www.rfc-editor.org/rfc/rfc9496) (ristretto255) ; [RFC 8446 §7.5](https://www.rfc-editor.org/rfc/rfc8446#section-7.5) (exporteurs TLS) ; [RFC 5869](https://www.rfc-editor.org/rfc/rfc5869) (HKDF, chemin par BLE)
+- Plan du jalon J6d, avec la sonde BLE : [medxfer-plan-j6d.md](medxfer-plan-j6d.md)
 - Bible technique, chapitres 6 (appairage) et 7 (canal) : [medxfer-bible-technique-v8.md](medxfer-bible-technique-v8.md)
 - Veille de la gate G1 : [medxfer-g1-pake.md](medxfer-g1-pake.md)
 - Plan du jalon J5 : [medxfer-plan-j5.md](medxfer-plan-j5.md)

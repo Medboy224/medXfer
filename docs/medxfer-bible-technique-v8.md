@@ -71,6 +71,7 @@ Cinq plateformes : **Windows, Linux, Android, macOS, iOS**. Le poste de dévelop
 | A4 | Pair malveillant | Envoie un manifeste piégé (chemins `../`, noms réservés, millions de fichiers) |
 | A5 | Page web malveillante | Un site ouvert dans le navigateur de l'utilisateur tente de joindre `127.0.0.1` |
 | A6 | Invité Web Share hostile | Force brute du PIN, envoi de fichiers piégés |
+| A7 | Appareil à portée radio, hors du réseau | Un inconnu dans le même café, à portée Bluetooth (§6.6) |
 
 Hors périmètre : un autre processus malveillant tournant sous le même compte utilisateur (on réduit seulement l'exposition avec des permissions de fichiers strictes).
 
@@ -88,6 +89,9 @@ Hors périmètre : un autre processus malveillant tournant sous le même compte 
 | A4 épuise les ressources | Limites chiffrées du chapitre 12 | `LIM-01` à `LIM-08` |
 | A5 pilote l'application | Aucun socket de contrôle ; sinon contrôles Origin, Host, jeton | `API-01` à `API-04` |
 | A6 force le PIN | 5 essais par *session*, pas par IP ; jeton porteur sans cookie | `WEB-03`, `WEB-04` |
+| A7 suit un appareil par BLE | Annonce sans identifiant ; étiquettes neuves à chaque défi, toujours 16 ; aucune empreinte en clair | `BLE-02`, `BLE-04`, `BLE-06` |
+| A7 obtient le réseau, rejoue ou relaie un échange BLE | Clés neuves à chaque échange, tirées de la clé de la paire ou du PIN ; empreinte épinglée ensuite sur le Wi-Fi | `BLE-05` à `BLE-10` |
+| A7 devine le PIN par BLE | Le même PIN et le même compteur que sur TLS | `BLE-07`, `PAIR-04` |
 | Crash ou disque défaillant | Journal ordonné + hash final | `STO-03` à `STO-08` |
 
 ---
@@ -100,8 +104,8 @@ Hors périmètre : un autre processus malveillant tournant sous le même compte 
  F  Stockage              fichier .part + journal + renommage atomique
  E  Protocole de transfert OFFER / CHUNK / DIGEST
  D  Canal sécurisé        TLS 1.3, mTLS, empreintes épinglées, ALPN
- C  Appairage             QR (secret fort)  |  PIN (PAKE)  |  appareil de confiance
- B  Découverte            mDNS | balise UDP | saisie manuelle   (non fiable par conception)
+ C  Appairage             QR (secret fort)  |  PIN (PAKE)  |  appareil de confiance   (aussi par BLE, §6.6)
+ B  Découverte            mDNS | balise UDP | BLE | saisie manuelle   (non fiable par conception)
  A  Identité et confiance clé persistante, empreinte, liste d'appareils de confiance
 
  H  Web Share (module séparé, ne dépend que de A et F)
@@ -233,7 +237,7 @@ Trois états entre deux appareils (lot « Modèle de confiance », [plan](medxfe
 | État | Comment on y entre | Ce qu'il permet | Ce qui est écrit sur disque |
 |---|---|---|---|
 | **Inconnu** | — | Se voir dans la découverte. | Rien |
-| **Session** | P1 (QR) ou P2 (PIN) réussi | Envoyer et recevoir tant que la session dure ; chaque offre reste à accepter. | **Rien** (`PAIR-08`) |
+| **Session** | P1 (QR) ou P2 (PIN) réussi, sur le réseau ou par BLE (§6.6) | Envoyer et recevoir tant que la session dure ; chaque offre reste à accepter. | **Rien** (`PAIR-08`) |
 | **Confiance mutuelle** | Demande de confiance acceptée des deux côtés (§6.5) | Se reconnecter par P3, sans PIN ni QR. | L'empreinte de l'autre, **de chaque côté** |
 
 Un appareil inconnu n'est jamais admis autrement que par P1 ou P2 : aucune décision ne repose sur une comparaison d'empreintes à l'œil (`PAIR-12`). L'empreinte reste affichable pour qui veut vérifier (`ID-03`).
@@ -324,6 +328,152 @@ A ──trust_commit──► B     A écrit l'empreinte de B en envoyant le com
 - Ces messages circulent dans un canal déjà authentifié par P1, P2 ou P3 ; ils ne changent rien à la cryptographie.
 - `trust_commit` porte la **clé de reconnaissance** de la paire (`DISC-11`), tirée par le côté qui l'envoie ; chacun la range avec l'entrée de l'autre. Si les deux proposent en même temps, chacun envoie la sienne, et les deux gardent celle de l'appareil à la plus petite empreinte.
 
+### 6.6 Chemin par BLE : se retrouver hors réseau (jalon J6d)
+Quand deux appareils ne sont pas sur le même réseau, Bluetooth Low Energy leur sert à en partager un. L'un le crée (`DISC-12`) ; l'autre reçoit par BLE son nom et son mot de passe, chiffrés, et le rejoint seul.
+
+BLE ne porte ni fichier ni alias. La session s'ouvre ensuite sur le Wi-Fi, en TLS (§7), avec les règles habituelles : P3 entre appareils de confiance mutuelle, le PIN pour un inconnu (`PAIR-12`).
+
+Aucune cryptographie nouvelle : CPace (§6.2), déjà dans `pkg/pake`, plus HMAC-SHA-256, HKDF-SHA-256 (RFC 5869) et AES-256-GCM de la bibliothèque standard de Go. Le cœur produit et lit tous les messages ; la plateforme ne fait que les porter (annonce, balayage, GATT), avec l'API de son système (plan J6d, D5). Un appareil sans BLE garde le QR et le PIN (D4).
+
+**Rôles.** Chaque appareil annonce et balaye à la fois.
+- L'**initiateur** `I` est l'appareil sur lequel l'utilisateur touche un autre appareil de la liste ; il est client GATT.
+- Le **répondant** `R` est l'appareil touché ; il est serveur GATT.
+- Pour la reconnaissance, celui qui balaye joue `I`.
+
+**Ce qui passe en clair :**
+- l'UUID du service ;
+- des valeurs aléatoires fraîches ;
+- des étiquettes qui changent à chaque défi ;
+- le suffixe du nom générique (`DISC-07`) ;
+- les parts CPace.
+
+**Jamais en clair :** une empreinte, un alias, le nom de l'appareil, le mot de passe d'un réseau. Une empreinte ne change jamais : en clair, elle permettrait à n'importe qui à portée radio de suivre un appareil d'un lieu à l'autre.
+
+#### Clés
+Notations :
+- `K_AB` : la clé de reconnaissance de la paire (`DISC-11`), tirée dans `trust_commit` ;
+- `fp_X` : l'empreinte de `X` (`ID-02`) ;
+- `c_I`, `c_R`, `n_I`, `n_R` : 16 octets tirés par `crypto/rand`, neufs à chaque message qui les porte.
+
+| Nom | Définition | Sert à |
+|---|---|---|
+| `K_tag` | `HKDF-SHA-256(K_AB, sel vide, "medXfer-ble-v1 tag", 32)` | les étiquettes |
+| `tag(fp, c)` | `HMAC-SHA-256(K_tag, fp ‖ c)`, tronqué à 8 octets | désigner un appareil de confiance pour ce défi |
+| `K_i2r ‖ K_r2i`, confiance | `HKDF-SHA-256(K_AB, sel = c_I ‖ c_R, "medXfer-ble-v1 trusted" ‖ fp_I ‖ fp_R, 64)` | chiffrer, chemin de confiance |
+| `K_i2r ‖ K_r2i`, PIN | `HKDF-SHA-256(ISK, sel vide, "medXfer-ble-v1 pin", 64)` | chiffrer, chemin du PIN |
+| `seal(K, n, …)` | AES-256-GCM sous `K` : nonce = `n` sur 12 octets, gros-boutiste ; AD = `version ‖ type` ; texte = `lv_cat` des champs | les champs chiffrés |
+
+`n` compte les messages chiffrés par `K`, à partir de 0, et ne circule pas. Chaque clé est neuve à chaque échange : un message rejoué, perdu ou déplacé ne se déchiffre pas. Une étiquette ne fait que désigner la clé à essayer : c'est le déchiffrement qui authentifie.
+
+#### Messages
+Un message : `version` (1 octet, `1`) ‖ `type` (1 octet) ‖ `lv_cat(champs)`, avec le `lv_cat` du brouillon CPace (A.1.3, déjà dans `pkg/pake`).
+- **Taille :** 512 octets au plus, la taille maximale d'un attribut GATT. Des écritures et des lectures longues les portent sans négociation de MTU.
+- **Refus :** une version inconnue, un champ de taille fixe d'une autre taille, un champ de trop ou de moins reçoivent `refuse`. La version fixe aussi HKDF, HMAC et AES-GCM : en changer, c'est une version nouvelle.
+- **Échange :** chaque message de `I` appelle exactement une réponse de `R`, par la caractéristique « message » du service.
+
+| Type | Message | Sens | En clair | Chiffré |
+|---|---|---|---|---|
+| 1 | `hello` | I → R | `c_I` | — |
+| 2 | `hello_reply` | R → I | 16 étiquettes (128 octets), suffixe (2 octets), `c_R` | — |
+| 3 | `trusted` | I → R | `tag(fp_I, c_R)` | `seal(K_i2r, 0)` : demande |
+| 4 | `pin_wanted` | I → R | `n_I`, suffixe de I | — |
+| 5 | `pin_ready` | R → I | `n_R` | — |
+| 6 | `pin` | I → R | suite (`CPACE-RISTR255-SHA512`), `Ya` | — |
+| 7 | `pin_reply` | R → I | `Yb`, `Tb` | — |
+| 8 | `pin_confirm` | I → R | `Ta` | `seal(K_i2r, 0)` : `fp_I`, demande |
+| 9 | `reply` | R → I | — | `seal(K_r2i, 0)` : `fp_R` (chemin du PIN seulement), issue, réseau |
+| 10 | `network` | I → R | — | `seal(K_i2r, 1)` : le réseau créé par I |
+| 11 | `ack` | R → I | — | `seal(K_r2i, 1)` : vide |
+| 15 | `refuse` | R → I | — | — |
+
+Le contenu des champs :
+- **Étiquettes de `hello_reply`** : une étiquette `tag(fp_R, c_I)` par appareil de confiance de R, chacune sous la `K_tag` de sa paire. Il y en a toujours 16, dans un ordre aléatoire : les places libres reçoivent des octets aléatoires. Leur nombre ne dit donc rien.
+- **Demande** : `create` et `join`, 1 octet chacun (bit 0 : 2,4 GHz, bit 1 : 5 GHz), ce que I peut créer et rejoindre.
+- **Issue** : 1 octet :
+  - `1` : R a créé le réseau, qui suit ;
+  - `2` : I doit le créer ;
+  - `3` : aucun des deux ne le peut.
+- **Réseau** :
+  - `ssid` (1 à 32 octets) et `pass` (8 à 63) ;
+  - `security` : 1 WPA2, 2 WPA3 en transition, 3 WPA3, comme `wt` du QR ;
+  - `band` (les bits de la demande) et `port` (2 octets) ;
+  - 1 à 4 adresses du créateur sur ce réseau (4 ou 16 octets).
+
+#### Déroulement
+```
+Reconnaissance, dès qu'un appareil medXfer est vu (par l'UUID) :
+I ──hello {c_I}──────────────────────────────►  R
+I ◄─hello_reply {16 étiquettes, suffixe, c_R}──  R    I cherche tag(fp_Y, c_I) pour chacun de ses appareils de confiance Y
+
+Appareil de confiance mutuelle (P3 par BLE), quand l'utilisateur de I touche R
+(après un hello sur la même connexion, de moins de 60 s ; sinon I en envoie un d'abord) :
+I ──trusted {tag(fp_I, c_R), seal(demande)}───►  R    R trouve I par l'étiquette, puis déchiffre
+I ◄─reply {seal(issue, réseau)}────────────────  R
+
+Appareil inconnu (P2 par BLE) :
+I ──pin_wanted {n_I, suffixe}─────────────────►  R    R montre la demande, le PIN et « Refuser »
+I ◄─pin_ready {n_R}────────────────────────────  R
+                                                      l'utilisateur de I tape le PIN
+I ──pin {suite, Ya}───────────────────────────►  R    un essai est réservé (PAIR-04)
+I ◄─pin_reply {Yb, Tb}─────────────────────────  R
+I ──pin_confirm {Ta, seal(fp_I, demande)}─────►  R    envoyé seulement si Tb est bon
+I ◄─reply {seal(fp_R, issue, réseau)}──────────  R
+
+Si I doit créer le réseau (issue 2), les deux chemins finissent par :
+I ──network {seal(réseau)}────────────────────►  R
+I ◄─ack {seal()}───────────────────────────────  R
+```
+
+**Le chemin du PIN** est CPace, comme au §6.2, avec :
+- `PRS` : le PIN ;
+- `CI` : `lv_cat("medXfer-ble-pair-v1")` ;
+- `sid` : `n_I ‖ n_R`, des valeurs aléatoires apportées par les deux côtés, ce que le brouillon cite comme une option adaptée (§10.9) ;
+- `ADa` et `ADb` vides ;
+- même confirmation, et R confirme le premier.
+
+Les empreintes ne sont pas dans le CI, contrairement au PIN sur TLS : il faudrait les envoyer en clair avant l'échange. Elles passent chiffrées juste après, sous une clé que seul un côté qui avait le PIN peut tirer de l'ISK. L'ISK passe par une KDF avant tout usage, comme le recommande le brouillon (§4, §10.3).
+
+**Sur le Wi-Fi :**
+1. L'appareil qui rejoint le réseau se connecte à l'adresse du créateur et épingle son empreinte : celle de l'appareil de confiance, ou celle reçue chiffrée sur le chemin du PIN.
+2. Entre appareils de confiance mutuelle, c'est P3, inchangé (`pair_hello`, `trusts_you`).
+3. Sur le chemin du PIN, il envoie `pair_ble {device_name}`. Le créateur vérifie que l'empreinte de la session TLS est celle que BLE vient d'authentifier, une seule fois et dans les 2 minutes, puis répond `pair_accept`, comme pour le QR (§6.1).
+4. Une session s'ouvre ; rien n'est écrit (`PAIR-08`).
+
+**Qui crée le réseau.** R décide, d'après sa demande et celle de I :
+1. celui qui peut le créer à 5 GHz, si l'autre peut le rejoindre à 5 GHz ;
+2. sinon, celui qui peut le créer à 2,4 GHz ;
+3. à égalité, R ;
+4. si aucun ne le peut : issue 3.
+
+Seul circule un réseau créé par medXfer pour l'occasion, au mot de passe tiré à chaque démarrage (`DISC-12`), jamais un réseau de l'utilisateur (sa box, le Wi-Fi du bureau). Le code de pays ne circule pas : le système et le pilote du créateur appliquent la réglementation. Un réseau que personne n'a rejoint dans les 2 minutes est arrêté.
+
+**Pourquoi cela tient** (adversaire A7, §2.1) :
+- **Rejeu.** Chaque clé dépend d'une valeur fraîche de chaque côté : `c_I` et `c_R`, ou `n_I` et `n_R` par le `sid`. Un message enregistré ne se déchiffre dans aucun autre échange.
+- **Relais.** Relayer `hello`, ou demander à un appareil ses étiquettes pour le défi d'un autre, fait croire qu'un appareil de confiance est proche, sans rien obtenir de plus. La suite exige `K_AB` ou le PIN, puis l'empreinte sur le Wi-Fi.
+- **Homme du milieu sur le chemin du PIN.** Sans le PIN, il n'obtient qu'un essai par échange, et cet essai compte (§6.2). Il ne peut ni lire ni remplacer les empreintes, chiffrées sous une clé tirée de l'ISK.
+- **Suivi.** Un inconnu ne voit que des valeurs neuves à chaque défi : toujours 16 étiquettes, quel que soit le nombre d'appareils de confiance, et le suffixe, tiré à chaque lancement.
+- **Devinette du PIN.** Un seul PIN et un seul compteur pour BLE et pour TLS : la borne de 18 essais par attente ne change pas (`PAIR-04`).
+
+**Risques résiduels acceptés :**
+- Tant que l'application cherche ou attend un appareil, un voisin sait qu'un appareil medXfer est là, par l'UUID. Pendant un lancement, il peut relier ses annonces par le suffixe, comme le permet mDNS sur le réseau local (`DISC-01`).
+- Le chemin de confiance n'a pas de confidentialité persistante. Qui volerait plus tard `K_AB` lirait le mot de passe d'un réseau enregistré, mais ce réseau est arrêté et son mot de passe ne resservira pas.
+- N'importe qui à portée peut faire afficher une demande de PIN, comme sur le réseau (`PAIR-11`) ; l'utilisateur la refuse.
+
+| Id | Exigence | Statut |
+|---|---|---|
+| `BLE-01` | **Rôle.** BLE ne sert qu'à mettre deux appareils sur un même réseau. Il ne porte ni fichier, ni alias, ni nom (`DISC-06`) ; la session s'ouvre sur le Wi-Fi, en TLS (§7). Le cœur produit et lit les messages ; la plateforme les porte. Sans BLE : le QR et le PIN. | Conçu (J6d, WP-D.1) |
+| `BLE-02` | **Annonce.** L'annonce ne porte que l'UUID de service `c46b12c3-1dee-482d-a490-b185212312fb` : ni nom (Windows : `IsDiscoverable` faux), ni donnée de service, ni identifiant stable. L'adresse est l'adresse aléatoire du système. La caractéristique « message » est `c46b12c4-1dee-482d-a490-b185212312fb`. Annonce et balayage, filtré sur l'UUID, suivent `DISC-05` : seulement quand l'utilisateur cherche ou attend un appareil, l'application ouverte (plan J6d, D3). | Conçu (J6d, WP-D.1) ; place dans l'annonce mesurée par la sonde WP-D.0 |
+| `BLE-03` | **Messages.** Format, tailles et réponses du §6.6 ; 512 octets au plus. Une version inconnue, une taille fausse, un champ de trop ou de moins : `refuse`, connexion fermée. Aucune taille de MTU n'est exigée. R répond dans la version de I s'il la connaît. | Conçu (J6d, WP-D.1) |
+| `BLE-04` | **Reconnaissance.** `hello` porte un défi frais. `hello_reply` porte toujours 16 étiquettes, dans un ordre aléatoire, le suffixe et `c_R`. Seuls les appareils de confiance mutuelle qui ont une clé `K_AB` ont une étiquette ; oublier un appareil retire la sienne. `c_R` vaut pour cette connexion, 60 s au plus. | Conçu (J6d, WP-D.1) |
+| `BLE-05` | **Appareil de confiance.** `trusted` porte `tag(fp_I, c_R)` et la demande chiffrée. Chaque côté ne calcule qu'avec la clé de sa propre liste : l'échange exige la confiance des deux côtés (`PAIR-09`). Aucune question à l'utilisateur de R, qui voit l'appareil se connecter. | Conçu (J6d, WP-D.1) |
+| `BLE-06` | **Appareil inconnu.** CPace du §6.2 avec `CI = lv_cat("medXfer-ble-pair-v1")` et `sid = n_I ‖ n_R`. Confirmation dans les deux sens, R le premier (`PAIR-05`). Les empreintes passent chiffrées après la confirmation, jamais en clair. | Conçu (J6d, WP-D.1) ; revue G4 |
+| `BLE-07` | **Un seul PIN, un seul compteur.** Le PIN de BLE est celui de `PAIR-11`, avec ses essais, ses délais et son arrêt (`PAIR-04`), partagés avec TLS. Un essai compte dès `pin_reply` ; sans essai disponible, R répond sur un PIN factice (`PAIR-07`) ; un succès consomme le PIN (`PAIR-02`). R montre la demande avec le suffixe de I, le PIN et « Refuser ». Une seule demande à la fois : les autres reçoivent `refuse`. | Conçu (J6d, WP-D.1) |
+| `BLE-08` | **Chiffrement.** AES-256-GCM sous les clés du §6.6, une par sens, nonce compté et non transmis. Tout échec (étiquette inconnue, déchiffrement, confirmation) : `refuse`, neutre, et connexion fermée. Le mot de passe du réseau ne circule jamais en clair et n'est jamais journalisé (§13). | Conçu (J6d, WP-D.1) ; revue G4 |
+| `BLE-09` | **Le réseau.** R décide qui le crée, selon la règle du §6.6. Seul circule un réseau créé par medXfer pour l'occasion, au mot de passe tiré à chaque démarrage (`DISC-12`), jamais un réseau de l'utilisateur. Le code de pays ne circule pas. Un réseau que personne n'a rejoint en 2 minutes est arrêté. | Conçu (J6d, WP-D.1) |
+| `BLE-10` | **Sur le Wi-Fi.** Celui qui rejoint épingle l'empreinte du créateur. Sur le chemin du PIN, il envoie `pair_ble`, et le créateur n'accepte que l'empreinte authentifiée par BLE, une fois, dans les 2 minutes (`CHAN-04`). Rien n'est écrit (`PAIR-08`). Un seul PIN sert au réseau et à l'appairage. | Conçu (J6d, WP-D.1) |
+| `BLE-11` | **Limites** (des paramètres, règle R4). 4 clients GATT à la fois ; 4 Kio reçus au plus par connexion (comme `LIM-03`). R attend `pin` au plus la vie du PIN (2 min), tout autre message 10 s, et répond en 25 s au plus, création du réseau comprise : une transaction GATT expire à 30 s. L'état d'une connexion disparaît avec elle. Aucune limite par adresse : les adresses BLE changent. | Conçu (J6d, WP-D.1) ; 📏 en WP-D.6 |
+| `BLE-12` | **Permissions et radio.** Les permissions sont demandées quand BLE sert, avec leur raison. Android 12 et plus : `BLUETOOTH_SCAN` (sans localisation), `BLUETOOTH_ADVERTISE`, `BLUETOOTH_CONNECT`. Android 11 : `BLUETOOTH`, `BLUETOOTH_ADMIN` et la localisation précise, que le système exige pour balayer. Bluetooth éteint (3 appareils sur 4 au début de la sonde) : l'application le dit et propose de l'allumer. | Conçu (J6d, WP-D.1) ; manifeste fait (WP-D.0) |
+
 ---
 
 ## 7. Couche D — Canal sécurisé
@@ -333,7 +483,7 @@ A ──trust_commit──► B     A écrit l'empreinte de B en envoyant le com
 | `CHAN-01` | Chaque appareil expose **un seul** listener TCP (défaut 18887 ; si occupé, port éphémère annoncé par la découverte). Il parle TLS dès le premier octet. On NE DOIT PAS « deviner » le protocole en lisant le premier octet. | Supprime le chemin « texte clair accepté » de `UpgradeToTLSIfClientHello`. ✅ |
 | `CHAN-02` | TLS 1.3 minimum ; ALPN `medxfer/1` obligatoire (refus sinon) ; tickets de session désactivés (`SessionTicketsDisabled: true`) donc ni reprise ni 0-RTT. | Pas de rejeu possible. ✅ |
 | `CHAN-03` | Authentification mutuelle : `ClientAuth: tls.RequireAnyClientCert`. La confiance est décidée par `VerifyConnection` (code ci-dessous), appelée des deux côtés. | ✅ |
-| `CHAN-04` | Deux états. `UNAUTH` : empreinte inconnue ; seules les trames `pair_*` sont acceptées, délai 30 s, 4 Kio max. Ce délai borne tout délai posé ensuite par l'appelant, qui ne peut ni le lever ni le repousser (#156) ; seule exception, l'attente d'une personne qui tape le PIN lu sur l'autre écran (`AwaitPerson`) : au plus la vie d'un PIN, 2 min, puis 30 s pour la fin de l'échange. `AUTH` : empreinte de confiance ou appairage réussi. Toute autre trame en `UNAUTH` ferme la connexion. | ✅ |
+| `CHAN-04` | Deux états. `UNAUTH` : empreinte inconnue ; seules les trames `pair_*` sont acceptées, délai 30 s, 4 Kio max. Ce délai borne tout délai posé ensuite par l'appelant, qui ne peut ni le lever ni le repousser (#156) ; seule exception, l'attente d'une personne qui tape le PIN lu sur l'autre écran (`AwaitPerson`) : au plus la vie d'un PIN, 2 min, puis 30 s pour la fin de l'échange. `AUTH` : empreinte de confiance, appairage réussi, ou empreinte authentifiée par BLE présentée avec `pair_ble` (`BLE-10`). Toute autre trame en `UNAUTH` ferme la connexion. | ✅ |
 | `CHAN-05` | Aucun repli. Handshake raté ou empreinte invalide = connexion fermée avec erreur. Le `return DialPeer(target)` de `DialTLSPeer` est supprimé. | ✅ |
 | `CHAN-06` | Une connexion de **données** DOIT s'ouvrir par `DATA_JOIN{transfer_id}` et n'est acceptée que si l'empreinte du pair est celle de la session de contrôle qui a créé ce transfert. Sans `DATA_JOIN` valide dans les 5 s : fermeture. | Remplace les ports 18888+N sans authentification. ✅ |
 | `CHAN-07` | Délais : handshake 5 s ; lectures avec échéance ; keep-alive TCP 15 s. | 📏 |
@@ -729,7 +879,7 @@ Valeurs par défaut ; toutes sont des paramètres (règle R4).
 
 ## 13. Journalisation et confidentialité
 - **Niveaux** : erreur, avertissement, information, débogage. Le débogage est désactivé en production.
-- **Interdit dans tout journal et tout événement :** PIN, jeton, secret de QR, clé privée, clé PAKE, `ekm`, contenu de fichier. Un test d'intégration parcourt les journaux d'une session complète et échoue si l'un de ces secrets y apparaît.
+- **Interdit dans tout journal et tout événement :** PIN, jeton, secret de QR, clé privée, clé PAKE, `ekm`, mot de passe d'un réseau créé, `K_AB` et les clés qui en sont tirées (`DISC-11`, §6.6), contenu de fichier. Un test d'intégration parcourt les journaux d'une session complète et échoue si l'un de ces secrets y apparaît.
 - Aucune télémétrie envoyée à l'extérieur, aucun appel réseau hors LAN. Les diagnostics du chapitre 17 restent locaux ; leur partage est une action manuelle de l'utilisateur.
 - Les noms et chemins de fichiers ne sont écrits dans les journaux qu'au niveau débogage.
 
@@ -752,6 +902,13 @@ Valeurs par défaut ; toutes sont des paramètres (règle R4).
 | Offre contenant `a` (fichier existant) puis `a/b.txt` | `STO-09`, `STO-11` : rien n'est supprimé |
 | Offre contenant `A.txt` et `a.txt` | `STO-14` |
 | Aucun secret dans les journaux d'une session complète | chapitre 13 |
+| `trusted` ou `pin_confirm` rejoué depuis un échange BLE enregistré | `BLE-05`, `BLE-08` : refus |
+| Relais BLE pendant un PIN, avec ou sans échange des empreintes | `BLE-06` : les confirmations échouent, l'essai compte |
+| 3 essais de PIN répartis entre BLE et TLS, puis un 4ᵉ | `BLE-07`, `PAIR-04` : refus |
+| `hello_reply` d'appareils qui ont 0, 1 et 16 appareils de confiance | `BLE-04` : toujours 16 étiquettes, indiscernables |
+| Message BLE tronqué, allongé, modifié ou d'une version inconnue | `BLE-03`, `BLE-08` : `refuse` |
+| `pair_ble` avec une autre empreinte, une seconde fois, ou après 2 min | `BLE-10` : refus |
+| Aucun mot de passe de réseau ni clé BLE dans les journaux d'un échange complet | `BLE-08`, chapitre 13 |
 | 5 PIN Web Share erronés depuis 5 adresses différentes | `WEB-03` : la session est invalidée |
 
 ### 14.2 Tests de fiabilité
@@ -813,7 +970,7 @@ Chaque phase est livrable seule (règle R5). Le projet n'étant pas encore publi
 | **G2b** | Même question sur macOS et iOS. | `c-shared` / `c-archive` ou `gomobile`. | Même prototype ; exige macOS et Xcode (voir G8). Le risque est le plus élevé sur iOS. | Phase 4b |
 | **G8** | Comment obtenir un environnement macOS ? | Mac d'occasion, Mac loué à distance, exécuteurs macOS d'intégration continue (compilation seulement). | Un vrai iPhone branché à un Mac est nécessaire pour valider Bonjour, la permission « réseau local » et le comportement en arrière-plan. | Phase 4b |
 | **G3** | TCP+TLS atteint-il 80 % d'iperf3 ? | Oui / non. | Benchmark §14.3. | Décision QUIC (phase 6) |
-| **G4** | Revue cryptographique externe | Qui, quand. medXfer étant open source (Apache 2.0), le porteur du projet organise la revue (décision du 14 octobre 2026). Dossier : `medxfer-g4-dossier-revue.md`. | Avant la version 1.0, couvrant chapitres 6 et 7. Avant la revue, seules des **RC** sont publiées, avec un `SECURITY.md` (signalement privé des failles) et cet avertissement : « *Version RC — cryptographie non auditée. L'appairage par PIN utilise CPace (draft-irtf-cfrg-cpace-21), vérifié contre les vecteurs de test du brouillon et contre une implémentation indépendante. Une revue de sécurité indépendante est en cours d'organisation ; le dossier est public (`docs/medxfer-g4-dossier-revue.md`). Pour l'appairage le plus sûr, utilisez le QR code.* » | Version 1.0 finale (une RC peut sortir avant) |
+| **G4** | Revue cryptographique externe | Qui, quand. medXfer étant open source (Apache 2.0), le porteur du projet organise la revue (décision du 14 octobre 2026). Dossier : `medxfer-g4-dossier-revue.md`. | Avant la version 1.0, couvrant les chapitres 6 (chemin par BLE du §6.6 compris) et 7. Avant la revue, seules des **RC** sont publiées, avec un `SECURITY.md` (signalement privé des failles) et cet avertissement : « *Version RC — cryptographie non auditée. L'appairage par PIN utilise CPace (draft-irtf-cfrg-cpace-21), vérifié contre les vecteurs de test du brouillon et contre une implémentation indépendante. Une revue de sécurité indépendante est en cours d'organisation ; le dossier est public (`docs/medxfer-g4-dossier-revue.md`). Pour l'appairage le plus sûr, utilisez le QR code.* » | Version 1.0 finale (une RC peut sortir avant) |
 | **G5** | HTTPS auto-signé du Web Share | Acceptable pour l'utilisateur ? | Test utilisateur sur iOS Safari et Chrome Android. | Phase 5 |
 | **G6** ✅ fermée (11/10/2026) | SHA-256 suffisant ? | **Retenu : SHA-256** (`crypto/sha256`). Sur le téléphone de référence (Exynos 1580), 536 Mo/s sur un cœur contre 60 Mo/s pour BLAKE3 en Go, qui n'est pas accéléré sur arm64 ; mesures dans `medxfer-plan-j4a.md` (WP-4.0). | Benchmark de hachage sur téléphones cibles ≥ 1,5× le débit du lien. | — |
 | **G7** | Quand supprimer le tableau de bord web ? | Garder / supprimer. | Tous les critères de retrait de `DEV-19` sont remplis par le panneau développeur Flutter et `xfer ctl`. | Fin de la phase 6 au plus tard |
@@ -996,7 +1153,10 @@ Pour le terminal (Termux, serveur sans écran), `xfer ctl` remplace le tableau d
 - **CPace :**
   - au 13 octobre 2026, c'est encore le brouillon CFRG/IRTF `draft-irtf-cfrg-cpace-21`, transmis à l'éditeur RFC (« *Awaiting First editor* ») et sans numéro de RFC. [Datatracker](https://datatracker.ietf.org/doc/draft-irtf-cfrg-cpace/) ;
   - `pkg/pake` en vérifie les annexes A et B.3 octet pour octet ;
-  - `filippo.io/cpace` est marqué expérimental et basé sur un brouillon antérieur. [Module Go](https://pkg.go.dev/filippo.io/cpace?tab=doc).
+  - `filippo.io/cpace` est marqué expérimental et basé sur un brouillon antérieur. [Module Go](https://pkg.go.dev/filippo.io/cpace?tab=doc) ;
+  - pour le chemin par BLE (§6.6), lu dans le texte du brouillon 21 le 2 novembre 2026 : un `sid` fait de valeurs aléatoires apportées par les deux côtés (§10.9 : « *One suitable option for generating sid is concatenation of ephemeral random strings contributed by both parties* ») ; l'ISK passé par une KDF, comme HKDF (RFC 5869), avant tout usage (§4, §10.3) ; les identités de préférence dans le CI (§10.1), ce que le §6.6 écarte pour ne pas envoyer d'empreinte en clair.
+- Go : `crypto/hkdf` (RFC 5869) dans la bibliothèque standard depuis Go 1.24 ; vérifié avec `go doc crypto/hkdf` (Go du projet : 1.25).
+- BLE sur les appareils de l'utilisateur (annonce de 31 octets, UUID seul sous Windows, deux rôles à la fois, mode caché) : mesuré par la sonde de J6d, [plan J6d](medxfer-plan-j6d.md), WP-D.0.
 - **`schollz/pake`** (CVE-2021-31603) : l'initiateur choisissait les points publics, donc pouvait connaître leur logarithme ; l'entropie de la clé tombait à celle du code. La faille a été corrigée depuis. [Analyse](https://redrocket.club/posts/croc/), [message au CFRG](https://mailarchive.ietf.org/arch/msg/cfrg/KtmqZS6CFUwCfkVTlieGw-ZFGfY/), [module](https://pkg.go.dev/github.com/schollz/pake).
 - Go 1.24 : `os.Root` / `os.OpenRoot` pour un accès aux fichiers résistant à la traversée. [Notes de version](https://go.dev/doc/go1.24), [article du blog Go](https://golang.google.cn/blog/osroot).
 
@@ -1004,6 +1164,7 @@ Pour le terminal (Termux, serveur sans écran), `xfer ctl` remplace le tableau d
 - BBR dans quic-go upstream : les implémentations trouvées sont des forks. [Exemple](https://github.com/ao-space/gt/issues/1).
 - Support d'un PSK externe dans `crypto/tls` : voir le [ticket Go 6379](https://golang.org/issue/6379).
 - **Ces deux points ne portent pas la décision de reporter QUIC** : elle repose sur l'absence de gain démontré et sur le coût, et sera tranchée par le benchmark G3.
+- BLE (§6.6) : la taille maximale d'un attribut GATT (512 octets) et l'expiration d'une transaction ATT à 30 s viennent de la spécification Bluetooth Core (vol. 3, partie F) ; la localisation précise exigée pour balayer sous Android 11, de la documentation Android. Non revérifiés en ligne. WP-D.3 vérifie les deux premiers sur les appareils ; aucun appareil sous Android 11 n'est disponible pour le troisième.
 
 **Non vérifié, à mesurer :** tous les chiffres de performance (débit de SHA-256, coût du `fsync`, 80 % d'iperf3). Les outils cités au chapitre 17 (`net/http/pprof`, `runtime/trace`, `iperf3`) sont des outils standard dont l'existence est connue, mais ils n'ont pas été revérifiés en ligne dans cette session. Le fait qu'iOS interdise de lancer un autre programme et qu'Android ait restreint l'exécution de binaires embarqués (§3.3) vient de connaissances générales, non revérifié ici ; le prototype G2 le confirmera sur appareils.
 
