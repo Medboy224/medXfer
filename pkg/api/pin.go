@@ -117,6 +117,7 @@ func (s *DaemonServer) handlePINRefuse(rs Responder, req RequestMessage) {
 	if demand != nil {
 		demand.Close()
 	}
+	s.bleRefusePIN() // asked for by BLE: its next message is refused (BLE-07)
 	rs.Reply(NewEvent("pin_refused", map[string]string{}, req.ID))
 }
 

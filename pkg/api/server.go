@@ -127,6 +127,9 @@ type DaemonServer struct {
 	trustPeer     identity.Fingerprint // the key of the active session's device
 	trustOffered  time.Time            // our trust_offer waiting for an answer
 
+	// The path by BLE (ble.go, bible §6.6): its own lock, the platform calling it often.
+	ble bleState
+
 	benchPongChan     chan session.Message
 	benchBurstAckChan chan session.Message
 
@@ -993,6 +996,22 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 				return
 			}
 			msg.DeviceName, offer = name, trust // the name is sent only after the confirmations (PAIR-07)
+		case pairing.TypeBLE: // after BLE: the key it authenticated, once, within 2 minutes (BLE-10)
+			if !s.ble.auth.Take(fp) {
+				_ = ch.Send(session.Message{Type: "pair_reject", FileName: pairing.ErrRefused.Error()})
+				s.Broadcast(NewEvent("pair_failed", map[string]string{}))
+				ch.Close()
+				return
+			}
+			// The PIN or the pair's key proved the user's authorisation, as for a PIN (ID-05, #217).
+			s.addressTaken(ip, fp)
+			mutual = s.mutual(fp, msg.TrustsYou)
+			if err := s.touchTrust(fp, msg.DeviceName, ip); err != nil {
+				s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": "could not save the trusted device: " + err.Error()}))
+			}
+			ch.Authenticate()
+			_ = conn.SetDeadline(time.Time{})
+			_ = ch.Send(session.Message{Type: "pair_accept", DeviceName: devName, TrustsYou: s.declares(fp)})
 		case "pair_request": // a QR code's secret (P1), or a device of mutual trust (P3)
 			// The pairing code, if any, is ignored: trust comes from the key (WP-3.6b).
 			trust, err := s.admitIncoming(conn, msg, ip)

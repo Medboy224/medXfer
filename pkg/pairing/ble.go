@@ -15,7 +15,6 @@ import (
 	"math/big"
 	"net/netip"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,6 +40,11 @@ const BLEMaxMessage = 512
 
 // BLEAuthLife is how long a key authenticated by BLE is accepted on the Wi-Fi, once (BLE-10).
 const BLEAuthLife = 2 * time.Minute
+
+// TypeBLE opens the TLS connection after BLE, from the device that joined the network to the
+// one that created it: {device_name}. The creator accepts the key BLE authenticated, once
+// (BLE-10), and answers pair_accept as for a QR code.
+const TypeBLE = "pair_ble"
 
 // Parameters of bible §6.6 (rule R4).
 const (
@@ -75,6 +79,10 @@ const (
 )
 
 var errBLEMessage = errors.New("pairing: malformed BLE message")
+
+// BLERefusal is the refusal, without a word (PAIR-07): what a responder too busy to take one
+// more connection answers (BLE-11).
+func BLERefusal() []byte { return bleEncode(bleRefuse) }
 
 // bleEncode is a message: version ‖ type ‖ lv_cat(fields).
 func bleEncode(typ byte, fields ...[]byte) []byte {
@@ -381,13 +389,22 @@ type BLEResponderConfig struct {
 	Self   identity.Fingerprint
 	Suffix string // the generic name's 4 hex digits (DISC-07)
 	Trust  *identity.TrustStore
-	Own    BLERequest // what this device can create and join
+	// Own is what this device can create and join, read at each request: a phone with Wi-Fi
+	// off cannot create its group at 5 GHz. Nothing when nil.
+	Own func() BLERequest
 	// PIN gets the PIN on demand (PAIR-11) for the unknown device whose generic name ends with
 	// suffix, and shows the request with it; nil when no PIN may be given by BLE. It is the PIN
 	// of the network too: one PIN, one count of attempts (BLE-07).
 	PIN  func(suffix string) (*PIN, error)
 	Rand io.Reader        // crypto/rand when nil
 	Now  func() time.Time // time.Now when nil
+}
+
+func (c *BLEResponderConfig) own() BLERequest {
+	if c.Own == nil {
+		return BLERequest{}
+	}
+	return c.Own()
 }
 
 // BLEResponder answers the devices that connect to this one's GATT service. It is safe for
@@ -602,7 +619,7 @@ func (c *BLEConn) trustedRequest(f [][]byte) (BLEStep, error) {
 			break
 		}
 		c.peer, c.trusted, c.i2r, c.r2i, c.stage = p.Fingerprint, true, i2r, r2i, bleAuthenticated
-		return BLEStep{Request: &BLEAuthRequest{Peer: p.Fingerprint, Trusted: true, Request: req, Outcome: Creator(req, cfg.Own)}}, nil
+		return BLEStep{Request: &BLEAuthRequest{Peer: p.Fingerprint, Trusted: true, Request: req, Outcome: Creator(req, cfg.own())}}, nil
 	}
 	return c.refuse()
 }
@@ -630,7 +647,7 @@ func (c *BLEConn) pinWanted(f [][]byte) (BLEStep, error) {
 	if busy {
 		return c.refuse()
 	}
-	p, err := cfg.PIN(strings.ToUpper(hex.EncodeToString(f[1])))
+	p, err := cfg.PIN(hex.EncodeToString(f[1]))
 	if err != nil || p == nil || !p.Live() {
 		return c.refuse()
 	}
@@ -697,7 +714,7 @@ func (c *BLEConn) pinConfirm(f [][]byte) (BLEStep, error) {
 	c.r.mu.Unlock()
 	c.peer = identity.Fingerprint(body[0])
 	c.i2r, c.r2i, c.stage = i2r, r2i, bleAuthenticated
-	return BLEStep{Request: &BLEAuthRequest{Peer: c.peer, Request: req, Outcome: Creator(req, c.r.cfg.Own)}}, nil
+	return BLEStep{Request: &BLEAuthRequest{Peer: c.peer, Request: req, Outcome: Creator(req, c.r.cfg.own())}}, nil
 }
 
 // Answer replies to the request authenticated: outcome, and the network when this device
@@ -816,7 +833,7 @@ func (c *BLEClient) Recognize(msg []byte) (BLEPeer, error) {
 		return BLEPeer{}, ErrRefused
 	}
 	c.cR = slices.Clone(f[2])
-	out := BLEPeer{Suffix: strings.ToUpper(hex.EncodeToString(f[1]))}
+	out := BLEPeer{Suffix: hex.EncodeToString(f[1])}
 	for _, p := range tagged(c.cfg.Trust) {
 		key, err := bleTagKey(p.TagKey)
 		if err != nil {
