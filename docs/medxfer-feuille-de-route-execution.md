@@ -267,7 +267,7 @@ D'abord une sonde, avec le PC Windows et Zorin reliés par un câble : adresses 
 
 **Résultat (01/11/2026) :** le lot est terminé (PR #233 à #239, et celle du rapport). Sans réglage, un Linux reçoit son adresse de l'application (NetworkManager n'en donne aucune sur un câble direct). Un chemin par réseau, câble d'abord, l'utilisateur choisit. Le commit groupé en arrière-plan : 40 → 57,7 MB/s vers un disque dur. Windows ↔ Windows : 101 et 106 MB/s, 91 à 96 % du câble ; Windows ↔ Zorin : 55 et 70 MB/s, limités par le disque de Zorin. Détail dans [report-cable.md](report-cable.md).
 
-### J6d — Se connecter au réseau par BLE · ≈ 7 à 10 jours
+### J6d — Se connecter au réseau par BLE, groupe Wi-Fi Direct à 5 GHz · ≈ 10 à 14 jours
 Ajouté le 28 octobre, à l'idée de l'utilisateur. Deux appareils qui ne sont pas sur le même réseau se trouvent par **Bluetooth Low Energy** ; l'un crée le réseau (selon ce que J6c aura montré : qui peut le créer à 5 GHz), l'autre le **rejoint seul**. Plus de nom de réseau ni de mot de passe à taper dans les réglages, en particulier sur un PC, qui ne peut pas scanner de QR.
 
 BLE ne fait que **mettre les appareils sur le même réseau**. La connexion medXfer suit ses règles habituelles (`PAIR-12`) :
@@ -290,11 +290,13 @@ Le code de pays de chaque appareil peut circuler pour **choisir** celui qui cré
 
 D'abord une sonde : rôles BLE (annonce et serveur, balayage et client) sur le Galaxy A57, le PC Windows (Intel) et Zorin ; portée ; délai entre la découverte et l'information reçue ; un message chiffré d'environ 200 octets. **Critère de sortie :** les quatre cas du tableau sur les vrais appareils, le QR toujours disponible en repli.
 
+**Le groupe Wi-Fi Direct à 5 GHz, avancé de J8** (décision D1 du plan, 2 novembre) : quand le téléphone crée le réseau, c'est son groupe à 5 GHz (53 MB/s en J6c), derrière l'interface `Hotspot`, choisi par téléphone selon la mesure (décision C7). Plan : [medxfer-plan-j6d.md](medxfer-plan-j6d.md).
+
 ### J7 — Web Share v2 · ≈ 5 à 7 jours
 Bible chapitre 11 : listener séparé, jeton porteur sans cookie (fragment d'URL), HTTPS auto-signé, CSP (JavaScript externalisé), PIN de repli à 5 essais par session, retrait du bouton « 4 chiffres », collision gérée pour le dépôt par morceaux (`WEB-07`). Gate G5 (test utilisateur de l'avertissement de certificat).
 
-### J8 — Mesure, optimisation, finitions v1 · ≈ 5 à 8 jours
-Matrice d'appareils réels (§14.3), gate G3, optimisations ciblées d'après le rapport par étape, point d'accès Wi-Fi Direct à 5 GHz, confirmé par la sonde J6c (derrière l'interface `Hotspot`, mise à jour de `DISC-12`) et choisi par téléphone selon la mesure, sinon `LocalOnlyHotspot` (décision C7 du plan J6c), benchmark nocturne en CI (`DEV-21`), suppression de `devui` si G7 est remplie, ingénierie de livraison (signature, paquets, `SECURITY.md`, documentation d'utilisation, premier `README`). **Critère de sortie :** objectif de 80 % d'iperf3 atteint ou plan écrit ; toutes les exigences ont leur test vert.
+### J8 — Mesure, optimisation, finitions v1 · ≈ 3 à 5 jours
+Matrice d'appareils réels (§14.3), gate G3, optimisations ciblées d'après le rapport par étape (le point d'accès Wi-Fi Direct à 5 GHz, prévu ici, est avancé en J6d), benchmark nocturne en CI (`DEV-21`), suppression de `devui` si G7 est remplie, ingénierie de livraison (signature, paquets, `SECURITY.md`, documentation d'utilisation, premier `README`). **Critère de sortie :** objectif de 80 % d'iperf3 atteint ou plan écrit ; toutes les exigences ont leur test vert.
 
 **Pare-feu Windows (constat de WP-6.5, 15/10/2026) :** sans règle entrante, un PC Windows trouve les autres mais reste invisible, sans message. L'installateur pose les règles de medXfer (UDP 5353 mDNS, UDP 19998 balise, TCP 18887, le port unique de medXfer : appairage et transferts, #133) sur les profils Privé et Public ; l'application vérifie au lancement qu'elles existent et sinon propose de les ajouter (élévation UAC), avec le message « Ce PC n'est pas visible par les autres appareils ». **Avancé le 2 novembre** (essai réel du 1er novembre : un second PC Windows n'acceptait medXfer que sur son câble, profil Public, son Wi-Fi étant Privé) : l'application lit au lancement, puis toutes les 15 s, les réseaux où le pare-feu la bloque, le dit en tête de la colonne « Connexion » et propose « Autoriser medXfer » (une élévation UAC remplace ses règles entrantes par une seule, tout profil). Reste pour J8 : l'installateur.
 
@@ -342,9 +344,9 @@ Toutes ces API sont celles du système (aucune dépendance livrée) et passent d
 | J6a + J6b | 15 à 22 j | ≈ 82 j |
 | J6c | 4 à 6 j | ≈ 88 j |
 | Câble Ethernet entre deux PC | 3 à 5 j | ≈ 92 j |
-| J6d | 7 à 10 j | ≈ 102 j |
-| J7 | 5 à 7 j | ≈ 109 j |
-| J8 | 5 à 8 j | ≈ 117 j |
+| J6d (avec le groupe à 5 GHz, avancé de J8) | 10 à 14 j | ≈ 106 j |
+| J7 | 5 à 7 j | ≈ 113 j |
+| J8 | 3 à 5 j | ≈ 118 j |
 
 Soit environ **24 semaines** en fourchette basse, pour une première version sur Windows, Linux et Android. Ces chiffres sont des hypothèses et non des engagements ; les estimations de ce type dérapent souvent, un tampon de 30 à 50 % est raisonnable (**≈ 6 mois**). La seule vraie mesure sera la vitesse constatée en J1 ; on recalcule alors tout le tableau.
 J9 s'ajoute ensuite et ne figure pas dans ce total.
