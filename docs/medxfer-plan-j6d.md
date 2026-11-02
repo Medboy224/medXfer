@@ -64,6 +64,40 @@ Questions, sur le Galaxy A57, les deux PC Windows, Zorin et le TECNO BF6 :
 
 Résultat : un rapport de sonde dans ce plan, et les décisions D2, D4 et D5.
 
+**Résultats de la sonde** (2 novembre ; `ble-probe.exe` en C++/WinRT sur les deux PC, `BleProbe.kt` dans une version de débogage installée à côté de la version normale, commandes `ble-…` par adb ; un UUID de service de 128 bits tiré pour la sonde ; un message de 200 octets écrit puis lu) :
+
+| Appareil | BLE | Annonce | Remarques |
+|---|---|---|---|
+| PC Windows 11 (Intel AC 8265) | central et périphérique | 31 octets, pas d'annonce étendue | — |
+| Second PC, Windows 10 1909 (Intel AC 8260) | central et périphérique | 31 octets | La sonde y tourne aussi par SSH, sans session ouverte. |
+| Galaxy A57 (Android 16) | central et périphérique | **annonce étendue, 1 650 octets**, plusieurs annonces à la fois, PHY 2M et Coded (longue portée) | — |
+| TECNO BF6 (Android 12, 32 bits) | central et périphérique | 31 octets, plusieurs annonces à la fois | Annonce et répond écran éteint. |
+| Zorin (HP EliteBook 8460p) | ❌ **pas de BLE** : Broadcom 2070, Bluetooth 2.1 | — | Décision D4. |
+
+| # | Question | Résultat |
+|---|---|---|
+| 1 | Les deux rôles à la fois | ✅ Les deux PC et le Galaxy A57 annoncent et balayent en même temps, et chacun voit les deux autres, en 0,1 à 3,9 s. |
+| 2 | La place dans l'annonce | **Un PC Windows ne peut pas porter d'étiquette dans son annonce connectable.** Celle du service GATT, Windows la remplit lui-même : les drapeaux, le service « Device Information » (`0x180A`) et l'UUID de 128 bits ; les 10 octets de données de service n'y tiennent plus, sur les deux PC (« commencée sans toutes les données »). Une seconde annonce, non connectable, n'accepte que des données de service ou de fabricant (les drapeaux, la liste d'UUID et le nom sont refusés) et **attend tant que le service GATT est annoncé** : les cartes Intel n'annoncent qu'une chose à la fois. Android porte l'UUID et 10 octets dans ses données de service (31 octets tout juste), la liste d'UUID dans la réponse au balayage. |
+| — | Vie privée de l'annonce | Annoncé « découvrable », Windows ajoute **le nom du PC** ; en mode caché, plus de nom, et l'échange marche toujours. Un appareil non appairé voit le PC sous une **adresse aléatoire qui change** (le second PC) ; le Galaxy A57 voit l'adresse réelle parce qu'il est appairé en Bluetooth classique avec ce PC. Android change d'adresse à chaque annonce. |
+| 3 | Délais d'un échange de 200 octets, en un seul envoi (MTU de 517 à 527 octets) | Voir le tableau suivant. |
+| 4 | Portée | **Pas encore mesurée** : l'utilisateur, au travail, n'a pas pu se déplacer ; à faire en WP-D.6. À la place, 6 min de stabilité à environ 1 m (le Galaxy A57 annonce, ce PC balaye et se connecte toutes les 6 s) : annonce vue 47 fois sur 48, signal de -62 à -70 dBm, **40 échanges réussis sur 47 (85 %)**, 2 s en moyenne. Six des sept échecs tombent dans la même minute et demie, signal stable (« injoignable », ou rien en 20 s) : cause non établie, peut-être le changement d'adresse du téléphone. L'adaptateur réessaie (WP-D.3). |
+| 5 | Cohabitation avec le Wi-Fi | Sur le point d'accès d'un téléphone à 2,4 GHz, entre les deux PC, aucun effet mesurable : 1,2 à 1,4 MB/s dans un sens, 2,1 à 2,5 dans l'autre, avec ou sans annonce et balayage BLE sur ce PC. Ce lien est trop lent pour conclure : **à refaire sur le groupe à 5 GHz** (WP-D.4). |
+| 6 | Permissions et accès | Windows : rien à déclarer pour une application non empaquetée. Android 12 et plus : les trois permissions, accordées par adb pour la sonde ; leur demande à l'utilisateur est pour WP-D.3. Android 11 : pas d'appareil d'essai. |
+| 7 | Bluetooth éteint | Lu sur chaque système (l'état de la radio sous Windows, `isEnabled` sous Android). Au début de la sonde, il était **éteint sur ce PC et les deux téléphones** : proposer de l'allumer est indispensable (WP-D.5). |
+| — | Écran éteint | Le TECNO annonce et répond écran éteint, mais un balayage sans filtre n'y voit plus rien, pas même les appareils autres que medXfer : Android coupe les balayages sans filtre écran éteint. L'adaptateur filtrera sur le service de medXfer (WP-D.3). |
+
+| Échange (qui se connecte → qui annonce) | Vu en | Premier échange | Échanges suivants |
+|---|---|---|---|
+| PC → second PC (Windows → Windows) | 0,3 s | 3,0 s (découverte des services : 2,5 s) | 0,6 à 1,0 s |
+| PC → Galaxy A57 | 0,3 s | 6,9 s (découverte de ses 8 services, ceux du son compris : 6,3 s) | 1,3 à 1,9 s |
+| Galaxy A57 → PC | 0,03 à 0,07 s | 4,4 s (négociation du MTU : 3,7 s) | 0,44 à 0,79 s |
+| PC → TECNO BF6 | 1,0 s | 3,1 s | 0,72 s |
+| TECNO BF6 → PC (écran allumé) | 0,4 à 3,1 s | 9,3 s | 4,3 à 5,2 s, dont **3,3 à 3,5 s de négociation du MTU à chaque fois** |
+
+La négociation du MTU depuis Android vers Windows prend 3,3 à 3,7 s, sauf parfois sur le Galaxy A57 une fois le premier échange passé. L'adaptateur Android essaiera sans la demander : 200 octets passent aussi en écriture longue, par morceaux (WP-D.3).
+
+Sous Windows, chercher directement le service de medXfer chez le Galaxy A57, sans avoir jamais découvert ses services, échoue (« le périphérique ne reconnaît pas la commande ») ; une découverte complète d'abord, et tout marche. À traiter dans l'adaptateur Windows (WP-D.3).
+
 ### WP-D.1 — Conception, pour la revue G4 · M
 
 Écrite dans la bible (nouvelles exigences `BLE-xx`, §6 complété), sans nouvelle cryptographie : CPace, HMAC-SHA-256, HKDF et AES-GCM, déjà là ou dans la bibliothèque standard de Go.
@@ -123,7 +157,7 @@ Résultat : un rapport de sonde dans ce plan, et les décisions D2, D4 et D5.
 | # | Question | Décision | Écarté |
 |---|---|---|---|
 | D1 | Le groupe Wi-Fi Direct à 5 GHz, prévu en J8 | ✅ **Avancé en J6d** (2 novembre) : le réseau créé par BLE va à environ 53 MB/s dès le départ quand le téléphone le crée. J6d passe à 10 à 14 jours, J8 raccourcit d'autant. | Le garder en J8 : J6d plus court, mais le réseau créé par BLE à 2,4 GHz (4 à 10 MB/s) jusque-là. |
-| D2 | Le format de l'annonce, dans 31 octets | Après la sonde (question 2). | — |
+| D2 | Le format de l'annonce, dans 31 octets | ✅ Tranché par la sonde (question 2) : **l'annonce ne dit que « medXfer est là »**, par l'UUID du service, puisqu'un PC Windows ne peut rien y mettre d'autre. La reconnaissance passe par un court échange GATT après la connexion : celui qui balaye envoie un défi frais, l'autre répond par ses étiquettes pour ce défi (`DISC-11`, adapté) et le suffixe de son nom générique (`DISC-07`). Un échange de 0,4 à 2 s par appareil medXfer à portée, conçu en WP-D.1. | Les étiquettes dans l'annonce : impossible depuis Windows. L'annonce étendue : absente des deux PC et du TECNO. |
 | D3 | Quand annoncer et balayer | Proposé : **seulement quand l'application est ouverte**. Moins de batterie, pas de service en arrière-plan à justifier auprès d'Android, rien d'annoncé quand l'utilisateur ne s'en sert pas. | En arrière-plan aussi : plus tard, si l'usage le demande. |
-| D4 | Un appareil sans BLE (Zorin, si la sonde le confirme) | Après la sonde : le QR et le PIN restent, ou un adaptateur USB. | — |
-| D5 | Les API BLE de chaque système | Après la sonde : les API du système, une par adaptateur. | — |
+| D4 | Un appareil sans BLE (Zorin : Bluetooth 2.1) | ✅ **Le QR et le PIN, comme aujourd'hui** (2 novembre) : les essais couvrent ce cas. Le BLE sous Linux sera essayé quand l'utilisateur aura installé Zorin sur le second PC (Intel AC 8260, BLE) ; d'ici là, des tests automatiques. | Un adaptateur USB Bluetooth 5 : introuvable là où se trouve l'utilisateur. |
+| D5 | Les API BLE de chaque système | ✅ Les API du système, une par adaptateur, sans dépendance. **Android** : `android.bluetooth.le`, balayage filtré sur le service. **Windows** (C++/WinRT, dans le runner) : `GattServiceProvider` en mode caché, `BluetoothLEAdvertisementWatcher`, `BluetoothLEDevice` et `GattSession`. **Linux** : BlueZ par D-Bus, sondé plus tard (D4). | — |

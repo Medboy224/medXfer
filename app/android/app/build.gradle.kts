@@ -40,6 +40,7 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["appLabel"] = "medXfer"
     }
 
     // The core (libmedxfer.so), staged by scripts/stage-app-native.* from build/lib (WP-B.1).
@@ -65,6 +66,12 @@ android {
     }
 
     buildTypes {
+        // Beside the installed release, never over it: signed with another key, a debug build
+        // could only replace it once removed, its identity and trusted devices with it (J6d probe).
+        debug {
+            applicationIdSuffix = ".debug"
+            manifestPlaceholders["appLabel"] = "medXfer debug"
+        }
         release {
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
