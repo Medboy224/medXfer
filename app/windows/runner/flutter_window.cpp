@@ -98,6 +98,24 @@ bool FlutterWindow::OnCreate() {
       result->NotImplemented();
     }
   });
+  // The wired cards (lib/platform/cable.dart, WindowsCableLink): their addresses set by hand.
+  network_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "dev.medxfer.app/network",
+      &flutter::StandardMethodCodec::GetInstance());
+  network_channel_->SetMethodCallHandler([](const auto& call, auto result) {
+    if (call.method_name() == "manualWired") {
+      flutter::EncodableList addresses;
+      for (const auto& a : ManualWiredAddresses()) {
+        addresses.push_back(flutter::EncodableValue(flutter::EncodableMap{
+            {flutter::EncodableValue("card"), flutter::EncodableValue(a.card)},
+            {flutter::EncodableValue("address"), flutter::EncodableValue(a.address)},
+        }));
+      }
+      result->Success(flutter::EncodableValue(addresses));
+    } else {
+      result->NotImplemented();
+    }
+  });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -116,6 +134,7 @@ void FlutterWindow::OnDestroy() {
   hotspot_.Stop();
   hotspot_channel_ = nullptr;
   firewall_channel_ = nullptr;
+  network_channel_ = nullptr;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }

@@ -8,6 +8,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 
@@ -372,10 +373,18 @@ class _ConnectionPanel extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
             child: Text(l.cableGiven(card), key: Key('cable-given-$card'), style: TextStyle(color: c.muted, fontSize: 13)),
           ),
-        if (cable.sharingLeftOn case final card?)
+        // A wired card's address set by hand (asked by the user on 2 November): a stopped
+        // connection sharing's trace, or the user's own; the way back to automatic is said.
+        if (cable.manual case final m?)
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-            child: Text(l.cableSharingLeft(card), key: const Key('cable-sharing-left'), style: TextStyle(color: c.danger, fontSize: 13)),
+            child: m.sharing
+                ? Text(l.cableSharingLeft(m.card), key: const Key('cable-sharing-left'), style: TextStyle(color: c.danger, fontSize: 13))
+                : Text(
+                    l.cableManual(m.card, m.address, Platform.isLinux ? l.cableManualHowLinux : l.cableManualHowWindows),
+                    key: const Key('cable-manual'),
+                    style: TextStyle(color: c.danger, fontSize: 13),
+                  ),
           ),
         // Discovery blocked by the Wi-Fi or a firewall: this computer's address and PIN.
         Align(

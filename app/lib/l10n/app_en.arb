@@ -331,5 +331,9 @@
   "firewallRefused": "The firewall was not changed.",
   "networkPrivate": "private",
   "networkPublic": "public",
-  "networkDomain": "domain"
+  "networkDomain": "domain",
+  "cableManual": "The IP address of the card “{card}” is set by hand ({address}). Over a direct cable, the other PC reaches this one only with an address of the same network. For the cable to work without settings, set the card back to automatic: {how}.",
+  "@cableManual": {"placeholders": {"card": {"type": "String"}, "address": {"type": "String"}, "how": {"type": "String"}}},
+  "cableManualHowWindows": "Settings › Network & internet › Ethernet › IP assignment › Edit › Automatic (DHCP)",
+  "cableManualHowLinux": "Settings › Network › Wired › IPv4 › Automatic (DHCP)"
 }

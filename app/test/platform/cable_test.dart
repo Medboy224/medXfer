@@ -59,7 +59,7 @@ class _FakeLink implements CableLink {
   Future<void> release() async => released = true;
 
   @override
-  Future<String?> sharingLeft() async => null;
+  Future<ManualAddress?> manualAddress() async => null;
 }
 
 void main() {
@@ -202,16 +202,29 @@ void main() {
     watch.dispose();
   });
 
-  test('WP-E.3: Windows says the sharing address left on a wired card, never on its own network', () async {
-    var cards = <(String, List<String>)>[
-      ('Wi-Fi', ['192.168.42.174']),
-      ('Connexion au réseau local* 2', ['192.168.137.1']), // the computer's own network (WP-C.2)
-      ('Ethernet', ['169.254.185.66']),
-    ];
-    final link = WindowsCableLink(interfaces: () async => cards);
-    expect(await link.sharingLeft(), isNull);
-    cards = [('Wi-Fi', ['192.168.42.174']), ('Ethernet', ['192.168.137.1'])];
-    expect(await link.sharingLeft(), 'Ethernet');
+  test("2 November: Windows says a wired card's address set by hand, a stopped sharing's first", () async {
+    var manual = <ManualAddress>[]; // what wired.cpp gives: physical wired cards with a link
+    final link = WindowsCableLink(manual: () async => manual);
+    expect(await link.manualAddress(), isNull);
+    manual = [const ManualAddress(card: 'Ethernet', address: '192.168.10.2')];
+    final m = await link.manualAddress();
+    expect((m?.card, m?.address, m?.sharing), ('Ethernet', '192.168.10.2', false));
+    manual = [const ManualAddress(card: 'Ethernet 2', address: '10.0.0.5'), const ManualAddress(card: 'Ethernet', address: '192.168.137.1')];
+    expect((await link.manualAddress())?.sharing, isTrue, reason: 'the trace of a sharing, said first');
     expect(await link.check(), isEmpty, reason: 'Windows gives the cable its address itself');
+  });
+
+  test('2 November: Linux says a wired profile in ipv4.method manual, not a link-local one', () async {
+    for (final (method, want) in [('manual', '192.168.10.3'), ('link-local', null), ('auto', null)]) {
+      final nm = _Nmcli()
+        ..state = 100
+        ..ipv4 = true;
+      final link = LinuxCableLink(run: (exe, args) async {
+        if (args.join(' ') == '-g ipv4.method connection show Connexion filaire 1') return ProcessResult(0, 0, '$method\n', '');
+        final r = await nm.call(exe, args);
+        return ProcessResult(0, r.exitCode, '${r.stdout}'.replaceAll('169.254.57.98/16', '192.168.10.3/24'), r.stderr);
+      });
+      expect((await link.manualAddress())?.address, want, reason: method);
+    }
   });
 }

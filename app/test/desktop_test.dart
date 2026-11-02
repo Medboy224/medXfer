@@ -54,10 +54,10 @@ FakeCore _core() => FakeCore()
 
 /// A PC's wired cards (WP-E.2, WP-E.3 of the cable plan): an address given, a sharing's left.
 class _Cable implements CableLink {
-  _Cable({this.given = const {}, this.left});
+  _Cable({this.given = const {}, this.manual});
 
   final Set<String> given;
-  final String? left;
+  final ManualAddress? manual;
 
   @override
   Future<Set<String>> check() async => given;
@@ -66,7 +66,7 @@ class _Cable implements CableLink {
   Future<void> release() async {}
 
   @override
-  Future<String?> sharingLeft() async => left;
+  Future<ManualAddress?> manualAddress() async => manual;
 }
 
 /// Windows' firewall of the second PC of the real test of 1 November: medXfer let in on the
@@ -293,13 +293,22 @@ void main() {
               'addresses': [{'address': '169.254.185.66:18887', 'kind': 'ethernet'}, {'address': '192.168.42.174:18887', 'kind': 'wifi'}],
             }),
           ]));
-    final state = await _app(tester, core, cable: _Cable(given: {'enp0s25'}, left: 'Ethernet'));
+    final state = await _app(tester, core, cable: _Cable(given: {'enp0s25'}, manual: const ManualAddress(card: 'Ethernet', address: '192.168.137.1')));
     expect(find.byKey(const Key('cable-given-enp0s25')), findsOneWidget);
     expect(find.textContaining('192.168.137.1'), findsOneWidget);
     await tester.tap(find.byKey(const Key('not-listed')));
     await tester.pumpAndSettle();
     expect(find.text('Câble : 169.254.185.66:18887'), findsOneWidget);
     expect(find.text('Wi-Fi : 192.168.42.174:18887'), findsOneWidget);
+    await state.cable.stop();
+  });
+
+  testWidgets("2 November: a wired card's address set by hand is said, with the way back to automatic", (tester) async {
+    final state = await _app(tester, _core(), cable: _Cable(manual: const ManualAddress(card: 'Ethernet', address: '192.168.10.2')));
+    expect(find.byKey(const Key('cable-manual')), findsOneWidget);
+    expect(find.textContaining('« Ethernet » est réglée à la main (192.168.10.2)'), findsOneWidget);
+    expect(find.textContaining('Automatique (DHCP)'), findsOneWidget);
+    expect(find.byKey(const Key('cable-sharing-left')), findsNothing);
     await state.cable.stop();
   });
 

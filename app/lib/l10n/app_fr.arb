@@ -270,5 +270,8 @@
   "firewallRefused": "Le pare-feu n'a pas été modifié.",
   "networkPrivate": "privé",
   "networkPublic": "public",
-  "networkDomain": "domaine"
+  "networkDomain": "domaine",
+  "cableManual": "L'adresse IP de la carte « {card} » est réglée à la main ({address}). Par un câble direct, l'autre PC ne joindra ce PC que s'il a une adresse du même réseau. Pour que le câble marche sans réglage, remettez la carte en automatique : {how}.",
+  "cableManualHowWindows": "Paramètres › Réseau et Internet › Ethernet › Attribution d'adresse IP › Modifier › Automatique (DHCP)",
+  "cableManualHowLinux": "Paramètres › Réseau › Filaire › IPv4 › Automatique (DHCP)"
 }
