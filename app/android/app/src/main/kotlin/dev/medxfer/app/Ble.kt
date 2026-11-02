@@ -47,8 +47,11 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
     /** The Wi-Fi bands this phone can create a network on and join one on (bit 0 2.4 GHz, bit 1 5 GHz). */
     fun bands(): Map<String, Int> {
         val five = if (wifi.is5GHzBandSupported) 2 else 0
-        // The group at 5 GHz needs Wi-Fi on; the local hotspot, at 2.4 GHz, does without.
-        return mapOf("create" to (1 or if (wifi.isWifiEnabled) five else 0), "join" to (1 or five))
+        val on = wifi.isWifiEnabled
+        // The group at 5 GHz needs Wi-Fi on; the local hotspot, at 2.4 GHz, does without. With
+        // Wi-Fi off no network can be joined: said, so that the other joins this phone's instead
+        // (the TECNO BF6, its Wi-Fi off once its own hotspot stopped, real test of 2 November 2026).
+        return mapOf("create" to (1 or if (on) five else 0), "join" to if (on) (1 or five) else 0)
     }
 
     // The server side: the GATT server and the advertisement.

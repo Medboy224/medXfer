@@ -26,14 +26,14 @@ class LocalHotspot(private val context: Context) {
             done(describe(reservation!!), null)
             return
         }
-        val before = apAddresses()
+        val before = ipv4Addresses().keys
         val main = Handler(Looper.getMainLooper())
         try {
             wifi.startLocalOnlyHotspot(object : WifiManager.LocalOnlyHotspotCallback() {
                 override fun onStarted(r: WifiManager.LocalOnlyHotspotReservation) {
                     reservation = r
                     // The hotspot's own address appears a moment after it starts.
-                    main.postDelayed({ done(describe(r, before), null) }, 1500)
+                    main.postDelayed({ describeOnceAddressed(r, before, done, tries = 8) }, 1500)
                 }
 
                 override fun onStopped() {
@@ -71,6 +71,16 @@ class LocalHotspot(private val context: Context) {
         reservation = null
     }
 
+    // The description once the hotspot has its address, which a slow phone gives later.
+    private fun describeOnceAddressed(r: WifiManager.LocalOnlyHotspotReservation, before: Set<String>, done: (Map<String, Any?>?, String?) -> Unit, tries: Int) {
+        val d = describe(r, before)
+        if (d["address"] == null && tries > 1 && reservation === r) {
+            Handler(Looper.getMainLooper()).postDelayed({ describeOnceAddressed(r, before, done, tries - 1) }, 500)
+            return
+        }
+        done(d, null)
+    }
+
     private fun describe(r: WifiManager.LocalOnlyHotspotReservation, before: Set<String> = emptySet()): Map<String, Any?> {
         val out = mutableMapOf<String, Any?>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -80,22 +90,39 @@ class LocalHotspot(private val context: Context) {
             out["security"] = c.securityType // 1: WPA2-PSK, 2: WPA3-SAE transition, 3: WPA3-SAE
             // The band is not in the public API: the probe reads it from `dumpsys wifi`.
         }
-        // The hotspot's address: an IPv4 of an access-point interface that was not there
-        // before, else any such interface.
-        val now = apAddresses()
-        out["address"] = (now - before).firstOrNull() ?: now.firstOrNull()
+        // The hotspot's address: an IPv4 that was not there before it started, on an interface of
+        // an access point when one stands out (swlan0, ap0…), else on any interface but the mobile
+        // data's and USB's. The TECNO BF6 runs its hotspot on wlan0, its one Wi-Fi interface, which
+        // the names alone missed (real test of 2 November 2026). Else any access point's address.
+        val fresh = ipv4Addresses().filterKeys { it !in before }.filterValues { name -> NOT_WIFI.none { name.startsWith(it) } }
+        out["address"] = fresh.entries.firstOrNull { isApName(it.value) }?.key ?: fresh.keys.firstOrNull() ?: apAddresses().firstOrNull()
         out["interfaces"] = interfaces()
         return out
     }
 
     companion object {
+        // Interfaces that are no access point of this phone: mobile data, USB tethering, Wi-Fi Direct.
+        private val NOT_WIFI = listOf("rmnet", "seth", "ccmni", "usb", "rndis", "ncm", "p2p", "lo", "dummy", "tun")
+
+        private fun isApName(n: String) = n.startsWith("swlan") || n.startsWith("ap") || n.startsWith("softap") || n == "wlan1" || n.startsWith("wlan2")
+
         /** IPv4 addresses of the interfaces an Android access point usually uses. */
         fun apAddresses(): Set<String> {
             val out = linkedSetOf<String>()
             for (ni in NetworkInterface.getNetworkInterfaces() ?: return out) {
                 val n = ni.name ?: continue
-                if (!ni.isUp || !(n.startsWith("swlan") || n.startsWith("ap") || n.startsWith("softap") || n == "wlan1" || n.startsWith("wlan2"))) continue
+                if (!ni.isUp || !isApName(n)) continue
                 ni.inetAddresses.toList().filterIsInstance<Inet4Address>().forEach { out.add(it.hostAddress ?: return@forEach) }
+            }
+            return out
+        }
+
+        /** Every IPv4 address of the interfaces that are up, with its interface's name. */
+        fun ipv4Addresses(): Map<String, String> {
+            val out = linkedMapOf<String, String>()
+            for (ni in NetworkInterface.getNetworkInterfaces() ?: return out) {
+                if (!ni.isUp || ni.isLoopback) continue
+                ni.inetAddresses.toList().filterIsInstance<Inet4Address>().forEach { out[it.hostAddress ?: return@forEach] = ni.name }
             }
             return out
         }
