@@ -6,19 +6,33 @@ package api
 // lost (listenToSession): the user hears it, and the side that dialed dials again (redial).
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/session"
 )
 
 var (
-	pingEvery      = 5 * time.Second
-	sessionSilence = 15 * time.Second // three pings missed
+	pingEvery      = newDuration(5 * time.Second)
+	sessionSilence = newDuration(15 * time.Second) // three pings missed
 )
+
+// duration is a parameter read by the sessions' goroutines while a test may change it: the
+// sessions of an earlier test can still run (a race the detector found, CI of #242).
+type duration struct{ v atomic.Int64 }
+
+func newDuration(d time.Duration) *duration {
+	var x duration
+	x.set(d)
+	return &x
+}
+
+func (d *duration) get() time.Duration  { return time.Duration(d.v.Load()) }
+func (d *duration) set(v time.Duration) { d.v.Store(int64(v)) }
 
 // pingSession pings the peer on ch until ch is closed or the server stops.
 func (s *DaemonServer) pingSession(ch *session.Channel) {
-	t := time.NewTicker(pingEvery)
+	t := time.NewTicker(pingEvery.get())
 	defer t.Stop()
 	for {
 		select {

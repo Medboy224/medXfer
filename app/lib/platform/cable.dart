@@ -8,7 +8,24 @@ library;
 
 import 'dart:io';
 
+import 'package:flutter/services.dart';
+
 import 'hotspot.dart' show Runner;
+
+/// A wired card with a link whose IPv4 address was set by hand. On a direct cable, the other PC
+/// reaches this one only with an address of the same network: the app says so (asked by the
+/// user on 2 November, after a manual address kept the cable from working, real test of
+/// 1 November).
+class ManualAddress {
+  const ManualAddress({required this.card, required this.address});
+
+  final String card;
+  final String address;
+
+  /// The address Windows' connection sharing gives the card it shares to: left there once the
+  /// sharing stopped, it is a trace rather than a choice (real tests of J6c and 1 November).
+  bool get sharing => address == WindowsCableLink.sharingAddress;
+}
 
 /// What the app does for wired cards left without an address.
 abstract interface class CableLink {
@@ -20,11 +37,10 @@ abstract interface class CableLink {
   /// Takes back every address the app gave: the app closes.
   Future<void> release();
 
-  /// The wired card that keeps the address of a connection sharing stopped since (Windows,
-  /// 192.168.137.1 set by hand): the system then gives it no 169.254 address, and a PC at the
-  /// other end of the cable cannot reach this one (real tests of J6c and of 1 November). null
-  /// when none does.
-  Future<String?> sharingLeft();
+  /// A wired card with a link whose IPv4 address is set by hand, or null: the system then gives
+  /// it no 169.254 address, and a PC at the other end of the cable reaches this one only with
+  /// an address of the same network. The address of a stopped connection sharing first.
+  Future<ManualAddress?> manualAddress();
 }
 
 class NoCableLink implements CableLink {
@@ -37,20 +53,24 @@ class NoCableLink implements CableLink {
   Future<void> release() async {}
 
   @override
-  Future<String?> sharingLeft() async => null;
+  Future<ManualAddress?> manualAddress() async => null;
 }
 
-/// Windows gives a cable its 169.254 address itself; what can block it is the address of a
-/// connection sharing (ICS) left on the card. Said, never changed: removing it needs the
-/// administrator, and the sharing may still be wanted (towards a router).
+/// Windows gives a cable its 169.254 address itself; what can block it is an address set by
+/// hand on the card, a stopped connection sharing's (ICS) or the user's. Said, never changed:
+/// changing it needs the administrator, and it may be wanted (a fixed address on a network).
+/// The native side is app/windows/runner/wired.cpp: only Windows says an address is manual.
 class WindowsCableLink implements CableLink {
-  WindowsCableLink({Future<List<(String, List<String>)>> Function()? interfaces}) : _interfaces = interfaces ?? _system;
+  WindowsCableLink({Future<List<ManualAddress>> Function()? manual}) : _manual = manual ?? _system;
 
-  /// Each interface's name and IPv4 addresses.
-  final Future<List<(String, List<String>)>> Function() _interfaces;
+  /// The manual IPv4 addresses of the physical wired cards that have a link.
+  final Future<List<ManualAddress>> Function() _manual;
 
-  static Future<List<(String, List<String>)>> _system() async => [
-    for (final i in await NetworkInterface.list(type: InternetAddressType.IPv4)) (i.name, [for (final a in i.addresses) a.address]),
+  static const _channel = MethodChannel('dev.medxfer.app/network');
+
+  static Future<List<ManualAddress>> _system() async => [
+    for (final m in await _channel.invokeListMethod<Object?>('manualWired') ?? const [])
+      if (m is Map) ManualAddress(card: '${m['card'] ?? ''}', address: '${m['address'] ?? ''}'),
   ];
 
   /// The address Windows's connection sharing puts on the card it shares to.
@@ -63,13 +83,9 @@ class WindowsCableLink implements CableLink {
   Future<void> release() async {}
 
   @override
-  Future<String?> sharingLeft() async {
-    for (final (name, addresses) in await _interfaces()) {
-      // The wired cards only: the computer's own network (WP-C.2) may hold it rightly.
-      if (!name.toLowerCase().startsWith('ethernet')) continue;
-      if (addresses.contains(sharingAddress)) return name;
-    }
-    return null;
+  Future<ManualAddress?> manualAddress() async {
+    final all = await _manual();
+    return all.where((m) => m.sharing).firstOrNull ?? all.firstOrNull;
   }
 }
 
@@ -81,6 +97,7 @@ class _Wired {
   int state = 0; // NetworkManager's device state: 20 no link, 30 disconnected, 40 to 90 activating, 100 connected, 120 failed
   String connection = '';
   bool ipv4 = false;
+  String address = ''; // its first IPv4 address, without the prefix
 }
 
 /// NetworkManager, by nmcli (arguments apart, no shell), as for the network the computer
@@ -153,8 +170,19 @@ class LinuxCableLink implements CableLink {
     return {..._given};
   }
 
+  /// A connected wired card whose profile (not the app's) has ipv4.method manual. A link-local
+  /// profile set by hand gets its address alone: not said.
   @override
-  Future<String?> sharingLeft() async => null;
+  Future<ManualAddress?> manualAddress() async {
+    for (final w in await _wired()) {
+      if (w.state != 100 || w.connection.isEmpty || w.connection == '$prefix${w.device}' || w.address.isEmpty) continue;
+      final method = await _nmcli(['-g', 'ipv4.method', 'connection', 'show', w.connection]);
+      if (method.exitCode == 0 && '${method.stdout}'.trim() == 'manual') {
+        return ManualAddress(card: w.device, address: w.address);
+      }
+    }
+    return null;
+  }
 
   @override
   Future<void> release() async {
@@ -223,6 +251,7 @@ class LinuxCableLink implements CableLink {
       } else if (key == 'GENERAL.CONNECTION') {
         cur!.connection = value;
       } else if (key.startsWith('IP4.ADDRESS') && value.isNotEmpty) {
+        if (!cur!.ipv4) cur!.address = value.split('/').first;
         cur!.ipv4 = true;
       }
     }

@@ -323,5 +323,17 @@
   "cableGiven": "Cable: medXfer gave the card {card} an address, which the system had left without one.",
   "@cableGiven": {"placeholders": {"card": {"type": "String"}}},
   "cableSharingLeft": "The card “{card}” keeps the address 192.168.137.1 of a connection sharing: a PC linked by cable will not reach this one. If that sharing is stopped, set the card back to automatic: Settings › Network & internet › Ethernet › IP assignment.",
-  "@cableSharingLeft": {"placeholders": {"card": {"type": "String"}}}
+  "@cableSharingLeft": {"placeholders": {"card": {"type": "String"}}},
+  "firewallBlocks": "Windows' firewall blocks medXfer on the network “{network}” ({kind}): other devices can neither reach this PC nor receive from it.",
+  "@firewallBlocks": {"placeholders": {"network": {"type": "String"}, "kind": {"type": "String"}}},
+  "firewallAllow": "Allow medXfer",
+  "firewallAsking": "Windows is asking for your permission…",
+  "firewallRefused": "The firewall was not changed.",
+  "networkPrivate": "private",
+  "networkPublic": "public",
+  "networkDomain": "domain",
+  "cableManual": "The IP address of the card “{card}” is set by hand ({address}). Over a direct cable, the other PC reaches this one only with an address of the same network. For the cable to work without settings, set the card back to automatic: {how}.",
+  "@cableManual": {"placeholders": {"card": {"type": "String"}, "address": {"type": "String"}, "how": {"type": "String"}}},
+  "cableManualHowWindows": "Settings › Network & internet › Ethernet › IP assignment › Edit › Automatic (DHCP)",
+  "cableManualHowLinux": "Settings › Network › Wired › IPv4 › Automatic (DHCP)"
 }

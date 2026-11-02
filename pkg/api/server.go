@@ -1029,7 +1029,7 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 }
 
 func (s *DaemonServer) listenToSession(sess *session.Channel) {
-	silence := sessionSilence
+	silence := sessionSilence.get()
 	for {
 		_ = sess.SetReadDeadline(time.Now().Add(silence)) // the peer pings (pingSession)
 		msg, err := sess.Read()
