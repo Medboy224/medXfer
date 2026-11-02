@@ -261,6 +261,19 @@ Corrigés :
 
 **Vérifié sur le second PC** : la colonne « Connexion » disait « Le pare-feu de Windows bloque medXfer sur le réseau « TECNO POP 7 » (privé) ». Après « Autoriser medXfer » et l'accord de Windows, sa règle unique est `medXfer | Inbound | Allow | Any`, et ce PC le joint sur son Wi-Fi (TCP 18887), ce qui échouait avant.
 
+**Essai combiné, après la fusion de #242 à #246** (2 novembre ; paquet construit depuis `main` dans un dossier vide, #247 ; le même programme des deux côtés) :
+- **Connexion** : ce PC se connecte au second par le Wi-Fi, le sens qui échouait.
+- **Transfert** : le second PC envoie un zip de 17,0 Mo, le fichier avec lequel la barre sautait.
+  - Durée : 12,0 s, soit **1,4 MB/s**.
+  - Le cœur donne la progression toutes les 200 ms, sans trou, et l'utilisateur voit la barre avancer régulièrement.
+  - Le fichier reçu a la même empreinte SHA-256 que l'original.
+- **Lien brut** (`xfer bench net`, entre les deux mêmes PC) :
+  - du second PC vers ce PC : 1,1 MB/s ;
+  - dans l'autre sens : 1,8 MB/s ;
+  - latence : 3,5 ms en moyenne.
+
+  Les deux PC passent par le point d'accès d'un téléphone, à 2,4 GHz (canal 1, 802.11n) : chaque paquet traverse l'air deux fois. medXfer va aussi vite que le lien brut ; la limite est ce point d'accès.
+
 **Rapport du lot** : [report-cable.md](report-cable.md).
 
 ## 3. Hors périmètre
