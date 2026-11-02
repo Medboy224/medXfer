@@ -199,6 +199,37 @@ func TestConfirmation(t *testing.T) {
 	}
 }
 
+// The keys a run derives (bible §6.6): the same on both sides, one per use, another for another
+// run; a wrong PIN gives keys the other side does not have.
+func TestKey(t *testing.T) {
+	sa, sb, err := pair(t, params("482913", "ci", "sid-1", Initiator), params("482913", "ci", "sid-1", Responder))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ka, _ := sa.Key("use-1", 64)
+	kb, _ := sb.Key("use-1", 64)
+	if len(ka) != 64 || !bytes.Equal(ka, kb) {
+		t.Fatal("both sides of a run derive different keys")
+	}
+	if other, _ := sa.Key("use-2", 64); bytes.Equal(other, ka) {
+		t.Fatal("two uses get the same key")
+	}
+	for name, pr := range map[string][2]Params{
+		"another run": {params("482913", "ci", "sid-2", Initiator), params("482913", "ci", "sid-2", Responder)},
+		"wrong PIN":   {params("482913", "ci", "sid-1", Initiator), params("482914", "ci", "sid-1", Responder)},
+	} {
+		sc, sd, err := pair(t, pr[0], pr[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		kc, _ := sc.Key("use-1", 64)
+		kd, _ := sd.Key("use-1", 64)
+		if bytes.Equal(kc, ka) || (name == "wrong PIN" && bytes.Equal(kc, kd)) {
+			t.Fatalf("%s: the same key", name)
+		}
+	}
+}
+
 // A share altered in transit, or too short, never confirms; a side runs once.
 func TestBadShares(t *testing.T) {
 	a, _ := New(SuiteCPaceRistretto255, params("123456", "ci", "sid", Initiator))

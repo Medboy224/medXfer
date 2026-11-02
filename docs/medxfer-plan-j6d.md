@@ -122,6 +122,10 @@ Sous Windows, chercher directement le service de medXfer chez le Galaxy A57, san
 - Épinglage, sur le Wi-Fi, des empreintes authentifiées par BLE.
 - Tests : vecteurs, rejeu refusé, mauvais PIN, essais épuisés, message tronqué ou modifié.
 
+En deux PR, pour que la partie cryptographique se relise seule :
+1. **Le protocole** (2 novembre) : `pkg/pairing/ble.go`, sans radio ni API. Il contient le format, les clés, le chiffrement, les étiquettes, CPace sans TLS sur le même `PIN` que TLS, la règle de qui crée le réseau et les clés authentifiées pour le Wi-Fi. `pkg/pake` gagne seulement `Session.Key`. 16 tests et un fuzzing (1,5 million d'exécutions, sans défaut).
+2. **L'API** : actions et événements dans `internal/cabi`, `pair_ble` sur TLS, la demande de PIN à l'écran et « Refuser », les journaux sans secret.
+
 ### WP-D.3 — Adaptateurs BLE · L
 
 - Une interface dans `app/lib/platform/` (annoncer, balayer, porter un message), un adaptateur par système et par API, selon la sonde (décision D5), et un adaptateur vide quand BLE manque.

@@ -8,7 +8,9 @@
 package pake
 
 import (
+	"crypto/hkdf"
 	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
 	"io"
 )
@@ -49,6 +51,14 @@ func (s *Session) Tag() []byte { return tag(s.macKey, s.own) }
 
 // Verify reports whether peerTag is the peer's confirmation of the same run, in constant time.
 func (s *Session) Verify(peerTag []byte) bool { return hmac.Equal(peerTag, tag(s.macKey, s.peer)) }
+
+// Key derives n bytes for the use info names from the session key: HKDF-SHA-256 over the ISK
+// (RFC 5869), as the draft asks of any use of the ISK in a higher-level protocol (§4, §10.3).
+// Over TLS the ISK only confirms; the path by BLE, which has no TLS beneath, encrypts with it
+// (bible §6.6).
+func (s *Session) Key(info string, n int) ([]byte, error) {
+	return hkdf.Key(sha256.New, s.isk, nil, info, n)
+}
 
 // SuiteCPaceRistretto255 is CPace over ristretto255 with SHA-512 (draft-irtf-cfrg-cpace-21).
 const SuiteCPaceRistretto255 = "CPACE-RISTR255-SHA512"
