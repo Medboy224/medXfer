@@ -180,9 +180,11 @@ Essayé, sans effet : un verrou Wi-Fi « haute performance » sur le TECNO. Le j
 | Fermeture de l'application sur le PC | ✅ réseau quitté, profil supprimé |
 | 1 Gio du PC vers le TECNO, écran du TECNO éteint | ❌ coupé vers 44 % ; l'application affiche pourtant « le transfert continue » et sa barre avance |
 
+**Suite de l'essai, l'après-midi du 3 novembre** :
+- **L'A57 ne voyait pas l'annonce de l'application Windows** : sans donnée de service, sa recherche filtrée sur le service ne la voit jamais (0 résultat en 15 s, avec la sonde), et la voit avec un octet (11 et 12). L'annonce porte maintenant un octet, la version des messages BLE, le même sur tous les PC. L'A57 voit alors le PC, le reconnaît comme appareil de confiance, et le touchant, met les deux sur son groupe à 5 GHz (canal 48) ; la session s'ouvre. À la fin, le PC revient seul au Wi-Fi où il était (« TECNO POP 7 »).
+- **Le téléphone appairé (#258) ne se reproduit pas** avec un appairage refait : 4 échanges sur 4 avec la sonde, en 0,9 à 2 s, et l'application reconnaît l'A57 appairé. L'ancien appairage était sans doute abîmé : l'A57 journalisait « BOND_BONDED » dans un état stable, et annonçait sous son adresse d'identité, ce qu'il ne fait plus. À revoir en WP-D.6 avec d'autres appareils appairés.
+
 **Reste ouvert** :
-- un téléphone appairé en Bluetooth avec le PC : le PC n'en lit pas le service. Les utilisateurs appairent souvent leur téléphone ; à corriger avant WP-D.6 ;
-- l'A57 ne voit pas l'annonce de l'application Windows, alors qu'il voit celle de la sonde et que le TECNO voit celle de l'application. Le PC touchant l'A57 suffit pour l'instant ;
 - un transfert mort affiché comme en cours, après une coupure ;
 - la coupure écran éteint (#256), cette fois le TECNO créant le réseau.
 
