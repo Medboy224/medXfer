@@ -159,7 +159,7 @@ Essayé, sans effet : un verrou Wi-Fi « haute performance » sur le TECNO. Le j
 
 **Reste ouvert** :
 - la coupure, écran éteint. Elle ne tient pas à BLE : le réseau est le même après un QR. Pistes : le groupe Wi-Fi Direct à 5 GHz de l'A57 au lieu de son point d'accès local, garder l'écran allumé pendant un transfert, un autre téléphone ;
-- l'arrêt d'un réseau créé pour BLE que personne n'a rejoint en 2 minutes (`BLE-09`).
+- l'arrêt d'un réseau créé pour BLE que personne n'a rejoint en 2 minutes (`BLE-09`) : fait en WP-D.5.
 
 **Windows, fait (3 novembre)** :
 - `ble.cpp`, dans le runner, en C++/WinRT : le même canal que `Ble.kt`. `GattServiceProvider` en mode caché, une réponse gardée jusqu'à ce que l'autre la lise (25 s au plus), un balayage filtré sur le service, un client qui fait une découverte complète puis écrit et lit. Une erreur du client dit l'étape où elle survient.
@@ -217,6 +217,25 @@ Décision du 2 novembre : **5 GHz par défaut**, avec un interrupteur « Haute v
 - Toucher un appareil trouvé par BLE : création ou jonction du réseau, puis session (confiance) ou PIN (inconnu), dans le même parcours qu'aujourd'hui.
 - Chez l'appareil qui crée le réseau : la demande d'un inconnu, Accepter ou Refuser.
 - Messages clairs à chaque étape qui peut échouer (Bluetooth éteint, permission refusée, réseau non rejoint, refus).
+
+**Fait (3 novembre)** :
+- BLE suit l'écran de connexion (D3) : il démarre quand l'écran Connecter s'ouvre (le PC : sa colonne de connexion, toujours là), s'arrête quand il se ferme, se met en pause pendant une session. Démarré ainsi, il ne demande pas la permission : l'écran en donne d'abord la raison, et la demande du système vient sur « Autoriser » (`BLE-12`). Bluetooth éteint : « Activer ».
+- La liste « À proximité », sur le téléphone et sur le PC, montre les appareils trouvés par Bluetooth, le chemin dit ; un appareil vu sur le réseau et par Bluetooth n'y est qu'une fois, par le réseau. Le toucher mène l'échange de `BleLink` ; sa ligne dit l'étape (contact, vérification, création du réseau, connexion au réseau), et le PIN d'un inconnu est demandé dans la même fenêtre que sur le réseau.
+- Chaque échec est dit : refus ou PIN faux, aucun réseau créé, réseau non rejoint, pas de réponse par Bluetooth.
+- Chez l'appareil touché, la demande d'un inconnu est celle du réseau : le PIN, et « Refuser » (D6).
+- Un réseau créé pour BLE que personne n'a rejoint en 2 minutes est arrêté (`BLE-09`).
+- La section BLE du panneau développeur est retirée.
+
+**Essai réel du 3 novembre au soir**, par les nouveaux écrans (PC Windows 11, Galaxy A57, TECNO BF6) :
+
+| Cas | Résultat |
+|---|---|
+| A57 et PC dans la liste l'un de l'autre, « Bluetooth · … » | ✅ |
+| A57 (confiance) touché, **Wi-Fi de l'A57 éteint** | ✅ session ; l'A57 crée son point d'accès local à **2,4 GHz** (son groupe exige le Wi-Fi) ; le PC le rejoint seul, puis revient à son Wi-Fi |
+| Le même, **Wi-Fi de l'A57 allumé** | ✅ groupe à **5 GHz** (canal 44), rejoint seul par le PC, session |
+| TECNO (inconnu) touche le PC, **chemin du PIN** | ✅ le PC montre le PIN, tapé sur le TECNO ; **le PC crée le réseau** (son groupe Wi-Fi Direct à 2,4 GHz), le TECNO le rejoint |
+
+À améliorer : Wi-Fi éteint, un téléphone qui pourrait créer à 5 GHz crée à 2,4 GHz sans le dire. L'écran pourrait proposer d'allumer le Wi-Fi.
 
 ### WP-D.6 — Essais réels et rapport · S
 

@@ -17,7 +17,8 @@ class _Radio implements Ble {
   final _events = StreamController<BleEvent>.broadcast();
   final replies = <String, Uint8List>{};
   final disconnected = <String>[];
-  bool on = true, granted = true, started = false;
+  bool on = true, allowed = true, started = false;
+  int asked = 0; // the permission's system dialog
   WifiBands bands = (create: 3, join: 3);
 
   void add(BleEvent e) => _events.add(e);
@@ -27,7 +28,13 @@ class _Radio implements Ble {
   @override
   Future<bool> enabled() async => on;
   @override
-  Future<bool> permission() async => granted;
+  Future<bool> permission() async {
+    asked++;
+    return allowed;
+  }
+
+  @override
+  Future<bool> granted() async => allowed;
   @override
   Future<bool> turnOn() async => on = true;
   @override
@@ -125,11 +132,11 @@ void main() {
   Iterable<Map<String, Object?>> steps(String action) => core.calls.where((c) => c.action == action).map((c) => c.payload);
 
   test('BLE-12: no permission, Bluetooth off: said; turned on, it runs', () async {
-    radio.granted = false;
+    radio.allowed = false;
     await link.start();
     expect((link.running, link.problem), (false, 'permission'));
     radio
-      ..granted = true
+      ..allowed = true
       ..on = false;
     await link.start();
     expect((link.running, link.problem), (false, 'bluetooth_off'));
@@ -137,8 +144,25 @@ void main() {
     expect((link.running, link.problem, radio.started), (true, null, true));
   });
 
+  test('D3: the connection screen opens: started without the permission dialog; it closes: stopped', () async {
+    radio.allowed = false;
+    await connection.openConnect();
+    await _settle();
+    expect((link.running, link.problem, radio.asked), (false, 'permission', 0)); // the screen gives the reason first
+    radio.allowed = true;
+    await link.start(); // the user's "Allow"
+    expect((link.running, radio.asked), (true, 1));
+    await connection.closeConnect();
+    await _settle();
+    expect((link.running, radio.started), (false, false));
+    await connection.openConnect();
+    await _settle();
+    expect((link.running, radio.asked), (true, 1));
+  });
+
   test('D3: paused while a session is open, started again after it', () async {
-    await link.start();
+    await connection.openConnect();
+    await _settle();
     expect(radio.started, isTrue);
     connection.take(const CoreEvent('paired', data: {'ip': '10.34.109.23', 'device_name': 'TECNO'}));
     await _settle();
@@ -231,6 +255,21 @@ void main() {
     final network = steps('ble_client').firstWhere((p) => p['step'] == 'network')['network'];
     expect(network, {'ssid': 'AndroidShare_1853', 'passphrase': 'vvrtsy12', 'security': 2, 'band': 1, 'addrs': ['10.34.109.23']});
     expect(link.stage, BleStage.idle); // the other joins it, then connects (pair_ble)
+  });
+
+  test('BLE-09: a network created for BLE that nobody joins is stopped after bleUnjoinedFor', () async {
+    final old = Connection.bleUnjoinedFor;
+    Connection.bleUnjoinedFor = const Duration(milliseconds: 60);
+    addTearDown(() => Connection.bleUnjoinedFor = old);
+    final net = await connection.networkForBle(fiveGhz: true);
+    expect((net?.ssid, connection.myHotspot?.ssid), ('DIRECT-KQ-medXfer', 'DIRECT-KQ-medXfer'));
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(connection.myHotspot, isNull);
+    // Joined in time: kept.
+    await connection.networkForBle(fiveGhz: true);
+    connection.take(const CoreEvent('paired', data: {'ip': '192.168.49.20', 'device_name': 'PC'}));
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(connection.myHotspot?.ssid, 'DIRECT-KQ-medXfer');
   });
 
   test('the radio fails during an exchange: said, the exchange may start again', () async {

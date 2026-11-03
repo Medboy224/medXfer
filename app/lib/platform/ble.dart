@@ -57,6 +57,9 @@ abstract interface class Ble {
   /// Asks the permissions BLE needs, at the moment it serves, with their reason (BLE-12).
   Future<bool> permission();
 
+  /// Whether they are granted, without asking: the screen gives the reason before asking.
+  Future<bool> granted();
+
   /// Asks the user to turn Bluetooth on: an app may not on its own. Whether it is on afterwards.
   Future<bool> turnOn();
 
@@ -110,6 +113,9 @@ class ChannelBle implements Ble {
   Future<bool> permission() async => await channel.invokeMethod<bool>('permission') ?? false;
 
   @override
+  Future<bool> granted() async => await channel.invokeMethod<bool>('granted') ?? false;
+
+  @override
   Future<bool> turnOn() async => await channel.invokeMethod<bool>('turnOn') ?? false;
 
   @override
@@ -150,6 +156,9 @@ class NoBle implements Ble {
 
   @override
   Future<bool> permission() async => false;
+
+  @override
+  Future<bool> granted() async => false;
 
   @override
   Future<bool> turnOn() async => false;
