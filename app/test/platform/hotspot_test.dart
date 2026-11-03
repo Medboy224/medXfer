@@ -131,6 +131,26 @@ void main() {
       expect(served.last, 'closed');
       expect(calls, ['start', 'stop']);
     });
+
+    test('WP-D.3: joins another device\'s network itself, its band said; leaving goes back', () async {
+      Object? asked;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.method);
+        if (call.method == 'join') asked = call.arguments;
+        return switch (call.method) {
+          'join' => {'name': 'Wi-Fi', 'index': 12, 'address': '192.168.49.23', 'prefix': 24, 'frequency': 5745},
+          _ => null,
+        };
+      });
+      final h = WindowsHotspot(addressServer: (server, prefix) async => () {});
+      expect(h.canJoin, isTrue);
+      final info = await h.join('DIRECT-ab-Galaxy', 'K3PQ8Z2M', security: 1, band: WifiBand.ghz5);
+      expect(asked, {'ssid': 'DIRECT-ab-Galaxy', 'passphrase': 'K3PQ8Z2M', 'security': 1, 'band': '5'});
+      expect((info.address, info.band, info.net!.index), ('192.168.49.23', WifiBand.ghz5, 12));
+      expect(info.net!.addrs, ['192.168.49.23/24']);
+      await h.leave();
+      expect(calls, ['join', 'leave']);
+    });
   });
 
   group('WP-D.4: Android, the Wi-Fi Direct group at 5 GHz or the local hotspot', () {

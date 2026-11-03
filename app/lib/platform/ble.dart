@@ -78,9 +78,10 @@ abstract interface class Ble {
   Future<WifiBands> wifiBands();
 }
 
-/// Android: android.bluetooth.le, through the app's Kotlin (Ble.kt).
-class AndroidBle implements Ble {
-  AndroidBle({this.channel = const MethodChannel('dev.medxfer.app/ble')}) {
+/// Android (android.bluetooth.le, the app's Kotlin: Ble.kt) and Windows (Windows.Devices.Bluetooth,
+/// the runner's C++/WinRT: ble.cpp), by one channel.
+class ChannelBle implements Ble {
+  ChannelBle({this.channel = const MethodChannel('dev.medxfer.app/ble')}) {
     channel.setMethodCallHandler((call) async {
       if (call.method != 'event') return;
       final m = Map<Object?, Object?>.from(call.arguments as Map);
@@ -100,7 +101,7 @@ class AndroidBle implements Ble {
   final _events = StreamController<BleEvent>.broadcast();
 
   @override
-  bool get supported => Platform.isAndroid;
+  bool get supported => Platform.isAndroid || Platform.isWindows;
 
   @override
   Future<bool> enabled() async => await channel.invokeMethod<bool>('enabled') ?? false;
@@ -175,4 +176,4 @@ class NoBle implements Ble {
   Future<WifiBands> wifiBands() async => (create: 0, join: 0);
 }
 
-Ble systemBle() => Platform.isAndroid ? AndroidBle() : const NoBle();
+Ble systemBle() => Platform.isAndroid || Platform.isWindows ? ChannelBle() : const NoBle();

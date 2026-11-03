@@ -3,8 +3,8 @@
 /// hotspot (WP-D.4 of the J6d plan). Windows and Linux (WP-C.2 of the J6c plan): a network
 /// the computer creates at 2.4 GHz, its cards refusing 5 GHz on their own (probe WP-C.1);
 /// Windows by Wi-Fi Direct with a name and passphrase of the app's (decision C4), Linux by
-/// NetworkManager. A computer does not join another's network itself: the user does, in the
-/// system's settings ([Hotspot.canJoin]).
+/// NetworkManager. Joining another's network: Android and Windows (WP-D.3 of the J6d plan) do it
+/// themselves; on Linux the user does, in the system's settings ([Hotspot.canJoin]).
 library;
 
 import 'dart:io';
@@ -97,8 +97,8 @@ abstract interface class Hotspot {
   /// This device creates a network ([start]).
   bool get supported;
 
-  /// This device joins another's network itself ([join]): Android. A desktop's user joins it
-  /// in the system's settings.
+  /// This device joins another's network itself ([join]): Android, Windows. Linux's user joins
+  /// it in the system's settings.
   bool get canJoin;
 
   /// The Wi-Fi this device is on is left while the network runs, and comes back at [stop]:
@@ -281,6 +281,8 @@ class NoHotspot implements Hotspot {
 /// Windows serves the addresses on it, through its connection sharing, and accepts the phones.
 /// When that sharing is taken by another card, it serves none: [DhcpServer] does, on the group's
 /// address only, and Windows drops each phone after 2 minutes ([HotspotInfo.dropsClients]).
+/// Another device's network is joined through Windows' Wi-Fi API (wifi_join.cpp), with a profile
+/// of this user's that leaving deletes; the computer then goes back to its network.
 class WindowsHotspot implements Hotspot {
   WindowsHotspot({this.channel = const MethodChannel('dev.medxfer.app/hotspot'), AddressServer? addressServer})
       : _addressServer = addressServer ?? _dhcpServer;
@@ -293,7 +295,7 @@ class WindowsHotspot implements Hotspot {
   bool get supported => true;
 
   @override
-  bool get canJoin => false;
+  bool get canJoin => true;
 
   @override
   bool get leavesWifi => false;
@@ -339,11 +341,26 @@ class WindowsHotspot implements Hotspot {
   }
 
   @override
-  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) => throw UnsupportedError('a computer joins in the system settings');
+  Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) async {
+    final m = (await channel.invokeMapMethod<String, Object?>(
+        'join', {'ssid': ssid, 'passphrase': passphrase, 'security': security, if (band != null) 'band': band.code}))!;
+    final address = '${m['address']}';
+    final prefix = (m['prefix'] as num?)?.toInt() ?? 24;
+    return HotspotInfo(
+      ssid: ssid,
+      passphrase: passphrase,
+      security: security,
+      address: address,
+      interfaces: ['${m['name']}'],
+      net: NetInterface(name: '${m['name']}', index: (m['index'] as num?)?.toInt() ?? 0, addrs: ['$address/$prefix']),
+      band: WifiBand.of((m['frequency'] as num?)?.toInt() ?? 0),
+    );
+  }
 
   @override
-  Future<void> leave() async {}
+  Future<void> leave() => channel.invokeMethod<void>('leave');
 
+  /// The core's sockets follow Windows' routes: the card that joined is the computer's Wi-Fi.
   @override
   Future<int> joinedNetwork() async => 0;
 

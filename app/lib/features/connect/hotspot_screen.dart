@@ -7,6 +7,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 
 import '../../app.dart';
@@ -27,6 +28,9 @@ class HotspotScreen extends StatefulWidget {
 class _HotspotScreenState extends State<HotspotScreen> {
   late final Connection _c;
   bool _pinTab = false;
+
+  /// Android names the network itself; a computer's screen needs a larger code.
+  bool get _phone => defaultTargetPlatform == TargetPlatform.android;
 
   @override
   void initState() {
@@ -203,7 +207,7 @@ class _HotspotScreenState extends State<HotspotScreen> {
                         decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
                         // A computer's screen shows it at about 1 mm a module at 230 (real test of
                         // 29 October 2026): the camera needs to be close, where it cannot focus.
-                        child: SizedBox.square(dimension: _c.hotspot.canJoin ? 230 : 340, child: QrView(key: const Key('my-qr'), data: _c.qrData!)),
+                        child: SizedBox.square(dimension: _phone ? 230 : 340, child: QrView(key: const Key('my-qr'), data: _c.qrData!)),
                       ),
                     ),
                     const SizedBox(height: 14),
@@ -219,7 +223,7 @@ class _HotspotScreenState extends State<HotspotScreen> {
                           _Field(label: l.networkLabel, value: h.ssid ?? '', valueKey: const Key('hotspot-ssid')),
                           _Field(label: l.passwordLabel, value: h.passphrase ?? '', valueKey: const Key('hotspot-password')),
                           const SizedBox(height: 4),
-                          Text(_c.hotspot.canJoin ? l.chosenByAndroid : l.chosenByApp, style: TextStyle(color: c.muted, fontSize: 12)),
+                          Text(_phone ? l.chosenByAndroid : l.chosenByApp, style: TextStyle(color: c.muted, fontSize: 12)),
                         ],
                       ),
                     ),
