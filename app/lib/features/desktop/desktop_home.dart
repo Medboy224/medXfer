@@ -53,8 +53,8 @@ class _DesktopHomeState extends State<DesktopHome> {
       unawaited(_c.loadTrusted());
       unawaited(_c.openConnect());
     });
-    // The devices come and go: look again now and then.
-    _rescan = Timer.periodic(const Duration(seconds: 8), (_) {
+    // The devices come and go: look again every 5 s, a scan lasting 2 s.
+    _rescan = Timer.periodic(const Duration(seconds: 5), (_) {
       if (!_c.scanning) unawaited(_c.scan());
     });
   }
