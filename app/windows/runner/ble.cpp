@@ -411,42 +411,60 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
   std::optional<std::string> error;
   std::vector<uint8_t> answer;
   co_await resume_background();
+  const char* step = "device";  // where an exception came from
   try {
     if (!c->characteristic) {
       c->device = co_await BluetoothLEDevice::FromBluetoothAddressAsync(std::stoull(device, nullptr, 16));
-      if (!c->device) throw hresult_error(E_FAIL, L"not_found");
-      c->session = co_await GattSession::FromDeviceIdAsync(c->device.BluetoothDeviceId());
-      c->session.MaintainConnection(true);
-      // A full discovery first: asking for one service straight away failed against the
-      // Galaxy A57 (WP-D.0).
-      co_await c->device.GetGattServicesAsync(BluetoothCacheMode::Uncached);
-      auto services = co_await c->device.GetGattServicesForUuidAsync(kService, BluetoothCacheMode::Uncached);
-      if (services.Status() != GattCommunicationStatus::Success || services.Services().Size() == 0) {
-        throw hresult_error(E_FAIL, L"no_service");
+      if (!c->device) {
+        error = "not_found";
+      } else {
+        step = "session";
+        c->session = co_await GattSession::FromDeviceIdAsync(c->device.BluetoothDeviceId());
+        c->session.MaintainConnection(true);
+        // A full discovery first: asking for one service straight away failed against the
+        // Galaxy A57 (WP-D.0). A phone paired in Bluetooth with this computer fails here, with
+        // E_UNEXPECTED or "unreachable", where the same phone unpaired answers (real test of
+        // 3 November 2026).
+        step = "services";
+        auto all = co_await c->device.GetGattServicesAsync(BluetoothCacheMode::Uncached);
+        auto services = co_await c->device.GetGattServicesForUuidAsync(kService, BluetoothCacheMode::Uncached);
+        if (services.Status() != GattCommunicationStatus::Success || services.Services().Size() == 0) {
+          error = "no_service:" + std::to_string(static_cast<int>(all.Status())) + "/" +
+                  std::to_string(all.Status() == GattCommunicationStatus::Success ? all.Services().Size() : 0) + "/" +
+                  std::to_string(static_cast<int>(services.Status()));
+        } else {
+          step = "characteristic";
+          auto found = co_await services.Services().GetAt(0).GetCharacteristicsForUuidAsync(kMessage, BluetoothCacheMode::Uncached);
+          if (found.Status() != GattCommunicationStatus::Success || found.Characteristics().Size() == 0) {
+            error = "no_characteristic:" + std::to_string(static_cast<int>(found.Status()));
+          } else {
+            c->characteristic = found.Characteristics().GetAt(0);
+          }
+        }
       }
-      auto found = co_await services.Services().GetAt(0).GetCharacteristicsForUuidAsync(kMessage, BluetoothCacheMode::Uncached);
-      if (found.Status() != GattCommunicationStatus::Success || found.Characteristics().Size() == 0) {
-        throw hresult_error(E_FAIL, L"no_service");
-      }
-      c->characteristic = found.Characteristics().GetAt(0);
     }
     // Longer than the MTU, Windows writes and reads in pieces (long write, long read).
-    auto written = co_await c->characteristic.WriteValueWithResultAsync(ToBuffer(message), GattWriteOption::WriteWithResponse);
-    if (written.Status() != GattCommunicationStatus::Success) {
-      error = "write_status:" + std::to_string(static_cast<int>(written.Status()));
-    } else {
-      auto read = co_await c->characteristic.ReadValueAsync(BluetoothCacheMode::Uncached);
-      if (read.Status() != GattCommunicationStatus::Success) {
-        error = "read_status:" + std::to_string(static_cast<int>(read.Status()));
+    if (!error) {
+      step = "write";
+      auto written = co_await c->characteristic.WriteValueWithResultAsync(ToBuffer(message), GattWriteOption::WriteWithResponse);
+      if (written.Status() != GattCommunicationStatus::Success) {
+        error = "write_status:" + std::to_string(static_cast<int>(written.Status()));
       } else {
-        answer = ToBytes(read.Value());
+        step = "read";
+        auto read = co_await c->characteristic.ReadValueAsync(BluetoothCacheMode::Uncached);
+        if (read.Status() != GattCommunicationStatus::Success) {
+          error = "read_status:" + std::to_string(static_cast<int>(read.Status()));
+        } else {
+          answer = ToBytes(read.Value());
+        }
       }
     }
   } catch (hresult_error const& e) {
-    error = to_string(e.message());
-    if (error->empty()) error = "error";
+    char t[16];
+    std::snprintf(t, sizeof(t), "%08x", static_cast<unsigned>(e.code()));
+    error = std::string(step) + "_" + t;
   } catch (...) {
-    error = "error";
+    error = std::string(step) + "_error";
   }
   if (error) c->Close();  // the next exchange connects again
   c->busy = false;

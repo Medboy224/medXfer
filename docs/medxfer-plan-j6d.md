@@ -159,8 +159,32 @@ Essayé, sans effet : un verrou Wi-Fi « haute performance » sur le TECNO. Le j
 
 **Reste ouvert** :
 - la coupure, écran éteint. Elle ne tient pas à BLE : le réseau est le même après un QR. Pistes : le groupe Wi-Fi Direct à 5 GHz de l'A57 au lieu de son point d'accès local, garder l'écran allumé pendant un transfert, un autre téléphone ;
-- l'arrêt d'un réseau créé pour BLE que personne n'a rejoint en 2 minutes (`BLE-09`) ;
-- l'adaptateur Windows.
+- l'arrêt d'un réseau créé pour BLE que personne n'a rejoint en 2 minutes (`BLE-09`).
+
+**Windows, fait (3 novembre)** :
+- `ble.cpp`, dans le runner, en C++/WinRT : le même canal que `Ble.kt`. `GattServiceProvider` en mode caché, une réponse gardée jusqu'à ce que l'autre la lise (25 s au plus), un balayage filtré sur le service, un client qui fait une découverte complète puis écrit et lit. Une erreur du client dit l'étape où elle survient.
+- `wifi_join.cpp` : **le PC rejoint seul le réseau d'un autre appareil**, par l'API Wi-Fi de Windows (`wlanapi`), avec un profil de l'utilisateur, sans droits d'administrateur. Le profil est supprimé au départ et le PC revient au réseau où il était. Il sert aussi au QR : le PC n'envoie plus l'utilisateur dans les réglages de Windows.
+- Bandes annoncées : création à 2,4 GHz (sonde WP-C.1) ; rejoindre à 2,4 GHz, et à 5 GHz si la carte le fait ; rien Wi-Fi éteint.
+- `platform/ble.dart` : un seul adaptateur à canal, `ChannelBle`, pour Android et Windows.
+
+**Essai réel du 3 novembre**, PC Windows 11 (Intel AC 8265), Galaxy A57, TECNO BF6 ; le PC gardait Internet par le partage de connexion USB du TECNO :
+
+| Mesure | Résultat |
+|---|---|
+| PC et TECNO (inconnus l'un de l'autre) : se trouver par BLE | ✅ dans les deux sens |
+| **Chemin du PIN**, premier essai réel : PIN montré par le TECNO, tapé sur le PC | ✅ |
+| Le TECNO crée son réseau, le PC le rejoint seul | ✅ point d'accès local à 2,4 GHz, canal 6 ; session ouverte, un PDF passe |
+| PC et Galaxy A57 **appairés en Bluetooth** dans les réglages | ❌ le PC voit l'A57, mais la découverte de ses services échoue à chaque fois (`E_UNEXPECTED`, ou « injoignable »), la sonde de WP-D.0 aussi |
+| Le même A57, l'appairage Bluetooth supprimé des deux côtés | ✅ reconnu ; l'A57 crée son groupe à **5 GHz** (canal 36, 866,7 Mbit/s), le PC le rejoint seul, session de confiance sans PIN |
+| **1 Gio du PC vers l'A57**, écran allumé | ✅ **42,4 Mo/s** en moyenne, 62,8 Mo/s en pointe, 25,3 s ; empreinte SHA-256 identique |
+| Fermeture de l'application sur le PC | ✅ réseau quitté, profil supprimé |
+| 1 Gio du PC vers le TECNO, écran du TECNO éteint | ❌ coupé vers 44 % ; l'application affiche pourtant « le transfert continue » et sa barre avance |
+
+**Reste ouvert** :
+- un téléphone appairé en Bluetooth avec le PC : le PC n'en lit pas le service. Les utilisateurs appairent souvent leur téléphone ; à corriger avant WP-D.6 ;
+- l'A57 ne voit pas l'annonce de l'application Windows, alors qu'il voit celle de la sonde et que le TECNO voit celle de l'application. Le PC touchant l'A57 suffit pour l'instant ;
+- un transfert mort affiché comme en cours, après une coupure ;
+- la coupure écran éteint (#256), cette fois le TECNO créant le réseau.
 
 ### WP-D.4 — Le groupe Wi-Fi Direct à 5 GHz derrière `Hotspot` · M (avancé de J8, décision D1)
 
