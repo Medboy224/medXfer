@@ -23,6 +23,7 @@ namespace {
 const guid kService{0xc46b12c3, 0x1dee, 0x482d, {0xa4, 0x90, 0xb1, 0x85, 0x21, 0x23, 0x12, 0xfb}};
 const guid kMessage{0xc46b12c4, 0x1dee, 0x482d, {0xa4, 0x90, 0xb1, 0x85, 0x21, 0x23, 0x12, 0xfb}};
 constexpr size_t kMaxMessage = 512;                      // BLE-03
+constexpr uint8_t kBleVersion = 1;                        // its messages' first byte (bible §6.6)
 constexpr auto kAnswerWithin = std::chrono::seconds(25);  // BLE-11: under the 30 s of a GATT transaction
 constexpr int64_t kSeenEveryMs = 5000;
 
@@ -177,6 +178,12 @@ fire_and_forget Ble::Start(bool advertise, bool scan, Done done) {
           GattServiceProviderAdvertisingParameters params;
           params.IsConnectable(true);
           params.IsDiscoverable(false);
+          // One byte of service data, the same on every computer (the BLE version): without it, the
+          // Galaxy A57's scan filtered on the service never sees this computer, which a TECNO
+          // does (3 November 2026: 0 results in 15 s without it, 11 and 12 with it).
+          DataWriter version;
+          version.WriteByte(kBleVersion);
+          params.ServiceData(version.DetachBuffer());
           provider.StartAdvertising(params);
           provider_ = provider;
         }
