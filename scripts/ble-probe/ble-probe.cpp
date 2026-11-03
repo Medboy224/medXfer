@@ -24,6 +24,8 @@
 #include <set>
 #include <string>
 #include <thread>
+
+#include <winrt/Windows.Devices.Enumeration.h>
 #include <vector>
 
 using namespace winrt;
@@ -141,7 +143,9 @@ int Serve(int seconds, size_t reply) {
   ap.IsDiscoverable(std::getenv("PROBE_HIDDEN") == nullptr);
   // 10 bytes of service data: what is left in 31 once the flags and the 128-bit UUID are in.
   try {
-    ap.ServiceData(Bytes(10, 0x10));
+    // PROBE_DATA=n: n bytes of service data (0: none).
+    size_t n = std::getenv("PROBE_DATA") ? std::strtoul(std::getenv("PROBE_DATA"), nullptr, 10) : 10;
+    if (n > 0) ap.ServiceData(Bytes(n, 0x10));
   } catch (hresult_error const& e) {
     Log("service data refused: %ls", e.message().c_str());
   }
@@ -216,20 +220,28 @@ int Exchange(uint64_t addr, size_t bytes) {
   if (!dev) { Log("device %s not found", Addr(addr).c_str()); return 1; }
   auto t1 = Clock::now();
   Log("device found, connection status %d", static_cast<int>(dev.ConnectionStatus()));
-  auto session = GattSession::FromDeviceIdAsync(dev.BluetoothDeviceId()).get();
-  Log("session opened");
-  session.MaintainConnection(true);
-  auto all = dev.GetGattServicesAsync(BluetoothCacheMode::Uncached).get();
+  // Variants for a phone paired with this computer (#258): PROBE_NOSESSION, no GattSession;
+  // PROBE_CACHED, the system's cache; PROBE_WAIT=ms before the discovery.
+  GattSession session{nullptr};
+  if (!std::getenv("PROBE_NOSESSION")) {
+    session = GattSession::FromDeviceIdAsync(dev.BluetoothDeviceId()).get();
+    Log("session opened");
+    session.MaintainConnection(true);
+  }
+  if (auto wait = std::getenv("PROBE_WAIT")) std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(wait)));
+  const auto mode = std::getenv("PROBE_CACHED") ? BluetoothCacheMode::Cached : BluetoothCacheMode::Uncached;
+  Log("paired: %d", dev.DeviceInformation().Pairing().IsPaired() ? 1 : 0);
+  auto all = dev.GetGattServicesAsync(mode).get();
   Log("all services: %s, %u", Status(all.Status()), all.Status() == GattCommunicationStatus::Success ? all.Services().Size() : 0);
   if (all.Status() == GattCommunicationStatus::Success)
     for (auto const& s : all.Services()) Log("  service %08x-...", s.Uuid().Data1);
-  auto sr = dev.GetGattServicesForUuidAsync(kService, BluetoothCacheMode::Uncached).get();
+  auto sr = dev.GetGattServicesForUuidAsync(kService, mode).get();
   auto t2 = Clock::now();
   if (sr.Status() != GattCommunicationStatus::Success || sr.Services().Size() == 0) {
     Log("service: %s, %u found", Status(sr.Status()), sr.Services().Size());
     return 1;
   }
-  auto cr = sr.Services().GetAt(0).GetCharacteristicsForUuidAsync(kMessage, BluetoothCacheMode::Uncached).get();
+  auto cr = sr.Services().GetAt(0).GetCharacteristicsForUuidAsync(kMessage, mode).get();
   if (cr.Status() != GattCommunicationStatus::Success || cr.Characteristics().Size() == 0) {
     Log("characteristic: %s", Status(cr.Status()));
     return 1;
@@ -241,12 +253,13 @@ int Exchange(uint64_t addr, size_t bytes) {
   auto rd = ch.ReadValueAsync(BluetoothCacheMode::Uncached).get();
   auto t5 = Clock::now();
   auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
-  Log("device %.0f ms, services %.0f ms, characteristic %.0f ms, max pdu %u", ms(t0, t1), ms(t1, t2), ms(t2, t3), session.MaxPduSize());
+  Log("device %.0f ms, services %.0f ms, characteristic %.0f ms, max pdu %u", ms(t0, t1), ms(t1, t2), ms(t2, t3),
+      session ? session.MaxPduSize() : 0);
   Log("write %zu bytes: %s in %.0f ms", bytes, Status(wr.Status()), ms(t3, t4));
   Log("read: %s, %u bytes in %.0f ms (%s)", Status(rd.Status()), rd.Status() == GattCommunicationStatus::Success ? rd.Value().Length() : 0,
       ms(t4, t5), rd.Status() == GattCommunicationStatus::Success ? Hex(rd.Value()).c_str() : "");
   Log("total %.0f ms", ms(t0, t5));
-  session.Close();
+  if (session) session.Close();
   dev.Close();
   return 0;
 }
