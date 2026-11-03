@@ -80,10 +80,10 @@ func TestBLEByPINThenPairBLE(t *testing.T) {
 	port, _ := strconv.Atoi(p)
 	const passphrase = "K3PQ8Z2MXA7D"
 	in = bleStep(t, na, "ble_server", map[string]any{"conn": "s1", "step": "answer", "outcome": 1, "network": map[string]any{
-		"ssid": "DIRECT-ZA-medXfer", "passphrase": passphrase, "security": 1, "band": 2, "port": port, "addrs": []string{"127.0.0.1"}}})
+		"ssid": "DIRECT-ZA-medXfer", "passphrase": passphrase, "security": 1, "band": 2, "addrs": []string{"127.0.0.1"}}})
 	out = bleStep(t, nb, "ble_client", map[string]any{"conn": "c1", "step": "reply", "data": in["data"]})
 	network, _ := out["network"].(map[string]any)
-	if network == nil || network["passphrase"] != passphrase || out["fingerprint"] != a.identity.Fingerprint.String() {
+	if network == nil || network["passphrase"] != passphrase || network["port"] != float64(port) || out["fingerprint"] != a.identity.Fingerprint.String() {
 		t.Fatalf("reply %v", out)
 	}
 

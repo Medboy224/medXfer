@@ -488,6 +488,28 @@ void main() {
     expect(h.log.last, 'stop');
   });
 
+  test('a session lost, not left: this device\'s network waits rejoinFor for the other to come back', () async {
+    final old = Connection.rejoinFor;
+    Connection.rejoinFor = const Duration(milliseconds: 80);
+    addTearDown(() => Connection.rejoinFor = old);
+    final core = _core()..on('set_network_info', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    addTearDown(c.dispose);
+    await c.startHotspot();
+    c.take(const CoreEvent('paired', data: {'ip': '10.46.56.91', 'device_name': 'TECNO'}));
+    c.take(const CoreEvent('disconnected', data: {'reason': 'connection timed out'}));
+    await _settle();
+    expect(h.log, isNot(contains('stop')), reason: 'the other joins it again, then the session comes back (real test)');
+    c.take(const CoreEvent('paired', data: {'ip': '10.46.56.91', 'device_name': 'TECNO'})); // it came back
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    expect(h.log, isNot(contains('stop')));
+    c.take(const CoreEvent('disconnected', data: {'reason': 'connection timed out'}));
+    await Future<void>.delayed(const Duration(milliseconds: 120)); // and this time it does not
+    expect(h.log.last, 'stop');
+    expect(c.myHotspot, isNull);
+  });
+
   test('no permission, no access point: said, nothing started', () async {
     final h = _FakeHotspot()..granted = false;
     final c = Connection(_core(), hotspot: h);

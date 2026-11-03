@@ -49,7 +49,7 @@ type BLENetworkInfo struct {
 	Passphrase string   `json:"passphrase"` // a secret of the network: masked in the journal
 	Security   int      `json:"security"`   // 1 WPA2, 2 WPA3 transition, 3 WPA3
 	Band       int      `json:"band"`       // 1: 2.4 GHz, 2: 5 GHz
-	Port       int      `json:"port"`       // the creator's medXfer port
+	Port       int      `json:"port"`       // the creator's medXfer port; 0: this device's, filled by the core
 	Addrs      []string `json:"addrs"`      // the creator's addresses on it
 }
 
@@ -270,7 +270,7 @@ func (s *DaemonServer) handleBLEServer(rs Responder, req RequestMessage) {
 		s.ble.mu.Unlock()
 		if a := step.Request; a != nil {
 			request := map[string]any{"fingerprint": a.Peer.String(), "trusted": a.Trusted,
-				"create": int(a.Request.Create), "join": int(a.Request.Join), "outcome": int(a.Outcome)}
+				"create": int(a.Request.Create), "join": int(a.Request.Join), "outcome": int(a.Outcome), "band": int(a.Band)}
 			if ts := s.trustStore(); ts != nil && a.Trusted {
 				if known, ok := ts.Get(a.Peer); ok {
 					request["alias"] = known.Alias
@@ -298,7 +298,7 @@ func (s *DaemonServer) handleBLEServer(rs Responder, req RequestMessage) {
 		}
 		var n *pairing.BLENetwork
 		if p.Network != nil {
-			nn, err := p.Network.toPairing()
+			nn, err := s.blePort(p.Network).toPairing()
 			if err != nil {
 				fail(err.Error())
 				return
@@ -421,7 +421,7 @@ func (s *DaemonServer) handleBLEClient(rs Responder, req RequestMessage) {
 		if a.Outcome == pairing.BLEInitiatorCreates {
 			s.ble.auth.Add(a.Peer) // it joins this device's network, then connects (BLE-10)
 		}
-		out := map[string]any{"fingerprint": a.Peer.String(), "outcome": int(a.Outcome)}
+		out := map[string]any{"fingerprint": a.Peer.String(), "outcome": int(a.Outcome), "band": int(a.Band)}
 		if a.Network != nil {
 			out["network"] = networkInfo(a.Network)
 		}
@@ -432,7 +432,7 @@ func (s *DaemonServer) handleBLEClient(rs Responder, req RequestMessage) {
 			fail("no network")
 			return
 		}
-		n, nerr := p.Network.toPairing()
+		n, nerr := s.blePort(p.Network).toPairing()
 		if nerr != nil {
 			fail(nerr.Error())
 			return
@@ -568,4 +568,20 @@ func (s *DaemonServer) trustStore() *identity.TrustStore {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.trust
+}
+
+// blePort is n with this device's medXfer port when the platform gave none: it creates the
+// network, the core knows where it listens.
+func (s *DaemonServer) blePort(n *BLENetworkInfo) *BLENetworkInfo {
+	if n.Port != 0 {
+		return n
+	}
+	s.mu.RLock()
+	ln := s.nodeLn
+	s.mu.RUnlock()
+	out := *n
+	if ln != nil {
+		out.Port = ln.Addr().(*net.TCPAddr).Port
+	}
+	return &out
 }

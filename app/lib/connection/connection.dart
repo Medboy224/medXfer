@@ -315,6 +315,7 @@ class Connection extends ChangeNotifier {
   bool _wantHotspot = false; // asked by the user, not stopped yet
   bool _hotspotWifiOff = false;
   bool _hotspotLowBand = false; // asked at 2.4 GHz, until stopped (setHotspotFiveGhz)
+  Timer? _hotspotGiveUp; // this device's network kept after its session was lost
   bool _hotspotOtherWifi = false;
 
   /// This device's network is wanted, but its Wi-Fi is off: it comes once it is on (#219).
@@ -564,6 +565,8 @@ class Connection extends ChangeNotifier {
 
   /// Stops this device's access point; the core gets every interface back.
   Future<void> stopHotspot() async {
+    _hotspotGiveUp?.cancel();
+    _hotspotGiveUp = null;
     _wantHotspot = false;
     _hotspotWifiOff = false;
     _hotspotLowBand = false;
@@ -745,6 +748,58 @@ class Connection extends ChangeNotifier {
   /// Pairs with the device whose QR code was scanned, or whose link was pasted.
   Future<void> pairUri(String uri) => _call('pair_uri', {'uri': uri.trim(), if (remember) 'trust': true});
 
+  // The path by BLE (bible §6.6, BleLink): the network created or joined as for a QR code, then
+  // the session on it.
+
+  /// This device's network for a device met by BLE: the one running, else one created at 5 GHz
+  /// when the other joins it there ([fiveGhz]). Null when none could be created.
+  Future<HotspotInfo?> networkForBle({required bool fiveGhz}) async {
+    if (!hotspot.supported) return null;
+    if (_myHotspot == null) {
+      _wantHotspot = true;
+      _hotspotLowBand = !fiveGhz;
+      await _startHotspot();
+    }
+    return _myHotspot;
+  }
+
+  /// Joins the network a device met by BLE created (Android; a desktop's user joins it in the
+  /// system's settings). Whether it is joined.
+  Future<bool> joinForBle(LinkNetwork n) async {
+    if (!hotspot.canJoin) return false;
+    if (_joined?.ssid == n.ssid) return true;
+    _hotspotBusy = true;
+    notifyListeners();
+    try {
+      if (!await hotspot.permission()) {
+        _notices.add(const HotspotFailed(permission: true));
+        return false;
+      }
+      await hotspot.join(n.ssid, n.passphrase, security: n.security, band: n.band);
+      _joined = n;
+      await pushNetwork();
+      return true;
+    } on PlatformException catch (e) {
+      _notices.add(switch (e.code) {
+        'no_band' when n.band != null => JoinBandMissing(n.band!),
+        _ => JoinFailed(n.ssid),
+      });
+      return false;
+    } finally {
+      _hotspotBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// Opens the session with the device whose network this one joined after BLE, at ip and port:
+  /// its key, which BLE authenticated, pinned (pair_ble, BLE-10); a device of mutual trust by P3
+  /// (pair).
+  Future<void> pairAfterBle(String ip, int port, String fingerprint, {required bool trusted}) {
+    if (trusted) return _call('pair', {'ip': ip, 'port': port});
+    final target = ip.contains(':') ? '[$ip]:$port' : '$ip:$port';
+    return _call('pair_ble', {'target': target, 'fingerprint': fingerprint, if (remember) 'trust': true});
+  }
+
   /// Pairs with the device at target (address, or address:port) by the PIN it shows.
   Future<void> pairPin(String target, String pin) {
     _pinNeeded = null;
@@ -866,8 +921,20 @@ class Connection extends ChangeNotifier {
         _session = null;
         _reconnecting = false;
         _trustOffer = null;
-        // The network made for this session is no longer needed.
-        if (_myHotspot != null && !_showing) unawaited(stopHotspot());
+        // The network made for this session: no longer needed once left. Lost, it waits for the
+        // other device as long as that one comes back (rejoinFor, as on the joining side): it was
+        // stopped at once, and the phone that joined it again 8 s later found none (real test of
+        // 2 November 2026).
+        if (_myHotspot != null && !_showing) {
+          if (m['reason'] == 'connection timed out') {
+            _hotspotGiveUp?.cancel();
+            _hotspotGiveUp = Timer(rejoinFor, () {
+              if (_session == null && !_showing) unawaited(stopHotspot());
+            });
+          } else {
+            unawaited(stopHotspot());
+          }
+        }
         if (_joined != null) {
           if (m['reason'] == 'connection timed out') {
             // Lost, not left (J6c): the network is joined again (WifiJoin) and the session
@@ -952,6 +1019,7 @@ class Connection extends ChangeNotifier {
     _connectingLimit?.cancel();
     _scanLimit?.cancel();
     _giveUp?.cancel();
+    _hotspotGiveUp?.cancel();
     _hotspotWatch?.cancel();
     _hotspotRetry?.cancel();
     _netSub?.cancel();

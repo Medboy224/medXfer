@@ -1,6 +1,7 @@
 package dev.medxfer.app
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
@@ -23,7 +24,10 @@ class MainActivity : FlutterActivity() {
     // The joined network lost, then joined again: the core gets the new one (DISC-10, J6c).
     private val join by lazy { WifiJoin(this) { runOnUiThread { channel?.invokeMethod("networkChanged", null) } } }
     private val p2p by lazy { WifiDirectGroup(this) }
-    private val ble by lazy { BleProbe(this) }
+    private val bleProbe by lazy { BleProbe(this) }
+    private var bleChannel: MethodChannel? = null
+    // The path by BLE (WP-D.3): its events go to Dart on its own channel.
+    private val ble by lazy { Ble(this) { name, args -> runOnUiThread { bleChannel?.invokeMethod("event", args + ("event" to name)) } } }
     private val network by lazy { Network(this) }
     private val storage by lazy { Storage(this) }
     private val library by lazy { Library(this) }
@@ -34,6 +38,28 @@ class MainActivity : FlutterActivity() {
         this.channel = channel
         // A network came, went or changed: the core gets the interfaces again (DISC-10).
         network.watch { runOnUiThread { channel.invokeMethod("networkChanged", null) } }
+        // The path by BLE (bible §6.6, WP-D.3): the radio here, the messages in the core.
+        val bleChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.medxfer.app/ble")
+        this.bleChannel = bleChannel
+        bleChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "supported" -> result.success(ble.supported)
+                "enabled" -> result.success(ble.enabled)
+                "bands" -> result.success(ble.bands())
+                "permission" -> askBlePermission { result.success(it) }
+                "turnOn" -> turnBluetoothOn { result.success(it) }
+                "start" -> ble.start(call.argument<Boolean>("advertise") == true, call.argument<Boolean>("scan") == true) { err ->
+                    if (err != null) result.error(err, err, null) else result.success(null)
+                }
+                "stop" -> { ble.stop(); result.success(null) }
+                "reply" -> { ble.reply(call.argument<String>("conn") ?: "", call.argument<ByteArray>("data") ?: ByteArray(0)); result.success(null) }
+                "exchange" -> ble.exchange(call.argument<String>("device") ?: "", call.argument<ByteArray>("data") ?: ByteArray(0)) { answer, err ->
+                    if (err != null) result.error("ble", err, null) else result.success(answer)
+                }
+                "disconnect" -> { ble.disconnect(call.argument<String>("device") ?: ""); result.success(null) }
+                else -> result.notImplemented()
+            }
+        }
         channel.setMethodCallHandler { call, result ->
                 when (call.method) {
                     // Private to the app: identity, trusted devices, reports (B6).
@@ -133,6 +159,35 @@ class MainActivity : FlutterActivity() {
     private fun askHotspotPermission(done: (Boolean) -> Unit) =
         ask(if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION, done)
 
+    // BLE's permissions (BLE-12): scan (without the location), advertise and connect from
+    // Android 12 on; the precise location before, which the system needs to scan. done gets
+    // whether all are granted.
+    private fun askBlePermission(done: (Boolean) -> Unit) {
+        val wanted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        askAll(wanted) { done(wanted.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }) }
+    }
+
+    private var bluetoothAnswer: ((Boolean) -> Unit)? = null
+
+    // The system's request to turn Bluetooth on, which the user answers: an app may not turn it
+    // on by itself. done gets whether it is on afterwards.
+    private fun turnBluetoothOn(done: (Boolean) -> Unit) {
+        if (ble.enabled) return done(true)
+        bluetoothAnswer?.invoke(false)
+        bluetoothAnswer = done
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), BLUETOOTH_REQUEST)
+        } catch (e: SecurityException) {
+            bluetoothAnswer = null
+            done(false)
+        }
+    }
+
     // One runtime permission; done gets whether it is granted. POST_NOTIFICATIONS exists from
     // Android 13 on: before, notifications need no permission.
     private fun ask(permission: String, done: (Boolean) -> Unit) {
@@ -177,6 +232,11 @@ class MainActivity : FlutterActivity() {
         if (requestCode == WIFI_PANEL_REQUEST) {
             wifiPanelAnswer?.let { wifiPanelClosed(it) }
             wifiPanelAnswer = null
+            return
+        }
+        if (requestCode == BLUETOOTH_REQUEST) {
+            bluetoothAnswer?.invoke(ble.enabled)
+            bluetoothAnswer = null
             return
         }
         if (!storage.onResult(requestCode, resultCode, data)) super.onActivityResult(requestCode, resultCode, data)
@@ -228,11 +288,11 @@ class MainActivity : FlutterActivity() {
             "p2p-start" -> p2p.start(intent.getStringExtra("band") ?: "5", log)
             "p2p-stop" -> p2p.stop { log(null, null) }
             // BLE (WP-D.0 of the J6d plan): --ei seconds … --ei bytes … --es addr …
-            "ble-caps" -> ble.caps(log)
-            "ble-serve" -> ble.serve(intent.getIntExtra("seconds", 60), intent.getIntExtra("bytes", 200), log)
-            "ble-scan" -> ble.scan(intent.getIntExtra("seconds", 15), log)
-            "ble-exchange" -> ble.exchange(intent.getStringExtra("addr"), intent.getIntExtra("bytes", 200), log)
-            "ble-stop" -> { ble.stop(); log(null, null) }
+            "ble-caps" -> bleProbe.caps(log)
+            "ble-serve" -> bleProbe.serve(intent.getIntExtra("seconds", 60), intent.getIntExtra("bytes", 200), log)
+            "ble-scan" -> bleProbe.scan(intent.getIntExtra("seconds", 15), log)
+            "ble-exchange" -> bleProbe.exchange(intent.getStringExtra("addr"), intent.getIntExtra("bytes", 200), log)
+            "ble-stop" -> { bleProbe.stop(); log(null, null) }
         }
     }
 
@@ -241,5 +301,6 @@ class MainActivity : FlutterActivity() {
         private const val PERMISSION_REQUEST = 0x6d78
         private const val WIFI_PANEL_REQUEST = 0x6d7b // Storage has 0x6d79 and 0x6d7a
         private const val SCAN_REQUEST = 0x6d7c
+        private const val BLUETOOTH_REQUEST = 0x6d7d
     }
 }

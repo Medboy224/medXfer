@@ -132,6 +132,36 @@ En deux PR, pour que la partie cryptographique se relise seule :
 - Permissions demandées au moment où BLE sert, avec leur raison ; Bluetooth éteint signalé.
 - Balayage et annonce **seulement quand l'application est ouverte** (décision D3), arrêtés pendant les transferts si WP-D.0 le demande.
 
+**Android, fait (2 novembre)** :
+- `Ble.kt` : l'annonce porte l'UUID seul ; un serveur GATT garde chaque réponse jusqu'à ce que l'autre la lise ; la recherche est filtrée sur le service ; le client écrit puis lit, sans demander de MTU (écritures et lectures longues).
+- `platform/ble.dart` : l'interface, l'adaptateur Android, et aucun ailleurs pour l'instant. Windows suit dans sa propre PR.
+- `BleLink`, entre la radio et le cœur. Touché, l'appareil répond seul et crée le réseau quand c'est à lui ; son utilisateur touchant un appareil, il mène l'échange jusqu'à la session.
+- Une section BLE du panneau développeur, en attendant les écrans (WP-D.5).
+
+**Essai réel du 2 novembre**, Galaxy A57 et TECNO BF6, par le chemin de confiance (les deux appareils se faisaient déjà confiance) :
+
+| Mesure | Résultat |
+|---|---|
+| Se trouver par BLE sans Wi-Fi commun, se reconnaître comme appareils de confiance | ✅ noms affichés, sans PIN |
+| L'un crée le réseau, l'autre le rejoint, la session s'ouvre | ✅ 7 à 10 s du réseau créé à la session ouverte |
+| Session perdue : le réseau du créateur gardé, la session revient seule | ✅ en 25 à 35 s, après correction |
+| TECNO au Wi-Fi éteint ; adresse de son réseau | ✅ après correction |
+| **Tenue de la session, écran du TECNO éteint** | ❌ quand l'A57 cherche des réseaux, son point d'accès lâche le TECNO, 1,5 à 5 s après (4 fois sur 4) ; écran allumé, aucune coupure sur 3 recherches |
+| Après une coupure, sur le TECNO (Android 12) | Android redemande d'accepter le réseau |
+
+Corrigé pendant l'essai :
+- **Le réseau du créateur était arrêté 15 s après la perte de la session**, alors que l'autre le rejoignait 8 s plus tard. Il est maintenant gardé `rejoinFor` (10 min), comme du côté qui le rejoint. Cela vaut aussi pour le QR.
+- **BLE est mis en pause pendant une session** (décision D3).
+- **Le TECNO fait tourner son point d'accès local sur `wlan0`**, que la recherche de son adresse manquait.
+- **Wi-Fi éteint, un téléphone ne dit plus pouvoir rejoindre un réseau** : il crée alors le sien, et l'autre le rejoint.
+
+Essayé, sans effet : un verrou Wi-Fi « haute performance » sur le TECNO. Le journal montre que c'est le point d'accès de l'A57 qui le lâche ; le TECNO ne s'en aperçoit que 20 s plus tard. Retiré.
+
+**Reste ouvert** :
+- la coupure, écran éteint. Elle ne tient pas à BLE : le réseau est le même après un QR. Pistes : le groupe Wi-Fi Direct à 5 GHz de l'A57 au lieu de son point d'accès local, garder l'écran allumé pendant un transfert, un autre téléphone ;
+- l'arrêt d'un réseau créé pour BLE que personne n'a rejoint en 2 minutes (`BLE-09`) ;
+- l'adaptateur Windows.
+
 ### WP-D.4 — Le groupe Wi-Fi Direct à 5 GHz derrière `Hotspot` · M (avancé de J8, décision D1)
 
 - `WifiDirectGroup.kt` devient un adaptateur de `Hotspot`, à côté de `LocalHotspot.kt` : bande 5 GHz demandée, nom et mot de passe tirés à chaque démarrage.
