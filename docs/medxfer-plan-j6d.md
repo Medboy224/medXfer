@@ -226,6 +226,17 @@ Décision du 2 novembre : **5 GHz par défaut**, avec un interrupteur « Haute v
 - Un réseau créé pour BLE que personne n'a rejoint en 2 minutes est arrêté (`BLE-09`).
 - La section BLE du panneau développeur est retirée.
 
+**Essai réel du 3 novembre au soir**, par les nouveaux écrans (PC Windows 11, Galaxy A57, TECNO BF6) :
+
+| Cas | Résultat |
+|---|---|
+| A57 et PC dans la liste l'un de l'autre, « Bluetooth · … » | ✅ |
+| A57 (confiance) touché, **Wi-Fi de l'A57 éteint** | ✅ session ; l'A57 crée son point d'accès local à **2,4 GHz** (son groupe exige le Wi-Fi) ; le PC le rejoint seul, puis revient à son Wi-Fi |
+| Le même, **Wi-Fi de l'A57 allumé** | ✅ groupe à **5 GHz** (canal 44), rejoint seul par le PC, session |
+| TECNO (inconnu) touche le PC, **chemin du PIN** | ✅ le PC montre le PIN, tapé sur le TECNO ; **le PC crée le réseau** (son groupe Wi-Fi Direct à 2,4 GHz), le TECNO le rejoint |
+
+À améliorer : Wi-Fi éteint, un téléphone qui pourrait créer à 5 GHz crée à 2,4 GHz sans le dire. L'écran pourrait proposer d'allumer le Wi-Fi.
+
 ### WP-D.6 — Essais réels et rapport · S
 
 - Les quatre cas du tableau, entre le Galaxy A57, les deux PC Windows, Zorin et le TECNO BF6 selon la sonde.
