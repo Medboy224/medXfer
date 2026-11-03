@@ -12,9 +12,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app.dart';
+import '../../connection/ble_link.dart';
 import '../../connection/connection.dart';
 import '../../l10n/app_localizations.dart';
 import '../../theme.dart';
+import 'ble_nearby.dart';
 import 'dialogs.dart';
 import 'hotspot_screen.dart';
 
@@ -94,42 +96,47 @@ class _ConnectScreenState extends State<ConnectScreen> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final scanner = AppScope.of(context).state.qrScanner;
+    final ble = AppScope.of(context).state.bleLink;
     return Scaffold(
       appBar: AppBar(title: Text(l.connectTitle)),
-      body: ListenableBuilder(
-        listenable: _c,
-        builder: (context, _) => Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                if (_c.hotspot.supported) ...[_HotspotCard(busy: _c.hotspotBusy, onOpen: _openHotspot), const SizedBox(height: 14)],
-                _JoinCard(
-                  onScan: scanner.supported ? () => scanAndJoin(context) : null,
-                  // Without a camera (a desktop), the link copied on the other device.
-                  onPaste: scanner.supported ? null : _pasteLink,
-                  onPin: () => _askPin(null),
-                ),
-                const SizedBox(height: 20),
-                _Nearby(
-                  connection: _c,
-                  onPick: (d) {
-                    _pinFor = d.name;
-                    unawaited(_c.pairWith(d));
-                  },
-                  onNotListed: _openManual,
-                ),
-                const SizedBox(height: 8),
-                SwitchListTile(
-                  key: const Key('remember'),
-                  value: _c.remember,
-                  onChanged: (v) => unawaited(_c.setRemember(v)),
-                  title: Text(l.rememberDevice),
-                  subtitle: Text(l.rememberHint),
-                ),
-              ],
+      body: BleFlow(
+        link: ble,
+        child: ListenableBuilder(
+          listenable: Listenable.merge([_c, ble]),
+          builder: (context, _) => Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  if (_c.hotspot.supported) ...[_HotspotCard(busy: _c.hotspotBusy, onOpen: _openHotspot), const SizedBox(height: 14)],
+                  _JoinCard(
+                    onScan: scanner.supported ? () => scanAndJoin(context) : null,
+                    // Without a camera (a desktop), the link copied on the other device.
+                    onPaste: scanner.supported ? null : _pasteLink,
+                    onPin: () => _askPin(null),
+                  ),
+                  const SizedBox(height: 20),
+                  _Nearby(
+                    connection: _c,
+                    ble: ble,
+                    onPick: (d) {
+                      _pinFor = d.name;
+                      unawaited(_c.pairWith(d));
+                    },
+                    onNotListed: _openManual,
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    key: const Key('remember'),
+                    value: _c.remember,
+                    onChanged: (v) => unawaited(_c.setRemember(v)),
+                    title: Text(l.rememberDevice),
+                    subtitle: Text(l.rememberHint),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -261,11 +268,13 @@ String pathLabel(AppLocalizations l, PathKind kind) => switch (kind) {
   PathKind.other => l.pathOther,
 };
 
-/// The devices already on the same Wi-Fi, under the name this one appears as.
+/// The devices already on the same Wi-Fi, under the name this one appears as, and those found
+/// by Bluetooth (WP-D.5).
 class _Nearby extends StatelessWidget {
-  const _Nearby({required this.connection, required this.onPick, required this.onNotListed});
+  const _Nearby({required this.connection, required this.ble, required this.onPick, required this.onNotListed});
 
   final Connection connection;
+  final BleLink ble;
   final ValueChanged<NearbyDevice> onPick;
   final VoidCallback onNotListed;
 
@@ -275,6 +284,8 @@ class _Nearby extends StatelessWidget {
     final c = context.colors;
     final accent = Theme.of(context).colorScheme.primary;
     final devices = connection.nearby;
+    final byBle = bleOnly(ble, connection);
+    final busy = connection.connecting != null || bleBusy(ble);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -301,7 +312,8 @@ class _Nearby extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
             child: Text(l.youAppearAs(connection.instance), key: const Key('my-instance'), style: const TextStyle(fontWeight: FontWeight.w600)),
           ),
-        if (devices.isEmpty)
+        BleStatus(link: ble),
+        if (devices.isEmpty && byBle.isEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
             child: Text(connection.scanning ? l.searching : l.nearbyEmpty, style: TextStyle(color: c.muted)),
@@ -316,7 +328,7 @@ class _Nearby extends StatelessWidget {
                 key: ValueKey('nearby-${d.ip}'),
                 borderRadius: BorderRadius.circular(16),
                 // One attempt at a time: the device tried says so (real test of 1 November).
-                onTap: connection.connecting != null ? null : () => onPick(d),
+                onTap: busy ? null : () => onPick(d),
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Row(
@@ -347,6 +359,44 @@ class _Nearby extends StatelessWidget {
                               child: Text(l.connect, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
                             )
                           : Icon(Icons.chevron_right_rounded, color: c.muted),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        // Found by Bluetooth, without a shared Wi-Fi (WP-D.5): touched, the network follows.
+        for (final d in byBle)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Material(
+              color: c.surface,
+              shape: RoundedRectangleBorder(side: BorderSide(color: c.border), borderRadius: BorderRadius.circular(16)),
+              child: InkWell(
+                key: ValueKey('ble-${d.device}'),
+                borderRadius: BorderRadius.circular(16),
+                onTap: busy ? null : () => unawaited(ble.connect(d)),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 22,
+                        backgroundColor: c.chip,
+                        child: Icon(d.trusted ? Icons.verified_user_rounded : Icons.bluetooth_rounded, color: d.trusted ? accent : c.muted),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(d.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                            const SizedBox(height: 2),
+                            Text(bleDetail(l, ble, d), style: TextStyle(color: c.muted, fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.chevron_right_rounded, color: c.muted),
                     ],
                   ),
                 ),

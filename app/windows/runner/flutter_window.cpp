@@ -193,7 +193,7 @@ bool FlutterWindow::OnCreate() {
       } else {
         ble_->TurnOn(answer);
       }
-    } else if (m == "permission") {
+    } else if (m == "permission" || m == "granted") {
       reply->Success(flutter::EncodableValue(true));  // a desktop program asks none
     } else if (m == "start") {
       ble_->Start(flag("advertise"), flag("scan"), [reply](std::optional<std::string> error) {

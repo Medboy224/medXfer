@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 
 import '../../app.dart';
 import '../../app_state.dart';
+import '../../connection/ble_link.dart';
 import '../../connection/cable_watch.dart';
 import '../../connection/firewall_watch.dart';
 import '../../connection/connection.dart';
@@ -24,6 +25,7 @@ import '../../theme.dart';
 import '../../widgets/dashed_box.dart';
 import '../../widgets/drop_zone.dart';
 import '../../widgets/format.dart';
+import '../connect/ble_nearby.dart';
 import '../connect/connect_screen.dart';
 import '../connect/dialogs.dart';
 import '../connect/hotspot_screen.dart';
@@ -65,26 +67,29 @@ class _SendPageState extends State<SendPage> {
     return DropZone(
       hint: l.dropHere,
       onPaths: _add,
-      child: ListenableBuilder(
-        listenable: Listenable.merge([_state.connection, _state.selection, _state.cable, _state.firewall]),
-        builder: (context, _) => LayoutBuilder(
-          builder: (context, box) {
-            final pick = _Pick(onFiles: _chooseFiles, onFolder: _chooseFolder, selection: _state.selection, session: _state.connection.session, onSend: _send);
-            final connection = _ConnectionPanel(connection: _state.connection, cable: _state.cable, firewall: _state.firewall);
-            return SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: box.maxWidth >= 860
-                  ? Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(flex: 3, child: pick),
-                        const SizedBox(width: 24),
-                        Expanded(flex: 2, child: connection),
-                      ],
-                    )
-                  : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [pick, const SizedBox(height: 24), connection]),
-            );
-          },
+      child: BleFlow(
+        link: _state.bleLink,
+        child: ListenableBuilder(
+          listenable: Listenable.merge([_state.connection, _state.selection, _state.cable, _state.firewall, _state.bleLink]),
+          builder: (context, _) => LayoutBuilder(
+            builder: (context, box) {
+              final pick = _Pick(onFiles: _chooseFiles, onFolder: _chooseFolder, selection: _state.selection, session: _state.connection.session, onSend: _send);
+              final connection = _ConnectionPanel(connection: _state.connection, cable: _state.cable, firewall: _state.firewall, ble: _state.bleLink);
+              return SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: box.maxWidth >= 860
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(flex: 3, child: pick),
+                          const SizedBox(width: 24),
+                          Expanded(flex: 2, child: connection),
+                        ],
+                      )
+                    : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [pick, const SizedBox(height: 24), connection]),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -244,9 +249,12 @@ class _Pick extends StatelessWidget {
 /// The right column, the phone's way of connecting: the device connected; those of the same
 /// network, which see this one too; else create a connection, or join another's.
 class _ConnectionPanel extends StatelessWidget {
-  const _ConnectionPanel({required this.connection, required this.cable, required this.firewall});
+  const _ConnectionPanel({required this.connection, required this.cable, required this.firewall, required this.ble});
 
   final Connection connection;
+
+  /// The devices found by Bluetooth, without a shared Wi-Fi (WP-D.5).
+  final BleLink ble;
 
   /// The networks Windows' firewall keeps medXfer out of, with the button to let it in.
   final FirewallWatch firewall;
@@ -284,7 +292,8 @@ class _ConnectionPanel extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final c = context.colors;
     final session = connection.session;
-    final busy = connection.connecting != null;
+    final busy = connection.connecting != null || bleBusy(ble);
+    final byBle = session == null ? bleOnly(ble, connection) : const <BleDevice>[];
     final others = [
       for (final d in connection.nearby)
         if (session == null || (d.ip != session.ip && d.name != session.name)) d,
@@ -369,7 +378,18 @@ class _ConnectionPanel extends StatelessWidget {
               primary: true,
               onAction: busy ? null : () => unawaited(connection.pairWith(d)),
             ),
-        if (others.isEmpty)
+        // Found by Bluetooth (WP-D.5): touched, the network is created or joined, then the session.
+        for (final d in byBle)
+          _Device(
+            key: ValueKey('ble-${d.device}'),
+            name: d.name,
+            detail: bleDetail(l, ble, d),
+            action: l.connect,
+            primary: true,
+            onAction: busy ? null : () => unawaited(ble.connect(d)),
+          ),
+        BleStatus(link: ble),
+        if (others.isEmpty && byBle.isEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
             child: Text(connection.scanning ? l.searching : l.nearbyEmpty, style: TextStyle(color: c.muted)),

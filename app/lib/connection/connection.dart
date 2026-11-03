@@ -306,6 +306,11 @@ class Connection extends ChangeNotifier {
   /// as long as the core dials it again (redialFor, J6c). Then left.
   static Duration rejoinFor = const Duration(minutes: 10);
 
+  /// A network created for a device met by BLE that nobody joined is stopped after this long
+  /// (BLE-09): it runs only for that device.
+  static Duration bleUnjoinedFor = const Duration(minutes: 2);
+  Timer? _bleUnjoined;
+
   /// How often this device's access point is checked to still run: the system may stop it
   /// without a word to the app (#219).
   static Duration hotspotCheck = const Duration(seconds: 5);
@@ -567,6 +572,8 @@ class Connection extends ChangeNotifier {
   Future<void> stopHotspot() async {
     _hotspotGiveUp?.cancel();
     _hotspotGiveUp = null;
+    _bleUnjoined?.cancel();
+    _bleUnjoined = null;
     _wantHotspot = false;
     _hotspotWifiOff = false;
     _hotspotLowBand = false;
@@ -759,6 +766,13 @@ class Connection extends ChangeNotifier {
       _wantHotspot = true;
       _hotspotLowBand = !fiveGhz;
       await _startHotspot();
+      if (_myHotspot != null) {
+        _bleUnjoined?.cancel();
+        _bleUnjoined = Timer(bleUnjoinedFor, () {
+          _bleUnjoined = null;
+          if (_session == null) unawaited(stopHotspot());
+        });
+      }
     }
     return _myHotspot;
   }
@@ -889,6 +903,8 @@ class Connection extends ChangeNotifier {
       case 'pin_needed':
         _pinNeeded = (m['target'] as String?) ?? '';
       case 'paired':
+        _bleUnjoined?.cancel();
+        _bleUnjoined = null;
         final ip = (m['ip'] as String?) ?? '';
         final name = (m['device_name'] as String?) ?? '';
         final before = _session;
@@ -1020,6 +1036,7 @@ class Connection extends ChangeNotifier {
     _scanLimit?.cancel();
     _giveUp?.cancel();
     _hotspotGiveUp?.cancel();
+    _bleUnjoined?.cancel();
     _hotspotWatch?.cancel();
     _hotspotRetry?.cancel();
     _netSub?.cancel();

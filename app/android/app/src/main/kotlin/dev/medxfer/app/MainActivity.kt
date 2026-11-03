@@ -47,6 +47,7 @@ class MainActivity : FlutterActivity() {
                 "enabled" -> result.success(ble.enabled)
                 "bands" -> result.success(ble.bands())
                 "permission" -> askBlePermission { result.success(it) }
+                "granted" -> result.success(blePermissions().all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED })
                 "turnOn" -> turnBluetoothOn { result.success(it) }
                 "start" -> ble.start(call.argument<Boolean>("advertise") == true, call.argument<Boolean>("scan") == true) { err ->
                     if (err != null) result.error(err, err, null) else result.success(null)
@@ -162,12 +163,14 @@ class MainActivity : FlutterActivity() {
     // BLE's permissions (BLE-12): scan (without the location), advertise and connect from
     // Android 12 on; the precise location before, which the system needs to scan. done gets
     // whether all are granted.
+    private fun blePermissions() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT)
+    } else {
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+
     private fun askBlePermission(done: (Boolean) -> Unit) {
-        val wanted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
+        val wanted = blePermissions()
         askAll(wanted) { done(wanted.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }) }
     }
 

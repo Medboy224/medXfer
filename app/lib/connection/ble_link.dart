@@ -51,7 +51,7 @@ const _band5 = 2;
 class BleLink extends ChangeNotifier {
   BleLink(this.core, this.ble, this.connection) {
     _events = ble.events.listen(_take);
-    connection.addListener(_sessionChanged);
+    connection.addListener(_follow);
   }
 
   final Core core;
@@ -89,9 +89,11 @@ class BleLink extends ChangeNotifier {
   String? get failure => _failure;
 
   /// Advertises and scans while the user looks for a device or waits for one (D3, DISC-05).
-  Future<void> start() async {
+  /// [ask]: the permissions are asked if missing; else their lack is only said ([problem]), for
+  /// the screen to give the reason first (BLE-12).
+  Future<void> start({bool ask = true}) async {
     if (_running) return;
-    _problem = await _cannotStart();
+    _problem = await _cannotStart(ask);
     if (_problem == null) {
       try {
         await ble.start();
@@ -103,9 +105,9 @@ class BleLink extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<String?> _cannotStart() async {
+  Future<String?> _cannotStart(bool ask) async {
     if (!ble.supported) return 'unsupported';
-    if (!await ble.permission()) return 'permission';
+    if (!await (ask ? ble.permission() : ble.granted())) return 'permission';
     if (!await ble.enabled()) return 'bluetooth_off';
     return null;
   }
@@ -133,7 +135,11 @@ class BleLink extends ChangeNotifier {
   /// 2026).
   bool get paused => _paused;
 
-  void _sessionChanged() {
+  bool _showing = false;
+
+  /// Follows the connection: started when its screen opens (the user looks for a device, or
+  /// waits for one, D3), stopped when it closes; paused while a session is open.
+  void _follow() {
     final inSession = connection.session != null;
     if (inSession && _running) {
       unawaited(stop().then((_) {
@@ -142,7 +148,14 @@ class BleLink extends ChangeNotifier {
       }));
     } else if (!inSession && _paused) {
       _paused = false;
-      unawaited(start());
+      if (connection.showing) unawaited(start(ask: false));
+    }
+    if (connection.showing == _showing) return;
+    _showing = connection.showing;
+    if (_showing && !inSession && supported) {
+      unawaited(start(ask: false));
+    } else if (!_showing && !_paused) {
+      unawaited(stop());
     }
   }
 
@@ -351,7 +364,7 @@ class BleLink extends ChangeNotifier {
 
   @override
   void dispose() {
-    connection.removeListener(_sessionChanged);
+    connection.removeListener(_follow);
     unawaited(_events.cancel());
     super.dispose();
   }
