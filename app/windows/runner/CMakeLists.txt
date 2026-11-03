@@ -7,11 +7,13 @@ project(runner LANGUAGES CXX)
 #
 # Any new source files that you add to the application should be added here.
 add_executable(${BINARY_NAME} WIN32
+  "ble.cpp"
   "firewall.cpp"
   "flutter_window.cpp"
   "hotspot.cpp"
   "main.cpp"
   "utils.cpp"
+  "wifi_join.cpp"
   "win32_window.cpp"
   "wired.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
@@ -42,6 +44,8 @@ target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_link_libraries(${BINARY_NAME} PRIVATE "windowsapp.lib" "iphlpapi.lib" "ws2_32.lib")
 # Windows' firewall and its networks (firewall.cpp): COM, BSTR and VARIANT.
 target_link_libraries(${BINARY_NAME} PRIVATE "ole32.lib" "oleaut32.lib")
+# Joining another device's network (wifi_join.cpp): Windows' Wi-Fi API.
+target_link_libraries(${BINARY_NAME} PRIVATE "wlanapi.lib")
 target_compile_features(${BINARY_NAME} PRIVATE cxx_std_20)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
