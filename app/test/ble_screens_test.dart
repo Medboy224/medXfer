@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:medxfer/app.dart';
 import 'package:medxfer/app_state.dart';
+import 'package:medxfer/connection/ble_link.dart';
 import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/features/connect/connect_screen.dart';
@@ -95,6 +96,8 @@ Future<void> _reveal(WidgetTester tester, Finder finder) async {
 }
 
 void main() {
+  setUpAll(() => BleLink.recognizeJitter = Duration.zero);
+
   testWidgets('BLE-12: the reason first, the system\'s dialog only on "Autoriser"; a device found by Bluetooth, its PIN, a refusal said', (tester) async {
     final radio = _Radio()..allowed = false;
     final core = _core({

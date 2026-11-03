@@ -12,6 +12,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -29,6 +30,9 @@ class BleDevice {
   /// Its BLE address, which the system changes now and then.
   final String device;
   int rssi = 0;
+
+  /// When the radio last said it advertises: a device silent for [BleLink.forgetAfter] is gone.
+  DateTime seenAt = DateTime.now();
 
   /// Its generic name's 4 hex digits (DISC-07): the same name as on the network.
   String? suffix;
@@ -63,6 +67,18 @@ class BleLink extends ChangeNotifier {
   String? _problem;
   final _devices = <String, BleDevice>{};
   final _recognizing = <String>{};
+  final _random = Random();
+  Timer? _forget;
+
+  /// A device the radio no longer reports (each one advertising is reported every 5 s at most,
+  /// Ble.kt and ble.cpp) leaves the list after this long.
+  static Duration forgetAfter = const Duration(seconds: 12);
+
+  /// An exchange that gets no answer: Android stops its own at 25 s (BLE-11), Windows may not.
+  static Duration exchangeWithin = const Duration(seconds: 26);
+
+  /// A recognition starts after a random wait up to this long.
+  static Duration recognizeJitter = const Duration(milliseconds: 800);
   final _servedTrusted = <String, bool>{}; // the connections to this device: by the pair's key?
 
   BleDevice? _target;
@@ -98,6 +114,7 @@ class BleLink extends ChangeNotifier {
       try {
         await ble.start();
         _running = true;
+        _forget ??= Timer.periodic(const Duration(seconds: 2), (_) => _forgetSilent());
       } on PlatformException catch (e) {
         _problem = e.code;
       }
@@ -121,6 +138,8 @@ class BleLink extends ChangeNotifier {
     _paused = false;
     if (!_running) return;
     _running = false;
+    _forget?.cancel();
+    _forget = null;
     _devices.clear();
     _servedTrusted.clear();
     await ble.stop();
@@ -162,8 +181,13 @@ class BleLink extends ChangeNotifier {
   void _take(BleEvent e) {
     switch (e) {
       case BleSeen(:final device, :final rssi):
-        final d = _devices.putIfAbsent(device, () => BleDevice(device))..rssi = rssi;
-        if (!d.recognized && _recognizing.add(device)) unawaited(_recognize(d));
+        final d = _devices.putIfAbsent(device, () => BleDevice(device))
+          ..rssi = rssi
+          ..seenAt = DateTime.now();
+        // One recognition at a time: a computer may advertise under several addresses in a
+        // row, and two devices recognizing each other at once made one of them fail (real test
+        // of 3 November). The others are tried when seen again, 5 s later at most.
+        if (!d.recognized && _recognizing.isEmpty && _recognizing.add(device)) unawaited(_recognize(d));
         notifyListeners();
       case final BleMessage m:
         unawaited(_serve(m));
@@ -184,7 +208,25 @@ class BleLink extends ChangeNotifier {
 
   Future<Uint8List?> _send(String device, Object? data) async {
     if (data is! String) return null;
-    return ble.exchange(device, base64Decode(data));
+    return ble.exchange(device, base64Decode(data)).timeout(
+      exchangeWithin,
+      onTimeout: () => throw PlatformException(code: 'ble', message: 'timeout'),
+    );
+  }
+
+  /// The devices the radio stopped reporting leave the list: gone, or under a new address.
+  void _forgetSilent() {
+    final now = DateTime.now();
+    final gone = [
+      for (final d in _devices.values)
+        if (d != _target && now.difference(d.seenAt) > forgetAfter) d,
+    ];
+    if (gone.isEmpty) return;
+    for (final d in gone) {
+      _devices.remove(d.device);
+      unawaited(ble.disconnect(d.device));
+    }
+    notifyListeners();
   }
 
   // The server side: another device touched this one.
@@ -234,6 +276,9 @@ class BleLink extends ChangeNotifier {
   /// same device under a new address replaces the old one.
   Future<void> _recognize(BleDevice d) async {
     try {
+      // Not at the same moment as the other device, which may be recognizing this one.
+      final jitter = recognizeJitter.inMilliseconds;
+      if (jitter > 0) await Future<void>.delayed(Duration(milliseconds: _random.nextInt(jitter)));
       final hello = await _step('ble_client', {'conn': d.device, 'step': 'hello'});
       final answer = await _send(d.device, hello?['data']);
       if (answer == null) return;
@@ -364,6 +409,7 @@ class BleLink extends ChangeNotifier {
 
   @override
   void dispose() {
+    _forget?.cancel();
     connection.removeListener(_follow);
     unawaited(_events.cancel());
     super.dispose();
