@@ -373,5 +373,7 @@
   "bleFailedJoin": "Could not join the network of {device}.",
   "@bleFailedJoin": {"placeholders": {"device": {"type": "String"}}},
   "bleFailedRadio": "{device} did not answer by Bluetooth. Come closer and try again.",
-  "@bleFailedRadio": {"placeholders": {"device": {"type": "String"}}}
+  "@bleFailedRadio": {"placeholders": {"device": {"type": "String"}}},
+  "bleFailedNoWifi": "No Wi-Fi network is possible with {device}: turn Wi-Fi on, on one of the two devices.",
+  "@bleFailedNoWifi": {"placeholders": {"device": {"type": "String"}}}
 }

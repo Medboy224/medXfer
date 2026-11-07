@@ -199,9 +199,11 @@ WifiBandMask OwnWifiBands() {
   Wlan wlan;
   auto card = wlan.Card();
   if (!card) return {};
+  // Wi-Fi off: no network joined, and none created either, the group needing Wi-Fi (#219).
+  if (!wlan.RadioOn(*card)) return {};
   WifiBandMask m;
   m.create = 1;
-  if (wlan.RadioOn(*card)) m.join = 1 | (wlan.Has5GHz(*card) ? 2 : 0);
+  m.join = 1 | (wlan.Has5GHz(*card) ? 2 : 0);
   return m;
 }
 

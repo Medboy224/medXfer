@@ -119,6 +119,7 @@ class _BleFlowState extends State<BleFlow> {
       final why = switch (link.failure) {
         'refused' => l.bleFailedRefused(d.name),
         'no_network' => l.bleFailedNetwork(d.name),
+        'no_band' => l.bleFailedNoWifi(d.name),
         'join' => l.bleFailedJoin(d.name),
         _ => l.bleFailedRadio(d.name),
       };

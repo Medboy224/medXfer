@@ -25,7 +25,7 @@ const guid kMessage{0xc46b12c4, 0x1dee, 0x482d, {0xa4, 0x90, 0xb1, 0x85, 0x21, 0
 constexpr size_t kMaxMessage = 512;                      // BLE-03
 constexpr uint8_t kBleVersion = 1;                        // its messages' first byte (bible §6.6)
 constexpr auto kAnswerWithin = std::chrono::seconds(25);  // BLE-11: under the 30 s of a GATT transaction
-constexpr int64_t kSeenEveryMs = 5000;
+constexpr int64_t kSeenEveryMs = 2000;  // "seen" at most this often per address
 
 std::vector<uint8_t> ToBytes(IBuffer const& b) {
   std::vector<uint8_t> v(b ? b.Length() : 0);

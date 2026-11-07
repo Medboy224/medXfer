@@ -131,7 +131,7 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
         clients.clear()
     }
 
-    // A device that advertises the service: said when new, then at most every 5 s.
+    // A device that advertises the service: said when new, then at most every 2 s.
     private fun seen(r: ScanResult) {
         val address = r.device.address
         val now = SystemClock.elapsedRealtime()
@@ -331,6 +331,6 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
         val MESSAGE: UUID = UUID.fromString("c46b12c4-1dee-482d-a490-b185212312fb")
         private const val MAX_MESSAGE = 512 // BLE-03
         private const val ANSWER_WITHIN = 25_000L // BLE-11: under the 30 s of a GATT transaction
-        private const val SEEN_EVERY = 5_000L
+        private const val SEEN_EVERY = 2_000L
     }
 }

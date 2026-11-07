@@ -23,7 +23,7 @@ struct JoinedNetwork {
 
 // The bands this computer creates a network on and joins one on (bit 0: 2.4 GHz, bit 1: 5 GHz),
 // as the core's ble_server and ble_client take them. Its own network is at 2.4 GHz (probe WP-C.1);
-// none is joined with Wi-Fi off.
+// with Wi-Fi off, none is created or joined.
 struct WifiBandMask {
   int create = 0;
   int join = 0;

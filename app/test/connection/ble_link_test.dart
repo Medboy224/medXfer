@@ -17,6 +17,7 @@ class _Radio implements Ble {
   final _events = StreamController<BleEvent>.broadcast();
   final replies = <String, Uint8List>{};
   final disconnected = <String>[];
+  final hang = <String>{}; // devices that never answer: out of reach, or an old address
   bool on = true, allowed = true, started = false;
   int asked = 0; // the permission's system dialog
   WifiBands bands = (create: 3, join: 3);
@@ -46,7 +47,8 @@ class _Radio implements Ble {
   @override
   Future<void> reply(String conn, Uint8List data) async => replies[conn] = data;
   @override
-  Future<Uint8List> exchange(String device, Uint8List message) async => Uint8List.fromList([...message, 0]);
+  Future<Uint8List> exchange(String device, Uint8List message) =>
+      hang.contains(device) ? Completer<Uint8List>().future : Future.value(Uint8List.fromList([...message, 0]));
   @override
   Future<void> disconnect(String device) async => disconnected.add(device);
   @override
@@ -274,11 +276,34 @@ void main() {
       ..add(const BleSeen('11:11', -60))
       ..add(const BleSeen('22:22', -60)); // the same moment: waits for the first
     await _settle();
-    expect(steps('ble_client').where((p) => p['step'] == 'hello').map((p) => p['conn']), ['11:11']);
-    expect(link.devices.map((d) => d.device), ['11:11']);
-    await Future<void>.delayed(const Duration(milliseconds: 2200)); // the check runs every 2 s
+    // One after the other, never two at once; the same device under its new address replaces
+    // the old one.
+    expect(steps('ble_client').map((p) => '${p['step']} ${p['conn']}'), ['hello 11:11', 'recognize 11:11', 'hello 22:22', 'recognize 22:22']);
+    expect(link.devices.map((d) => d.device), ['22:22']);
+    await Future<void>.delayed(const Duration(milliseconds: 1200)); // the check runs every second
     expect(link.devices, isEmpty);
-    expect(radio.disconnected, contains('11:11'));
+    expect(radio.disconnected, containsAll(['11:11', '22:22']));
+  });
+
+  test('a recognition with no answer is given up: the next device has its turn, the first waits retryAfter', () async {
+    final within = BleLink.recognizeWithin;
+    BleLink.recognizeWithin = const Duration(milliseconds: 50);
+    addTearDown(() => BleLink.recognizeWithin = within);
+    _client(core, {
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+    });
+    await link.start();
+    radio.hang.add('old');
+    radio.add(const BleSeen('old', -70)); // a phone's old address, no longer advertised
+    await _settle();
+    radio.add(const BleSeen('new', -50));
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await _settle();
+    expect(link.devices.map((d) => d.device), ['new']);
+    expect(radio.disconnected, contains('old'));
+    radio.add(const BleSeen('old', -70)); // seen again at once: not tried before retryAfter
+    await _settle();
+    expect(steps('ble_client').where((p) => p['step'] == 'hello' && p['conn'] == 'old'), hasLength(1));
   });
 
   test('BLE-09: a network created for BLE that nobody joins is stopped after bleUnjoinedFor', () async {
