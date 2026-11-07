@@ -184,6 +184,7 @@ void main() {
           'answer' => _reply('ble_server', {'conn': 'aa', 'data': base64Encode([7, 7])}),
           _ => const FakeAnswer(),
         });
+    await link.start();
     radio.add(BleMessage('aa', Uint8List.fromList([1, 2])));
     await _settle();
     final message = steps('ble_server').first;
@@ -285,6 +286,14 @@ void main() {
     expect(radio.disconnected, containsAll(['11:11', '22:22']));
   });
 
+  test('DISC-05: stopped, this device answers nothing, the platform keeping its service', () async {
+    core.on('ble_server', (_) => _reply('ble_server', {'conn': 'aa', 'data': _data}));
+    radio.add(BleMessage('aa', Uint8List.fromList([1])));
+    await _settle();
+    expect(steps('ble_server'), isEmpty);
+    expect(radio.replies, isEmpty);
+  });
+
   test('a device being recognized by another waits servedQuiet before recognizing it in turn', () async {
     final quiet = BleLink.servedQuiet;
     BleLink.servedQuiet = const Duration(milliseconds: 80);
@@ -293,6 +302,7 @@ void main() {
     _client(core, {
       'recognize': {'suffix': '6e2a', 'trusted': false},
     });
+    await link.start();
     radio.add(BleMessage('aa', Uint8List.fromList([1]))); // the other recognizes this one
     await _settle();
     radio.add(const BleSeen('11:11', -60));

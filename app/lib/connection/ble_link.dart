@@ -208,6 +208,9 @@ class BleLink extends ChangeNotifier {
         if (!d.recognized) _recognizeNext();
         notifyListeners();
       case final BleMessage m:
+        // The platform keeps its service between starts: stopped, this device answers nothing
+        // (DISC-05), as when it advertised nothing.
+        if (!_running) return;
         _servedAt = DateTime.now();
         unawaited(_serve(m));
       case BleClosed(:final conn):

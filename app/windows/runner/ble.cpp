@@ -51,6 +51,21 @@ int64_t NowMs() {
 
 flutter::EncodableValue V(const std::string& s) { return flutter::EncodableValue(s); }
 
+// Hidden (WP-D.0): not discoverable, so no computer name in the advertisement and a random
+// address that changes; the UUID alone (BLE-02), and one byte of service data, the same on every
+// computer (the BLE version): without it, the Galaxy A57's scan filtered on the service never sees
+// this computer, which a TECNO does (3 November 2026: 0 results in 15 s without it, 11 and 12
+// with it).
+GattServiceProviderAdvertisingParameters AdvertisingParameters() {
+  GattServiceProviderAdvertisingParameters params;
+  params.IsConnectable(true);
+  params.IsDiscoverable(false);
+  DataWriter version;
+  version.WriteByte(kBleVersion);
+  params.ServiceData(version.DetachBuffer());
+  return params;
+}
+
 Windows::Foundation::IAsyncOperation<Radio> BluetoothRadio() {
   auto adapter = co_await BluetoothAdapter::GetDefaultAsync();
   if (!adapter) co_return nullptr;
@@ -105,6 +120,7 @@ Ble::Ble(Emit emit) : emit_(std::move(emit)) {}
 Ble::~Ble() {
   *alive_ = false;
   Stop();
+  provider_ = nullptr;
 }
 
 fire_and_forget Ble::Enabled(std::function<void(bool on)> done) {
@@ -150,6 +166,17 @@ fire_and_forget Ble::Start(bool advertise, bool scan, Done done) {
     } else if (advertise && !provider_ && !adapter.IsPeripheralRoleSupported()) {
       error = "no_advertiser";
     }
+    // The service kept from the last start: its advertisement again. A new service would make
+    // Windows tell the paired devices their copy of this computer's services is stale, which
+    // held the link with the Galaxy A57 30 s (real test of 7 November).
+    if (!error && advertise && provider_ && !advertising_) {
+      try {
+        provider_.StartAdvertising(AdvertisingParameters());
+        advertising_ = true;
+      } catch (...) {
+        provider_ = nullptr;  // lost with the radio: made again below
+      }
+    }
     if (!error && advertise && !provider_) {
       auto created = co_await GattServiceProvider::CreateAsync(kService);
       co_await ui;
@@ -180,19 +207,9 @@ fire_and_forget Ble::Start(bool advertise, bool scan, Done done) {
               EmitOnUi("advertise_failed", {{V("code"), flutter::EncodableValue(static_cast<int32_t>(e.Error()))}});
             }
           });
-          // Hidden (WP-D.0): not discoverable, so no computer name in the advertisement and a
-          // random address that changes; the UUID alone (BLE-02).
-          GattServiceProviderAdvertisingParameters params;
-          params.IsConnectable(true);
-          params.IsDiscoverable(false);
-          // One byte of service data, the same on every computer (the BLE version): without it, the
-          // Galaxy A57's scan filtered on the service never sees this computer, which a TECNO
-          // does (3 November 2026: 0 results in 15 s without it, 11 and 12 with it).
-          DataWriter version;
-          version.WriteByte(kBleVersion);
-          params.ServiceData(version.DetachBuffer());
-          provider.StartAdvertising(params);
+          provider.StartAdvertising(AdvertisingParameters());
           provider_ = provider;
+          advertising_ = true;
         }
       }
     }
@@ -221,13 +238,13 @@ fire_and_forget Ble::Start(bool advertise, bool scan, Done done) {
 }
 
 void Ble::Stop() {
-  if (provider_) {
+  if (provider_ && advertising_) {
     try {
       provider_.StopAdvertising();
     } catch (...) {
     }
-    provider_ = nullptr;
   }
+  advertising_ = false;
   if (watcher_) {
     try {
       watcher_.Stop();
