@@ -205,7 +205,7 @@ void main() {
     radio.add(const BleSeen('22:22', -50));
     await _settle();
     expect(link.devices.map((d) => d.device), ['22:22']);
-    expect(radio.disconnected, ['11:11']);
+    expect(radio.disconnected, ['11:11', '22:22', '11:11']); // each recognition closes its connection, the old address too
   });
 
   test('a device of mutual trust: its network joined at 5 GHz, then the session by P3', () async {
@@ -283,6 +283,24 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 1200)); // the check runs every second
     expect(link.devices, isEmpty);
     expect(radio.disconnected, containsAll(['11:11', '22:22']));
+  });
+
+  test('a device being recognized by another waits servedQuiet before recognizing it in turn', () async {
+    final quiet = BleLink.servedQuiet;
+    BleLink.servedQuiet = const Duration(milliseconds: 80);
+    addTearDown(() => BleLink.servedQuiet = quiet);
+    core.on('ble_server', (_) => _reply('ble_server', {'conn': 'aa', 'data': _data}));
+    _client(core, {
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+    });
+    radio.add(BleMessage('aa', Uint8List.fromList([1]))); // the other recognizes this one
+    await _settle();
+    radio.add(const BleSeen('11:11', -60));
+    await _settle();
+    expect(steps('ble_client'), isEmpty);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await _settle();
+    expect(link.devices.map((d) => d.name), ['medXfer-6e2a']);
   });
 
   test('a recognition with no answer is given up: the next device has its turn, the first waits retryAfter', () async {

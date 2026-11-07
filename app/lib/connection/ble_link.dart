@@ -83,6 +83,12 @@ class BleLink extends ChangeNotifier {
   static Duration recognizeWithin = const Duration(seconds: 8);
   static Duration retryAfter = const Duration(seconds: 5);
 
+  /// While another device talks to this one (it recognizes it, or touched it), this one does not
+  /// start its own recognitions: two at once over one link, one of them hung (7 November).
+  static Duration servedQuiet = const Duration(seconds: 3);
+  DateTime _servedAt = DateTime(0);
+  Timer? _afterQuiet;
+
   /// An exchange that gets no answer: Android stops its own at 25 s (BLE-11), Windows may not.
   static Duration exchangeWithin = const Duration(seconds: 26);
 
@@ -149,6 +155,8 @@ class BleLink extends ChangeNotifier {
     _running = false;
     _forget?.cancel();
     _forget = null;
+    _afterQuiet?.cancel();
+    _afterQuiet = null;
     _devices.clear();
     _servedTrusted.clear();
     await ble.stop();
@@ -200,6 +208,7 @@ class BleLink extends ChangeNotifier {
         if (!d.recognized) _recognizeNext();
         notifyListeners();
       case final BleMessage m:
+        _servedAt = DateTime.now();
         unawaited(_serve(m));
       case BleClosed(:final conn):
         _servedTrusted.remove(conn);
@@ -230,6 +239,12 @@ class BleLink extends ChangeNotifier {
   void _recognizeNext() {
     if (_recognizing.isNotEmpty) return;
     final now = DateTime.now();
+    final quiet = _servedAt.add(servedQuiet);
+    if (now.isBefore(quiet)) {
+      _afterQuiet?.cancel();
+      _afterQuiet = Timer(quiet.difference(now), _recognizeNext);
+      return;
+    }
     final waiting = [
       for (final d in _devices.values)
         if (!d.recognized && !now.isBefore(d.retryAt)) d,
@@ -321,6 +336,9 @@ class BleLink extends ChangeNotifier {
         ..alias = peer['alias'] as String?
         ..fingerprint = peer['fingerprint'] as String?;
       debugPrint('ble: ${d.device} is ${d.name}, ${clock.elapsedMilliseconds} ms');
+      // Its connection closed: kept open, the other's recognition of this device hung over it
+      // (7 November). Touching it connects again.
+      unawaited(ble.disconnect(d.device));
       for (final old in _devices.values.where((o) => o != d && o.suffix == d.suffix).toList()) {
         _devices.remove(old.device);
         unawaited(ble.disconnect(old.device));
@@ -483,6 +501,7 @@ class BleLink extends ChangeNotifier {
   @override
   void dispose() {
     _forget?.cancel();
+    _afterQuiet?.cancel();
     connection.removeListener(_follow);
     unawaited(_events.cancel());
     super.dispose();

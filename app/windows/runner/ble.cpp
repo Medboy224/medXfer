@@ -78,15 +78,22 @@ struct Ble::Served {
 };
 
 // This computer connected to another device's service: one exchange at a time.
+// Its members under mu_: Disconnect closes them while an exchange may be running, which works
+// on copies of them.
 struct Ble::Client {
   BluetoothLEDevice device{nullptr};
   GattSession session{nullptr};
   GattCharacteristic characteristic{nullptr};
   bool busy = false;
+  bool closed = false;  // what the exchange running opens next is closed at once
 
   void Close() {
-    if (session) session.Close();
-    if (device) device.Close();
+    closed = true;
+    try {
+      if (session) session.Close();
+      if (device) device.Close();
+    } catch (...) {
+    }
     session = nullptr;
     device = nullptr;
     characteristic = nullptr;
@@ -407,7 +414,7 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
   {
     std::lock_guard<std::mutex> lock(mu_);
     auto& slot = clients_[device];
-    if (!slot) slot = std::make_shared<Client>();
+    if (!slot || slot->closed) slot = std::make_shared<Client>();
     c = slot;
     if (c->busy) {
       done("busy", {});
@@ -419,22 +426,41 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
   std::vector<uint8_t> answer;
   co_await resume_background();
   const char* step = "device";  // where an exception came from
+  // Kept in c for Disconnect to close; false once it did, the object then closed here.
+  auto keep = [this, &c](auto&& set) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (c->closed) return false;
+    set(*c);
+    return true;
+  };
+  GattCharacteristic ch{nullptr};
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    ch = c->characteristic;
+  }
   try {
-    if (!c->characteristic) {
-      c->device = co_await BluetoothLEDevice::FromBluetoothAddressAsync(std::stoull(device, nullptr, 16));
-      if (!c->device) {
+    if (!ch) {
+      BluetoothLEDevice dev = co_await BluetoothLEDevice::FromBluetoothAddressAsync(std::stoull(device, nullptr, 16));
+      if (!dev) {
         error = "not_found";
+      } else if (!keep([&](Client& k) { k.device = dev; })) {
+        dev.Close();
+        error = "closed";
       } else {
         step = "session";
-        c->session = co_await GattSession::FromDeviceIdAsync(c->device.BluetoothDeviceId());
-        c->session.MaintainConnection(true);
+        GattSession session = co_await GattSession::FromDeviceIdAsync(dev.BluetoothDeviceId());
+        if (!keep([&](Client& k) { k.session = session; })) {
+          session.Close();
+          throw hresult_error(RO_E_CLOSED);
+        }
+        session.MaintainConnection(true);
         // A full discovery first: asking for one service straight away failed against the
         // Galaxy A57 (WP-D.0). A phone paired in Bluetooth with this computer fails here, with
         // E_UNEXPECTED or "unreachable", where the same phone unpaired answers (real test of
         // 3 November 2026).
         step = "services";
-        auto all = co_await c->device.GetGattServicesAsync(BluetoothCacheMode::Uncached);
-        auto services = co_await c->device.GetGattServicesForUuidAsync(kService, BluetoothCacheMode::Uncached);
+        auto all = co_await dev.GetGattServicesAsync(BluetoothCacheMode::Uncached);
+        auto services = co_await dev.GetGattServicesForUuidAsync(kService, BluetoothCacheMode::Uncached);
         if (services.Status() != GattCommunicationStatus::Success || services.Services().Size() == 0) {
           error = "no_service:" + std::to_string(static_cast<int>(all.Status())) + "/" +
                   std::to_string(all.Status() == GattCommunicationStatus::Success ? all.Services().Size() : 0) + "/" +
@@ -445,7 +471,8 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
           if (found.Status() != GattCommunicationStatus::Success || found.Characteristics().Size() == 0) {
             error = "no_characteristic:" + std::to_string(static_cast<int>(found.Status()));
           } else {
-            c->characteristic = found.Characteristics().GetAt(0);
+            ch = found.Characteristics().GetAt(0);
+            if (!keep([&](Client& k) { k.characteristic = ch; })) throw hresult_error(RO_E_CLOSED);
           }
         }
       }
@@ -453,12 +480,12 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
     // Longer than the MTU, Windows writes and reads in pieces (long write, long read).
     if (!error) {
       step = "write";
-      auto written = co_await c->characteristic.WriteValueWithResultAsync(ToBuffer(message), GattWriteOption::WriteWithResponse);
+      auto written = co_await ch.WriteValueWithResultAsync(ToBuffer(message), GattWriteOption::WriteWithResponse);
       if (written.Status() != GattCommunicationStatus::Success) {
         error = "write_status:" + std::to_string(static_cast<int>(written.Status()));
       } else {
         step = "read";
-        auto read = co_await c->characteristic.ReadValueAsync(BluetoothCacheMode::Uncached);
+        auto read = co_await ch.ReadValueAsync(BluetoothCacheMode::Uncached);
         if (read.Status() != GattCommunicationStatus::Success) {
           error = "read_status:" + std::to_string(static_cast<int>(read.Status()));
         } else {
@@ -473,8 +500,11 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
   } catch (...) {
     error = std::string(step) + "_error";
   }
-  if (error) c->Close();  // the next exchange connects again
-  c->busy = false;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (error) c->Close();  // the next exchange connects again
+    c->busy = false;
+  }
   co_await ui;
   if (*alive) done(error, std::move(answer));
 }
@@ -487,6 +517,6 @@ void Ble::Disconnect(const std::string& device) {
     if (it == clients_.end()) return;
     c = it->second;
     clients_.erase(it);
+    c->Close();
   }
-  c->Close();
 }
