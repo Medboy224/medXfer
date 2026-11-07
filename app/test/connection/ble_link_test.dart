@@ -200,6 +200,7 @@ void main() {
     _client(core, {
       'recognize': {'suffix': '6e2a', 'trusted': false},
     });
+    await link.start();
     radio.add(const BleSeen('11:11', -60));
     await _settle();
     expect(link.devices.map((d) => (d.name, d.trusted)), [('medXfer-6e2a', false)]);
@@ -218,6 +219,7 @@ void main() {
       },
     });
     core.on('pair', (_) => const FakeAnswer());
+    await link.start();
     radio.add(const BleSeen('33:33', -40));
     await _settle();
     final phone = link.devices.single;
@@ -239,6 +241,7 @@ void main() {
       'pin_ready': {'ready': true},
       'pin_reply': {'refused': true},
     });
+    await link.start();
     radio.add(const BleSeen('11:11', -60));
     await _settle();
     await link.connect(link.devices.single);
@@ -255,6 +258,7 @@ void main() {
       'reply': {'fingerprint': 'FPB', 'outcome': 2, 'band': 1},
       'ack': {'done': true},
     });
+    await link.start();
     radio.add(const BleSeen('11:11', -60));
     await _settle();
     await link.connect(link.devices.single);
@@ -286,10 +290,14 @@ void main() {
     expect(radio.disconnected, containsAll(['11:11', '22:22']));
   });
 
-  test('DISC-05: stopped, this device answers nothing, the platform keeping its service', () async {
+  test('DISC-05: stopped, this device answers nothing, the platform keeping its service; the last reports are ignored', () async {
     core.on('ble_server', (_) => _reply('ble_server', {'conn': 'aa', 'data': _data}));
-    radio.add(BleMessage('aa', Uint8List.fromList([1])));
+    radio
+      ..add(BleMessage('aa', Uint8List.fromList([1])))
+      ..add(const BleSeen('11:11', -60)); // delivered after the stop
     await _settle();
+    expect(link.devices, isEmpty);
+    expect(steps('ble_client'), isEmpty);
     expect(steps('ble_server'), isEmpty);
     expect(radio.replies, isEmpty);
   });
@@ -353,6 +361,7 @@ void main() {
     _client(core, {
       'recognize': {'suffix': '6e2a', 'trusted': false},
     });
+    await link.start();
     radio.add(const BleSeen('11:11', -60));
     await _settle();
     final failing = _FailingRadio(radio);

@@ -199,6 +199,8 @@ class BleLink extends ChangeNotifier {
   void _take(BleEvent e) {
     switch (e) {
       case BleSeen(:final device, :final rssi):
+        // A report that comes after the stop: the radio delivers its last ones.
+        if (!_running) return;
         final d = _devices.putIfAbsent(device, () {
           debugPrint('ble: seen $device, $rssi dBm');
           return BleDevice(device);
@@ -267,6 +269,7 @@ class BleLink extends ChangeNotifier {
     ];
     if (gone.isEmpty) return;
     for (final d in gone) {
+      debugPrint('ble: ${d.device} gone, last seen ${now.difference(d.seenAt).inMilliseconds} ms ago');
       _devices.remove(d.device);
       unawaited(ble.disconnect(d.device));
     }
