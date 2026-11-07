@@ -224,6 +224,10 @@ void main() {
     expect(hotspot.joins, ['DIRECT-KQ-medXfer WifiBand.ghz5']);
     expect(steps('pair').single, {'ip': '192.168.49.1', 'port': 18887});
     expect(link.stage, BleStage.idle);
+    // WP-D.6: each step's time, from the touch to the session.
+    connection.take(const CoreEvent('paired', data: {'ip': '192.168.49.1', 'device_name': 'Phone'}));
+    await _settle();
+    expect(link.lastTimings.split(', ').map((m) => m.substring(0, m.lastIndexOf(' '))), ['touched', 'asking', 'confirming', 'connecting', 'joined ghz5', 'idle', 'session']);
   });
 
   test('an unknown device: its PIN typed; a wrong one is refused, said', () async {

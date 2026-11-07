@@ -160,6 +160,7 @@ class BleLink extends ChangeNotifier {
   /// waits for one, D3), stopped when it closes; paused while a session is open.
   void _follow() {
     final inSession = connection.session != null;
+    if (inSession) _mark('session');
     if (inSession && _running) {
       unawaited(stop().then((_) {
         _paused = true;
@@ -232,6 +233,7 @@ class BleLink extends ChangeNotifier {
   // The server side: another device touched this one.
 
   Future<void> _serve(BleMessage m) async {
+    _startClock('touched by another');
     final own = await ble.wifiBands();
     final r = await _step('ble_server', {'conn': m.conn, 'step': 'message', 'data': base64Encode(m.data), 'create': own.create, 'join': own.join});
     if (r == null) return;
@@ -251,6 +253,7 @@ class BleLink extends ChangeNotifier {
     Map<String, Object?>? network;
     if (outcome == 1) {
       final net = await connection.networkForBle(fiveGhz: ((request['band'] as num?)?.toInt() ?? 0) == _band5);
+      _mark('network ${net?.band?.name ?? 'none'}');
       if (net?.ssid == null || net?.address == null) {
         outcome = 3; // none could be created: said, rather than a network that is not there
       } else {
@@ -304,7 +307,34 @@ class BleLink extends ChangeNotifier {
   void _set(BleStage stage, [String? failure]) {
     _stage = stage;
     _failure = failure;
+    _mark(failure == null ? stage.name : '${stage.name} $failure');
     notifyListeners();
+  }
+
+  // How long each step takes (WP-D.6): from the touch, or from the first message of the device
+  // that touched this one, to the session. Logged once the session opens, or the exchange fails.
+  Stopwatch? _clock;
+  final _marks = <String>[];
+
+  /// The steps of the last exchange, with their time in ms since it began.
+  String get lastTimings => _marks.join(', ');
+
+  void _mark(String what) {
+    final clock = _clock;
+    if (clock == null) return;
+    _marks.add('$what ${clock.elapsedMilliseconds}');
+    if (what == 'session' || what.startsWith('failed')) {
+      debugPrint('ble: $lastTimings');
+      _clock = null;
+    }
+  }
+
+  void _startClock(String what) {
+    // One left by an exchange that ended without a session: a minute is longer than any.
+    if (_clock case final c? when c.elapsed < const Duration(minutes: 1)) return;
+    _clock = Stopwatch()..start();
+    _marks.clear();
+    _mark(what);
   }
 
   /// Touches [d]: of mutual trust, the network and the session follow; unknown, it shows a PIN,
@@ -312,6 +342,8 @@ class BleLink extends ChangeNotifier {
   Future<void> connect(BleDevice d) async {
     if (_stage != BleStage.idle && _stage != BleStage.failed) return;
     _target = d;
+    _clock = null;
+    _startClock('touched');
     _set(BleStage.asking);
     try {
       final own = await ble.wifiBands();
@@ -373,6 +405,7 @@ class BleLink extends ChangeNotifier {
       case 2: // this device creates it, at the band the other agreed
         _set(BleStage.networking);
         final net = await connection.networkForBle(fiveGhz: ((r['band'] as num?)?.toInt() ?? 0) == _band5);
+        _mark('network ${net?.band?.name ?? 'none'}');
         if (net?.ssid == null || net?.address == null) return _set(BleStage.failed, 'no_network');
         final n = await _step('ble_client', {'conn': d.device, 'step': 'network', 'network': _networkOf(net!)});
         final ack = await _send(d.device, n?['data']);
@@ -393,6 +426,7 @@ class BleLink extends ChangeNotifier {
       band: (network['band'] as num?)?.toInt() == _band5 ? WifiBand.ghz5 : WifiBand.ghz24,
     );
     if (!await connection.joinForBle(n)) return _set(BleStage.failed, 'join');
+    _mark('joined ${n.band?.name}');
     final addrs = [for (final a in (network['addrs'] as List?) ?? const []) '$a'];
     final ip = addrs.firstWhere((a) => !a.contains(':'), orElse: () => addrs.isEmpty ? '' : addrs.first);
     final port = (network['port'] as num?)?.toInt() ?? 0;
