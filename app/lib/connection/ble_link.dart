@@ -279,12 +279,17 @@ class BleLink extends ChangeNotifier {
   // The server side: another device touched this one.
 
   Future<void> _serve(BleMessage m) async {
-    _startClock('touched by another');
     final own = await ble.wifiBands();
     final r = await _step('ble_server', {'conn': m.conn, 'step': 'message', 'data': base64Encode(m.data), 'create': own.create, 'join': own.join});
     if (r == null) return;
     if (r['data'] case final String data) await ble.reply(m.conn, base64Decode(data));
-    if (r['request'] case final Map<String, Object?> request) await _answer(m.conn, request, own);
+    if (r['request'] case final Map<String, Object?> request) {
+      // The other's user touched this device: its request authenticated, by the pair's key or
+      // the PIN typed. The recognition before it says nothing of the touch.
+      _clock = null;
+      _startClock('request${request['trusted'] == true ? '' : ' after the PIN'}');
+      await _answer(m.conn, request, own);
+    }
     if (r['network'] case final Map<String, Object?> network) {
       // The other created its network: join it, then connect (BLE-10).
       unawaited(_joinAndConnect(network, '${r['fingerprint']}', trusted: _servedTrusted[m.conn] ?? false));
@@ -299,7 +304,7 @@ class BleLink extends ChangeNotifier {
     Map<String, Object?>? network;
     if (outcome == 1) {
       final net = await connection.networkForBle(fiveGhz: ((request['band'] as num?)?.toInt() ?? 0) == _band5);
-      _mark('network ${net?.band?.name ?? 'none'}');
+      _mark(net == null ? 'no network' : 'network ${net.band?.name ?? 'created'}');
       if (net?.ssid == null || net?.address == null) {
         outcome = 3; // none could be created: said, rather than a network that is not there
       } else {
@@ -468,7 +473,7 @@ class BleLink extends ChangeNotifier {
       case 2: // this device creates it, at the band the other agreed
         _set(BleStage.networking);
         final net = await connection.networkForBle(fiveGhz: ((r['band'] as num?)?.toInt() ?? 0) == _band5);
-        _mark('network ${net?.band?.name ?? 'none'}');
+        _mark(net == null ? 'no network' : 'network ${net.band?.name ?? 'created'}');
         if (net?.ssid == null || net?.address == null) return _set(BleStage.failed, 'no_network');
         final n = await _step('ble_client', {'conn': d.device, 'step': 'network', 'network': _networkOf(net!)});
         final ack = await _send(d.device, n?['data']);
