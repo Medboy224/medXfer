@@ -116,6 +116,7 @@ void main() {
   late _Hotspot hotspot;
   late Connection connection;
   late BleLink link;
+  setUpAll(() => BleLink.recognizeJitter = Duration.zero);
   setUp(() {
     core = FakeCore()..on('set_network_info', (_) => const FakeAnswer());
     radio = _Radio();
@@ -255,6 +256,25 @@ void main() {
     final network = steps('ble_client').firstWhere((p) => p['step'] == 'network')['network'];
     expect(network, {'ssid': 'AndroidShare_1853', 'passphrase': 'vvrtsy12', 'security': 2, 'band': 1, 'addrs': ['10.34.109.23']});
     expect(link.stage, BleStage.idle); // the other joins it, then connects (pair_ble)
+  });
+
+  test('a device the radio stops reporting leaves the list; one recognition at a time', () async {
+    final old = BleLink.forgetAfter;
+    BleLink.forgetAfter = const Duration(milliseconds: 50);
+    addTearDown(() => BleLink.forgetAfter = old);
+    _client(core, {
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+    });
+    await link.start();
+    radio
+      ..add(const BleSeen('11:11', -60))
+      ..add(const BleSeen('22:22', -60)); // the same moment: waits for the first
+    await _settle();
+    expect(steps('ble_client').where((p) => p['step'] == 'hello').map((p) => p['conn']), ['11:11']);
+    expect(link.devices.map((d) => d.device), ['11:11']);
+    await Future<void>.delayed(const Duration(milliseconds: 2200)); // the check runs every 2 s
+    expect(link.devices, isEmpty);
+    expect(radio.disconnected, contains('11:11'));
   });
 
   test('BLE-09: a network created for BLE that nobody joins is stopped after bleUnjoinedFor', () async {

@@ -237,6 +237,10 @@ Décision du 2 novembre : **5 GHz par défaut**, avec un interrupteur « Haute v
 
 À améliorer : Wi-Fi éteint, un téléphone qui pourrait créer à 5 GHz crée à 2,4 GHz sans le dire. L'écran pourrait proposer d'allumer le Wi-Fi.
 
+Remarques de l'utilisateur après l'essai, et leur correction :
+- **La liste gardait des appareils partis** : un appareil trouvé par Bluetooth n'en sortait jamais, BLE arrêté excepté. Il en sort maintenant 12 s après que la radio a cessé de le signaler (elle le signale toutes les 5 s au plus). Sur le réseau, la liste est refaite toutes les 5 s au lieu de 8.
+- **L'un voyait l'autre sans réciproque** : un appareil n'apparaît qu'une fois reconnu, après un échange Bluetooth. Deux appareils qui se reconnaissaient au même moment, ou un PC annonçant sous plusieurs adresses de suite, faisaient échouer des échanges. Maintenant : une reconnaissance à la fois, après une attente au hasard de 0,8 s au plus, et un échange sans réponse abandonné à 26 s (Windows n'en a pas de limite à lui).
+
 ### WP-D.6 — Essais réels et rapport · S
 
 - Les quatre cas du tableau, entre le Galaxy A57, les deux PC Windows, Zorin et le TECNO BF6 selon la sonde.
