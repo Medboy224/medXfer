@@ -147,10 +147,10 @@ abstract interface class Hotspot {
   Future<bool> alive();
 }
 
-/// Android, through the app's Kotlin: a Wi-Fi Direct group at 5 GHz when this phone gets it
-/// (WifiDirectGroup.kt, 53 MB/s in WP-C.0 of the J6c plan), else the local hotspot
-/// (LocalHotspot.kt), which stays at 2.4 GHz (4 to 12 MB/s): decision C7 of the J6c plan. The
-/// group needs Wi-Fi on, the local hotspot does not. Joining: WifiJoin.kt.
+/// Android, through the app's Kotlin: a Wi-Fi Direct group (WifiDirectGroup.kt), at 5 GHz when
+/// this phone gets it (53 MB/s in WP-C.0 of the J6c plan), at 2.4 GHz for a device that joins
+/// only there; else, without Wi-Fi or Wi-Fi Direct, the local hotspot (LocalHotspot.kt, 2.4 GHz).
+/// The group needs Wi-Fi on, the local hotspot does not. Joining: WifiJoin.kt.
 class AndroidHotspot implements Hotspot {
   AndroidHotspot({this.channel = platformChannel});
 
@@ -174,18 +174,14 @@ class AndroidHotspot implements Hotspot {
 
   @override
   Future<HotspotInfo> start({bool fiveGhz = true}) async {
-    if (fiveGhz) {
-      try {
-        final group = HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>('groupStart', {'band': '5'}))!);
-        if (group.band == WifiBand.ghz5) {
-          _group = true;
-          return group;
-        }
-        // At 2.4 GHz, the local hotspot does as well, and has been tried for longer.
-        await channel.invokeMethod<void>('groupStop');
-      } on PlatformException {
-        // No Wi-Fi Direct, Wi-Fi off, or the radio busy: the local hotspot needs none of them.
-      }
+    // The group first, at the band asked, 2.4 GHz included: the local hotspot dropped a phone
+    // whose screen was off each time this phone searched for networks (#256).
+    try {
+      final group = HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>('groupStart', {'band': fiveGhz ? '5' : '2'}))!);
+      _group = true;
+      return group;
+    } on PlatformException {
+      // No Wi-Fi Direct, Wi-Fi off, or the radio busy: the local hotspot needs none of them.
     }
     _group = false;
     return HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>('hotspotStart'))!);
