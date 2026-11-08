@@ -16,6 +16,9 @@ import (
 // device (the core, a node, a sender). Two devices run in one process (tests) take each other
 // for themselves; they would anyway, by their shared loopback address. A name is drawn at each
 // launch and never reused, so the set only grows by one per discovery server (#156).
+//
+// The tests name their fake devices outside that draw ("medXfer-t..."): a test device named
+// like a drawn one was taken for this process once in a few thousand runs (CI of 8 November).
 var own struct {
 	mu    sync.RWMutex
 	names map[string]bool

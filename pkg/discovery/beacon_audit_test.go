@@ -13,7 +13,7 @@ import (
 // is probed, at the address it sent from. Other packets are ignored.
 func TestCodeSearchHearsTheBeacon(t *testing.T) {
 	src := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 9), Port: 50000}
-	beacon, _ := json.Marshal(beaconMsg{V: 1, Role: "node", Name: "medXfer-3fa2", Port: 18887})
+	beacon, _ := json.Marshal(beaconMsg{V: 1, Role: "node", Name: "medXfer-t3fa2", Port: 18887})
 	if ip, ok := codeProbeTarget(beacon, src); !ok || ip != "192.0.2.9" {
 		t.Fatalf("beacon: probe %q, %v; want 192.0.2.9", ip, ok)
 	}
