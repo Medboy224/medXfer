@@ -48,6 +48,9 @@ class FlutterWindow : public Win32Window {
   // The wired cards' addresses set by hand (lib/platform/cable.dart, WindowsCableLink).
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> network_channel_;
 
+  // The computer kept from sleeping while a transfer runs (lib/platform/awake.dart, #256).
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> power_channel_;
+
   // Bluetooth Low Energy, for the path by BLE (lib/platform/ble.dart, ChannelBle).
   std::unique_ptr<Ble> ble_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> ble_channel_;

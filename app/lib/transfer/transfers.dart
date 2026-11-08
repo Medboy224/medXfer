@@ -221,6 +221,28 @@ class Transfers extends ChangeNotifier {
     _sub = core.events.listen(take);
   }
 
+  /// The session lost, the data may go on (WP-B.8), and the core reports its progress several
+  /// times a second while it does. Silent this long, its last speed is no longer true: 0, and
+  /// the screen says it waits. A dead connection left "the transfer goes on" on the screen, its
+  /// bar still, for minutes (real test of 3 November). With the session alive, the core's own
+  /// speed falls to 0 when nothing moves.
+  static Duration speedStale = const Duration(seconds: 4);
+  Timer? _stale;
+
+  void _watchStale() {
+    _stale?.cancel();
+    _stale = null;
+    final a = _active;
+    if (a == null || a.stage == Stage.done || !a.lost || a.speedMBps <= 0) return;
+    _stale = Timer(speedStale, () {
+      _stale = null;
+      final b = _active;
+      if (b == null || b.stage == Stage.done || !b.lost) return;
+      _active = b.copyWith(speedMBps: 0, etaSeconds: 0);
+      notifyListeners();
+    });
+  }
+
   final Core core;
   final HistoryStore history;
 
@@ -485,6 +507,7 @@ class Transfers extends ChangeNotifier {
       default:
         return;
     }
+    _watchStale();
     notifyListeners();
   }
 
@@ -529,6 +552,7 @@ class Transfers extends ChangeNotifier {
 
   @override
   void dispose() {
+    _stale?.cancel();
     _sub.cancel();
     _notices.close();
     super.dispose();

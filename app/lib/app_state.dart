@@ -15,6 +15,7 @@ import 'background_keeper.dart';
 import 'dev/dev_tools.dart';
 import 'library/explorer.dart';
 import 'library/selection.dart';
+import 'platform/awake.dart';
 import 'platform/background.dart';
 import 'platform/ble.dart';
 import 'platform/cable.dart';
@@ -42,6 +43,7 @@ class AppState extends ChangeNotifier {
     NetworkInfo network = const NoNetworkInfo(),
     Hotspot hotspot = const NoHotspot(),
     this.ble = const NoBle(),
+    this.awake = const NoAwake(),
     CableLink cable = const NoCableLink(),
     Firewall firewall = const NoFirewall(),
     this.qrScanner = const NoQrScanner(),
@@ -69,6 +71,7 @@ class AppState extends ChangeNotifier {
     );
     explorer = Explorer(library);
     keeper = BackgroundKeeper(background: background, connection: connection, transfers: transfers);
+    transfers.addListener(_keepAwake);
     dev = DevTools(core, downloadDir: folders.downloadDir);
   }
 
@@ -107,6 +110,19 @@ class AppState extends ChangeNotifier {
 
   /// The BLE radio (WP-D.3); none where the device has none (D4).
   final Ble ble;
+
+  /// Kept awake while a transfer runs (#256): a phone's screen gone off, the network that
+  /// carried it was lost (real tests of 2 and 3 November).
+  final Awake awake;
+  bool _awake = false;
+
+  void _keepAwake() {
+    final a = transfers.active;
+    final want = a != null && a.stage != Stage.done;
+    if (want == _awake) return;
+    _awake = want;
+    unawaited(awake.keep(want));
+  }
 
   /// The path by BLE (bible §6.6, WP-D.3): the radio, the core, and this device's networks.
   late final BleLink bleLink = BleLink(core, ble, connection);
@@ -197,6 +213,8 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _events?.cancel();
+    transfers.removeListener(_keepAwake);
+    if (_awake) unawaited(awake.keep(false));
     bleLink.dispose();
     connection.dispose();
     cable.dispose();
