@@ -292,6 +292,8 @@ D'abord une sonde : rôles BLE (annonce et serveur, balayage et client) sur le G
 
 **Le groupe Wi-Fi Direct à 5 GHz, avancé de J8** (décision D1 du plan, 2 novembre) : quand le téléphone crée le réseau, c'est son groupe à 5 GHz (53 MB/s en J6c), derrière l'interface `Hotspot`, choisi par téléphone selon la mesure (décision C7). Plan : [medxfer-plan-j6d.md](medxfer-plan-j6d.md).
 
+**Résultat (8/11/2026) :** le jalon est terminé (PR #248 à #262, et celle du rapport). Les quatre cas marchent sur les vrais appareils ; toucher un appareil trouvé par BLE ouvre la session en 2,4 à 6,7 s, le PC rejoignant seul le réseau ; 1 Gio à 53,7 MB/s par le groupe à 5 GHz du téléphone. Réserves : aucun second téléphone à 5 GHz pour rejoindre le groupe ; le toucher à la limite de portée. Détail dans [j6d-report.md](j6d-report.md).
+
 ### J7 — Web Share v2 · ≈ 5 à 7 jours
 Bible chapitre 11 : listener séparé, jeton porteur sans cookie (fragment d'URL), HTTPS auto-signé, CSP (JavaScript externalisé), PIN de repli à 5 essais par session, retrait du bouton « 4 chiffres », collision gérée pour le dépôt par morceaux (`WEB-07`). Gate G5 (test utilisateur de l'avertissement de certificat).
 
