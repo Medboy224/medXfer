@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -106,6 +107,16 @@ class MainActivity : FlutterActivity() {
                         if (err != null) result.error(if (err == WifiJoin.WIFI_OFF || err == WifiJoin.NO_BAND) err else "join", err, null) else result.success(info)
                     }
                     "openWifiPanel" -> openWifiPanel(call.argument<Boolean>("always") == true) { result.success(it) }
+                    // While a transfer runs (#256): the screen gone off, the network that carried
+                    // it was lost (real tests of 2 and 3 November 2026).
+                    "keepAwake" -> {
+                        if (call.argument<Boolean>("on") == true) {
+                            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        } else {
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        }
+                        result.success(null)
+                    }
                     // A QR code read by the app's camera screen (QrScanActivity.kt); null: back.
                     "scanQr" -> {
                         scanAnswer?.invoke(null)

@@ -7,6 +7,7 @@ import 'app_state.dart';
 import 'core/ffi_core.dart';
 import 'perf.dart';
 import 'platform/background.dart';
+import 'platform/awake.dart';
 import 'platform/ble.dart';
 import 'platform/cable.dart';
 import 'platform/file_picker.dart';
@@ -33,6 +34,7 @@ Future<void> main() async {
     network: systemNetworkInfo(),
     hotspot: systemHotspot(),
     ble: systemBle(),
+    awake: systemAwake(),
     cable: systemCableLink(),
     firewall: systemFirewall(),
     qrScanner: systemQrScanner(),

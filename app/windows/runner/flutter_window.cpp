@@ -153,6 +153,27 @@ bool FlutterWindow::OnCreate() {
       result->NotImplemented();
     }
   });
+  // The computer kept from sleeping while a transfer runs (lib/platform/awake.dart, #256); the
+  // screen may go off. The state is this thread's, the window's, where the channel is answered.
+  power_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "dev.medxfer.app/power",
+      &flutter::StandardMethodCodec::GetInstance());
+  power_channel_->SetMethodCallHandler([](const auto& call, auto result) {
+    if (call.method_name() != "keepAwake") {
+      result->NotImplemented();
+      return;
+    }
+    const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
+    bool on = false;
+    if (args) {
+      auto it = args->find(flutter::EncodableValue("on"));
+      if (it != args->end()) {
+        if (const auto* b = std::get_if<bool>(&it->second)) on = *b;
+      }
+    }
+    SetThreadExecutionState(on ? (ES_CONTINUOUS | ES_SYSTEM_REQUIRED) : ES_CONTINUOUS);
+    result->Success();
+  });
   // Bluetooth Low Energy (lib/platform/ble.dart, ChannelBle): the same channel as Android's Ble.kt.
   ble_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
       flutter_controller_->engine()->messenger(), "dev.medxfer.app/ble",
@@ -249,6 +270,8 @@ void FlutterWindow::OnDestroy() {
   wifi_join_.Leave();
   ble_ = nullptr;
   ble_channel_ = nullptr;
+  SetThreadExecutionState(ES_CONTINUOUS);
+  power_channel_ = nullptr;
   hotspot_channel_ = nullptr;
   firewall_channel_ = nullptr;
   network_channel_ = nullptr;

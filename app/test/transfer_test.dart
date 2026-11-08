@@ -239,6 +239,9 @@ void main() {
     core.emit(const CoreEvent('transfer_progress', data: {'batch_bytes': 2048, 'batch_total_bytes': 4096, 'speed_mbps': 12.5}));
     await tester.pumpAndSettle();
     expect(find.text('Connexion perdue avec Galaxy : le transfert continue'), findsOneWidget);
+    // Silent 4 s, it no longer goes on: it waits (real test of 3 November).
+    await tester.pump(const Duration(seconds: 5));
+    expect(find.text('Connexion perdue avec Galaxy : en attente'), findsOneWidget);
     await tester.binding.handlePopRoute(); // the system back
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('see-transfer')), findsOneWidget);

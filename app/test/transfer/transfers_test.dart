@@ -396,4 +396,28 @@ void main() {
     }));
     expect(t.active!.name, 'medXfer 2026-10-20 10h56');
   });
+
+  test('the session lost, the core silent: the last speed is dropped, the screen says it waits', () async {
+    final old = Transfers.speedStale;
+    Transfers.speedStale = const Duration(milliseconds: 50);
+    addTearDown(() => Transfers.speedStale = old);
+    final (_, t, _) = _model();
+    addTearDown(t.dispose);
+    t.take(CoreEvent('batch_offered', data: {
+      'summary': 'Vacances',
+      'total_files': 1,
+      'total_bytes': 300,
+      'items': [_q(0, 'Vacances/a.jpg', 300, 'pending')],
+    }));
+    t.take(const CoreEvent('transfer_accepted', data: {}));
+    t.take(const CoreEvent('reconnecting', data: {}));
+    t.take(const CoreEvent('transfer_progress', data: {'batch_bytes': 150, 'batch_total_bytes': 300, 'speed_mbps': 12.5, 'eta_seconds': 3}));
+    expect((t.active!.lost, t.active!.speedMBps), (true, 12.5)); // "the transfer goes on"
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    t.take(const CoreEvent('transfer_progress', data: {'batch_bytes': 170, 'batch_total_bytes': 300, 'speed_mbps': 12.0, 'eta_seconds': 3}));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(t.active!.speedMBps, 12.0); // still reported: still going on
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect((t.active!.speedMBps, t.active!.etaSeconds, t.active!.bytes), (0, 0, 170));
+  });
 }
