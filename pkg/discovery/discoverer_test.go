@@ -51,7 +51,7 @@ func TestBeaconAnnounceAndBrowse(t *testing.T) {
 		}
 		return []string{"bbbbbbbbbbbbb", "BAD!"}
 	}
-	if err := b.Announce(ctx, Announcement{Instance: "medXfer-be01", Port: 18888, Role: "sender", Tags: tags}); err != nil {
+	if err := b.Announce(ctx, Announcement{Instance: "medXfer-tbe01", Port: 18888, Role: "sender", Tags: tags}); err != nil {
 		t.Fatal(err)
 	}
 	found := <-results
@@ -59,7 +59,7 @@ func TestBeaconAnnounceAndBrowse(t *testing.T) {
 		t.Fatalf("found %+v, want the beacon at least twice", found)
 	}
 	for _, f := range found {
-		if f.Instance != "medXfer-be01" || f.Port != 18888 || f.Role != "sender" || f.Via != "beacon" || !f.IP.Equal(net.IPv4(127, 0, 0, 1)) {
+		if f.Instance != "medXfer-tbe01" || f.Port != 18888 || f.Role != "sender" || f.Via != "beacon" || !f.IP.Equal(net.IPv4(127, 0, 0, 1)) {
 			t.Fatalf("beacon read as %+v", f)
 		}
 	}
@@ -100,10 +100,10 @@ func TestBrowseAllMerges(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := net.IPv4(192, 0, 2, 7) // TEST-NET-1: never a local address
-	mdnsSeen := fixedDiscoverer{{Instance: "medXfer-aa01", IP: remote, Port: 18888, Role: "node", Via: "mdns", Tags: []string{"aaaaaaaaaaaaa"}}}
+	mdnsSeen := fixedDiscoverer{{Instance: "medXfer-taa01", IP: remote, Port: 18888, Role: "node", Via: "mdns", Tags: []string{"aaaaaaaaaaaaa"}}}
 	beaconSeen := fixedDiscoverer{
-		{Instance: "medXfer-aa01", IP: remote, Port: 18888, Role: "node", Via: "beacon", Tags: []string{"aaaaaaaaaaaaa", "bbbbbbbbbbbbb"}},
-		{Instance: "medXfer-bb02", IP: net.IPv4(192, 0, 2, 8), Port: 18888, Role: "sender", Via: "beacon"},
+		{Instance: "medXfer-taa01", IP: remote, Port: 18888, Role: "node", Via: "beacon", Tags: []string{"aaaaaaaaaaaaa", "bbbbbbbbbbbbb"}},
+		{Instance: "medXfer-tbb02", IP: net.IPv4(192, 0, 2, 8), Port: 18888, Role: "sender", Via: "beacon"},
 		{Instance: "self", IP: net.IPv4(127, 0, 0, 1), Port: 18888, Via: "beacon"},
 		{Instance: "noport", IP: net.IPv4(192, 0, 2, 9), Via: "beacon"},
 	}
@@ -174,11 +174,11 @@ func TestBrowseAllDropsAnotherInterfacesAnswer(t *testing.T) {
 	if err := SetNetworkInfo([]NetworkInterface{{Name: "wlan0", Addrs: []string{"192.0.2.123/24"}}}); err != nil {
 		t.Fatal(err)
 	}
-	bridge := fixedDiscoverer{{Instance: "medXfer-c81e", IP: net.IPv4(10, 0, 3, 1), Port: 18887, Via: "mdns"}}
+	bridge := fixedDiscoverer{{Instance: "medXfer-tc81e", IP: net.IPv4(10, 0, 3, 1), Port: 18887, Via: "mdns"}}
 	if got := browseAll(context.Background(), []Discoverer{bridge}, time.Second); len(got) != 0 {
 		t.Fatalf("browsed %+v: the bridge's address is unreachable from here", got)
 	}
-	beacon := fixedDiscoverer{{Instance: "medXfer-c81e", IP: net.IPv4(192, 0, 2, 91), Port: 18887, Via: "beacon"}}
+	beacon := fixedDiscoverer{{Instance: "medXfer-tc81e", IP: net.IPv4(192, 0, 2, 91), Port: 18887, Via: "beacon"}}
 	got := browseAll(context.Background(), []Discoverer{bridge, beacon}, time.Second)
 	if len(got) != 1 || !got[0].IP.Equal(net.IPv4(192, 0, 2, 91)) {
 		t.Fatalf("browsed %+v, want the device at its Wi-Fi address", got)
@@ -188,9 +188,9 @@ func TestBrowseAllDropsAnotherInterfacesAnswer(t *testing.T) {
 // A found device has the shape the callers know: a sender has an offer (whose content travels
 // only in the secure channel), a node has none.
 func TestPeerOfAndTXT(t *testing.T) {
-	p := peerOf(Found{Instance: "medXfer-cc03", IP: net.IPv4(192, 0, 2, 7), Port: 18888, Role: "sender"})
-	if p.DeviceName != "medXfer-cc03" || p.HostIP != "192.0.2.7" || p.Port != 18888 || p.Role != "sender" ||
-		p.Offer == nil || p.Offer.FileName != PrivateTransfer || p.ID != "medXfer-cc03-18888" {
+	p := peerOf(Found{Instance: "medXfer-tcc03", IP: net.IPv4(192, 0, 2, 7), Port: 18888, Role: "sender"})
+	if p.DeviceName != "medXfer-tcc03" || p.HostIP != "192.0.2.7" || p.Port != 18888 || p.Role != "sender" ||
+		p.Offer == nil || p.Offer.FileName != PrivateTransfer || p.ID != "medXfer-tcc03-18888" {
 		t.Fatalf("peerOf sender: %+v", p)
 	}
 	if p := peerOf(Found{Instance: "n", IP: net.IPv4(192, 0, 2, 7), Port: 1, Role: "node"}); p.Offer != nil {
@@ -202,7 +202,7 @@ func TestPeerOfAndTXT(t *testing.T) {
 	if _, _, ok := parseTXT([]string{"v=2", "r=sender"}); ok {
 		t.Fatal("another version accepted")
 	}
-	if got := instanceOf("medXfer-cc03._medxfer._tcp.local."); got != "medXfer-cc03" {
+	if got := instanceOf("medXfer-tcc03._medxfer._tcp.local."); got != "medXfer-tcc03" {
 		t.Fatal(got)
 	}
 }

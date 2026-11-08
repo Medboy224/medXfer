@@ -78,12 +78,12 @@ func TestBrowseAllKeepsAPathPerNetwork(t *testing.T) {
 	}
 	wifi, cable := net.IPv4(192, 0, 2, 91), net.IPv4(169, 254, 57, 98)
 	viaWiFi := fixedDiscoverer{
-		{Instance: "medXfer-1c6e", IP: wifi, Port: 18887, Role: "node", Via: "mdns"},
-		{Instance: "medXfer-1c6e", IP: wifi, Port: 18887, Role: "node", Via: "beacon"},
+		{Instance: "medXfer-t1c6e", IP: wifi, Port: 18887, Role: "node", Via: "mdns"},
+		{Instance: "medXfer-t1c6e", IP: wifi, Port: 18887, Role: "node", Via: "beacon"},
 	}
 	viaCable := fixedDiscoverer{
-		{Instance: "medXfer-1c6e", IP: cable, Port: 18887, Role: "node", Via: "beacon"},
-		{Instance: "medXfer-1c6e", IP: net.IPv4(100, 64, 0, 9), Port: 18887, Role: "node", Via: "beacon"},
+		{Instance: "medXfer-t1c6e", IP: cable, Port: 18887, Role: "node", Via: "beacon"},
+		{Instance: "medXfer-t1c6e", IP: net.IPv4(100, 64, 0, 9), Port: 18887, Role: "node", Via: "beacon"},
 	}
 	want := []Path{{IP: "169.254.57.98", Kind: KindEthernet}, {IP: "192.0.2.91", Kind: KindWiFi}}
 	for _, order := range [][]Discoverer{{viaWiFi, viaCable}, {viaCable, viaWiFi}} {
