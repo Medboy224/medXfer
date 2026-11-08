@@ -1,6 +1,7 @@
 package dev.medxfer.app
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
@@ -17,7 +18,10 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -62,6 +66,27 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
     private val parked = mutableMapOf<String, MutableList<Pair<Int, Int>>>() // reads before the answer: (request, offset)
     private val clientsOf = mutableMapOf<String, BluetoothDevice>()
 
+    // Bluetooth turned off takes the server, the advertisement and the scan with it: made again
+    // at the next start.
+    private val radio = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.STATE_ON) != BluetoothAdapter.STATE_TURNING_OFF) return
+            server?.close()
+            server = null
+            advertising = null
+            scanning = null
+        }
+    }
+
+    init {
+        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            app.registerReceiver(radio, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            app.registerReceiver(radio, filter)
+        }
+    }
+
     // The scan.
     private var scanning: ScanCallback? = null
     private val seenAt = mutableMapOf<String, Long>()
@@ -73,7 +98,7 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
     fun start(advertise: Boolean, scan: Boolean, done: (String?) -> Unit) {
         val a = manager?.adapter ?: return done("unsupported")
         if (!a.isEnabled) return done("bluetooth_off")
-        if (advertise && server == null) {
+        if (advertise && advertising == null) {
             val error = serve(a.bluetoothLeAdvertiser ?: return done("no_advertiser"))
             if (error != null) return done(error)
         }
@@ -97,9 +122,14 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
             BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
             BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE,
         )
-        val s = manager?.openGattServer(app, serverCallback) ?: return "no_gatt_server"
-        s.addService(BluetoothGattService(SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply { addCharacteristic(message) })
-        server = s
+        // The server kept from one start to the next (stop only stops the advertisement): a new
+        // service makes Android tell the paired devices their copy of this phone's services is
+        // stale, which held the link with a computer 30 s (real test of 7 November).
+        if (server == null) {
+            val s = manager?.openGattServer(app, serverCallback) ?: return "no_gatt_server"
+            s.addService(BluetoothGattService(SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply { addCharacteristic(message) })
+            server = s
+        }
         // The UUID alone (BLE-02): no name, no service data; the address is the system's random one.
         val data = AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false)
             .addServiceUuid(ParcelUuid(SERVICE)).build()
@@ -118,8 +148,6 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
     fun stop() {
         advertising?.let { manager?.adapter?.bluetoothLeAdvertiser?.stopAdvertising(it) }
         advertising = null
-        server?.close()
-        server = null
         scanning?.let { manager?.adapter?.bluetoothLeScanner?.stopScan(it) }
         scanning = null
         writes.clear()
@@ -131,7 +159,7 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
         clients.clear()
     }
 
-    // A device that advertises the service: said when new, then at most every 5 s.
+    // A device that advertises the service: said when new, then at most every 2 s.
     private fun seen(r: ScanResult) {
         val address = r.device.address
         val now = SystemClock.elapsedRealtime()
@@ -331,6 +359,6 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
         val MESSAGE: UUID = UUID.fromString("c46b12c4-1dee-482d-a490-b185212312fb")
         private const val MAX_MESSAGE = 512 // BLE-03
         private const val ANSWER_WITHIN = 25_000L // BLE-11: under the 30 s of a GATT transaction
-        private const val SEEN_EVERY = 5_000L
+        private const val SEEN_EVERY = 2_000L
     }
 }

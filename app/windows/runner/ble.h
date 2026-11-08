@@ -66,7 +66,9 @@ class Ble {
   std::optional<winrt::apartment_context> ui_;
   std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);  // false once destroyed: late callbacks stop
 
+  // The service, kept from one Start to the next: only its advertisement stops (Stop).
   winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattServiceProvider provider_{nullptr};
+  bool advertising_ = false;
   winrt::Windows::Devices::Bluetooth::Advertisement::BluetoothLEAdvertisementWatcher watcher_{nullptr};
 
   std::mutex mu_;  // the maps below: the server's events come on Windows' threads

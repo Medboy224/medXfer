@@ -248,6 +248,8 @@ Remarques de l'utilisateur après l'essai, et leur correction :
 - Délais mesurés, de « toucher l'appareil » à « session ouverte ».
 - Rapport `docs/j6d-report.md`. Guide d'utilisation : reporté à la première version.
 
+**Fait (7 et 8 novembre)** : les quatre cas, le débit à 5 GHz (53,7 MB/s ; 21,3 à travers deux murs), les délais du toucher à la session (2,4 à 6,7 s) et la portée. Les essais ont trouvé et corrigé une liste lente et figée, des reconnaissances croisées, et le service GATT recréé à chaque démarrage. Détail et réserves : [j6d-report.md](j6d-report.md).
+
 ## 3. Hors périmètre
 
 - BLE en arrière-plan, application fermée (décision D3).

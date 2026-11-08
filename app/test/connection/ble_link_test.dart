@@ -17,6 +17,7 @@ class _Radio implements Ble {
   final _events = StreamController<BleEvent>.broadcast();
   final replies = <String, Uint8List>{};
   final disconnected = <String>[];
+  final hang = <String>{}; // devices that never answer: out of reach, or an old address
   bool on = true, allowed = true, started = false;
   int asked = 0; // the permission's system dialog
   WifiBands bands = (create: 3, join: 3);
@@ -46,7 +47,8 @@ class _Radio implements Ble {
   @override
   Future<void> reply(String conn, Uint8List data) async => replies[conn] = data;
   @override
-  Future<Uint8List> exchange(String device, Uint8List message) async => Uint8List.fromList([...message, 0]);
+  Future<Uint8List> exchange(String device, Uint8List message) =>
+      hang.contains(device) ? Completer<Uint8List>().future : Future.value(Uint8List.fromList([...message, 0]));
   @override
   Future<void> disconnect(String device) async => disconnected.add(device);
   @override
@@ -182,6 +184,7 @@ void main() {
           'answer' => _reply('ble_server', {'conn': 'aa', 'data': base64Encode([7, 7])}),
           _ => const FakeAnswer(),
         });
+    await link.start();
     radio.add(BleMessage('aa', Uint8List.fromList([1, 2])));
     await _settle();
     final message = steps('ble_server').first;
@@ -197,13 +200,14 @@ void main() {
     _client(core, {
       'recognize': {'suffix': '6e2a', 'trusted': false},
     });
+    await link.start();
     radio.add(const BleSeen('11:11', -60));
     await _settle();
     expect(link.devices.map((d) => (d.name, d.trusted)), [('medXfer-6e2a', false)]);
     radio.add(const BleSeen('22:22', -50));
     await _settle();
     expect(link.devices.map((d) => d.device), ['22:22']);
-    expect(radio.disconnected, ['11:11']);
+    expect(radio.disconnected, ['11:11', '22:22', '11:11']); // each recognition closes its connection, the old address too
   });
 
   test('a device of mutual trust: its network joined at 5 GHz, then the session by P3', () async {
@@ -215,6 +219,7 @@ void main() {
       },
     });
     core.on('pair', (_) => const FakeAnswer());
+    await link.start();
     radio.add(const BleSeen('33:33', -40));
     await _settle();
     final phone = link.devices.single;
@@ -224,6 +229,10 @@ void main() {
     expect(hotspot.joins, ['DIRECT-KQ-medXfer WifiBand.ghz5']);
     expect(steps('pair').single, {'ip': '192.168.49.1', 'port': 18887});
     expect(link.stage, BleStage.idle);
+    // WP-D.6: each step's time, from the touch to the session.
+    connection.take(const CoreEvent('paired', data: {'ip': '192.168.49.1', 'device_name': 'Phone'}));
+    await _settle();
+    expect(link.lastTimings.split(', ').map((m) => m.substring(0, m.lastIndexOf(' '))), ['touched', 'asking', 'confirming', 'connecting', 'joined ghz5', 'idle', 'session']);
   });
 
   test('an unknown device: its PIN typed; a wrong one is refused, said', () async {
@@ -232,6 +241,7 @@ void main() {
       'pin_ready': {'ready': true},
       'pin_reply': {'refused': true},
     });
+    await link.start();
     radio.add(const BleSeen('11:11', -60));
     await _settle();
     await link.connect(link.devices.single);
@@ -248,6 +258,7 @@ void main() {
       'reply': {'fingerprint': 'FPB', 'outcome': 2, 'band': 1},
       'ack': {'done': true},
     });
+    await link.start();
     radio.add(const BleSeen('11:11', -60));
     await _settle();
     await link.connect(link.devices.single);
@@ -270,11 +281,65 @@ void main() {
       ..add(const BleSeen('11:11', -60))
       ..add(const BleSeen('22:22', -60)); // the same moment: waits for the first
     await _settle();
-    expect(steps('ble_client').where((p) => p['step'] == 'hello').map((p) => p['conn']), ['11:11']);
-    expect(link.devices.map((d) => d.device), ['11:11']);
-    await Future<void>.delayed(const Duration(milliseconds: 2200)); // the check runs every 2 s
+    // One after the other, never two at once; the same device under its new address replaces
+    // the old one.
+    expect(steps('ble_client').map((p) => '${p['step']} ${p['conn']}'), ['hello 11:11', 'recognize 11:11', 'hello 22:22', 'recognize 22:22']);
+    expect(link.devices.map((d) => d.device), ['22:22']);
+    await Future<void>.delayed(const Duration(milliseconds: 1200)); // the check runs every second
     expect(link.devices, isEmpty);
-    expect(radio.disconnected, contains('11:11'));
+    expect(radio.disconnected, containsAll(['11:11', '22:22']));
+  });
+
+  test('DISC-05: stopped, this device answers nothing, the platform keeping its service; the last reports are ignored', () async {
+    core.on('ble_server', (_) => _reply('ble_server', {'conn': 'aa', 'data': _data}));
+    radio
+      ..add(BleMessage('aa', Uint8List.fromList([1])))
+      ..add(const BleSeen('11:11', -60)); // delivered after the stop
+    await _settle();
+    expect(link.devices, isEmpty);
+    expect(steps('ble_client'), isEmpty);
+    expect(steps('ble_server'), isEmpty);
+    expect(radio.replies, isEmpty);
+  });
+
+  test('a device being recognized by another waits servedQuiet before recognizing it in turn', () async {
+    final quiet = BleLink.servedQuiet;
+    BleLink.servedQuiet = const Duration(milliseconds: 80);
+    addTearDown(() => BleLink.servedQuiet = quiet);
+    core.on('ble_server', (_) => _reply('ble_server', {'conn': 'aa', 'data': _data}));
+    _client(core, {
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+    });
+    await link.start();
+    radio.add(BleMessage('aa', Uint8List.fromList([1]))); // the other recognizes this one
+    await _settle();
+    radio.add(const BleSeen('11:11', -60));
+    await _settle();
+    expect(steps('ble_client'), isEmpty);
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await _settle();
+    expect(link.devices.map((d) => d.name), ['medXfer-6e2a']);
+  });
+
+  test('a recognition with no answer is given up: the next device has its turn, the first waits retryAfter', () async {
+    final within = BleLink.recognizeWithin;
+    BleLink.recognizeWithin = const Duration(milliseconds: 50);
+    addTearDown(() => BleLink.recognizeWithin = within);
+    _client(core, {
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+    });
+    await link.start();
+    radio.hang.add('old');
+    radio.add(const BleSeen('old', -70)); // a phone's old address, no longer advertised
+    await _settle();
+    radio.add(const BleSeen('new', -50));
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    await _settle();
+    expect(link.devices.map((d) => d.device), ['new']);
+    expect(radio.disconnected, contains('old'));
+    radio.add(const BleSeen('old', -70)); // seen again at once: not tried before retryAfter
+    await _settle();
+    expect(steps('ble_client').where((p) => p['step'] == 'hello' && p['conn'] == 'old'), hasLength(1));
   });
 
   test('BLE-09: a network created for BLE that nobody joins is stopped after bleUnjoinedFor', () async {
@@ -296,6 +361,7 @@ void main() {
     _client(core, {
       'recognize': {'suffix': '6e2a', 'trusted': false},
     });
+    await link.start();
     radio.add(const BleSeen('11:11', -60));
     await _settle();
     final failing = _FailingRadio(radio);

@@ -34,6 +34,9 @@ class BleDevice {
   /// When the radio last said it advertises: a device silent for [BleLink.forgetAfter] is gone.
   DateTime seenAt = DateTime.now();
 
+  /// A recognition failed: not tried again before then, for the others to have their turn.
+  DateTime retryAt = DateTime(0);
+
   /// Its generic name's 4 hex digits (DISC-07): the same name as on the network.
   String? suffix;
 
@@ -70,9 +73,21 @@ class BleLink extends ChangeNotifier {
   final _random = Random();
   Timer? _forget;
 
-  /// A device the radio no longer reports (each one advertising is reported every 5 s at most,
-  /// Ble.kt and ble.cpp) leaves the list after this long.
-  static Duration forgetAfter = const Duration(seconds: 12);
+  /// A device the radio no longer reports (each one advertising is reported every 2 s, Ble.kt
+  /// and ble.cpp) leaves the list after this long: three reports missed.
+  static Duration forgetAfter = const Duration(seconds: 6);
+
+  /// A recognition takes 1 to 2 s; one longer is given up, the device tried again later. A
+  /// recognition waits for the one before it: an old address of a phone, no longer advertised,
+  /// held the computer's list 26 s (real test of 7 November).
+  static Duration recognizeWithin = const Duration(seconds: 8);
+  static Duration retryAfter = const Duration(seconds: 5);
+
+  /// While another device talks to this one (it recognizes it, or touched it), this one does not
+  /// start its own recognitions: two at once over one link, one of them hung (7 November).
+  static Duration servedQuiet = const Duration(seconds: 3);
+  DateTime _servedAt = DateTime(0);
+  Timer? _afterQuiet;
 
   /// An exchange that gets no answer: Android stops its own at 25 s (BLE-11), Windows may not.
   static Duration exchangeWithin = const Duration(seconds: 26);
@@ -100,7 +115,7 @@ class BleLink extends ChangeNotifier {
   BleDevice? get target => _target;
   BleStage get stage => _stage;
 
-  /// Why the exchange failed: refused (a wrong PIN among others, PAIR-07), no_network, join, or
+  /// Why the exchange failed: refused (a wrong PIN among others, PAIR-07), no_network, no_band, join, or
   /// the radio's error.
   String? get failure => _failure;
 
@@ -114,7 +129,7 @@ class BleLink extends ChangeNotifier {
       try {
         await ble.start();
         _running = true;
-        _forget ??= Timer.periodic(const Duration(seconds: 2), (_) => _forgetSilent());
+        _forget ??= Timer.periodic(const Duration(seconds: 1), (_) => _forgetSilent());
       } on PlatformException catch (e) {
         _problem = e.code;
       }
@@ -140,6 +155,8 @@ class BleLink extends ChangeNotifier {
     _running = false;
     _forget?.cancel();
     _forget = null;
+    _afterQuiet?.cancel();
+    _afterQuiet = null;
     _devices.clear();
     _servedTrusted.clear();
     await ble.stop();
@@ -160,6 +177,7 @@ class BleLink extends ChangeNotifier {
   /// waits for one, D3), stopped when it closes; paused while a session is open.
   void _follow() {
     final inSession = connection.session != null;
+    if (inSession) _mark('session');
     if (inSession && _running) {
       unawaited(stop().then((_) {
         _paused = true;
@@ -181,15 +199,21 @@ class BleLink extends ChangeNotifier {
   void _take(BleEvent e) {
     switch (e) {
       case BleSeen(:final device, :final rssi):
-        final d = _devices.putIfAbsent(device, () => BleDevice(device))
+        // A report that comes after the stop: the radio delivers its last ones.
+        if (!_running) return;
+        final d = _devices.putIfAbsent(device, () {
+          debugPrint('ble: seen $device, $rssi dBm');
+          return BleDevice(device);
+        })
           ..rssi = rssi
           ..seenAt = DateTime.now();
-        // One recognition at a time: a computer may advertise under several addresses in a
-        // row, and two devices recognizing each other at once made one of them fail (real test
-        // of 3 November). The others are tried when seen again, 5 s later at most.
-        if (!d.recognized && _recognizing.isEmpty && _recognizing.add(device)) unawaited(_recognize(d));
+        if (!d.recognized) _recognizeNext();
         notifyListeners();
       case final BleMessage m:
+        // The platform keeps its service between starts: stopped, this device answers nothing
+        // (DISC-05), as when it advertised nothing.
+        if (!_running) return;
+        _servedAt = DateTime.now();
         unawaited(_serve(m));
       case BleClosed(:final conn):
         _servedTrusted.remove(conn);
@@ -206,12 +230,34 @@ class BleLink extends ChangeNotifier {
     return reply.first(action)?.map;
   }
 
-  Future<Uint8List?> _send(String device, Object? data) async {
+  Future<Uint8List?> _send(String device, Object? data, {Duration? within}) async {
     if (data is! String) return null;
     return ble.exchange(device, base64Decode(data)).timeout(
-      exchangeWithin,
+      within ?? exchangeWithin,
       onTimeout: () => throw PlatformException(code: 'ble', message: 'timeout'),
     );
+  }
+
+  /// One recognition at a time: a computer may advertise under several addresses in a row, and
+  /// two devices recognizing each other at once made one of them fail (real test of 3 November).
+  /// The device seen last goes first; one that failed waits [retryAfter].
+  void _recognizeNext() {
+    if (_recognizing.isNotEmpty) return;
+    final now = DateTime.now();
+    final quiet = _servedAt.add(servedQuiet);
+    if (now.isBefore(quiet)) {
+      _afterQuiet?.cancel();
+      _afterQuiet = Timer(quiet.difference(now), _recognizeNext);
+      return;
+    }
+    final waiting = [
+      for (final d in _devices.values)
+        if (!d.recognized && !now.isBefore(d.retryAt)) d,
+    ]..sort((a, b) => b.seenAt.compareTo(a.seenAt));
+    if (waiting.isEmpty) return;
+    final d = waiting.first;
+    _recognizing.add(d.device);
+    unawaited(_recognize(d));
   }
 
   /// The devices the radio stopped reporting leave the list: gone, or under a new address.
@@ -223,6 +269,7 @@ class BleLink extends ChangeNotifier {
     ];
     if (gone.isEmpty) return;
     for (final d in gone) {
+      debugPrint('ble: ${d.device} gone, last seen ${now.difference(d.seenAt).inMilliseconds} ms ago');
       _devices.remove(d.device);
       unawaited(ble.disconnect(d.device));
     }
@@ -236,7 +283,13 @@ class BleLink extends ChangeNotifier {
     final r = await _step('ble_server', {'conn': m.conn, 'step': 'message', 'data': base64Encode(m.data), 'create': own.create, 'join': own.join});
     if (r == null) return;
     if (r['data'] case final String data) await ble.reply(m.conn, base64Decode(data));
-    if (r['request'] case final Map<String, Object?> request) await _answer(m.conn, request, own);
+    if (r['request'] case final Map<String, Object?> request) {
+      // The other's user touched this device: its request authenticated, by the pair's key or
+      // the PIN typed. The recognition before it says nothing of the touch.
+      _clock = null;
+      _startClock('request${request['trusted'] == true ? '' : ' after the PIN'}');
+      await _answer(m.conn, request, own);
+    }
     if (r['network'] case final Map<String, Object?> network) {
       // The other created its network: join it, then connect (BLE-10).
       unawaited(_joinAndConnect(network, '${r['fingerprint']}', trusted: _servedTrusted[m.conn] ?? false));
@@ -251,6 +304,7 @@ class BleLink extends ChangeNotifier {
     Map<String, Object?>? network;
     if (outcome == 1) {
       final net = await connection.networkForBle(fiveGhz: ((request['band'] as num?)?.toInt() ?? 0) == _band5);
+      _mark(net == null ? 'no network' : 'network ${net.band?.name ?? 'created'}');
       if (net?.ssid == null || net?.address == null) {
         outcome = 3; // none could be created: said, rather than a network that is not there
       } else {
@@ -275,36 +329,80 @@ class BleLink extends ChangeNotifier {
   /// Recognizes a device newly seen: its generic name, and whether it is of mutual trust. The
   /// same device under a new address replaces the old one.
   Future<void> _recognize(BleDevice d) async {
+    final clock = Stopwatch()..start();
+    String? failed;
     try {
       // Not at the same moment as the other device, which may be recognizing this one.
       final jitter = recognizeJitter.inMilliseconds;
       if (jitter > 0) await Future<void>.delayed(Duration(milliseconds: _random.nextInt(jitter)));
       final hello = await _step('ble_client', {'conn': d.device, 'step': 'hello'});
-      final answer = await _send(d.device, hello?['data']);
-      if (answer == null) return;
-      final peer = await _step('ble_client', {'conn': d.device, 'step': 'recognize', 'data': base64Encode(answer)});
-      if (peer == null || peer['refused'] == true) return;
+      final answer = await _send(d.device, hello?['data'], within: recognizeWithin);
+      final peer = answer == null ? null : await _step('ble_client', {'conn': d.device, 'step': 'recognize', 'data': base64Encode(answer)});
+      if (peer == null || peer['refused'] == true) {
+        failed = 'refused';
+        return;
+      }
       d
         ..suffix = peer['suffix'] as String?
         ..alias = peer['alias'] as String?
         ..fingerprint = peer['fingerprint'] as String?;
+      debugPrint('ble: ${d.device} is ${d.name}, ${clock.elapsedMilliseconds} ms');
+      // Its connection closed: kept open, the other's recognition of this device hung over it
+      // (7 November). Touching it connects again.
+      unawaited(ble.disconnect(d.device));
       for (final old in _devices.values.where((o) => o != d && o.suffix == d.suffix).toList()) {
         _devices.remove(old.device);
         unawaited(ble.disconnect(old.device));
       }
       notifyListeners();
-    } on PlatformException {
-      // Out of reach, or busy: seen again, it is tried again.
-      _devices.remove(d.device);
+    } on PlatformException catch (e) {
+      // Out of reach, or busy: its connection closed, tried again later.
+      failed = e.message ?? e.code;
+      unawaited(ble.disconnect(d.device));
     } finally {
+      if (failed != null) {
+        debugPrint('ble: ${d.device} not recognized ($failed), ${clock.elapsedMilliseconds} ms');
+        d.retryAt = DateTime.now().add(retryAfter);
+      }
       _recognizing.remove(d.device);
+      scheduleMicrotask(_recognizeNext);
     }
   }
 
   void _set(BleStage stage, [String? failure]) {
     _stage = stage;
     _failure = failure;
+    _mark(failure == null ? stage.name : '${stage.name} $failure');
+    // Failed: the connection closed, for the other to forget this exchange; a new touch starts
+    // afresh (the second attempt was refused at once, real test of 7 November).
+    if (stage == BleStage.failed && _target != null) unawaited(ble.disconnect(_target!.device));
     notifyListeners();
+  }
+
+  // How long each step takes (WP-D.6): from the touch, or from the first message of the device
+  // that touched this one, to the session. Logged once the session opens, or the exchange fails.
+  Stopwatch? _clock;
+  final _marks = <String>[];
+
+  /// The steps of the last exchange, with their time in ms since it began.
+  String get lastTimings => _marks.join(', ');
+
+  void _mark(String what) {
+    final clock = _clock;
+    if (clock == null) return;
+    _marks.add('$what ${clock.elapsedMilliseconds}');
+    if (what == 'session' || what.startsWith('failed')) {
+      debugPrint('ble: $lastTimings');
+      _clock = null;
+    }
+  }
+
+  void _startClock(String what) {
+    // One left by an exchange that ended without a session: a minute is longer than any.
+    if (_clock case final c? when c.elapsed < const Duration(minutes: 1)) return;
+    _clock = Stopwatch()..start();
+    _marks.clear();
+    _mark(what);
   }
 
   /// Touches [d]: of mutual trust, the network and the session follow; unknown, it shows a PIN,
@@ -312,6 +410,8 @@ class BleLink extends ChangeNotifier {
   Future<void> connect(BleDevice d) async {
     if (_stage != BleStage.idle && _stage != BleStage.failed) return;
     _target = d;
+    _clock = null;
+    _startClock('touched');
     _set(BleStage.asking);
     try {
       final own = await ble.wifiBands();
@@ -373,6 +473,7 @@ class BleLink extends ChangeNotifier {
       case 2: // this device creates it, at the band the other agreed
         _set(BleStage.networking);
         final net = await connection.networkForBle(fiveGhz: ((r['band'] as num?)?.toInt() ?? 0) == _band5);
+        _mark(net == null ? 'no network' : 'network ${net.band?.name ?? 'created'}');
         if (net?.ssid == null || net?.address == null) return _set(BleStage.failed, 'no_network');
         final n = await _step('ble_client', {'conn': d.device, 'step': 'network', 'network': _networkOf(net!)});
         final ack = await _send(d.device, n?['data']);
@@ -380,7 +481,7 @@ class BleLink extends ChangeNotifier {
         if (done?['done'] != true) return _set(BleStage.failed, 'refused');
         _set(BleStage.idle); // the other joins this network, then connects (pair_ble)
       default:
-        _set(BleStage.failed, 'no_network');
+        _set(BleStage.failed, 'no_band'); // neither can join what the other creates: Wi-Fi off on both
     }
   }
 
@@ -393,6 +494,7 @@ class BleLink extends ChangeNotifier {
       band: (network['band'] as num?)?.toInt() == _band5 ? WifiBand.ghz5 : WifiBand.ghz24,
     );
     if (!await connection.joinForBle(n)) return _set(BleStage.failed, 'join');
+    _mark('joined ${n.band?.name}');
     final addrs = [for (final a in (network['addrs'] as List?) ?? const []) '$a'];
     final ip = addrs.firstWhere((a) => !a.contains(':'), orElse: () => addrs.isEmpty ? '' : addrs.first);
     final port = (network['port'] as num?)?.toInt() ?? 0;
@@ -410,6 +512,7 @@ class BleLink extends ChangeNotifier {
   @override
   void dispose() {
     _forget?.cancel();
+    _afterQuiet?.cancel();
     connection.removeListener(_follow);
     unawaited(_events.cancel());
     super.dispose();
