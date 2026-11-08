@@ -37,7 +37,7 @@ String bleDetail(AppLocalizations l, BleLink link, BleDevice d) {
     };
     if (stage != null) return stage;
   }
-  return '${l.pathBluetooth} · ${d.trusted ? l.nearbyTrusted : l.nearbyAsksPin}';
+  return [l.pathBluetooth, if (d.weak) l.bleWeak, d.trusted ? l.nearbyTrusted : l.nearbyAsksPin].join(' · ');
 }
 
 /// One exchange at a time.
@@ -121,6 +121,7 @@ class _BleFlowState extends State<BleFlow> {
         'no_network' => l.bleFailedNetwork(d.name),
         'no_band' => l.bleFailedNoWifi(d.name),
         'join' => l.bleFailedJoin(d.name),
+        'far' => l.bleFailedFar(d.name),
         _ => l.bleFailedRadio(d.name),
       };
       // Said once: the exchange may start again.

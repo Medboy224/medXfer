@@ -18,6 +18,7 @@ class _Radio implements Ble {
   final replies = <String, Uint8List>{};
   final disconnected = <String>[];
   final hang = <String>{}; // devices that never answer: out of reach, or an old address
+  int drops = 0; // the next exchanges failing, as Android's do when the other goes out of reach
   bool on = true, allowed = true, started = false;
   int asked = 0; // the permission's system dialog
   WifiBands bands = (create: 3, join: 3);
@@ -47,8 +48,14 @@ class _Radio implements Ble {
   @override
   Future<void> reply(String conn, Uint8List data) async => replies[conn] = data;
   @override
-  Future<Uint8List> exchange(String device, Uint8List message) =>
-      hang.contains(device) ? Completer<Uint8List>().future : Future.value(Uint8List.fromList([...message, 0]));
+  Future<Uint8List> exchange(String device, Uint8List message) {
+    if (drops > 0) {
+      drops--;
+      return Future.error(PlatformException(code: 'ble', message: 'timeout'));
+    }
+    return hang.contains(device) ? Completer<Uint8List>().future : Future.value(Uint8List.fromList([...message, 0]));
+  }
+
   @override
   Future<void> disconnect(String device) async => disconnected.add(device);
   @override
@@ -109,8 +116,7 @@ FakeAnswer _reply(String action, Map<String, Object?> data) => FakeAnswer(replie
 final _data = base64Encode([1, 2, 3]);
 
 /// The steps of the core's ble_client a test scripts, by name; the others answer with data.
-void _client(FakeCore core, Map<String, Map<String, Object?>> steps) =>
-    core.on('ble_client', (p) => _reply('ble_client', steps[p['step']] ?? {'data': _data}));
+void _client(FakeCore core, Map<String, Map<String, Object?>> steps) => core.on('ble_client', (p) => _reply('ble_client', steps[p['step']] ?? {'data': _data}));
 
 void main() {
   late FakeCore core;
@@ -118,7 +124,10 @@ void main() {
   late _Hotspot hotspot;
   late Connection connection;
   late BleLink link;
-  setUpAll(() => BleLink.recognizeJitter = Duration.zero);
+  setUpAll(() {
+    BleLink.recognizeJitter = Duration.zero;
+    BleLink.touchRetryAfter = Duration.zero;
+  });
   setUp(() {
     core = FakeCore()..on('set_network_info', (_) => const FakeAnswer());
     radio = _Radio();
@@ -176,14 +185,20 @@ void main() {
   });
 
   test('touched by an unknown device: the core answers each message, the phone creates its network at 5 GHz, the answer is read', () async {
-    core.on('ble_server', (p) => switch (p['step']) {
-          'message' => _reply('ble_server', {
-              'conn': 'aa',
-              'request': {'fingerprint': 'FPB', 'trusted': false, 'create': 1, 'join': 3, 'outcome': 1, 'band': 2},
-            }),
-          'answer' => _reply('ble_server', {'conn': 'aa', 'data': base64Encode([7, 7])}),
-          _ => const FakeAnswer(),
-        });
+    core.on(
+      'ble_server',
+      (p) => switch (p['step']) {
+        'message' => _reply('ble_server', {
+          'conn': 'aa',
+          'request': {'fingerprint': 'FPB', 'trusted': false, 'create': 1, 'join': 3, 'outcome': 1, 'band': 2},
+        }),
+        'answer' => _reply('ble_server', {
+          'conn': 'aa',
+          'data': base64Encode([7, 7]),
+        }),
+        _ => const FakeAnswer(),
+      },
+    );
     await link.start();
     radio.add(BleMessage('aa', Uint8List.fromList([1, 2])));
     await _settle();
@@ -192,7 +207,13 @@ void main() {
     expect(hotspot.starts, [true]);
     final answer = steps('ble_server').last;
     expect(answer['outcome'], 1);
-    expect(answer['network'], {'ssid': 'DIRECT-KQ-medXfer', 'passphrase': 'K3PQ8Z2MXA7D', 'security': 1, 'band': 2, 'addrs': ['192.168.49.1']});
+    expect(answer['network'], {
+      'ssid': 'DIRECT-KQ-medXfer',
+      'passphrase': 'K3PQ8Z2MXA7D',
+      'security': 1,
+      'band': 2,
+      'addrs': ['192.168.49.1'],
+    });
     expect(radio.replies['aa'], [7, 7]);
   });
 
@@ -214,8 +235,17 @@ void main() {
     _client(core, {
       'recognize': {'suffix': 'ab12', 'trusted': true, 'fingerprint': 'FPA', 'alias': 'Phone'},
       'reply': {
-        'fingerprint': 'FPA', 'outcome': 1, 'band': 2,
-        'network': {'ssid': 'DIRECT-KQ-medXfer', 'passphrase': 'K3PQ8Z2MXA7D', 'security': 1, 'band': 2, 'port': 18887, 'addrs': ['192.168.49.1']},
+        'fingerprint': 'FPA',
+        'outcome': 1,
+        'band': 2,
+        'network': {
+          'ssid': 'DIRECT-KQ-medXfer',
+          'passphrase': 'K3PQ8Z2MXA7D',
+          'security': 1,
+          'band': 2,
+          'port': 18887,
+          'addrs': ['192.168.49.1'],
+        },
       },
     });
     core.on('pair', (_) => const FakeAnswer());
@@ -265,7 +295,13 @@ void main() {
     await link.typePin('123456');
     expect(hotspot.starts, [false]); // at 2.4 GHz: the other does not join 5 GHz
     final network = steps('ble_client').firstWhere((p) => p['step'] == 'network')['network'];
-    expect(network, {'ssid': 'AndroidShare_1853', 'passphrase': 'vvrtsy12', 'security': 2, 'band': 1, 'addrs': ['10.34.109.23']});
+    expect(network, {
+      'ssid': 'AndroidShare_1853',
+      'passphrase': 'vvrtsy12',
+      'security': 2,
+      'band': 1,
+      'addrs': ['10.34.109.23'],
+    });
     expect(link.stage, BleStage.idle); // the other joins it, then connects (pair_ble)
   });
 
@@ -357,25 +393,93 @@ void main() {
     expect(connection.myHotspot?.ssid, 'DIRECT-KQ-medXfer');
   });
 
-  test('the radio fails during an exchange: said, the exchange may start again', () async {
+  /// A device seen at [rssi] and recognized: of mutual trust, its network given at 5 GHz.
+  Future<BleDevice> trustedAt(int rssi) async {
+    _client(core, {
+      'recognize': {'suffix': 'ab12', 'trusted': true, 'fingerprint': 'FPA', 'alias': 'PC'},
+      'reply': {
+        'fingerprint': 'FPA',
+        'outcome': 1,
+        'band': 2,
+        'network': {
+          'ssid': 'DIRECT-KQ-medXfer',
+          'passphrase': 'K3PQ8Z2MXA7D',
+          'security': 1,
+          'band': 2,
+          'port': 18887,
+          'addrs': ['192.168.49.1'],
+        },
+      },
+    });
+    core.on('pair', (_) => const FakeAnswer());
+    await link.start();
+    radio.add(BleSeen('33:33', rssi));
+    await _settle();
+    return link.devices.single;
+  }
+
+  test('the edge of reach: a touch the radio drops runs again by itself, afresh', () async {
+    final pc = await trustedAt(-88);
+    radio.drops = 2; // the first try's hello, the second's trusted request
+    await link.connect(pc);
+    expect(steps('ble_client').where((p) => p['step'] == 'hello'), hasLength(4)); // the recognition, then 3 tries
+    expect(radio.disconnected.where((d) => d == '33:33'), hasLength(3)); // the recognition's, then each try dropped
+    expect(link.stage, BleStage.idle);
+    expect(steps('pair').single, {'ip': '192.168.49.1', 'port': 18887});
+    expect(link.lastTimings, contains('retry timeout'));
+  });
+
+  test('the edge of reach: still dropped after touchTries, "too far" when the signal is weak', () async {
+    final pc = await trustedAt(-90);
+    expect(pc.weak, isTrue);
+    radio.drops = 99;
+    await link.connect(pc);
+    expect((link.stage, link.failure), (BleStage.failed, 'far'));
+    expect(steps('ble_client').where((p) => p['step'] == 'hello'), hasLength(1 + BleLink.touchTries));
+  });
+
+  test('the radio fails with a good signal: its error said, the exchange may start again', () async {
+    final pc = await trustedAt(-60);
+    expect(pc.weak, isFalse);
+    radio.drops = 99;
+    await link.connect(pc);
+    expect((link.stage, link.failure), (BleStage.failed, 'timeout'));
+    radio.drops = 0;
+    await link.connect(pc);
+    expect(link.stage, BleStage.idle);
+  });
+
+  test('given up while it waits to run the touch again: not run again', () async {
+    final pc = await trustedAt(-90);
+    final wait = BleLink.touchRetryAfter;
+    BleLink.touchRetryAfter = const Duration(milliseconds: 50);
+    addTearDown(() => BleLink.touchRetryAfter = wait);
+    radio.drops = 1;
+    final touch = link.connect(pc);
+    await _settle();
+    link.reset();
+    await touch;
+    expect(steps('ble_client').where((p) => p['step'] == 'hello'), hasLength(2));
+    expect((link.stage, link.target), (BleStage.idle, null));
+  });
+
+  test('a device at the edge of reach is kept forgetWeakAfter, for the list not to blink', () async {
+    final (forget, weak) = (BleLink.forgetAfter, BleLink.forgetWeakAfter);
+    BleLink.forgetAfter = const Duration(milliseconds: 50);
+    BleLink.forgetWeakAfter = const Duration(milliseconds: 2500);
+    addTearDown(() {
+      BleLink.forgetAfter = forget;
+      BleLink.forgetWeakAfter = weak;
+    });
     _client(core, {
       'recognize': {'suffix': '6e2a', 'trusted': false},
     });
     await link.start();
-    radio.add(const BleSeen('11:11', -60));
+    radio.add(const BleSeen('11:11', -91));
     await _settle();
-    final failing = _FailingRadio(radio);
-    final l2 = BleLink(core, failing, connection);
-    addTearDown(l2.dispose);
-    await l2.connect(link.devices.single);
-    expect((l2.stage, l2.failure), (BleStage.failed, 'timeout'));
+    await Future<void>.delayed(const Duration(milliseconds: 1200)); // past forgetAfter: still there
+    expect(link.devices.map((d) => d.device), ['11:11']);
+    await Future<void>.delayed(const Duration(milliseconds: 2400));
+    expect(link.devices, isEmpty);
   });
-}
-
-/// A radio whose exchanges fail as Android's do when the other goes out of reach.
-class _FailingRadio extends _Radio {
-  _FailingRadio(_Radio _);
-
-  @override
-  Future<Uint8List> exchange(String device, Uint8List message) => throw PlatformException(code: 'ble', message: 'timeout');
 }

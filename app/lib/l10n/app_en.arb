@@ -375,5 +375,9 @@
   "bleFailedRadio": "{device} did not answer by Bluetooth. Come closer and try again.",
   "@bleFailedRadio": {"placeholders": {"device": {"type": "String"}}},
   "bleFailedNoWifi": "No Wi-Fi network is possible with {device}: turn Wi-Fi on, on one of the two devices.",
-  "@bleFailedNoWifi": {"placeholders": {"device": {"type": "String"}}}
+  "@bleFailedNoWifi": {"placeholders": {"device": {"type": "String"}}},
+  "bleFailedFar": "{device} is too far for Bluetooth: come closer, then touch it again.",
+  "@bleFailedFar": {"placeholders": {"device": {"type": "String"}}},
+  "bleWeak": "weak signal",
+  "@bleWeak": {"description": "A device found by Bluetooth at the edge of reach."}
 }
