@@ -302,5 +302,7 @@
   "bleFailedNetwork": "Aucun réseau n'a pu être créé avec {device}.",
   "bleFailedJoin": "Impossible de rejoindre le réseau de {device}.",
   "bleFailedRadio": "{device} n'a pas répondu par Bluetooth. Rapprochez-vous et réessayez.",
-  "bleFailedNoWifi": "Aucun réseau Wi-Fi possible avec {device} : allumez le Wi-Fi de l’un des deux appareils."
+  "bleFailedNoWifi": "Aucun réseau Wi-Fi possible avec {device} : allumez le Wi-Fi de l’un des deux appareils.",
+  "bleFailedFar": "{device} est trop loin pour le Bluetooth : rapprochez-vous, puis touchez-le à nouveau.",
+  "bleWeak": "signal faible"
 }

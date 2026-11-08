@@ -46,6 +46,9 @@ class BleDevice {
 
   bool get recognized => suffix != null;
   bool get trusted => fingerprint != null;
+
+  /// At the edge of reach ([BleLink.weakRssi]).
+  bool get weak => rssi != 0 && rssi <= BleLink.weakRssi;
   String get name => alias ?? 'medXfer-$suffix';
 }
 
@@ -54,6 +57,12 @@ enum BleStage { idle, asking, pinNeeded, confirming, networking, connecting, fai
 
 /// Bands as the core takes them: bit 0 2.4 GHz, bit 1 5 GHz.
 const _band5 = 2;
+
+/// An exchange the radio dropped: out of reach, or the link lost.
+class _RadioLost implements Exception {
+  const _RadioLost(this.why);
+  final String why;
+}
 
 class BleLink extends ChangeNotifier {
   BleLink(this.core, this.ble, this.connection) {
@@ -76,6 +85,18 @@ class BleLink extends ChangeNotifier {
   /// A device the radio no longer reports (each one advertising is reported every 2 s, Ble.kt
   /// and ble.cpp) leaves the list after this long: three reports missed.
   static Duration forgetAfter = const Duration(seconds: 6);
+
+  /// A signal this weak is at the edge of reach: through two walls, -82 to -96 dBm, the radio
+  /// reported the other one time in several, and a touch worked at the third (real test of
+  /// 8 November). Such a device is kept [forgetWeakAfter] rather than [forgetAfter], for the
+  /// list not to blink.
+  static const weakRssi = -80;
+  static Duration forgetWeakAfter = const Duration(seconds: 15);
+
+  /// A touch the radio drops is run again by itself, afresh, this many times in all: the other
+  /// forgets the first on its connection's close, and a network already created is given again.
+  static int touchTries = 3;
+  static Duration touchRetryAfter = const Duration(milliseconds: 600);
 
   /// A recognition takes 1 to 2 s; one longer is given up, the device tried again later. A
   /// recognition waits for the one before it: an old address of a phone, no longer advertised,
@@ -109,8 +130,7 @@ class BleLink extends ChangeNotifier {
   String? get problem => _problem;
 
   /// The devices seen and recognized, of mutual trust first, then the nearest.
-  List<BleDevice> get devices => _devices.values.where((d) => d.recognized).toList()
-    ..sort((a, b) => a.trusted != b.trusted ? (a.trusted ? -1 : 1) : b.rssi.compareTo(a.rssi));
+  List<BleDevice> get devices => _devices.values.where((d) => d.recognized).toList()..sort((a, b) => a.trusted != b.trusted ? (a.trusted ? -1 : 1) : b.rssi.compareTo(a.rssi));
 
   BleDevice? get target => _target;
   BleStage get stage => _stage;
@@ -179,10 +199,12 @@ class BleLink extends ChangeNotifier {
     final inSession = connection.session != null;
     if (inSession) _mark('session');
     if (inSession && _running) {
-      unawaited(stop().then((_) {
-        _paused = true;
-        notifyListeners();
-      }));
+      unawaited(
+        stop().then((_) {
+          _paused = true;
+          notifyListeners();
+        }),
+      );
     } else if (!inSession && _paused) {
       _paused = false;
       if (connection.showing) unawaited(start(ask: false));
@@ -201,12 +223,13 @@ class BleLink extends ChangeNotifier {
       case BleSeen(:final device, :final rssi):
         // A report that comes after the stop: the radio delivers its last ones.
         if (!_running) return;
-        final d = _devices.putIfAbsent(device, () {
-          debugPrint('ble: seen $device, $rssi dBm');
-          return BleDevice(device);
-        })
-          ..rssi = rssi
-          ..seenAt = DateTime.now();
+        final d =
+            _devices.putIfAbsent(device, () {
+                debugPrint('ble: seen $device, $rssi dBm');
+                return BleDevice(device);
+              })
+              ..rssi = rssi
+              ..seenAt = DateTime.now();
         if (!d.recognized) _recognizeNext();
         notifyListeners();
       case final BleMessage m:
@@ -232,10 +255,16 @@ class BleLink extends ChangeNotifier {
 
   Future<Uint8List?> _send(String device, Object? data, {Duration? within}) async {
     if (data is! String) return null;
-    return ble.exchange(device, base64Decode(data)).timeout(
-      within ?? exchangeWithin,
-      onTimeout: () => throw PlatformException(code: 'ble', message: 'timeout'),
-    );
+    try {
+      return await ble
+          .exchange(device, base64Decode(data))
+          .timeout(
+            within ?? exchangeWithin,
+            onTimeout: () => throw PlatformException(code: 'ble', message: 'timeout'),
+          );
+    } on PlatformException catch (e) {
+      throw _RadioLost(e.message ?? e.code);
+    }
   }
 
   /// One recognition at a time: a computer may advertise under several addresses in a row, and
@@ -265,7 +294,7 @@ class BleLink extends ChangeNotifier {
     final now = DateTime.now();
     final gone = [
       for (final d in _devices.values)
-        if (d != _target && now.difference(d.seenAt) > forgetAfter) d,
+        if (d != _target && now.difference(d.seenAt) > (d.weak ? forgetWeakAfter : forgetAfter)) d,
     ];
     if (gone.isEmpty) return;
     for (final d in gone) {
@@ -317,12 +346,12 @@ class BleLink extends ChangeNotifier {
 
   /// A network of this device as the core takes it: the core adds its own port.
   Map<String, Object?> _networkOf(HotspotInfo net) => {
-        'ssid': net.ssid,
-        'passphrase': net.passphrase,
-        'security': net.security == 0 ? 1 : net.security,
-        'band': net.band == WifiBand.ghz5 ? 2 : 1,
-        'addrs': [net.address],
-      };
+    'ssid': net.ssid,
+    'passphrase': net.passphrase,
+    'security': net.security == 0 ? 1 : net.security,
+    'band': net.band == WifiBand.ghz5 ? 2 : 1,
+    'addrs': [net.address],
+  };
 
   // The client side: this device's user touched another.
 
@@ -355,8 +384,11 @@ class BleLink extends ChangeNotifier {
         unawaited(ble.disconnect(old.device));
       }
       notifyListeners();
-    } on PlatformException catch (e) {
+    } on _RadioLost catch (e) {
       // Out of reach, or busy: its connection closed, tried again later.
+      failed = e.why;
+      unawaited(ble.disconnect(d.device));
+    } on PlatformException catch (e) {
       failed = e.message ?? e.code;
       unawaited(ble.disconnect(d.device));
     } finally {
@@ -407,36 +439,53 @@ class BleLink extends ChangeNotifier {
 
   /// Touches [d]: of mutual trust, the network and the session follow; unknown, it shows a PIN,
   /// which this user types ([typePin], stage [BleStage.pinNeeded]).
+  ///
+  /// The radio dropping an exchange, the touch runs again by itself ([touchTries]); still
+  /// dropped, it fails, `far` when the signal is weak.
   Future<void> connect(BleDevice d) async {
     if (_stage != BleStage.idle && _stage != BleStage.failed) return;
     _target = d;
     _clock = null;
     _startClock('touched');
-    _set(BleStage.asking);
-    try {
-      final own = await ble.wifiBands();
-      // A fresh challenge on this connection: the one of the recognition may be past its minute.
-      final hello = await _step('ble_client', {'conn': d.device, 'step': 'hello'});
-      final answer = await _send(d.device, hello?['data']);
-      final peer = answer == null ? null : await _step('ble_client', {'conn': d.device, 'step': 'recognize', 'data': base64Encode(answer)});
-      if (peer == null || peer['refused'] == true) return _set(BleStage.failed, 'refused');
-      if (peer['trusted'] == true) {
-        final req = await _step('ble_client', {'conn': d.device, 'step': 'trusted', 'create': own.create, 'join': own.join});
-        _set(BleStage.confirming);
-        final reply = await _send(d.device, req?['data']);
-        if (reply == null) return _set(BleStage.failed, 'refused');
-        await _reply(d, reply, trusted: true);
-        return;
+    for (var tried = 1; ; tried++) {
+      _set(BleStage.asking);
+      try {
+        return await _touch(d);
+      } on _RadioLost catch (e) {
+        if (_target != d) return; // given up meanwhile
+        if (tried >= touchTries) return _set(BleStage.failed, d.weak ? 'far' : e.why);
+        _mark('retry ${e.why}');
+        await ble.disconnect(d.device);
+        await Future<void>.delayed(touchRetryAfter);
+        if (_target != d) return;
+      } on PlatformException catch (e) {
+        return _set(BleStage.failed, e.message ?? e.code);
       }
-      final wanted = await _step('ble_client', {'conn': d.device, 'step': 'pin_wanted'});
-      final ready = await _send(d.device, wanted?['data']);
-      if (ready == null) return _set(BleStage.failed, 'refused');
-      final r = await _step('ble_client', {'conn': d.device, 'step': 'pin_ready', 'data': base64Encode(ready)});
-      if (r?['ready'] != true) return _set(BleStage.failed, 'refused');
-      _set(BleStage.pinNeeded);
-    } on PlatformException catch (e) {
-      _set(BleStage.failed, e.message ?? e.code);
     }
+  }
+
+  /// One touch: to the PIN asked (unknown), or to the network and the session (mutual trust).
+  Future<void> _touch(BleDevice d) async {
+    final own = await ble.wifiBands();
+    // A fresh challenge on this connection: the one of the recognition may be past its minute.
+    final hello = await _step('ble_client', {'conn': d.device, 'step': 'hello'});
+    final answer = await _send(d.device, hello?['data']);
+    final peer = answer == null ? null : await _step('ble_client', {'conn': d.device, 'step': 'recognize', 'data': base64Encode(answer)});
+    if (peer == null || peer['refused'] == true) return _set(BleStage.failed, 'refused');
+    if (peer['trusted'] == true) {
+      final req = await _step('ble_client', {'conn': d.device, 'step': 'trusted', 'create': own.create, 'join': own.join});
+      _set(BleStage.confirming);
+      final reply = await _send(d.device, req?['data']);
+      if (reply == null) return _set(BleStage.failed, 'refused');
+      await _reply(d, reply, trusted: true);
+      return;
+    }
+    final wanted = await _step('ble_client', {'conn': d.device, 'step': 'pin_wanted'});
+    final ready = await _send(d.device, wanted?['data']);
+    if (ready == null) return _set(BleStage.failed, 'refused');
+    final r = await _step('ble_client', {'conn': d.device, 'step': 'pin_ready', 'data': base64Encode(ready)});
+    if (r?['ready'] != true) return _set(BleStage.failed, 'refused');
+    _set(BleStage.pinNeeded);
   }
 
   /// The PIN the other device shows, typed by this user.
@@ -455,6 +504,9 @@ class BleLink extends ChangeNotifier {
       final answer = await _send(d.device, confirm['data']);
       if (answer == null) return _set(BleStage.failed, 'refused');
       await _reply(d, answer, trusted: false);
+    } on _RadioLost catch (e) {
+      // Not run again: the PIN would be another.
+      _set(BleStage.failed, d.weak ? 'far' : e.why);
     } on PlatformException catch (e) {
       _set(BleStage.failed, e.message ?? e.code);
     }

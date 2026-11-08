@@ -31,6 +31,7 @@ class _Radio implements Ble {
   final _events = StreamController<BleEvent>.broadcast();
   bool allowed = true, started = false;
   int asked = 0;
+  bool dropping = false; // out of reach: each exchange fails
 
   void add(BleEvent e) => _events.add(e);
 
@@ -57,7 +58,11 @@ class _Radio implements Ble {
   @override
   Future<void> reply(String conn, Uint8List data) async {}
   @override
-  Future<Uint8List> exchange(String device, Uint8List message) async => Uint8List.fromList([...message, 0]);
+  Future<Uint8List> exchange(String device, Uint8List message) async {
+    if (dropping) throw PlatformException(code: 'ble', message: 'timeout');
+    return Uint8List.fromList([...message, 0]);
+  }
+
   @override
   Future<void> disconnect(String device) async {}
   @override
@@ -67,14 +72,36 @@ class _Radio implements Ble {
 final _data = base64Encode([1, 2, 3]);
 
 FakeCore _core(Map<String, Map<String, Object?>> steps) => FakeCore()
-  ..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy A57', 'instance': 'medXfer-7810'})]))
+  ..on(
+    'get_status',
+    (_) => const FakeAnswer(
+      replies: [
+        CoreEvent('status', data: {'device_name': 'Galaxy A57', 'instance': 'medXfer-7810'}),
+      ],
+    ),
+  )
   ..on('set_discoverable', (_) => const FakeAnswer())
-  ..on('scan', (_) => const FakeAnswer(replies: [
-        CoreEvent('peers_list', data: [
-          {'device_name': 'medXfer-1a2b', 'host_ip': '192.168.1.30', 'port': 18887},
-        ]),
-      ]))
-  ..on('ble_client', (p) => FakeAnswer(replies: [CoreEvent('ble_client', data: steps[p['step']] ?? {'data': _data})]));
+  ..on(
+    'scan',
+    (_) => const FakeAnswer(
+      replies: [
+        CoreEvent(
+          'peers_list',
+          data: [
+            {'device_name': 'medXfer-1a2b', 'host_ip': '192.168.1.30', 'port': 18887},
+          ],
+        ),
+      ],
+    ),
+  )
+  ..on(
+    'ble_client',
+    (p) => FakeAnswer(
+      replies: [
+        CoreEvent('ble_client', data: steps[p['step']] ?? {'data': _data}),
+      ],
+    ),
+  );
 
 Future<AppState> _app(WidgetTester tester, FakeCore core, _Radio radio) async {
   final state = AppState(core: core, folders: const _TestFolders(), ble: radio, history: MemoryHistoryStore());
@@ -96,7 +123,10 @@ Future<void> _reveal(WidgetTester tester, Finder finder) async {
 }
 
 void main() {
-  setUpAll(() => BleLink.recognizeJitter = Duration.zero);
+  setUpAll(() {
+    BleLink.recognizeJitter = Duration.zero;
+    BleLink.touchRetryAfter = Duration.zero;
+  });
 
   testWidgets('BLE-12: the reason first, the system\'s dialog only on "Autoriser"; a device found by Bluetooth, its PIN, a refusal said', (tester) async {
     final radio = _Radio()..allowed = false;
@@ -147,5 +177,24 @@ void main() {
     await _reveal(tester, find.text('medXfer-1a2b'));
     expect(find.text('medXfer-1a2b'), findsOneWidget);
     expect(find.byKey(const ValueKey('ble-22:22')), findsNothing);
+  });
+
+  testWidgets('the edge of reach: the weak signal said in the row; the touch still dropped, "too far" said', (tester) async {
+    final radio = _Radio();
+    final core = _core({
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+    });
+    await _app(tester, core, radio);
+    await tester.tap(find.byKey(const Key('connect')));
+    await tester.pumpAndSettle();
+    radio.add(const BleSeen('11:11', -90));
+    await tester.pumpAndSettle();
+    await _reveal(tester, find.text('medXfer-6e2a'));
+    expect(find.text('Bluetooth · signal faible · Il affichera un PIN à taper ici'), findsOneWidget);
+    radio.dropping = true;
+    await tester.tap(find.text('medXfer-6e2a'));
+    await tester.pumpAndSettle();
+    expect(core.calls.where((c) => c.action == 'ble_client' && c.payload['step'] == 'hello'), hasLength(1 + BleLink.touchTries));
+    expect(find.text('medXfer-6e2a est trop loin pour le Bluetooth : rapprochez-vous, puis touchez-le à nouveau.'), findsOneWidget);
   });
 }
