@@ -239,11 +239,13 @@ class TrustIncomplete extends ConnectionNotice {
   final bool local;
 }
 
-/// The access point could not be created: the permission refused, or Android said no (the
-/// system's hotspot on, no channel…).
+/// The access point could not be created: the permission refused, or the system said no.
+/// [code] says why when it knows (Windows): radio_off, busy (the system's hotspot on among
+/// others), refused (the card or its driver, [Connection.cannotCreate]); [reason] for the logs.
 class HotspotFailed extends ConnectionNotice {
-  const HotspotFailed({required this.permission, this.reason = ''});
+  const HotspotFailed({required this.permission, this.code = '', this.reason = ''});
   final bool permission;
+  final String code;
   final String reason;
 }
 
@@ -320,6 +322,7 @@ class Connection extends ChangeNotifier {
   bool _wantHotspot = false; // asked by the user, not stopped yet
   bool _hotspotWifiOff = false;
   bool _hotspotLowBand = false; // asked at 2.4 GHz, until stopped (setHotspotFiveGhz)
+  bool _cannotCreate = false;
   Timer? _hotspotGiveUp; // this device's network kept after its session was lost
   bool _hotspotOtherWifi = false;
 
@@ -552,15 +555,17 @@ class Connection extends ChangeNotifier {
         return;
       }
       _myHotspot = await hotspot.start(fiveGhz: !_hotspotLowBand);
+      _cannotCreate = false;
       _hotspotOtherWifi = await hotspot.otherWifi();
       _hotspotWatch = Timer.periodic(hotspotCheck, (_) => unawaited(_checkHotspot()));
       await pushNetwork();
       if (_codeOpen) await showCode();
     } on PlatformException catch (e) {
       _myHotspot = null;
+      if (_refusedCodes.contains(e.code)) _cannotCreate = true;
       if (!quiet) {
         _wantHotspot = false;
-        _notices.add(HotspotFailed(permission: false, reason: e.message ?? e.code));
+        _notices.add(HotspotFailed(permission: false, code: e.code, reason: e.message ?? e.code));
       }
     } finally {
       _hotspotBusy = false;
@@ -757,6 +762,12 @@ class Connection extends ChangeNotifier {
 
   // The path by BLE (bible §6.6, BleLink): the network created or joined as for a QR code, then
   // the session on it.
+
+  /// The system refused to create this device's network for a reason that stays (the card or its
+  /// driver: a Windows 10 PC with an Intel AC 3165, 9 November 2026), until one is created: BLE
+  /// then lets the other device create it ([BleLink], bible §6.6).
+  bool get cannotCreate => _cannotCreate;
+  static const _refusedCodes = {'refused', 'not_started', 'no_interface', 'failed'};
 
   /// This device's network for a device met by BLE: the one running, else one created at 5 GHz
   /// when the other joins it there ([fiveGhz]). Null when none could be created.

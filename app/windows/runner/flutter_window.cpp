@@ -44,9 +44,9 @@ bool FlutterWindow::OnCreate() {
       };
       // Answered once the group runs, the window drawing meanwhile.
       std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> reply = std::move(result);
-      hotspot_.Start(text("ssid"), text("passphrase"), [reply](std::optional<std::string> error, HotspotInterface group) {
+      hotspot_.Start(text("ssid"), text("passphrase"), [reply](std::optional<HotspotError> error, HotspotInterface group) {
         if (error) {
-          reply->Error("hotspot", *error);
+          reply->Error(error->code, error->message);
           return;
         }
         reply->Success(flutter::EncodableValue(flutter::EncodableMap{

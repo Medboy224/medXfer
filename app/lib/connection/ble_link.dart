@@ -339,10 +339,18 @@ class BleLink extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The Wi-Fi bands this device creates a network on and joins one on: none to create once the
+  /// system refused to (the card or its driver, [Connection.cannotCreate]), for the other device
+  /// to create it.
+  Future<WifiBands> _bands() async {
+    final own = await ble.wifiBands();
+    return connection.cannotCreate ? (create: 0, join: own.join) : own;
+  }
+
   // The server side: another device touched this one.
 
   Future<void> _serve(BleMessage m) async {
-    final own = await ble.wifiBands();
+    final own = await _bands();
     final r = await _step('ble_server', {'conn': m.conn, 'step': 'message', 'data': base64Encode(m.data), 'create': own.create, 'join': own.join});
     if (r == null) return;
     if (r['data'] case final String data) await ble.reply(m.conn, base64Decode(data));
@@ -506,7 +514,7 @@ class BleLink extends ChangeNotifier {
 
   /// One touch: to the PIN asked (unknown), or to the network and the session (mutual trust).
   Future<void> _touch(BleDevice d) async {
-    final own = await ble.wifiBands();
+    final own = await _bands();
     // A fresh challenge on this connection: the one of the recognition may be past its minute.
     final hello = await _step('ble_client', {'conn': d.device, 'step': 'hello'});
     final answer = await _send(d.device, hello?['data']);
@@ -534,7 +542,7 @@ class BleLink extends ChangeNotifier {
     if (d == null || _stage != BleStage.pinNeeded) return;
     _set(BleStage.confirming);
     try {
-      final own = await ble.wifiBands();
+      final own = await _bands();
       final p = await _step('ble_client', {'conn': d.device, 'step': 'pin', 'pin': pin});
       final reply = await _send(d.device, p?['data']);
       if (reply == null) return _set(BleStage.failed, 'refused');

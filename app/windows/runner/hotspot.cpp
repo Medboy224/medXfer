@@ -7,7 +7,9 @@
 #include <iphlpapi.h>
 #include <shellapi.h>
 
+#include <atomic>
 #include <chrono>
+#include <memory>
 #include <cstdio>
 #include <vector>
 
@@ -19,10 +21,12 @@
 
 using winrt::Windows::Devices::WiFiDirect::WiFiDirectAdvertisementPublisher;
 using winrt::Windows::Devices::WiFiDirect::WiFiDirectAdvertisementPublisherStatus;
+using winrt::Windows::Devices::WiFiDirect::WiFiDirectAdvertisementPublisherStatusChangedEventArgs;
 using winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionListener;
 using winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionRequest;
 using winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionRequestedEventArgs;
 using winrt::Windows::Devices::WiFiDirect::WiFiDirectDevice;
+using winrt::Windows::Devices::WiFiDirect::WiFiDirectError;
 using winrt::Windows::Devices::Radios::Radio;
 using winrt::Windows::Devices::Radios::RadioAccessStatus;
 using winrt::Windows::Devices::Radios::RadioKind;
@@ -151,17 +155,24 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
   ui_.emplace();
   winrt::apartment_context ui = *ui_;
   WiFiDirectAdvertisementPublisher publisher{nullptr};
+  winrt::event_token status_token{};
+  // Windows' reason when it aborts the group (WiFiDirectError), given by its StatusChanged event
+  // only, on a thread of its own.
+  auto aborted_why = std::make_shared<std::atomic<int32_t>>(-1);
   // Gives up: the publisher stopped, the listener let go (unless a Stop did, and maybe a new
   // Start since), the error told.
-  auto fail = [&](const std::string& error) {
+  auto fail = [&](const std::string& code, const std::string& message) {
     if (publisher) {
       try {
+        if (status_token.value != 0) publisher.StatusChanged(status_token);
         publisher.Stop();
       } catch (const winrt::hresult_error&) {
       }
     }
     if (generation == generation_) Stop();
-    done(error, HotspotInterface{});
+    fprintf(stderr, "hotspot: not started, %s (%s)\n", code.c_str(), message.c_str());
+    fflush(stderr);
+    done(HotspotError{code, message}, HotspotInterface{});
   };
   try {
     publisher = WiFiDirectAdvertisementPublisher();
@@ -180,21 +191,44 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
           Accept(args.GetConnectionRequest());
         });
     listener_ = listener;
+    status_token = publisher.StatusChanged(
+        [aborted_why](const WiFiDirectAdvertisementPublisher&, const WiFiDirectAdvertisementPublisherStatusChangedEventArgs& args) {
+          if (args.Status() == WiFiDirectAdvertisementPublisherStatus::Aborted) {
+            aborted_why->store(static_cast<int32_t>(args.Error()));
+          }
+        });
     // Off the window's thread too: Windows takes 0.2 to 1.4 s to start the group, the window
     // frozen as long when it waited there (real test of 30 October 2026).
     co_await winrt::resume_background();
     publisher.Start();
     co_await ui;
     if (generation != generation_) {
-      fail("stopped");
+      fail("stopped", "stopped");
       co_return;
     }
-    // Started within a few milliseconds on the probe's PC; Aborted says the driver refused.
+    // Started within a few milliseconds on the probe's PC. Aborted: Windows refused, saying why
+    // when it is the radio (off, or taken by the system's hotspot); without a reason, it is the
+    // card or its driver (a Windows 10 PC with an Intel AC 3165 and its 2018 driver, 9 November
+    // 2026).
     bool started = false;
     for (int i = 0; i < 60 && !started; ++i) {
       auto status = publisher.Status();
       if (status == WiFiDirectAdvertisementPublisherStatus::Aborted) {
-        fail("the Wi-Fi Direct group was refused (aborted)");
+        // The event may come a moment after the status: waited for, briefly.
+        for (int j = 0; j < 10 && aborted_why->load() < 0; ++j) {
+          co_await winrt::resume_after(std::chrono::milliseconds(20));
+        }
+        co_await ui;
+        switch (static_cast<WiFiDirectError>(aborted_why->load())) {
+          case WiFiDirectError::RadioNotAvailable:
+            fail("radio_off", "the Wi-Fi Direct group was aborted: radio not available");
+            break;
+          case WiFiDirectError::ResourceInUse:
+            fail("busy", "the Wi-Fi Direct group was aborted: resource in use");
+            break;
+          default:
+            fail("refused", "the Wi-Fi Direct group was aborted without a reason");
+        }
         co_return;
       }
       started = status == WiFiDirectAdvertisementPublisherStatus::Started;
@@ -202,12 +236,14 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
       co_await winrt::resume_after(std::chrono::milliseconds(50));
       co_await ui;
       if (generation != generation_) {
-        fail("stopped");
+        fail("stopped", "stopped");
         co_return;
       }
     }
+    publisher.StatusChanged(status_token);
+    status_token = {};
     if (!started) {
-      fail("the Wi-Fi Direct group did not start");
+      fail("not_started", "the Wi-Fi Direct group did not start");
       co_return;
     }
     // Its interface comes up a moment after, and the sharing's address a moment later still:
@@ -219,12 +255,12 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
       co_await winrt::resume_after(std::chrono::milliseconds(100));
       co_await ui;
       if (generation != generation_) {
-        fail("stopped");
+        fail("stopped", "stopped");
         co_return;
       }
     }
     if (!group) {
-      fail("the Wi-Fi Direct group has no interface");
+      fail("no_interface", "the Wi-Fi Direct group has no interface");
       co_return;
     }
     HotspotInterface out = *group;
@@ -241,7 +277,7 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
     group_index_ = group->index;
     done(std::nullopt, out);
   } catch (const winrt::hresult_error& e) {
-    fail(winrt::to_string(e.message()));
+    fail("failed", winrt::to_string(e.message()));
   }
 }
 

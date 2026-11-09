@@ -33,6 +33,14 @@ struct HotspotInterface {
 winrt::fire_and_forget WifiRadioOn(std::function<void(bool on)> done);
 winrt::fire_and_forget TurnWifiOn(std::function<void(bool on)> done);
 
+// Why a Start failed: code for the app (radio_off: the Wi-Fi radio off; busy: taken, by the
+// system's hotspot among others; refused: Windows aborted the group without a reason, the card
+// or its driver; not_started, no_interface, failed, stopped), message for the logs.
+struct HotspotError {
+  std::string code;
+  std::string message;
+};
+
 // The network this computer creates when none is available (DISC-12, WP-C.2 of the J6c plan):
 // a Wi-Fi Direct group it owns, joined by the others as an ordinary Wi-Fi network ("legacy"
 // settings), with a name and passphrase chosen by the app. No Internet connection to share, no
@@ -45,7 +53,7 @@ class WifiDirectHotspot {
   ~WifiDirectHotspot();
 
   // What Start gives once done: the error, if any, else the group's interface.
-  using Started = std::function<void(std::optional<std::string> error, HotspotInterface group)>;
+  using Started = std::function<void(std::optional<HotspotError> error, HotspotInterface group)>;
 
   // Starts the group and finds its interface, then calls done, on the window's thread: called
   // from it, it waits off it, so that the window keeps drawing (up to 7 s of waits, the window
