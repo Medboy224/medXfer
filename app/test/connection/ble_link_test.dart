@@ -304,7 +304,32 @@ void main() {
       'band': 1,
       'addrs': ['10.34.109.23'],
     });
-    expect(link.stage, BleStage.idle); // the other joins it, then connects (pair_ble)
+    // The other joins it, then connects (pair_ble): said meanwhile, until the session.
+    expect((link.stage, link.target?.name), (BleStage.waiting, 'medXfer-6e2a'));
+    connection.take(const CoreEvent('paired', data: {'ip': '10.34.109.20', 'device_name': 'medXfer-6e2a'}));
+    await _settle();
+    expect((link.stage, link.target), (BleStage.idle, null));
+    expect(link.lastTimings, contains('waiting'));
+  });
+
+  test('this device gave its network, the other never connects: failed after joinWithin', () async {
+    final within = BleLink.joinWithin;
+    BleLink.joinWithin = const Duration(milliseconds: 50);
+    addTearDown(() => BleLink.joinWithin = within);
+    _client(core, {
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+      'pin_ready': {'ready': true},
+      'reply': {'fingerprint': 'FPB', 'outcome': 2, 'band': 2},
+      'ack': {'done': true},
+    });
+    await link.start();
+    radio.add(const BleSeen('11:11', -60));
+    await _settle();
+    await link.connect(link.devices.single);
+    await link.typePin('123456');
+    expect(link.stage, BleStage.waiting);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect((link.stage, link.failure), (BleStage.failed, 'not_joined'));
   });
 
   test('a device the radio stops reporting leaves the list; one recognition at a time', () async {

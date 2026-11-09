@@ -33,6 +33,7 @@ String bleDetail(AppLocalizations l, BleLink link, BleDevice d) {
       BleStage.pinNeeded || BleStage.confirming => l.bleStageConfirming,
       BleStage.networking => l.bleStageNetworking,
       BleStage.connecting => l.bleStageConnecting,
+      BleStage.waiting => l.bleStageWaiting(d.name),
       BleStage.idle || BleStage.failed => null,
     };
     if (stage != null) return stage;
@@ -42,6 +43,9 @@ String bleDetail(AppLocalizations l, BleLink link, BleDevice d) {
 
 /// One exchange at a time.
 bool bleBusy(BleLink link) => link.stage != BleStage.idle && link.stage != BleStage.failed;
+
+/// [d] is the device being touched: its row shows it works.
+bool bleTouching(BleLink link, BleDevice d) => link.target == d && bleBusy(link) && link.stage != BleStage.pinNeeded;
 
 /// Why BLE does not run, with what to do: the permission, with its reason first (BLE-12), or
 /// Bluetooth to turn on. Nothing when it runs, or where there is no BLE (D4).
@@ -122,6 +126,7 @@ class _BleFlowState extends State<BleFlow> {
         'no_band' => l.bleFailedNoWifi(d.name),
         'join' => l.bleFailedJoin(d.name),
         'far' => l.bleFailedFar(d.name),
+        'not_joined' => l.bleFailedNotJoined(d.name),
         _ => l.bleFailedRadio(d.name),
       };
       // Said once: the exchange may start again.

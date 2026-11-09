@@ -56,7 +56,7 @@ class BleDevice {
 }
 
 /// Where the exchange this device started stands.
-enum BleStage { idle, asking, pinNeeded, confirming, networking, connecting, failed }
+enum BleStage { idle, asking, pinNeeded, confirming, networking, connecting, waiting, failed }
 
 /// Bands as the core takes them: bit 0 2.4 GHz, bit 1 5 GHz.
 const _band5 = 2;
@@ -119,6 +119,11 @@ class BleLink extends ChangeNotifier {
   static Duration servedQuiet = const Duration(seconds: 3);
   DateTime _servedAt = DateTime(0);
   Timer? _afterQuiet;
+
+  /// This device gave its network: the other joins it, then opens the session, 1 to 3 s after
+  /// (real tests of 8 and 9 November). Not open after this long, the touch failed.
+  static Duration joinWithin = const Duration(seconds: 30);
+  Timer? _joinWait;
 
   /// An exchange that gets no answer: Android stops its own at 25 s (BLE-11), Windows may not.
   static Duration exchangeWithin = const Duration(seconds: 26);
@@ -210,6 +215,10 @@ class BleLink extends ChangeNotifier {
   void _follow() {
     final inSession = connection.session != null;
     if (inSession) _mark('session');
+    if (inSession && _stage == BleStage.waiting) {
+      _target = null;
+      _set(BleStage.idle);
+    }
     if (inSession && _running) {
       unawaited(
         stop().then((_) {
@@ -429,6 +438,10 @@ class BleLink extends ChangeNotifier {
   }
 
   void _set(BleStage stage, [String? failure]) {
+    if (stage != BleStage.waiting) {
+      _joinWait?.cancel();
+      _joinWait = null;
+    }
     _stage = stage;
     _failure = failure;
     _mark(failure == null ? stage.name : '${stage.name} $failure');
@@ -558,7 +571,12 @@ class BleLink extends ChangeNotifier {
         final ack = await _send(d.device, n?['data']);
         final done = ack == null ? null : await _step('ble_client', {'conn': d.device, 'step': 'ack', 'data': base64Encode(ack)});
         if (done?['done'] != true) return _set(BleStage.failed, 'refused');
-        _set(BleStage.idle); // the other joins this network, then connects (pair_ble)
+        // The other joins this network, then connects (pair_ble): said meanwhile, for the user not
+        // to take the still moment for a failure and touch again (real test of 9 November).
+        _set(BleStage.waiting);
+        _joinWait = Timer(joinWithin, () {
+          if (_stage == BleStage.waiting) _set(BleStage.failed, 'not_joined');
+        });
       default:
         _set(BleStage.failed, 'no_band'); // neither can join what the other creates: Wi-Fi off on both
     }
@@ -590,6 +608,7 @@ class BleLink extends ChangeNotifier {
 
   @override
   void dispose() {
+    _joinWait?.cancel();
     _forget?.cancel();
     _afterQuiet?.cancel();
     _nextTry?.cancel();
