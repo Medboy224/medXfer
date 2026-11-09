@@ -184,6 +184,29 @@ class _HotspotScreenState extends State<HotspotScreen> {
                     ),
                     const SizedBox(height: 14),
                   ],
+                  // Its Wi-Fi off, the phone made its network at 2.4 GHz, several times slower:
+                  // said, with the way back to 5 GHz (reserve 5 of the J6d report).
+                  if (_c.hotspotSlowWifiOff) ...[
+                    Container(
+                      key: const Key('hotspot-wifi-off-slow'),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(border: Border.all(color: c.border), borderRadius: BorderRadius.circular(12)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(l.hotspotWifiOffSlow, style: const TextStyle(fontSize: 13, height: 1.4)),
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            key: const Key('hotspot-wifi-on'),
+                            onPressed: _c.session == null ? () => unawaited(_c.turnWifiOnForFiveGhz()) : null,
+                            icon: const Icon(Icons.wifi_rounded),
+                            label: Text(l.wifiTurnOn),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                  ],
                   // Windows serves no addresses here: said before the phone is dropped, with the
                   // cause and the way to a stable connection (WP-C.5 of the J6c plan).
                   if (h.dropsClients) ...[

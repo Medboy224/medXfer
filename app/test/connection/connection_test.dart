@@ -87,7 +87,8 @@ class _FakeHotspot implements Hotspot {
   @override
   Future<HotspotInfo> start({bool fiveGhz = true}) async {
     log.add('start');
-    return const HotspotInfo(ssid: 'AndroidShare_1732', passphrase: 'vvrtsy', security: 2, address: '10.46.56.232');
+    // Android with Wi-Fi off: the local hotspot, at 2.4 GHz, said.
+    return HotspotInfo(ssid: 'AndroidShare_1732', passphrase: 'vvrtsy', security: 2, address: '10.46.56.232', wifiOff: wifiOff && fiveGhz);
   }
 
   @override
@@ -742,6 +743,37 @@ void main() {
     expect(h.log, ['start', 'stop', 'wifi on', 'start']);
     expect(c.hotspotWifiOff, isFalse);
     expect(notices, isEmpty);
+  });
+
+  test('J6d reserve 5: Wi-Fi off, the network at 2.4 GHz said; Wi-Fi on from the panel, made again at 5 GHz', () async {
+    final core = _core()..on('set_network_info', (_) => const FakeAnswer());
+    final h = _FakeHotspot()
+      ..wifiOff = true
+      ..panelTurnsOn = true;
+    final c = Connection(core, hotspot: h);
+    addTearDown(c.dispose);
+    await c.startHotspot();
+    expect(c.hotspotSlowWifiOff, isTrue);
+    await c.turnWifiOnForFiveGhz();
+    expect(h.log.where((e) => e == 'wifi panel' || e == 'stop' || e == 'start'), ['start', 'wifi panel', 'stop', 'start']);
+    expect(c.hotspotSlowWifiOff, isFalse);
+    expect(c.myHotspot, isNotNull);
+    // Already on: nothing made again.
+    await c.turnWifiOnForFiveGhz();
+    expect(h.log.where((e) => e == 'start'), hasLength(2));
+  });
+
+  test('J6d reserve 5: the panel closed with Wi-Fi still off: the network kept as it is', () async {
+    final core = _core()..on('set_network_info', (_) => const FakeAnswer());
+    final h = _FakeHotspot()
+      ..wifiOff = true
+      ..panelTurnsOn = false;
+    final c = Connection(core, hotspot: h);
+    addTearDown(c.dispose);
+    await c.startHotspot();
+    await c.turnWifiOnForFiveGhz();
+    expect(h.log.where((e) => e == 'stop' || e == 'start'), ['start']);
+    expect(c.hotspotSlowWifiOff, isTrue);
   });
 
   test('#219: created with its Wi-Fi off: no error, it waits for the Wi-Fi', () async {

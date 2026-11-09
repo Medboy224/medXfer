@@ -50,16 +50,22 @@ class HotspotInfo {
     this.addressHeldBy,
     this.sharingAddress,
     this.band,
+    this.wifiOff = false,
   });
 
-  factory HotspotInfo.fromMap(Map<Object?, Object?> m) => HotspotInfo(
+  factory HotspotInfo.fromMap(Map<Object?, Object?> m, {bool wifiOff = false}) => HotspotInfo(
         ssid: m['ssid'] as String?,
         passphrase: m['passphrase'] as String?,
         security: (m['security'] as num?)?.toInt() ?? 0,
         address: m['address'] as String?,
         interfaces: [for (final i in (m['interfaces'] as List?) ?? const []) '$i'],
         band: WifiBand.of((m['frequency'] as num?)?.toInt() ?? 0),
+        wifiOff: wifiOff,
       );
+
+  /// Android: 5 GHz asked, but this device's Wi-Fi was off, which the Wi-Fi Direct group needs;
+  /// the local hotspot runs instead, at 2.4 GHz (reserve 5 of the J6d report).
+  final bool wifiOff;
 
   /// The band obtained; null when the system does not say (Android's local hotspot, Windows).
   final WifiBand? band;
@@ -176,15 +182,17 @@ class AndroidHotspot implements Hotspot {
   Future<HotspotInfo> start({bool fiveGhz = true}) async {
     // The group first, at the band asked, 2.4 GHz included: the local hotspot dropped a phone
     // whose screen was off each time this phone searched for networks (#256).
+    var wifiOff = false;
     try {
       final group = HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>('groupStart', {'band': fiveGhz ? '5' : '2'}))!);
       _group = true;
       return group;
-    } on PlatformException {
+    } on PlatformException catch (e) {
       // No Wi-Fi Direct, Wi-Fi off, or the radio busy: the local hotspot needs none of them.
+      wifiOff = fiveGhz && e.message == 'wifi_off';
     }
     _group = false;
-    return HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>('hotspotStart'))!);
+    return HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>('hotspotStart'))!, wifiOff: wifiOff);
   }
 
   @override

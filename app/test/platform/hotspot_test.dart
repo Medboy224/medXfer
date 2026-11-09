@@ -200,11 +200,18 @@ void main() {
       groupError = 'wifi_off';
       final h = AndroidHotspot(channel: channel);
       final info = await h.start();
-      expect(info.ssid, 'AndroidShare_1732');
+      expect((info.ssid, info.wifiOff), ('AndroidShare_1732', true)); // said: 2.4 GHz for want of Wi-Fi
       expect(await h.alive(), isTrue);
       expect(await h.otherWifi(), isFalse, reason: 'measured for the group only');
       await h.stop();
       expect(calls, ['groupStart {band: 5}', 'hotspotStart', 'hotspotAlive', 'hotspotStop']);
+    });
+
+    test('no group for another reason, or 2.4 GHz asked: not taken for Wi-Fi off', () async {
+      groupError = 'busy';
+      expect((await AndroidHotspot(channel: channel).start()).wifiOff, isFalse);
+      groupError = 'wifi_off';
+      expect((await AndroidHotspot(channel: channel).start(fiveGhz: false)).wifiOff, isFalse);
     });
 
     test('#256: asked at 2.4 GHz, the group at 2.4 GHz: the local hotspot dropped a phone whose screen was off', () async {

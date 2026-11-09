@@ -287,6 +287,7 @@
   "band6": "6 GHz",
   "hotspotOtherWifi": "This phone is also connected to a Wi-Fi network: its own network is then much slower, the radio switching between the two. Disconnect that Wi-Fi for full speed.",
   "hotspotOpenWifiSettings": "Open the Wi-Fi settings",
+  "hotspotWifiOffSlow": "This phone's Wi-Fi is off: its network was created at 2.4 GHz, several times slower. Turn Wi-Fi on for high speed (5 GHz): the network will be created again, with a new QR code.",
   "hotspotFiveGhz": "High speed (5 GHz)",
   "hotspotFiveGhzHint": "Turn it off if the other device does not see this network: some phones and PCs only receive 2.4 GHz.",
   "hotspotUnstableHeld": "Unstable connection: Windows hands out no addresses on this network, because the card “{card}” holds the address {address} of its connection sharing. The phones will be cut off every 2 minutes, then reconnect by themselves. For a stable connection: stop that sharing or remove this address from the card (if only a trace of it is left), or create the network on the phone instead.",

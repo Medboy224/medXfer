@@ -621,6 +621,20 @@ class Connection extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// This device's network runs at 2.4 GHz because its Wi-Fi was off ([HotspotInfo.wifiOff]): the
+  /// screen says so, and [turnWifiOnForFiveGhz] makes it again at 5 GHz.
+  bool get hotspotSlowWifiOff => (_myHotspot?.wifiOff ?? false) && !_hotspotLowBand;
+
+  /// Opens the system's Wi-Fi panel; Wi-Fi on once it closes, the network is made again at
+  /// 5 GHz, with a new QR code. Not during a session, which that would cut.
+  Future<void> turnWifiOnForFiveGhz() async {
+    if (!await hotspot.openWifiPanel()) return;
+    if (!hotspotSlowWifiOff || _hotspotBusy || _session != null) return;
+    debugPrint('hotspot: Wi-Fi on, made again at 5 GHz');
+    await _dropHotspot();
+    await _startHotspot();
+  }
+
   /// This device's network at 2.4 GHz, asked by the user ([setHotspotFiveGhz]).
   bool get hotspotLowBand => _hotspotLowBand;
 

@@ -235,6 +235,7 @@
   "band6": "6 GHz",
   "hotspotOtherWifi": "Ce téléphone est aussi connecté à un Wi-Fi : son propre réseau est alors bien plus lent, la radio passant de l'un à l'autre. Déconnectez ce Wi-Fi pour la pleine vitesse.",
   "hotspotOpenWifiSettings": "Ouvrir les réglages Wi-Fi",
+  "hotspotWifiOffSlow": "Le Wi-Fi de ce téléphone est désactivé : son réseau a été créé à 2,4 GHz, plusieurs fois plus lent. Activez le Wi-Fi pour la haute vitesse (5 GHz) : le réseau sera recréé, avec un nouveau QR code.",
   "hotspotFiveGhz": "Haute vitesse (5 GHz)",
   "hotspotFiveGhzHint": "Désactivez-la si l'autre appareil ne voit pas ce réseau : certains téléphones et PC ne captent que le 2,4 GHz.",
   "hotspotUnstableHeld": "Connexion instable : Windows ne distribue pas d'adresses sur ce réseau, car la carte « {card} » détient l'adresse {address} de son partage de connexion. Les téléphones seront coupés toutes les 2 minutes, puis reconnectés seuls. Pour une connexion stable : arrêtez ce partage ou retirez cette adresse de la carte (s'il n'en reste qu'une trace), ou créez plutôt le réseau sur le téléphone.",
