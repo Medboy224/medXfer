@@ -272,6 +272,57 @@ void main() {
     expect(core.calls.where((x) => x.action == 'pair'), hasLength(2));
   });
 
+  test('#263: unanswered on its first path, the device is tried on the next one; a path chosen is tried alone', () async {
+    final core = _core()
+      ..on('scan', (_) => const FakeAnswer(replies: [
+            CoreEvent('peers_list', data: [
+              {
+                'device_name': 'medXfer-2926',
+                'host_ip': '10.209.151.174',
+                'port': 18887,
+                'paths': [
+                  {'ip': '10.209.151.174', 'kind': 'ethernet'}, // the phone's USB tethering
+                  {'ip': '192.168.199.174', 'kind': 'wifi'},
+                ],
+              },
+            ]),
+          ]))
+      ..on('pair', (_) => const FakeAnswer());
+    final c = Connection(core);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.scan();
+    final d = c.nearby.single;
+    List<Object?> pairs() => [for (final x in core.calls.where((x) => x.action == 'pair')) x.payload['ip']];
+    String lastId() => 'ui-${core.calls.length}';
+    void unanswered(String ip, String id) => c.take(CoreEvent('action_error', id: id, data: {
+          'error': 'failed to pair with $ip:18887: dial tcp4 $ip:18887: connect: no route to host',
+          'code': 'unreachable',
+          'target': '$ip:18887',
+        }));
+
+    await c.pairWith(d);
+    unanswered('10.209.151.174', lastId());
+    await _settle();
+    expect(pairs(), ['10.209.151.174', '192.168.199.174']);
+    expect(c.connecting, '192.168.199.174');
+    expect(notices, isEmpty); // nothing said yet: the Wi-Fi is being tried
+    // Unanswered there too: said, once.
+    unanswered('192.168.199.174', lastId());
+    await _settle();
+    expect(pairs(), hasLength(2));
+    expect(c.connecting, isNull);
+    expect(notices.single, isA<PeerUnreachable>());
+
+    // The cable chosen by the user: that path only.
+    notices.clear();
+    await c.pairWith(d.via(d.paths.first), only: true);
+    unanswered('10.209.151.174', lastId());
+    await _settle();
+    expect(pairs(), hasLength(3));
+    expect(notices.single, isA<PeerUnreachable>());
+  });
+
   test('a device of the list asks for its PIN, which the user types', () async {
     final core = _core()
       ..on('pair', (_) => const FakeAnswer(broadcast: [CoreEvent('pin_needed', data: {'target': '192.168.1.30:18887'})]))

@@ -748,13 +748,37 @@ class Connection extends ChangeNotifier {
   static const scanLimit = Duration(seconds: 20);
 
   /// Pairs with a device of the list: directly with a device of mutual trust; any other
-  /// shows a PIN on its screen, which this user types ([pinNeeded]).
-  Future<void> pairWith(NearbyDevice d) async {
+  /// shows a PIN on its screen, which this user types ([pinNeeded]). Unanswered on its first
+  /// path, it is tried on the next ones (#263: a PC seen through the phone's USB tethering,
+  /// which Android keeps its apps from reaching, and on the Wi-Fi); [only] a path the user chose
+  /// (decision E2 of the cable plan).
+  Future<void> pairWith(NearbyDevice d, {bool only = false}) async {
     if (_connecting != null) return;
-    _connecting = d.ip;
+    _pairing = only ? null : d;
+    _triedPaths
+      ..clear()
+      ..add(d.ip);
+    await _pairAt(d.ip, d.port);
+  }
+
+  NearbyDevice? _pairing; // the device pairWith tries, path after path
+  final _triedPaths = <String>{};
+
+  Future<void> _pairAt(String ip, int port) async {
+    _connecting = ip;
+    _connectingLimit?.cancel();
     _connectingLimit = Timer(connectingLimit, _doneConnecting);
     notifyListeners();
-    await _call('pair', {'ip': d.ip, if (d.port > 0) 'port': d.port, if (remember) 'trust': true});
+    await _call('pair', {'ip': ip, if (port > 0) 'port': port, if (remember) 'trust': true});
+  }
+
+  /// The next path of the device pairWith tries, after one unanswered at host: null if none.
+  NetPath? _nextPath(String host) {
+    final d = _pairing;
+    if (d == null || !_triedPaths.contains(host)) return null;
+    final next = d.paths.where((p) => !_triedPaths.contains(p.address)).firstOrNull;
+    if (next == null) _pairing = null;
+    return next;
   }
 
   /// Pairs with the device whose QR code was scanned, or whose link was pasted.
@@ -1014,7 +1038,15 @@ class Connection extends ChangeNotifier {
         if (!error.contains('REFUSED:') && (e.id == null || !_mine.contains(e.id))) return;
         _scanning = false;
         if (m['code'] == 'unreachable') {
-          _notices.add(PeerUnreachable(nameAt(_host((m['target'] as String?) ?? ''))));
+          final host = _host((m['target'] as String?) ?? '');
+          final next = _nextPath(host);
+          if (next != null) {
+            _triedPaths.add(next.address);
+            debugPrint('pair: $host unanswered, trying ${next.kind.name}');
+            unawaited(_pairAt(next.address, _pairing!.port));
+            return;
+          }
+          _notices.add(PeerUnreachable(nameAt(host)));
         } else {
           _error(error);
         }
