@@ -297,6 +297,7 @@
   "bleOff": "Le Bluetooth est éteint : les appareils sans Wi-Fi commun ne sont pas trouvés.",
   "bleTurnOn": "Activer",
   "bleUnavailable": "Le Bluetooth ne fonctionne pas ici ({code}) : le QR code et le PIN restent possibles.",
+  "bleScanOnly": "Le Bluetooth de cet appareil ne peut pas s'annoncer : les autres appareils ne le voient pas, mais lui les voit. Touchez l'autre appareil dans cette liste.",
   "bleStageAsking": "Contact…",
   "bleStageConfirming": "Vérification…",
   "bleStageNetworking": "Création du réseau…",

@@ -48,7 +48,8 @@ bool bleBusy(BleLink link) => link.stage != BleStage.idle && link.stage != BleSt
 bool bleTouching(BleLink link, BleDevice d) => link.target == d && bleBusy(link) && link.stage != BleStage.pinNeeded;
 
 /// Why BLE does not run, with what to do: the permission, with its reason first (BLE-12), or
-/// Bluetooth to turn on. Nothing when it runs, or where there is no BLE (D4).
+/// Bluetooth to turn on; or that it runs one way only, this device not seen by the others.
+/// Nothing when it runs fully, or where there is no BLE (D4).
 class BleStatus extends StatelessWidget {
   const BleStatus({super.key, required this.link});
 
@@ -58,9 +59,10 @@ class BleStatus extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final c = context.colors;
-    final problem = link.problem;
-    if (link.running || !link.supported || problem == null || problem == 'unsupported') return const SizedBox.shrink();
+    final problem = link.running && link.scanOnly ? 'scan_only' : link.problem;
+    if ((link.running && !link.scanOnly) || !link.supported || problem == null || problem == 'unsupported') return const SizedBox.shrink();
     final (text, action, onAction) = switch (problem) {
+      'scan_only' => (l.bleScanOnly, null, null),
       'permission' => (l.bleWhy, l.bleAllow, link.start),
       'bluetooth_off' => (l.bleOff, l.bleTurnOn, link.turnOn),
       _ => (l.bleUnavailable(problem), null, null),
@@ -69,7 +71,7 @@ class BleStatus extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
       child: Row(
         children: [
-          Icon(Icons.bluetooth_disabled_rounded, color: c.muted, size: 20),
+          Icon(problem == 'scan_only' ? Icons.bluetooth_searching_rounded : Icons.bluetooth_disabled_rounded, color: c.muted, size: 20),
           const SizedBox(width: 8),
           Expanded(
             child: Text(

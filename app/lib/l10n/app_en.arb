@@ -365,6 +365,7 @@
   "bleTurnOn": "Turn on",
   "bleUnavailable": "Bluetooth does not work here ({code}): the QR code and the PIN remain.",
   "@bleUnavailable": {"placeholders": {"code": {"type": "String"}}},
+  "bleScanOnly": "This device's Bluetooth cannot advertise: other devices do not see it, but it sees them. Touch the other device in this list.",
   "bleStageAsking": "Contacting…",
   "bleStageConfirming": "Checking…",
   "bleStageNetworking": "Creating the network…",

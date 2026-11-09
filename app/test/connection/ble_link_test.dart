@@ -21,6 +21,7 @@ class _Radio implements Ble {
   int drops = 0; // the next exchanges failing, as Android's do when the other goes out of reach
   String dropWhy = 'timeout';
   bool on = true, allowed = true, started = false;
+  bool canAdvertise = true, advertising = false; // no peripheral role: Windows says no_advertiser
   int asked = 0; // the permission's system dialog
   WifiBands bands = (create: 3, join: 3);
 
@@ -41,7 +42,11 @@ class _Radio implements Ble {
   @override
   Future<bool> turnOn() async => on = true;
   @override
-  Future<void> start({bool advertise = true, bool scan = true}) async => started = true;
+  Future<void> start({bool advertise = true, bool scan = true}) async {
+    if (advertise && !canAdvertise) throw PlatformException(code: 'no_advertiser');
+    advertising = advertise;
+    started = true;
+  }
   @override
   Future<void> stop() async => started = false;
   @override
@@ -420,6 +425,23 @@ void main() {
     connection.take(const CoreEvent('paired', data: {'ip': '192.168.49.20', 'device_name': 'PC'}));
     await Future<void>.delayed(const Duration(milliseconds: 120));
     expect(connection.myHotspot?.ssid, 'DIRECT-KQ-medXfer');
+  });
+
+  test('an adapter that cannot advertise: it scans, and touches the others', () async {
+    radio.canAdvertise = false;
+    _client(core, {
+      'recognize': {'suffix': 'ab12', 'trusted': true, 'fingerprint': 'FPA', 'alias': 'Phone'},
+    });
+    await link.start();
+    expect((link.running, link.scanOnly, link.problem, radio.advertising), (true, true, null, false));
+    radio.add(const BleSeen('33:33', -40));
+    await _settle();
+    await link.connect(link.devices.single);
+    expect(steps('ble_client').map((p) => p['step']), containsAllInOrder(['hello', 'recognize', 'trusted']));
+    // Started again (the screen opened again): scanning only at once.
+    await link.stop();
+    await link.start();
+    expect((link.running, radio.advertising), (true, false));
   });
 
   test('a computer whose system refused its network: the other device creates it, until one is created', () async {

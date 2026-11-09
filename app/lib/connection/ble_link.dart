@@ -162,7 +162,15 @@ class BleLink extends ChangeNotifier {
     _problem = await _cannotStart(ask);
     if (_problem == null) {
       try {
-        await ble.start();
+        try {
+          await ble.start(advertise: !_scanOnly);
+        } on PlatformException catch (e) {
+          if (e.code != 'no_advertiser') rethrow;
+          // An adapter that cannot advertise (no peripheral role): it still scans, and this
+          // device touches the others (a Windows 10 PC, 9 November 2026).
+          _scanOnly = true;
+          await ble.start(advertise: false);
+        }
         _running = true;
         _forget ??= Timer.periodic(const Duration(seconds: 1), (_) => _forgetSilent());
       } on PlatformException catch (e) {
@@ -171,6 +179,12 @@ class BleLink extends ChangeNotifier {
     }
     notifyListeners();
   }
+
+  bool _scanOnly = false;
+
+  /// This device's adapter cannot advertise: it sees the others and touches them, but they do not
+  /// see it.
+  bool get scanOnly => _scanOnly;
 
   Future<String?> _cannotStart(bool ask) async {
     if (!ble.supported) return 'unsupported';
