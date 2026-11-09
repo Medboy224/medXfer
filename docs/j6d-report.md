@@ -128,12 +128,12 @@ Chaque étape d'un échange est maintenant journalisée avec son temps, côté q
 | # | Réserve | Suite |
 |---|---|---|
 | 1 | Un second téléphone dans le groupe à 5 GHz (critère 2b) | Dès qu'un second téléphone qui capte le 5 GHz est disponible |
-| 2 | Au premier contact après le démarrage, un PC face à un téléphone appairé en Bluetooth met ~30 s à le reconnaître (l'avis « services changés ») | Toucher depuis le téléphone, qui reconnaît le PC en 1 s, marche dès le départ ; une parade côté PC est à chercher (#258) |
-| 3 | À la limite de portée, un toucher échoue sans message clair, et l'appareil clignote dans la liste | Réessayer seul, dire « trop loin, rapprochez-vous », garder plus longtemps un appareil au signal faible |
-| 4 | Un téléphone qui partage sa connexion par USB : le toucher d'un PC vu sur ce câble échoue (#263) | Essayer le chemin suivant, ou écarter les interfaces du partage |
-| 5 | Wi-Fi du téléphone éteint : il crée à 2,4 GHz sans le dire | L'écran pourrait proposer d'allumer le Wi-Fi pour le 5 GHz |
-| 6 | La coupure écran éteint (#256) | Toujours ouverte |
-| 7 | Un transfert mort affiché « en cours » après une coupure (3 novembre) | À corriger |
+| 2 | Au premier contact après le démarrage, un PC face à un téléphone appairé en Bluetooth met ~30 s à le reconnaître (l'avis « services changés ») | ✅ Ne se reproduit plus depuis #262 (le service GATT gardé) : reconnu en 0,7 à 1,2 s, 3 démarrages à froid sur 3 (#258, fermée le 9 novembre) |
+| 3 | À la limite de portée, un toucher échoue sans message clair, et l'appareil clignote dans la liste | ✅ #268 et #269 : le toucher réessaie seul et dit « trop loin », un appareil au signal faible est gardé 15 s, la reconnaissance perdue reprise après 1 s puis 2 s, l'attente dite (22 s → 5,5 s à travers deux murs) |
+| 4 | Un téléphone qui partage sa connexion par USB : le toucher d'un PC vu sur ce câble échoue (#263) | ✅ #272 : le chemin suivant essayé ; sur le téléphone aussi, le choix entre « Câble » et « Wi-Fi ». Le partage USB marche dans les deux sens (essai du 9 novembre) : l'échec venait sans doute d'une adresse changée |
+| 5 | Wi-Fi du téléphone éteint : il crée à 2,4 GHz sans le dire | ✅ L'écran du réseau le dit et propose d'allumer le Wi-Fi ; le réseau est alors recréé à 5 GHz |
+| 6 | La coupure écran éteint (#256) | ✅ #266 (l'appareil tenu éveillé pendant un transfert) et #267 (le groupe Wi-Fi Direct aussi à 2,4 GHz, au lieu du point d'accès local) |
+| 7 | Un transfert mort affiché « en cours » après une coupure (3 novembre) | ✅ #266 : la session perdue, une vitesse plus annoncée depuis 4 s tombe à 0, l'écran dit « en attente » |
 | 8 | BLE sous Linux (décision D4) | Sur le second PC, quand Zorin y sera installé |
 | 9 | Revue G4 de la cryptographie BLE | L'utilisateur l'organise |
 | 10 | Guide d'utilisation de l'application | **Reporté à la première version** : l'application change encore |
