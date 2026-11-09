@@ -67,9 +67,13 @@ func TestBundleHoldsNoSecret(t *testing.T) {
 	time.Sleep(50 * time.Millisecond) // let the last broadcast reach the journal
 	_ = j.Close()
 
+	// The application's log, as careless: masked the same way.
+	appLog := "ble: started, 70 ms\nhotspot: failed refused (aborted)\ndebug: pin=" + receiver.GetStatus().WebSharePIN +
+		" file " + secretFile + "\n"
+
 	var buf bytes.Buffer
 	if err := diag.WriteBundle(&buf, diag.BundleOptions{
-		ReportsDir: ReportsDir(), JournalDir: JournalDir(), Config: DiagnosticConfig(),
+		ReportsDir: ReportsDir(), JournalDir: JournalDir(), Config: DiagnosticConfig(), AppLog: appLog,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +93,7 @@ func TestBundleHoldsNoSecret(t *testing.T) {
 		}
 	}
 
-	var journalText string
+	var journalText, appText string
 	names := map[string]bool{}
 	for _, f := range zr.File {
 		names[f.Name] = true
@@ -102,6 +106,9 @@ func TestBundleHoldsNoSecret(t *testing.T) {
 		text := string(data)
 		if strings.HasPrefix(f.Name, "journal/") {
 			journalText += text
+		}
+		if f.Name == "app.log" {
+			appText = text
 		}
 		for _, secret := range forbidden {
 			if secret == "" {
@@ -119,7 +126,7 @@ func TestBundleHoldsNoSecret(t *testing.T) {
 	}
 
 	// The bundle is not empty: it holds what a diagnosis needs.
-	for _, want := range []string{"manifest.json", "config.json", "journal/journal.log"} {
+	for _, want := range []string{"manifest.json", "config.json", "journal/journal.log", "app.log"} {
 		if !names[want] {
 			t.Errorf("bundle lacks %s (has %v)", want, names)
 		}
@@ -128,5 +135,8 @@ func TestBundleHoldsNoSecret(t *testing.T) {
 		if !strings.Contains(journalText, want) {
 			t.Errorf("journal lacks %q:\n%s", want, journalText)
 		}
+	}
+	if !strings.Contains(appText, "hotspot: failed refused") {
+		t.Errorf("app.log lacks the network's failure:\n%s", appText)
 	}
 }

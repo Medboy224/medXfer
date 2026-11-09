@@ -31,9 +31,11 @@ type TrustPayload struct {
 	Name        string `json:"name,omitempty"` // trust_rename
 }
 
-// ExportBundlePayload is the folder where export_bundle writes the bundle.
+// ExportBundlePayload is the folder where export_bundle writes the bundle, and the
+// application's own log to add to it (its Bluetooth, its networks: what the core does not see).
 type ExportBundlePayload struct {
-	Dir string `json:"dir"`
+	Dir    string `json:"dir"`
+	AppLog string `json:"app_log,omitempty"`
 }
 
 // trustedDevices lists the trusted devices, as the trusted_devices event carries them.
@@ -137,6 +139,7 @@ func (s *DaemonServer) handleExportBundle(rs Responder, req RequestMessage) {
 			ReportsDir: filepath.Join(s.dataDir, "reports"),
 			JournalDir: s.JournalDir(),
 			Config:     s.diagnosticConfig(),
+			AppLog:     p.AppLog,
 		})
 		if cerr := f.Close(); werr == nil {
 			werr = cerr

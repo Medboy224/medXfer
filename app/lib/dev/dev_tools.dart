@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../core/core.dart';
+import 'app_log.dart';
 
 /// The transfer as the core measures it, at its last progress event.
 @immutable
@@ -96,11 +97,14 @@ class DevError implements Exception {
 }
 
 class DevTools extends ChangeNotifier {
-  DevTools(this.core, {required this.downloadDir}) {
+  DevTools(this.core, {required this.downloadDir, AppLog? log}) : log = log ?? AppLog.instance {
     _events = core.events.listen(_on);
   }
 
   final Core core;
+
+  /// The application's own log, added to the bundle.
+  final AppLog log;
 
   /// Where the disk benchmark writes and the bundle goes: the folder received files go to.
   final Future<String> Function() downloadDir;
@@ -163,10 +167,10 @@ class DevTools extends ChangeNotifier {
     _report = (m['formatted_report'] as String?) ?? '';
   });
 
-  /// The diagnostic bundle (DEV-11): the reports, the journal, the configuration, without
-  /// secrets nor file names.
+  /// The diagnostic bundle (DEV-11): the reports, the journal, the configuration, the
+  /// application's log, without secrets nor file names (the core masks them).
   Future<void> exportBundle() => _run(DevJob.bundle, () async {
-    final m = await _ask('export_bundle', {'dir': await downloadDir()}, 'bundle_exported');
+    final m = await _ask('export_bundle', {'dir': await downloadDir(), 'app_log': log.text}, 'bundle_exported');
     _bundle = m['path'] as String?;
   });
 

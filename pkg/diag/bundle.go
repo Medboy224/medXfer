@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -16,7 +17,13 @@ type BundleOptions struct {
 	JournalDir string // journal.log and journal.log.1
 	Config     any    // configuration to include, already stripped of personal data
 	MaxReports int    // newest reports to include; 0 means 10
+	// AppLog is the application's own log (its Bluetooth, its networks), which the core does not
+	// see: its last MaxAppLog bytes, masked as the rest.
+	AppLog string
 }
+
+// MaxAppLog bounds the application's log in the bundle.
+const MaxAppLog = 512 << 10
 
 // BundleManifest describes the bundle and the device that produced it.
 type BundleManifest struct {
@@ -31,7 +38,7 @@ type BundleManifest struct {
 }
 
 // WriteBundle writes the diagnostic bundle (DEV-11) as a zip archive: manifest, configuration,
-// newest reports, journal. Every text is masked again on the way out, with Secrets: the
+// newest reports, journal, the application's log. Every text is masked again on the way out, with Secrets: the
 // bundle never contains keys, PINs, tokens, paths or user names, whatever the files hold.
 func WriteBundle(w io.Writer, opts BundleOptions) error {
 	if opts.MaxReports <= 0 {
@@ -92,6 +99,18 @@ func WriteBundle(w io.Writer, opts BundleOptions) error {
 			if err := add("journal/"+filepath.Base(p), data); err != nil {
 				return err
 			}
+		}
+	}
+
+	if log := opts.AppLog; log != "" {
+		if len(log) > MaxAppLog {
+			log = log[len(log)-MaxAppLog:]
+			if i := strings.IndexByte(log, '\n'); i >= 0 {
+				log = log[i+1:] // from a whole line
+			}
+		}
+		if err := add("app.log", []byte(log)); err != nil {
+			return err
 		}
 	}
 

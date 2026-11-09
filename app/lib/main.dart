@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'app.dart';
 import 'app_state.dart';
 import 'core/ffi_core.dart';
+import 'dev/app_log.dart';
 import 'perf.dart';
 import 'platform/background.dart';
 import 'platform/awake.dart';
@@ -23,6 +24,7 @@ import 'settings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AppLog.install();
   FrameStats.start();
   // Read before the first frame: the saved theme from the start, without a flash.
   final settings = AppSettings(store: FileSettingsStore(const SystemFolders().dataDir));

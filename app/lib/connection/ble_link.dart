@@ -161,6 +161,7 @@ class BleLink extends ChangeNotifier {
     if (_running) return;
     _problem = await _cannotStart(ask);
     if (_problem == null) {
+      final clock = Stopwatch()..start();
       try {
         try {
           await ble.start(advertise: !_scanOnly);
@@ -173,10 +174,12 @@ class BleLink extends ChangeNotifier {
         }
         _running = true;
         _forget ??= Timer.periodic(const Duration(seconds: 1), (_) => _forgetSilent());
+        debugPrint('ble: started${_scanOnly ? ', scan only' : ''}, ${clock.elapsedMilliseconds} ms');
       } on PlatformException catch (e) {
         _problem = e.code;
       }
     }
+    if (_problem != null) debugPrint('ble: not started ($_problem)');
     notifyListeners();
   }
 
@@ -278,6 +281,7 @@ class BleLink extends ChangeNotifier {
         unawaited(_step('ble_server', {'conn': conn, 'step': 'close'}));
       case BleFailed(:final what, :final code):
         _problem = '${what}_failed:$code';
+        debugPrint('ble: $_problem');
         notifyListeners();
     }
   }

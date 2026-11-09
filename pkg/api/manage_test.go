@@ -1,6 +1,7 @@
 package api
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"os"
 	"testing"
@@ -51,7 +52,7 @@ func TestExportBundle(t *testing.T) {
 	s := NewDaemonServerAt(t.TempDir(), 0, t.TempDir(), "Solo")
 	n := testkit.StartNode(t, s)
 	dir := t.TempDir()
-	e := n.WaitReply(n.Request("export_bundle", map[string]any{"dir": dir}), 0)
+	e := n.WaitReply(n.Request("export_bundle", map[string]any{"dir": dir, "app_log": "ble: started, scan only\n"}), 0)
 	var d struct{ Path string }
 	_ = json.Unmarshal(e.Data, &d)
 	if e.Event != "bundle_exported" || d.Path == "" {
@@ -59,6 +60,19 @@ func TestExportBundle(t *testing.T) {
 	}
 	if fi, err := os.Stat(d.Path); err != nil || fi.Size() == 0 {
 		t.Fatalf("bundle %s: %v", d.Path, err)
+	}
+	// The application's log is in it.
+	zr, err := zip.OpenReader(d.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	hasLog := false
+	for _, f := range zr.File {
+		hasLog = hasLog || f.Name == "app.log"
+	}
+	if !hasLog {
+		t.Fatal("the bundle lacks app.log")
 	}
 	if e := n.WaitReply(n.Request("export_bundle", map[string]any{"dir": ""}), 0); e.Event != "action_error" {
 		t.Fatalf("no folder: %s", e.Event)
