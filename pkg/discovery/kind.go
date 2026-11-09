@@ -53,6 +53,10 @@ func nameKind(name string) string {
 		return KindWiFi
 	case strings.HasPrefix(lower, "eth"):
 		return KindEthernet
+	// A phone's USB tethering, seen from the phone itself (usb0 on the Galaxy A57, real test of 9
+	// November 2026; rndis0 and ncm0 elsewhere): a cable.
+	case strings.HasPrefix(lower, "usb") || strings.HasPrefix(lower, "rndis") || strings.HasPrefix(lower, "ncm"):
+		return KindEthernet
 	case strings.HasPrefix(lower, "en") && runtime.GOOS != "darwin" && runtime.GOOS != "ios":
 		return KindEthernet
 	}

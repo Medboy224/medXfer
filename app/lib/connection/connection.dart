@@ -749,9 +749,9 @@ class Connection extends ChangeNotifier {
 
   /// Pairs with a device of the list: directly with a device of mutual trust; any other
   /// shows a PIN on its screen, which this user types ([pinNeeded]). Unanswered on its first
-  /// path, it is tried on the next ones (#263: a PC seen through the phone's USB tethering,
-  /// which Android keeps its apps from reaching, and on the Wi-Fi); [only] a path the user chose
-  /// (decision E2 of the cable plan).
+  /// path, it is tried on the next ones (#263: a PC seen through the phone's USB tethering and on
+  /// the Wi-Fi, its USB address no longer answering: tethering draws new addresses each time it
+  /// starts); [only] a path the user chose (decision E2 of the cable plan).
   Future<void> pairWith(NearbyDevice d, {bool only = false}) async {
     if (_connecting != null) return;
     _pairing = only ? null : d;

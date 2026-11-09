@@ -121,9 +121,9 @@ class _ConnectScreenState extends State<ConnectScreen> {
                   _Nearby(
                     connection: _c,
                     ble: ble,
-                    onPick: (d) {
+                    onPick: (d, {only = false}) {
                       _pinFor = d.name;
-                      unawaited(_c.pairWith(d));
+                      unawaited(_c.pairWith(d, only: only));
                     },
                     onNotListed: _openManual,
                   ),
@@ -275,7 +275,8 @@ class _Nearby extends StatelessWidget {
 
   final Connection connection;
   final BleLink ble;
-  final ValueChanged<NearbyDevice> onPick;
+  /// Tapped: its paths in order; [only] the one of a path button.
+  final void Function(NearbyDevice d, {bool only}) onPick;
   final VoidCallback onNotListed;
 
   @override
@@ -286,6 +287,7 @@ class _Nearby extends StatelessWidget {
     final devices = connection.nearby;
     final byBle = bleOnly(ble, connection);
     final busy = connection.connecting != null || bleBusy(ble);
+    bool tried(NearbyDevice d) => connection.connecting == d.ip || d.paths.any((p) => p.address == connection.connecting);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -346,9 +348,33 @@ class _Nearby extends StatelessWidget {
                             Text(d.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
                             const SizedBox(height: 2),
                             Text(
-                              connection.connecting == d.ip ? l.connectingLabel : (d.trusted ? l.nearbyTrusted : l.nearbyAsksPin),
+                              [
+                                tried(d) ? l.connectingLabel : (d.trusted ? l.nearbyTrusted : l.nearbyAsksPin),
+                                if (d.paths.length == 1 && d.kind == PathKind.cable) l.byCable,
+                              ].join(' · '),
                               style: TextStyle(color: c.muted, fontSize: 13),
                             ),
+                            // DISC-13: reached by a cable and by Wi-Fi, as on a desktop, the user
+                            // may choose; the row itself tries them in order (#263).
+                            if (d.paths.length > 1)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 6),
+                                child: Wrap(
+                                  spacing: 8,
+                                  children: [
+                                    for (final p in d.paths)
+                                      OutlinedButton(
+                                        key: Key('nearby-${d.ip}-${p.kind.name}-${p.address}'),
+                                        style: OutlinedButton.styleFrom(
+                                          visualDensity: VisualDensity.compact,
+                                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                                        ),
+                                        onPressed: busy ? null : () => onPick(d.via(p), only: true),
+                                        child: Text(connection.connecting == p.address ? l.connectingLabel : pathLabel(l, p.kind)),
+                                      ),
+                                  ],
+                                ),
+                              ),
                           ],
                         ),
                       ),

@@ -15,7 +15,7 @@ import (
 func TestNameKind(t *testing.T) {
 	want := map[string]string{
 		"wlan0": KindWiFi, "wlo1": KindWiFi, "swlan0": KindWiFi, "Wi-Fi": KindWiFi, "Wi-Fi 2": KindWiFi,
-		"eth0": KindEthernet, "lxcbr0": KindOther, "rmnet_data0": KindOther, "": KindOther,
+		"eth0": KindEthernet, "usb0": KindEthernet, "rndis0": KindEthernet, "ncm0": KindEthernet, "lxcbr0": KindOther, "rmnet_data0": KindOther, "": KindOther,
 	}
 	if runtime.GOOS != "darwin" && runtime.GOOS != "ios" {
 		want["enp0s25"] = KindEthernet
