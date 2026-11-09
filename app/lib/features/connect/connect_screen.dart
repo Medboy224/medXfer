@@ -396,7 +396,10 @@ class _Nearby extends StatelessWidget {
                           ],
                         ),
                       ),
-                      Icon(Icons.chevron_right_rounded, color: c.muted),
+                      if (bleTouching(ble, d))
+                        SizedBox.square(key: const Key('ble-working'), dimension: 20, child: CircularProgressIndicator(strokeWidth: 2.5, color: accent))
+                      else
+                        Icon(Icons.chevron_right_rounded, color: c.muted),
                     ],
                   ),
                 ),

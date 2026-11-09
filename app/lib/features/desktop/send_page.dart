@@ -384,7 +384,7 @@ class _ConnectionPanel extends StatelessWidget {
             key: ValueKey('ble-${d.device}'),
             name: d.name,
             detail: bleDetail(l, ble, d),
-            action: l.connect,
+            action: bleTouching(ble, d) ? l.connectingLabel : l.connect,
             primary: true,
             onAction: busy ? null : () => unawaited(ble.connect(d)),
           ),

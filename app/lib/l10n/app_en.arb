@@ -366,6 +366,8 @@
   "bleStageConfirming": "Checking…",
   "bleStageNetworking": "Creating the network…",
   "bleStageConnecting": "Joining the network…",
+  "bleStageWaiting": "{device} is joining this network…",
+  "@bleStageWaiting": {"placeholders": {"device": {"type": "String"}}},
   "bleFailedRefused": "{device} refused, or the PIN was wrong.",
   "@bleFailedRefused": {"placeholders": {"device": {"type": "String"}}},
   "bleFailedNetwork": "No network could be created with {device}.",
@@ -379,5 +381,7 @@
   "bleFailedFar": "{device} is too far for Bluetooth: come closer, then touch it again.",
   "@bleFailedFar": {"placeholders": {"device": {"type": "String"}}},
   "bleWeak": "weak signal",
+  "bleFailedNotJoined": "{device} did not join this device's network. Touch it again.",
+  "@bleFailedNotJoined": {"placeholders": {"device": {"type": "String"}}},
   "@bleWeak": {"description": "A device found by Bluetooth at the edge of reach."}
 }
