@@ -19,6 +19,7 @@ class _Radio implements Ble {
   final disconnected = <String>[];
   final hang = <String>{}; // devices that never answer: out of reach, or an old address
   int drops = 0; // the next exchanges failing, as Android's do when the other goes out of reach
+  String dropWhy = 'timeout';
   bool on = true, allowed = true, started = false;
   int asked = 0; // the permission's system dialog
   WifiBands bands = (create: 3, join: 3);
@@ -51,7 +52,7 @@ class _Radio implements Ble {
   Future<Uint8List> exchange(String device, Uint8List message) {
     if (drops > 0) {
       drops--;
-      return Future.error(PlatformException(code: 'ble', message: 'timeout'));
+      return Future.error(PlatformException(code: 'ble', message: dropWhy));
     }
     return hang.contains(device) ? Completer<Uint8List>().future : Future.value(Uint8List.fromList([...message, 0]));
   }
@@ -128,6 +129,7 @@ void main() {
     BleLink.recognizeJitter = Duration.zero;
     BleLink.touchRetryAfter = Duration.zero;
   });
+
   setUp(() {
     core = FakeCore()..on('set_network_info', (_) => const FakeAnswer());
     radio = _Radio();
@@ -480,6 +482,33 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 1200)); // past forgetAfter: still there
     expect(link.devices.map((d) => d.device), ['11:11']);
     await Future<void>.delayed(const Duration(milliseconds: 2400));
+    expect(link.devices, isEmpty);
+  });
+
+  test('the edge of reach: a recognition the radio drops is tried again soon, by itself, then later', () async {
+    final soon = BleLink.retrySoonAfter;
+    BleLink.retrySoonAfter = const [Duration(milliseconds: 40), Duration(milliseconds: 80)];
+    addTearDown(() => BleLink.retrySoonAfter = soon);
+    _client(core, {
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+    });
+    await link.start();
+    radio
+      ..drops = 3
+      ..dropWhy = 'write_status:133'; // Android's, through two walls (8 November)
+    radio.add(const BleSeen('11:11', -88)); // reported once: the tries again come without a report
+    await _settle();
+    Iterable<Map<String, Object?>> hellos() => steps('ble_client').where((p) => p['step'] == 'hello');
+    expect(hellos(), hasLength(1));
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    await _settle();
+    expect(hellos(), hasLength(2)); // after 40 ms
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await _settle();
+    expect(hellos(), hasLength(3)); // after 80 ms more
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await _settle();
+    expect(hellos(), hasLength(3), reason: 'the third failure waits retryAfter');
     expect(link.devices, isEmpty);
   });
 }

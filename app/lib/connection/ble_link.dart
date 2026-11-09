@@ -37,6 +37,9 @@ class BleDevice {
   /// A recognition failed: not tried again before then, for the others to have their turn.
   DateTime retryAt = DateTime(0);
 
+  /// Its recognitions failed in a row.
+  int failures = 0;
+
   /// Its generic name's 4 hex digits (DISC-07): the same name as on the network.
   String? suffix;
 
@@ -103,6 +106,13 @@ class BleLink extends ChangeNotifier {
   /// held the computer's list 26 s (real test of 7 November).
   static Duration recognizeWithin = const Duration(seconds: 8);
   static Duration retryAfter = const Duration(seconds: 5);
+
+  /// A recognition the radio dropped (Android's error 133, at the edge of reach) is tried again
+  /// sooner: after these, in turn, then [retryAfter]. Through two walls, three tries 5 s apart
+  /// kept the computer out of the phone's list 22 s (real test of 8 November). One that got no
+  /// answer at all, an old address most often, waits [retryAfter] at once.
+  static List<Duration> retrySoonAfter = const [Duration(seconds: 1), Duration(seconds: 2)];
+  Timer? _nextTry;
 
   /// While another device talks to this one (it recognizes it, or touched it), this one does not
   /// start its own recognitions: two at once over one link, one of them hung (7 November).
@@ -177,6 +187,8 @@ class BleLink extends ChangeNotifier {
     _forget = null;
     _afterQuiet?.cancel();
     _afterQuiet = null;
+    _nextTry?.cancel();
+    _nextTry = null;
     _devices.clear();
     _servedTrusted.clear();
     await ble.stop();
@@ -283,10 +295,23 @@ class BleLink extends ChangeNotifier {
       for (final d in _devices.values)
         if (!d.recognized && !now.isBefore(d.retryAt)) d,
     ]..sort((a, b) => b.seenAt.compareTo(a.seenAt));
-    if (waiting.isEmpty) return;
+    if (waiting.isEmpty) return _tryLater(now);
     final d = waiting.first;
     _recognizing.add(d.device);
     unawaited(_recognize(d));
+  }
+
+  /// A device that failed is tried again at its time, without waiting for the radio's next
+  /// report of it: at the edge of reach, one in several comes.
+  void _tryLater(DateTime now) {
+    final later = [
+      for (final d in _devices.values)
+        if (!d.recognized) d.retryAt,
+    ];
+    if (later.isEmpty) return;
+    final at = later.reduce((a, b) => a.isBefore(b) ? a : b);
+    _nextTry?.cancel();
+    _nextTry = Timer(at.difference(now), _recognizeNext);
   }
 
   /// The devices the radio stopped reporting leave the list: gone, or under a new address.
@@ -394,7 +419,9 @@ class BleLink extends ChangeNotifier {
     } finally {
       if (failed != null) {
         debugPrint('ble: ${d.device} not recognized ($failed), ${clock.elapsedMilliseconds} ms');
-        d.retryAt = DateTime.now().add(retryAfter);
+        final soon = failed != 'timeout' && failed != 'refused' && d.failures < retrySoonAfter.length;
+        d.retryAt = DateTime.now().add(soon ? retrySoonAfter[d.failures] : retryAfter);
+        d.failures++;
       }
       _recognizing.remove(d.device);
       scheduleMicrotask(_recognizeNext);
@@ -565,6 +592,7 @@ class BleLink extends ChangeNotifier {
   void dispose() {
     _forget?.cancel();
     _afterQuiet?.cancel();
+    _nextTry?.cancel();
     connection.removeListener(_follow);
     unawaited(_events.cancel());
     super.dispose();
