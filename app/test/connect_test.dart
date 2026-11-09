@@ -192,6 +192,41 @@ void main() {
     expect(find.byKey(const Key('connect')), findsOneWidget);
   });
 
+  testWidgets('#263: a device by cable and by Wi-Fi: the row tries them in order, a path button only its path', (tester) async {
+    final core = _core()
+      ..on('scan', (_) => const FakeAnswer(replies: [
+            CoreEvent('peers_list', data: [
+              {
+                'device_name': 'medXfer-1A2B',
+                'host_ip': '10.210.49.42',
+                'port': 18887,
+                'paths': [
+                  {'ip': '10.210.49.42', 'kind': 'ethernet'},
+                  {'ip': '192.168.199.174', 'kind': 'wifi'},
+                ],
+              },
+            ]),
+          ]))
+      ..on('pair', (_) => const FakeAnswer());
+    final (_, state) = await _app(tester, core);
+    await tester.tap(find.byKey(const Key('connect')));
+    await tester.pumpAndSettle();
+    final wifi = find.byKey(const Key('nearby-10.210.49.42-wifi-192.168.199.174'));
+    await _reveal(tester, wifi);
+    expect(find.byKey(const Key('nearby-10.210.49.42-cable-10.210.49.42')), findsOneWidget);
+    await tester.tap(wifi);
+    await tester.pumpAndSettle();
+    expect(core.calls.lastWhere((c) => c.action == 'pair').payload, {'ip': '192.168.199.174', 'port': 18887, 'trust': true});
+    expect(find.text('Connexion…'), findsWidgets); // the row and its button say it
+    // Unanswered there: said, the cable not tried behind the user's choice.
+    final mine = core.calls.length;
+    state.connection.take(CoreEvent('action_error', id: 'ui-$mine', data: {
+      'error': 'failed to pair', 'code': 'unreachable', 'target': '192.168.199.174:18887',
+    }));
+    await tester.pumpAndSettle();
+    expect(core.calls.where((c) => c.action == 'pair'), hasLength(1));
+  });
+
   testWidgets('Connect: a PIN typed with the address of the other device', (tester) async {
     final core = _core()..on('pair_pin', (_) => const FakeAnswer());
     await _app(tester, core);

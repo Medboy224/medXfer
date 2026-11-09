@@ -365,7 +365,7 @@ class _ConnectionPanel extends StatelessWidget {
                   (
                     key: Key('device-${d.ip}-${p.kind.name}-${p.address}'),
                     label: connection.connecting == p.address ? l.connectingLabel : pathLabel(l, p.kind),
-                    onAction: busy ? null : () => unawaited(connection.pairWith(d.via(p))),
+                    onAction: busy ? null : () => unawaited(connection.pairWith(d.via(p), only: true)),
                   ),
               ],
             )
