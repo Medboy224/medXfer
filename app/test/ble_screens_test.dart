@@ -30,6 +30,7 @@ class _TestFolders implements Folders {
 class _Radio implements Ble {
   final _events = StreamController<BleEvent>.broadcast();
   bool allowed = true, started = false;
+  bool canAdvertise = true; // no peripheral role: Windows says no_advertiser
   int asked = 0;
   bool dropping = false; // out of reach: each exchange fails
 
@@ -50,7 +51,10 @@ class _Radio implements Ble {
   @override
   Future<bool> turnOn() async => true;
   @override
-  Future<void> start({bool advertise = true, bool scan = true}) async => started = true;
+  Future<void> start({bool advertise = true, bool scan = true}) async {
+    if (advertise && !canAdvertise) throw PlatformException(code: 'no_advertiser');
+    started = true;
+  }
   @override
   Future<void> stop() async => started = false;
   @override
@@ -196,5 +200,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(core.calls.where((c) => c.action == 'ble_client' && c.payload['step'] == 'hello'), hasLength(1 + BleLink.touchTries));
     expect(find.text('medXfer-6e2a est trop loin pour le Bluetooth : rapprochez-vous, puis touchez-le à nouveau.'), findsOneWidget);
+  });
+
+  testWidgets('an adapter that cannot advertise: said, and the devices it sees still listed', (tester) async {
+    final radio = _Radio()..canAdvertise = false;
+    final core = _core({
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+    });
+    await _app(tester, core, radio);
+    await tester.tap(find.byKey(const Key('connect')));
+    await tester.pumpAndSettle();
+    await _reveal(tester, find.byKey(const Key('ble-status')));
+    expect(find.textContaining("ne peut pas s'annoncer"), findsOneWidget);
+    radio.add(const BleSeen('11:11', -50));
+    await tester.pumpAndSettle();
+    await _reveal(tester, find.text('medXfer-6e2a'));
+    expect(find.text('medXfer-6e2a'), findsOneWidget);
   });
 }

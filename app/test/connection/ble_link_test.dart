@@ -21,6 +21,7 @@ class _Radio implements Ble {
   int drops = 0; // the next exchanges failing, as Android's do when the other goes out of reach
   String dropWhy = 'timeout';
   bool on = true, allowed = true, started = false;
+  bool canAdvertise = true, advertising = false; // no peripheral role: Windows says no_advertiser
   int asked = 0; // the permission's system dialog
   WifiBands bands = (create: 3, join: 3);
 
@@ -41,7 +42,11 @@ class _Radio implements Ble {
   @override
   Future<bool> turnOn() async => on = true;
   @override
-  Future<void> start({bool advertise = true, bool scan = true}) async => started = true;
+  Future<void> start({bool advertise = true, bool scan = true}) async {
+    if (advertise && !canAdvertise) throw PlatformException(code: 'no_advertiser');
+    advertising = advertise;
+    started = true;
+  }
   @override
   Future<void> stop() async => started = false;
   @override
@@ -67,6 +72,7 @@ class _Radio implements Ble {
 class _Hotspot implements Hotspot {
   final starts = <bool>[];
   final joins = <String>[];
+  PlatformException? startError; // the system refusing the network
 
   @override
   bool get supported => true;
@@ -79,6 +85,7 @@ class _Hotspot implements Hotspot {
   @override
   Future<HotspotInfo> start({bool fiveGhz = true}) async {
     starts.add(fiveGhz);
+    if (startError case final e?) throw e;
     return fiveGhz
         ? const HotspotInfo(ssid: 'DIRECT-KQ-medXfer', passphrase: 'K3PQ8Z2MXA7D', security: 1, address: '192.168.49.1', band: WifiBand.ghz5)
         : const HotspotInfo(ssid: 'AndroidShare_1853', passphrase: 'vvrtsy12', security: 2, address: '10.34.109.23');
@@ -418,6 +425,51 @@ void main() {
     connection.take(const CoreEvent('paired', data: {'ip': '192.168.49.20', 'device_name': 'PC'}));
     await Future<void>.delayed(const Duration(milliseconds: 120));
     expect(connection.myHotspot?.ssid, 'DIRECT-KQ-medXfer');
+  });
+
+  test('an adapter that cannot advertise: it scans, and touches the others', () async {
+    radio.canAdvertise = false;
+    _client(core, {
+      'recognize': {'suffix': 'ab12', 'trusted': true, 'fingerprint': 'FPA', 'alias': 'Phone'},
+    });
+    await link.start();
+    expect((link.running, link.scanOnly, link.problem, radio.advertising), (true, true, null, false));
+    radio.add(const BleSeen('33:33', -40));
+    await _settle();
+    await link.connect(link.devices.single);
+    expect(steps('ble_client').map((p) => p['step']), containsAllInOrder(['hello', 'recognize', 'trusted']));
+    // Started again (the screen opened again): scanning only at once.
+    await link.stop();
+    await link.start();
+    expect((link.running, radio.advertising), (true, false));
+  });
+
+  test('a computer whose system refused its network: the other device creates it, until one is created', () async {
+    final notices = <ConnectionNotice>[];
+    final sub = connection.notices.listen(notices.add);
+    addTearDown(sub.cancel);
+    // Busy (the system's hotspot on): it may be turned off, nothing remembered.
+    hotspot.startError = PlatformException(code: 'busy', message: 'resource in use');
+    await connection.startHotspot();
+    expect(connection.cannotCreate, isFalse);
+    hotspot.startError = PlatformException(code: 'refused', message: 'aborted without a reason');
+    await connection.startHotspot();
+    await _settle();
+    expect(connection.cannotCreate, isTrue);
+    expect([for (final n in notices.whereType<HotspotFailed>()) n.code], ['busy', 'refused']);
+    _client(core, {
+      'recognize': {'suffix': 'ab12', 'trusted': true, 'fingerprint': 'FPA', 'alias': 'Phone'},
+    });
+    await link.start();
+    radio.add(const BleSeen('33:33', -40));
+    await _settle();
+    await link.connect(link.devices.single);
+    final asked = steps('ble_client').firstWhere((p) => p['step'] == 'trusted');
+    expect((asked['create'], asked['join']), (0, 3));
+    // Created after all (a driver updated): announced again.
+    hotspot.startError = null;
+    await connection.startHotspot();
+    expect(connection.cannotCreate, isFalse);
   });
 
   /// A device seen at [rssi] and recognized: of mutual trust, its network given at 5 GHz.
