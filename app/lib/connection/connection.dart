@@ -554,8 +554,10 @@ class Connection extends ChangeNotifier {
         _keepHotspot();
         return;
       }
+      final clock = Stopwatch()..start();
       _myHotspot = await hotspot.start(fiveGhz: !_hotspotLowBand);
       _cannotCreate = false;
+      debugPrint('hotspot: started, ${_myHotspot!.band?.name ?? 'band unknown'}, ${clock.elapsedMilliseconds} ms');
       _hotspotOtherWifi = await hotspot.otherWifi();
       _hotspotWatch = Timer.periodic(hotspotCheck, (_) => unawaited(_checkHotspot()));
       await pushNetwork();
@@ -563,6 +565,7 @@ class Connection extends ChangeNotifier {
     } on PlatformException catch (e) {
       _myHotspot = null;
       if (_refusedCodes.contains(e.code)) _cannotCreate = true;
+      debugPrint('hotspot: failed ${e.code} (${e.message ?? ''})');
       if (!quiet) {
         _wantHotspot = false;
         _notices.add(HotspotFailed(permission: false, code: e.code, reason: e.message ?? e.code));
@@ -802,9 +805,11 @@ class Connection extends ChangeNotifier {
       }
       await hotspot.join(n.ssid, n.passphrase, security: n.security, band: n.band);
       _joined = n;
+      debugPrint('hotspot: joined, ${n.band?.name ?? 'band unknown'}');
       await pushNetwork();
       return true;
     } on PlatformException catch (e) {
+      debugPrint('hotspot: join failed ${e.code} (${e.message ?? ''})');
       _notices.add(switch (e.code) {
         'no_band' when n.band != null => JoinBandMissing(n.band!),
         _ => JoinFailed(n.ssid),

@@ -8,6 +8,7 @@ import 'package:medxfer/app.dart';
 import 'package:medxfer/app_state.dart';
 import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
+import 'package:medxfer/dev/app_log.dart';
 import 'package:medxfer/dev/dev_tools.dart';
 import 'package:medxfer/features/dev/dev_panel.dart';
 import 'package:medxfer/platform/folders.dart';
@@ -125,11 +126,16 @@ void main() {
       final core = FakeCore()
         ..on('get_transfer_summary', (_) => const FakeAnswer(replies: [CoreEvent('last_transfer_summary', data: {'formatted_report': 'Speed: 52 MB/s'})]))
         ..on('export_bundle', (_) => const FakeAnswer(replies: [CoreEvent('bundle_exported', data: {'path': '/out/medxfer-bundle-1.zip'})]));
-      final dev = DevTools(core, downloadDir: () async => '/out');
+      final log = AppLog()..add('ble: started, scan only, 70 ms');
+      final dev = DevTools(core, downloadDir: () async => '/out', log: log);
       addTearDown(dev.dispose);
       await dev.loadReport();
       await dev.exportBundle();
       expect((dev.report, dev.bundle), ('Speed: 52 MB/s', '/out/medxfer-bundle-1.zip'));
+      // The application's own log goes with it, for the core to add and mask.
+      final asked = core.calls.singleWhere((c) => c.action == 'export_bundle').payload;
+      expect(asked['dir'], '/out');
+      expect(asked['app_log'], endsWith(' ble: started, scan only, 70 ms\n'));
     });
   });
 
