@@ -39,11 +39,16 @@ func (s *Session) handler() http.Handler {
 	mux.HandleFunc("GET /api/session", s.authed(s.handleSession))
 	mux.HandleFunc("GET /api/items", s.authed(s.handleItems))
 	mux.HandleFunc("GET /api/items/{id}", s.authed(s.handleItem))
+	mux.HandleFunc("POST /api/uploads", s.authed(s.handleUploadRequest))
+	mux.HandleFunc("GET /api/uploads/{ticket}", s.authed(s.handleUploadState))
+	mux.HandleFunc("PUT /api/uploads/{ticket}/{index}", s.authed(s.handleChunk))
+	mux.HandleFunc("DELETE /api/uploads/{ticket}", s.authed(s.handleUploadCancel))
 	return s.headers(mux)
 }
 
-// headers sets the security headers on every response (WEB-05), refuses everything once the
-// session ended (WEB-10), and bounds every body (WEB-08).
+// headers sets the security headers on every response (WEB-05) and refuses everything once
+// the session ended (WEB-10). Each route bounds its own body (WEB-08): decode, handleChunk; the
+// others read none.
 func (s *Session) headers(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -57,7 +62,6 @@ func (s *Session) headers(next http.Handler) http.Handler {
 			writeError(w, http.StatusGone, "session_closed")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxJSON)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -103,7 +107,7 @@ func (s *Session) handleUnlock(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PIN string `json:"pin"`
 	}
-	if !decode(w, r, &body) {
+	if !decode(w, r, &body, maxJSON) {
 		return
 	}
 	s.mu.Lock()
@@ -134,9 +138,16 @@ func (s *Session) handleUnlock(w http.ResponseWriter, r *http.Request) {
 
 // handleSession says who the host is (its generic name, DISC-07) and until when.
 func (s *Session) handleSession(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	bytesLeft, filesLeft := s.maxBytes()-s.usedBytes, s.maxFiles()-s.usedFiles
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":    s.opts.Name,
-		"expires": s.Expires().UTC().Format(time.RFC3339),
+		"name":       s.opts.Name,
+		"expires":    s.Expires().UTC().Format(time.RFC3339),
+		"receive":    s.opts.ReceiveDir != "",
+		"bytes_left": bytesLeft,
+		"files_left": filesLeft,
+		"chunk":      ChunkSize,
 	})
 }
 
@@ -153,9 +164,9 @@ func (s *Session) handleItem(w http.ResponseWriter, r *http.Request) {
 	s.serveItem(w, r, it)
 }
 
-// decode reads a JSON body: 413 beyond maxJSON (WEB-08), 400 when it is not JSON.
-func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	err := json.NewDecoder(r.Body).Decode(v)
+// decode reads a JSON body: 413 beyond limit (WEB-08), 400 when it is not JSON.
+func decode(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(v)
 	var tooBig *http.MaxBytesError
 	switch {
 	case err == nil:

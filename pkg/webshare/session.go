@@ -57,6 +57,14 @@ type Options struct {
 	// PinIP: once the guest is authenticated, requests from another address are refused
 	// (WEB-09). Off by default: an address changes, and a NAT shares one.
 	PinIP bool
+	// ReceiveDir is where the guest's files go; "" refuses uploads.
+	ReceiveDir string
+	// AutoAccept: the guest's uploads are accepted without asking the host (WEB-06).
+	AutoAccept bool
+	// MaxBytes and MaxFiles bound what a session receives (WEB-06): DefaultMaxBytes and
+	// DefaultMaxFiles when 0.
+	MaxBytes int64
+	MaxFiles int
 	// Events receives what the host is told; it must not block.
 	Events func(Event)
 	// Logf receives the server's own errors (TLS handshakes refused by the guest's browser
@@ -82,17 +90,21 @@ type Session struct {
 	srv *http.Server
 	ln  net.Listener
 
-	mu       sync.Mutex
-	expires  time.Time
-	tries    int    // wrong PINs so far
-	guestIP  string // the authenticated guest's address, when PinIP
-	busy     int    // transfers running: the session does not expire meanwhile
-	closed   string // why it ended; "" while it runs
-	timer    *time.Timer
-	done     chan struct{}
-	now      func() time.Time
-	failWait time.Duration // the wait after a wrong PIN (WEB-03)
-	recheck  time.Duration // how soon an expiry put off by a transfer is looked at again
+	mu        sync.Mutex
+	expires   time.Time
+	tries     int    // wrong PINs so far
+	guestIP   string // the authenticated guest's address, when PinIP
+	busy      int    // transfers running: the session does not expire meanwhile
+	closed    string // why it ended; "" while it runs
+	uploads   map[string]*upload
+	active    *upload // the one upload pending or coming (WEB-06)
+	usedFiles int
+	usedBytes int64
+	timer     *time.Timer
+	done      chan struct{}
+	now       func() time.Time
+	failWait  time.Duration // the wait after a wrong PIN (WEB-03)
+	recheck   time.Duration // how soon an expiry put off by a transfer is looked at again
 }
 
 // Start opens a guest session: its certificate, token, PIN, listener and server.
@@ -142,6 +154,7 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 		items:       items,
 		ln:          ln,
 		expires:     now().Add(opts.TTL),
+		uploads:     map[string]*upload{},
 		done:        make(chan struct{}),
 		now:         now,
 		failWait:    failWait,
@@ -223,6 +236,7 @@ func (s *Session) end(why string) {
 	}
 	close(s.done)
 	s.mu.Unlock()
+	s.dropUploads() // no part file left behind
 	// Off the request that may have ended it: Shutdown waits for it.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
