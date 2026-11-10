@@ -1,0 +1,6 @@
+{"comment": "Golden scenario (DEV-17, J7): a Web Share guest session started, its address, PIN and certificate given to the host, then stopped."}
+{"expect": {"event": "status", "data": {"status": "idle"}}}
+{"id": "on", "action": "web_share_start", "payload": {"addr": "127.0.0.1", "port": -1, "receive": true}}
+{"expect": {"id": "on", "event": "web_share_started", "data": {"url": "*", "pin": "*", "fingerprint": "*", "receive": true}}}
+{"id": "off", "action": "web_share_stop"}
+{"expect": {"event": "web_share_closed", "data": {"reason": "stopped"}}}

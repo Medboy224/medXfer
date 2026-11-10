@@ -61,18 +61,11 @@ func TestNoDashboardNorControlSurface(t *testing.T) {
 	for _, r := range []route{
 		{"GET", "/status"}, {"GET", "/ws"}, {"GET", "/api/browse"}, {"POST", "/api/upload"},
 		{"GET", "/api/fs/list"}, {"POST", "/api/fs/mkdir?dir=x&name=y"},
+		// Web Share has its own listener per guest session (WEB-01, J7): nothing of it here.
+		{"GET", "/"}, {"GET", "/share"}, {"GET", "/api/share/list"}, {"POST", "/api/share/upload_chunk"},
 	} {
 		if code, _ := guardDo(t, r.method, "http://"+addr+r.path, nil); code != http.StatusNotFound {
 			t.Errorf("%s %s = %d; want 404", r.method, r.path, code)
 		}
-	}
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Get("http://" + addr + "/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusTemporaryRedirect || resp.Header.Get("Location") != "/share" {
-		t.Fatalf("GET / = %d → %q; want a redirect to /share", resp.StatusCode, resp.Header.Get("Location"))
 	}
 }

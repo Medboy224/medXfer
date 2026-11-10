@@ -1,5 +1,5 @@
 {"comment": "Golden scenario (DEV-17): status on connect, configuration change, disk benchmark."}
-{"expect": {"event": "status", "data": {"status": "idle", "web_share_enabled": false}}}
+{"expect": {"event": "status", "data": {"status": "idle"}}}
 {"id": "cfg", "action": "set_config", "payload": {"device_name": "ctl-golden", "collision_policy": "skip"}}
 {"expect": {"id": "cfg", "event": "status", "data": {"device_name": "ctl-golden", "collision_policy": "skip"}}}
 {"id": "st", "action": "get_status"}

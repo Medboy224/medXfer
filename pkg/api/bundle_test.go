@@ -48,27 +48,28 @@ func TestBundleHoldsNoSecret(t *testing.T) {
 	pair.AcceptOffer(0)
 	pair.WaitTransferDone(0)
 
-	pair.Receiver.Request("toggle_web_share", map[string]any{"enabled": true})
-	oldPIN := receiver.GetStatus().WebSharePIN
-	pair.Receiver.Request("regenerate_share_pin", nil)
-	pair.Receiver.WaitFor("new PIN", func(e testkit.Event) bool {
-		return e.Event == "status" && receiver.GetStatus().WebSharePIN != oldPIN
-	}, 0)
+	// A Web Share session (J7), its token and PIN shown to the host only (WEB-04).
+	started := pair.Receiver.WaitReply(pair.Receiver.Request("web_share_start", map[string]any{"addr": "127.0.0.1", "port": -1, "receive": true}), 0)
+	var share struct{ Token, PIN, URL string }
+	if started.Event != "web_share_started" || started.Decode(&share) != nil || share.Token == "" || share.PIN == "" {
+		t.Fatalf("web_share_start: %s %s", started.Event, started.Data)
+	}
+	pair.Receiver.Request("web_share_stop", nil)
+	pair.Receiver.WaitEvent("web_share_closed", 0)
 
 	var forbidden []string
 	for _, s := range []*DaemonServer{sender, receiver} {
-		st := s.GetStatus()
-		forbidden = append(forbidden, st.WebSharePIN, st.WebShareToken, st.PairingCode)
+		forbidden = append(forbidden, s.GetStatus().PairingCode)
 	}
-	forbidden = append(forbidden, oldPIN)
+	forbidden = append(forbidden, share.Token, share.PIN)
 
 	// A careless log line, like a future bug could add: the redactor must still catch it.
-	log.Printf("debug: pin=%s token %s file %s", receiver.GetStatus().WebSharePIN, receiver.GetStatus().WebShareToken, secretFile)
+	log.Printf("debug: pin=%s token %s url %s file %s", share.PIN, share.Token, share.URL, secretFile)
 	time.Sleep(50 * time.Millisecond) // let the last broadcast reach the journal
 	_ = j.Close()
 
 	// The application's log, as careless: masked the same way.
-	appLog := "ble: started, 70 ms\nhotspot: failed refused (aborted)\ndebug: pin=" + receiver.GetStatus().WebSharePIN +
+	appLog := "ble: started, 70 ms\nhotspot: failed refused (aborted)\ndebug: pin=" + share.PIN +
 		" file " + secretFile + "\n"
 
 	var buf bytes.Buffer

@@ -30,8 +30,13 @@ import (
 // trusted_devices, bundle_exported; send takes descriptors (items); transfer_progress lists the
 // files in progress (items). Added since, without a break: transfer_progress's stages
 // (stage_ms, bottleneck_confidence, WP-B.5); pin_refuse and pin_refused (the refusal of a PIN
-// asked for); ble_server, ble_client and pair_ble (the path by BLE, J6d WP-D.2).
-const SchemaVersion = 4
+// asked for); ble_server, ble_client and pair_ble (the path by BLE, J6d WP-D.2). 5: Web Share
+// v2 (J7, WP-W.4): web_share_start, web_share_stop, web_share_answer and web_share_cancel, their
+// web_share_* events, the guest session with its own listener (pkg/webshare); the transition
+// Web Share is gone (share_web_files, clear_web_files, toggle_web_share, regenerate_share_pin,
+// set_web_share_auto_accept, accept_web_upload, reject_web_upload, web_share_pause,
+// web_share_resume, their events, and status's web_share_* and portal_* fields).
+const SchemaVersion = 5
 
 // DefaultQueueSize bounds the event queue (B11): past it, an event is dropped and counted, and
 // the engine never waits for the interface.

@@ -4,7 +4,7 @@
 library;
 
 /// The schema of the messages this interface speaks (pkg/core SchemaVersion).
-const coreSchema = 4;
+const coreSchema = 5;
 
 /// The folders and name the core starts with (B6: the paths come from the caller).
 class CoreConfig {

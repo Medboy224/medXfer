@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -29,6 +28,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
 	"github.com/Medboy224/medXfer/pkg/transfer"
+	"github.com/Medboy224/medXfer/pkg/webshare"
 )
 
 // defaultPort is the device's single port: pairing, session and data (CHAN-01). Every mode
@@ -1719,76 +1719,87 @@ func selectOneShotSender() *discovery.Peer {
 
 func handleShare(args []string) {
 	shareCmd := flag.NewFlagSet("share", flag.ExitOnError)
-	portFlag := shareCmd.Int("port", 19999, "Port for Web Share HTTP portal")
-	pinFlag := shareCmd.String("pin", "", "Custom 4-digit security PIN (default: random)")
-	autoAcceptFlag := shareCmd.Bool("auto-accept", false, "Auto-accept incoming uploads without terminal prompt")
-	outDirFlag := shareCmd.String("out", "", "Directory to save incoming uploaded files")
-	nameFlag := shareCmd.String("name", "", "Custom device name")
+	addrFlag := shareCmd.String("addr", "", "Address of the interface to serve on (default: this device's main address)")
+	portFlag := shareCmd.Int("port", webshare.DefaultPort, "Port of the guest session (another one if it is taken)")
+	outDirFlag := shareCmd.String("out", "", "Folder for the guest's files (default: the download folder)")
+	autoAcceptFlag := shareCmd.Bool("auto-accept", false, "Accept the guest's files without asking")
 
 	_ = shareCmd.Parse(reorderArgs(shareCmd, args))
 	defer startJournal()()
-	rawPaths := shareCmd.Args()
+	paths := shareCmd.Args()
 
-	srv := api.NewDaemonServer(*portFlag, *outDirFlag, *nameFlag)
-	srv.SetWebShareEnabled(true)
-	if *pinFlag != "" {
-		srv.SetPIN(*pinFlag)
+	addr := *addrFlag
+	if addr == "" {
+		addr = discovery.GetPrimaryLocalIP()
 	}
-	if *autoAcceptFlag {
-		srv.SetAutoAccept(true)
+	recv := *outDirFlag
+	if recv == "" {
+		recv = api.LoadConfig("", "").DownloadDir
 	}
-
-	if len(rawPaths) > 0 {
-		if err := srv.SharePaths(rawPaths); err != nil {
-			fmt.Printf("[-] Failed to prepare files for sharing: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	ln, err := srv.Listen(*portFlag)
+	answers := make(chan map[string]any, 4)
+	sess, err := webshare.Start(webshare.Options{
+		Addr:       addr,
+		Port:       *portFlag,
+		Name:       "medXfer",
+		Paths:      paths,
+		ReceiveDir: recv,
+		AutoAccept: *autoAcceptFlag,
+		Events: func(e webshare.Event) {
+			switch e.Kind {
+			case "upload_request":
+				if !*autoAcceptFlag {
+					answers <- e.Data
+				}
+			case "upload_file_done":
+				fmt.Printf("[+] Received %v\n", e.Data["path"])
+			case "download_done":
+				fmt.Printf("[+] Downloaded by the guest: %v\n", e.Data["name"])
+			case "session_closed":
+				fmt.Printf("[*] Web Share ended (%v).\n", e.Data["reason"])
+			}
+		},
+	})
 	if err != nil {
-		fmt.Printf("[-] Failed to start Web Share listener: %v\n", err)
+		fmt.Printf("[-] Web Share did not start: %v\n", err)
 		os.Exit(1)
 	}
 
-	st := srv.GetStatus()
-	portalURL := st.PortalURL
-	if portalURL == "" {
-		portalURL = fmt.Sprintf("http://%s:%d/share?pin=%s", discovery.GetPrimaryLocalIP(), st.LocalPort, st.WebSharePIN)
-	}
-
 	fmt.Println("==================================================")
-	fmt.Println("             medXfer Instant Web Share            ")
+	fmt.Println("             medXfer Web Share                    ")
 	fmt.Println("==================================================")
-	if len(rawPaths) > 0 {
-		fmt.Printf(" [SHARING] %d file/folder path(s):\n", len(rawPaths))
-		for _, p := range rawPaths {
-			fmt.Printf("   • %s\n", p)
-		}
-	} else {
-		fmt.Println(" [SHARING] Portal ready for incoming uploads and downloads.")
+	for _, p := range paths {
+		fmt.Printf(" Shared   : %s\n", p)
 	}
+	fmt.Printf(" Receives : %s\n", recv)
 	fmt.Println("--------------------------------------------------")
-	fmt.Printf(" Access URL : %s\n", portalURL)
-	fmt.Printf(" Security PIN: %s\n", st.WebSharePIN)
+	fmt.Printf(" Address  : %s\n", sess.URL())
+	fmt.Printf(" PIN      : %s (without the QR code: type it on the page)\n", sess.PIN())
+	fmt.Printf(" Certificate: %s\n", sess.Fingerprint())
+	fmt.Println(" The browser warns that the connection is not private: this certificate is")
+	fmt.Println(" drawn for this session only. Advanced, then Continue.")
 	fmt.Println("--------------------------------------------------")
-	fmt.Println(" Scan QR code with your phone / device camera:")
-	discovery.PrintTerminalQR(portalURL)
-	fmt.Println("--------------------------------------------------")
-	fmt.Println(" Web Share is running. Press Ctrl+C to stop.")
+	discovery.PrintTerminalQR(sess.URL())
+	fmt.Printf(" Open for %v without a transfer. Ctrl+C stops it.\n", webshare.DefaultTTL)
 
-	// Listen for OS signals to stop cleanly
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		fmt.Println("\n[*] Stopping Web Share...")
-		srv.Stop()
-		os.Exit(0)
-	}()
-
-	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		fmt.Printf("[-] Server error: %v\n", err)
+	in := bufio.NewReader(os.Stdin)
+	for {
+		select {
+		case <-sigChan:
+			sess.Close()
+			<-sess.Done()
+			return
+		case <-sess.Done():
+			return
+		case req := <-answers:
+			fmt.Printf("[?] The guest sends %v (%v bytes). Accept? [y/N] ", req["files"], req["total"])
+			line, _ := in.ReadString('\n')
+			accept := strings.EqualFold(strings.TrimSpace(line), "y")
+			if err := sess.Answer(fmt.Sprint(req["ticket"]), accept); err != nil {
+				fmt.Printf("[-] %v\n", err)
+			}
+		}
 	}
 }
 
@@ -1798,7 +1809,7 @@ func printUsage() {
 		"==================================================\n" +
 		"Usage:\n" +
 		"  xfer node                                      (Persistent interactive CLI: QR code or fingerprints)\n" +
-		"  xfer share <file_or_folder...>                 (Instant Web Share with QR code & PIN)\n" +
+		"  xfer share <file_or_folder...>                 (Web Share: a browser sends and receives, QR code & PIN)\n" +
 		"  xfer send [-i] <file_or_folder> [more...]      (Direct transfer: shows a QR code; -i prompts)\n" +
 		"  xfer recv 'medxfer://...'                      (Receive from the sender's QR code)\n" +
 		"  xfer recv [pairing_code]                       (Via 6-digit code or discovery; both confirm)\n" +
@@ -1817,6 +1828,6 @@ func printUsage() {
 		"Examples on Android / Termux:\n" +
 		"  ./xfer-android-arm64 daemon                    -> Starts Web UI on http://localhost:19999\n" +
 		"  ./xfer-android-arm64 node                      -> Interactive CLI (scan, pair, send, recv)\n" +
-		"  ./xfer-android-arm64 share /sdcard/video.mp4   -> Instant Web Share with QR Code\n" +
+		"  ./xfer-android-arm64 share /sdcard/video.mp4   -> Web Share with a QR code\n" +
 		"==================================================\n")
 }
