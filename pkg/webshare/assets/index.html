@@ -3,14 +3,66 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>medXfer</title>
   <link rel="stylesheet" href="/s/app.css">
   <script src="/s/app.js" defer></script>
 </head>
 <body>
-  <main id="app">
-    <h1>medXfer</h1>
-    <p id="status"></p>
+  <header class="bar">
+    <span class="brand">medXfer</span>
+    <span id="host" class="host"></span>
+  </header>
+
+  <main>
+    <!-- Without a token: the PIN shown on the host (WEB-03). -->
+    <section id="pin" class="card" hidden>
+      <h1 data-i18n="pinTitle"></h1>
+      <p class="muted" data-i18n="pinHint"></p>
+      <form id="pin-form" autocomplete="off">
+        <input id="pin-input" class="pin" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" aria-describedby="pin-error">
+        <button id="pin-ok" class="primary" type="submit" data-i18n="pinOk"></button>
+      </form>
+      <p id="pin-error" class="error" role="alert"></p>
+    </section>
+
+    <!-- The session ended: expired, stopped by the host, or too many wrong PINs (WEB-10). -->
+    <section id="closed" class="card" hidden>
+      <h1 data-i18n="closedTitle"></h1>
+      <p class="muted" data-i18n="closedHint"></p>
+    </section>
+
+    <section id="main" hidden>
+      <nav class="tabs" role="tablist">
+        <button id="tab-receive" type="button" role="tab" aria-selected="true" data-i18n="tabReceive"></button>
+        <button id="tab-send" type="button" role="tab" aria-selected="false" data-i18n="tabSend"></button>
+      </nav>
+
+      <div id="receive" role="tabpanel">
+        <p id="items-empty" class="muted" data-i18n="itemsEmpty" hidden></p>
+        <ul id="items" class="list"></ul>
+      </div>
+
+      <div id="send" role="tabpanel" hidden>
+        <p id="send-off" class="muted" data-i18n="sendOff" hidden></p>
+        <div id="send-on">
+          <label class="picker">
+            <input id="files" type="file" multiple>
+            <span data-i18n="choose"></span>
+          </label>
+          <ul id="queue" class="list"></ul>
+          <p id="send-status" class="muted" role="status"></p>
+          <div class="actions">
+            <button id="send-go" class="primary" type="button" data-i18n="send" disabled></button>
+            <button id="send-cancel" type="button" data-i18n="cancel" hidden></button>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
+
+  <footer>
+    <p id="expires" class="muted"></p>
+  </footer>
 </body>
 </html>

@@ -866,12 +866,16 @@ Le portail n'appelle que ces routes, toutes en HTTPS sur le listener de la sessi
 | `GET /api/session` | Le nom générique de l'hôte (`DISC-07`), l'expiration, les quotas restants | `200` |
 | `GET /api/items` | Ce que l'hôte propose | `200 [{id, name, size, folder}]` |
 | `GET /api/items/{id}` | Un fichier, ou un dossier en zip à la volée (`WEB-07`) | le contenu, `Content-Disposition` ; `404` |
+| `POST /api/items/{id}/link` | Un lien de téléchargement pour cet élément | `200 {url: "/dl/<clé>"}` ; `404` |
+| `GET /dl/{clé}` | L'élément du lien, sans en-tête `Authorization` ; `Range` accepté | le contenu ; `404` pour une clé inconnue ou expirée |
 | `POST /api/uploads` `{files: [{name, size}]}` | Une demande de dépôt : un ticket | `201 {ticket, state}` ; `413` au-delà des quotas ; `507` sans assez d'espace libre ; `409` si un transfert est déjà actif |
 | `GET /api/uploads/{ticket}` | Son état : `pending`, `accepted`, `refused`, `done` | `200 {state, files: [{index, received}]}` |
 | `PUT /api/uploads/{ticket}/{index}?offset=N` | Un morceau du fichier `index`, à sa position | `200 {received}` ; `409` si `offset` n'est pas la position attendue ; `413` au-delà de la taille annoncée |
 | `DELETE /api/uploads/{ticket}` | L'invité abandonne : les fichiers incomplets sont supprimés | `204` |
 
 Sans jeton valide : `401 {error: "unauthorized"}`. Session finie ou expirée : `410 {error: "session_closed"}`. Aucune réponse ne répète le jeton ou le PIN, sauf `unlock`.
+
+**Pourquoi des liens de téléchargement.** Un navigateur enregistre un fichier en suivant une adresse, sans en-tête `Authorization`. Le lire en entier par le script de la page ne tient pas dans la mémoire d'un téléphone pour 1 Gio, et un *service worker* refuse de s'installer sur un certificat auto-signé. La page demande donc, avec le jeton, un lien vers un seul élément : une clé à elle, de 128 bits (`crypto/rand`), jamais le jeton de session (`WEB-04`), valable 10 minutes, réutilisable pour reprendre un téléchargement, et disparue avec la session. Elle n'ouvre que cet élément.
 
 ### 11.5 Pourquoi pas de chiffrement WebCrypto de bout en bout
 `window.crypto.subtle` n'existe que dans un *contexte sécurisé* (HTTPS ou `localhost`) : il est absent sur `http://192.168.x.x`. Et en HTTP, un attaquant actif peut modifier le JavaScript qui implémente le chiffrement. Seul HTTPS résout les deux ; une fois HTTPS en place, WebCrypto n'ajoute rien face à A1 et A2.

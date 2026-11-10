@@ -39,6 +39,8 @@ func (s *Session) handler() http.Handler {
 	mux.HandleFunc("GET /api/session", s.authed(s.handleSession))
 	mux.HandleFunc("GET /api/items", s.authed(s.handleItems))
 	mux.HandleFunc("GET /api/items/{id}", s.authed(s.handleItem))
+	mux.HandleFunc("POST /api/items/{id}/link", s.authed(s.handleLink))
+	mux.HandleFunc("GET /dl/{key}", s.handleDownload)
 	mux.HandleFunc("POST /api/uploads", s.authed(s.handleUploadRequest))
 	mux.HandleFunc("GET /api/uploads/{ticket}", s.authed(s.handleUploadState))
 	mux.HandleFunc("PUT /api/uploads/{ticket}/{index}", s.authed(s.handleChunk))

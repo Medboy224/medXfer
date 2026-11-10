@@ -100,6 +100,7 @@ type Session struct {
 	active    *upload // the one upload pending or coming (WEB-06)
 	usedFiles int
 	usedBytes int64
+	links     map[string]link // download links, by key
 	timer     *time.Timer
 	done      chan struct{}
 	now       func() time.Time
@@ -155,6 +156,7 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 		ln:          ln,
 		expires:     now().Add(opts.TTL),
 		uploads:     map[string]*upload{},
+		links:       map[string]link{},
 		done:        make(chan struct{}),
 		now:         now,
 		failWait:    failWait,

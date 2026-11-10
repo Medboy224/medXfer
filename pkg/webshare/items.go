@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 // Item is a file or a folder the host offers. The guest names it by ID only, never by a name
@@ -51,6 +52,57 @@ func itemsOf(paths []string) ([]Item, error) {
 		items = append(items, it)
 	}
 	return items, nil
+}
+
+// LinkTTL is how long a download link lasts.
+const LinkTTL = 10 * time.Minute
+
+// link is a download link: a browser saves a file through an address, which carries no
+// Authorization header, and a file read whole by the page's script would not fit in a phone's
+// memory. So the page asks, with the token, for a link to one item: a key of its own, 128
+// bits, never the session's token (WEB-04), valid LinkTTL, used again to resume, gone with the
+// session.
+type link struct {
+	item    string
+	expires time.Time
+}
+
+// handleLink: POST /api/items/{id}/link.
+func (s *Session) handleLink(w http.ResponseWriter, r *http.Request) {
+	it, ok := s.item(r.PathValue("id"))
+	if !ok {
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	key, err := randomToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	s.mu.Lock()
+	now := s.now()
+	for k, l := range s.links {
+		if now.After(l.expires) {
+			delete(s.links, k)
+		}
+	}
+	s.links[key] = link{item: it.ID, expires: now.Add(LinkTTL)}
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"url": "/dl/" + key})
+}
+
+// handleDownload: GET /dl/{key}, the link's item.
+func (s *Session) handleDownload(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	l, ok := s.links[r.PathValue("key")]
+	expired := s.now().After(l.expires)
+	s.mu.Unlock()
+	if !ok || expired {
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	it, _ := s.item(l.item)
+	s.serveItem(w, r, it)
 }
 
 func (s *Session) item(id string) (Item, bool) {
