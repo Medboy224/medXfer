@@ -51,6 +51,21 @@ type upload struct {
 	said   time.Time // the last upload_progress
 }
 
+// counting writes a chunk to its file, and counts what is written as it goes. The upload's
+// lock is held.
+type counting struct {
+	s  *Session
+	up *upload
+	f  *upFile
+}
+
+func (c *counting) Write(p []byte) (int, error) {
+	n, err := c.f.f.Write(p)
+	c.f.received += int64(n)
+	c.s.progress(c.up)
+	return n, err
+}
+
 // progressGap is the least time between two upload_progress events.
 const progressGap = 250 * time.Millisecond
 
@@ -324,8 +339,9 @@ func (s *Session) handleChunk(w http.ResponseWriter, r *http.Request) {
 	}
 	// Never past the size announced: one byte more read says the chunk is too big.
 	body := http.MaxBytesReader(w, r.Body, MaxChunk)
-	n, err := io.Copy(f.f, io.LimitReader(body, f.Size-f.received+1))
-	f.received += n
+	// Counted as it is written, the host's bar moving during a chunk, not once per chunk (real
+	// test of 10 November 2026: an 8 MiB chunk took seconds on a slow network).
+	_, err = io.Copy(&counting{s: s, up: up, f: f}, io.LimitReader(body, f.Size-f.received+1))
 	if f.received > f.Size {
 		s.drop(up)
 		up.state = upCancelled

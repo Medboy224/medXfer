@@ -154,7 +154,7 @@ func (s *Session) handleSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Session) handleItems(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.items)
+	writeJSON(w, http.StatusOK, s.Items())
 }
 
 func (s *Session) handleItem(w http.ResponseWriter, r *http.Request) {

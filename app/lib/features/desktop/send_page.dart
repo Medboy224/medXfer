@@ -29,6 +29,7 @@ import '../connect/ble_nearby.dart';
 import '../connect/connect_screen.dart';
 import '../connect/dialogs.dart';
 import '../connect/hotspot_screen.dart';
+import '../webshare/web_share_screen.dart';
 
 class SendPage extends StatefulWidget {
   const SendPage({super.key});
@@ -73,7 +74,15 @@ class _SendPageState extends State<SendPage> {
           listenable: Listenable.merge([_state.connection, _state.selection, _state.cable, _state.firewall, _state.bleLink]),
           builder: (context, _) => LayoutBuilder(
             builder: (context, box) {
-              final pick = _Pick(onFiles: _chooseFiles, onFolder: _chooseFolder, selection: _state.selection, session: _state.connection.session, onSend: _send);
+              final pick = _Pick(
+                onFiles: _chooseFiles,
+                onFolder: _chooseFolder,
+                selection: _state.selection,
+                session: _state.connection.session,
+                onSend: _send,
+                // The side menu shows the page once the selection waits there (DesktopHome).
+                onBrowser: () => unawaited(offerSelectionToBrowser(context, open: () {})),
+              );
               final connection = _ConnectionPanel(connection: _state.connection, cable: _state.cable, firewall: _state.firewall, ble: _state.bleLink);
               return SingleChildScrollView(
                 padding: const EdgeInsets.all(24),
@@ -98,13 +107,14 @@ class _SendPageState extends State<SendPage> {
 
 /// The left column: where to drop or choose, the list of what was chosen, and send.
 class _Pick extends StatelessWidget {
-  const _Pick({required this.onFiles, required this.onFolder, required this.selection, required this.session, required this.onSend});
+  const _Pick({required this.onFiles, required this.onFolder, required this.selection, required this.session, required this.onSend, required this.onBrowser});
 
   final VoidCallback onFiles;
   final VoidCallback onFolder;
   final Selection selection;
   final PeerSession? session;
   final VoidCallback onSend;
+  final VoidCallback onBrowser;
 
   @override
   Widget build(BuildContext context) {
@@ -221,6 +231,15 @@ class _Pick extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
+          // A guest without medXfer: its browser (J7), the selection offered there.
+          OutlinedButton.icon(
+            key: const Key('send-browser'),
+            style: choose.copyWith(minimumSize: const WidgetStatePropertyAll(Size(0, 48))),
+            onPressed: onBrowser,
+            icon: const Icon(Icons.public_rounded),
+            label: Text(l.webShareTitle),
+          ),
+          const SizedBox(height: 12),
           if (to != null)
             FilledButton.icon(
               key: const Key('send'),

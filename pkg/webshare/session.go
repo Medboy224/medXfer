@@ -52,6 +52,10 @@ type Options struct {
 	Name string
 	// Paths are the files and folders offered to the guest.
 	Paths []string
+	// Files are offered too: files open already, under the name the guest sees (Android hands
+	// out descriptors, not paths, STO-16). The session owns them and closes them at its end,
+	// or at once when it does not start.
+	Files []OpenFile
 	// TTL: DefaultTTL when 0.
 	TTL time.Duration
 	// PinIP: once the guest is authenticated, requests from another address are refused
@@ -85,7 +89,11 @@ type Session struct {
 	token       string
 	pin         string
 	fingerprint string
-	items       []Item
+	cert        tls.Certificate // the session's, drawn for it (bible §11.2)
+	items       []Item          // guarded by mu: Add appends
+	files       []OpenFile      // the open files offered, closed at the end; guarded by mu
+	adding      sync.Mutex      // one Add at a time
+	nextID      int             // the next item's ID: never one withdrawn (Remove); guarded by mu
 
 	srv *http.Server
 	ln  net.Listener
@@ -114,6 +122,12 @@ func Start(opts Options) (*Session, error) {
 }
 
 func start(opts Options, now func() time.Time, failWait time.Duration) (*Session, error) {
+	ok := false
+	defer func() {
+		if !ok {
+			closeFiles(opts.Files) // owned from the call on, whatever fails
+		}
+	}()
 	ip := net.ParseIP(opts.Addr)
 	if ip == nil || ip.IsUnspecified() {
 		return nil, fmt.Errorf("webshare: give the address of the interface to serve on, not %q", opts.Addr)
@@ -124,7 +138,7 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 	if opts.Logf == nil {
 		opts.Logf = log.Printf
 	}
-	items, err := itemsOf(opts.Paths)
+	items, err := itemsOf(0, opts.Paths, opts.Files)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +166,10 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 		token:       token,
 		pin:         pin,
 		fingerprint: fp,
+		cert:        cert,
 		items:       items,
+		nextID:      len(items),
+		files:       opts.Files,
 		ln:          ln,
 		expires:     now().Add(opts.TTL),
 		uploads:     map[string]*upload{},
@@ -163,20 +180,25 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 		recheck:     30 * time.Second,
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	s.url = "https://" + net.JoinHostPort(ip.String(), strconv.Itoa(port)) + "/s#t=" + token
+	base := "https://" + net.JoinHostPort(ip.String(), strconv.Itoa(port))
+	s.url = base + "/s#t=" + token
 	s.srv = &http.Server{
 		Handler: s.handler(),
 		// WEB-08: a slow or oversized client holds nothing open.
 		ReadHeaderTimeout: 10 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 		IdleTimeout:       2 * time.Minute,
-		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 		ErrorLog:          log.New(logWriter(opts.Logf), "", 0),
+		// HTTP/1.1 only: large uploads through Go's HTTP/2 server go chunk by chunk of its flow
+		// control, slower than one connection per request (real test of 10 November 2026).
+		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
 	}
+	tlsConfig := &tls.Config{Certificates: []tls.Certificate{s.cert}, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}
 	s.mu.Lock()
 	s.timer = time.AfterFunc(opts.TTL, s.checkExpiry)
 	s.mu.Unlock()
-	go func() { _ = s.srv.ServeTLS(ln, "", "") }()
+	go func() { _ = s.srv.Serve(tls.NewListener(newSniffing(ln, base+"/s"), tlsConfig)) }()
+	ok = true
 	return s, nil
 }
 
@@ -238,6 +260,11 @@ func (s *Session) end(why string) {
 	}
 	s.mu.Unlock()
 	s.dropUploads() // no part file left behind
+	s.mu.Lock()
+	files := s.files
+	s.files = nil
+	s.mu.Unlock()
+	closeFiles(files)
 	// Off the request that may have ended it: Shutdown waits for it.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

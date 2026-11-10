@@ -37,6 +37,8 @@ class _Picker implements FilePicker {
   Future<Picked> files() async => Picked(paths: paths);
   @override
   Future<String?> folder() async => folderPath;
+  @override
+  Future<void> close(List<OpenFile> files) async {}
 }
 
 const _file = '/home/a/rapport.pdf';
@@ -468,5 +470,37 @@ void main() {
     core.emit(const CoreEvent('disconnected', data: {'reason': 'connection timed out'}));
     await tester.pump(const Duration(seconds: 31));
     expect(h.log, ['start', 'stop']);
+  });
+
+  testWidgets('J7: the selection to a browser: the page shown with it, its paths offered at the start', (tester) async {
+    final core = _core()
+      ..on('web_share_start', (_) => const FakeAnswer(replies: [
+            CoreEvent('web_share_started', data: {
+              'url': 'https://192.168.1.20:19999/s#t=0123456789abcdef0123456789abcdef',
+              'pin': '054461',
+              'fingerprint': '9E:81',
+              'addr': '192.168.1.20',
+              'port': 19999,
+              'receive': true,
+            }),
+          ]))
+      ..on('web_share_stop', (_) => const FakeAnswer());
+    final state = await _app(tester, core);
+    await tester.tap(find.byKey(const Key('pick-files')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pick-folder')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('send-browser')));
+    await tester.tap(find.byKey(const Key('send-browser')));
+    await tester.pumpAndSettle();
+    expect(state.selection.count, 2, reason: 'kept: the same files may go to a device with medXfer too');
+    expect([for (final d in state.webShare.draft) d.name], ['rapport.pdf', 'Vacances 2026']);
+    expect(find.text('rapport.pdf'), findsOneWidget); // listed on the page, offered at the start
+    expect(find.text('Vacances 2026'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('web-share-start')));
+    await tester.tap(find.byKey(const Key('web-share-start')));
+    await tester.pumpAndSettle();
+    expect(core.calls.firstWhere((c) => c.action == 'web_share_start').payload['paths'], [_file, _folder]);
+    expect((state.webShare.session != null, state.webShare.draft.isEmpty), (true, true));
   });
 }

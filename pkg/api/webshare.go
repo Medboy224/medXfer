@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -15,12 +16,15 @@ import (
 
 // WebShareStartPayload is web_share_start's.
 type WebShareStartPayload struct {
-	Paths      []string `json:"paths"`       // what the guest may download
-	Receive    bool     `json:"receive"`     // the guest may send, into the download folder
-	ReceiveDir string   `json:"receive_dir"` // another folder than the download folder
-	AutoAccept bool     `json:"auto_accept"` // the guest's uploads without asking (WEB-06)
-	Addr       string   `json:"addr"`        // the interface's address; the one status shows when ""
-	Port       int      `json:"port"`        // 19999 when 0 (decision D5 of the J7 plan)
+	Paths []string `json:"paths"` // what the guest may download
+	// Items: files open already, as send takes them (Android, STO-16). The core owns their
+	// descriptors from the call on, and closes them when the session ends.
+	Items      []SendItem `json:"items,omitempty"`
+	Receive    bool       `json:"receive"`     // the guest may send, into the download folder
+	ReceiveDir string     `json:"receive_dir"` // another folder than the download folder
+	AutoAccept bool       `json:"auto_accept"` // the guest's uploads without asking (WEB-06)
+	Addr       string     `json:"addr"`        // the interface's address; the one status shows when ""
+	Port       int        `json:"port"`        // 19999 when 0 (decision D5 of the J7 plan)
 }
 
 // WebShareTicketPayload is web_share_answer's and web_share_cancel's.
@@ -51,6 +55,7 @@ func (s *DaemonServer) handleWebShareStart(rs Responder, req RequestMessage) {
 			return
 		}
 	}
+	files := openFiles(p.Items)
 	s.stopWebShare()
 	if p.Addr == "" {
 		p.Addr = statusAddress()
@@ -70,6 +75,7 @@ func (s *DaemonServer) handleWebShareStart(rs Responder, req RequestMessage) {
 		Port:       p.Port,
 		Name:       name,
 		Paths:      p.Paths,
+		Files:      files,
 		ReceiveDir: dir,
 		AutoAccept: p.AutoAccept,
 		Events:     s.relayWebShare,
@@ -91,7 +97,75 @@ func (s *DaemonServer) handleWebShareStart(rs Responder, req RequestMessage) {
 		"port":        sess.Port(),
 		"receive":     dir != "",
 		"expires":     sess.Expires().UTC().Format(time.RFC3339),
+		"items":       sess.Items(),
 	}, req.ID))
+}
+
+// openFiles takes the descriptors the app hands over: the core owns them from here on.
+func openFiles(items []SendItem) []webshare.OpenFile {
+	var files []webshare.OpenFile
+	for _, it := range items {
+		if it.FD >= 0 {
+			files = append(files, webshare.OpenFile{File: os.NewFile(uintptr(it.FD), it.Name), Name: it.Name})
+		}
+	}
+	return files
+}
+
+// WebShareAddPayload is web_share_add's: more to offer, the session running.
+type WebShareAddPayload struct {
+	Paths []string   `json:"paths"`
+	Items []SendItem `json:"items,omitempty"` // files open already (Android): the core owns them
+}
+
+// handleWebShareAdd offers more to the guest, the session running (real test of 10 November
+// 2026): its page lists them at its next look. Answers web_share_added with the count offered.
+func (s *DaemonServer) handleWebShareAdd(rs Responder, req RequestMessage) {
+	var p WebShareAddPayload
+	if err := json.Unmarshal(req.Payload, &p); err != nil {
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid web_share_add payload"}, req.ID))
+		return
+	}
+	files := openFiles(p.Items)
+	sess := s.webShareSession()
+	if sess == nil {
+		for _, f := range files {
+			_ = f.File.Close()
+		}
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "no Web Share session"}, req.ID))
+		return
+	}
+	before := len(sess.Items())
+	if err := sess.Add(p.Paths, files); err != nil {
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+		return
+	}
+	items := sess.Items()
+	added := items
+	if before <= len(items) {
+		added = items[before:]
+	}
+	rs.Reply(NewEvent("web_share_added", map[string]any{"count": len(items), "items": added}, req.ID))
+}
+
+// WebShareRemovePayload is web_share_remove's: the item withdrawn.
+type WebShareRemovePayload struct {
+	ID string `json:"id"`
+}
+
+// handleWebShareRemove withdraws an item from the guest's list (real test of 10 November 2026).
+func (s *DaemonServer) handleWebShareRemove(rs Responder, req RequestMessage) {
+	var p WebShareRemovePayload
+	sess := s.webShareSession()
+	if err := json.Unmarshal(req.Payload, &p); err != nil || p.ID == "" || sess == nil {
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "no such Web Share item"}, req.ID))
+		return
+	}
+	if err := sess.Remove(p.ID); err != nil {
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+		return
+	}
+	rs.Reply(NewEvent("web_share_removed", map[string]any{"id": p.ID}, req.ID))
 }
 
 // handleWebShareStop: web_share_closed follows, reason "stopped".

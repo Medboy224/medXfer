@@ -33,6 +33,7 @@ import 'settings.dart';
 import 'transfer/history.dart';
 import 'transfer/receive_folders.dart';
 import 'transfer/transfers.dart';
+import 'transfer/web_share.dart';
 
 enum CoreStatus { starting, ready, failed }
 
@@ -72,6 +73,7 @@ class AppState extends ChangeNotifier {
     explorer = Explorer(library);
     keeper = BackgroundKeeper(background: background, connection: connection, transfers: transfers);
     transfers.addListener(_keepAwake);
+    webShare.addListener(_keepAwake);
     dev = DevTools(core, downloadDir: folders.downloadDir);
   }
 
@@ -118,7 +120,8 @@ class AppState extends ChangeNotifier {
 
   void _keepAwake() {
     final a = transfers.active;
-    final want = a != null && a.stage != Stage.done;
+    // A guest session too: a phone gone to sleep would take its network away from the guest.
+    final want = (a != null && a.stage != Stage.done) || webShare.active;
     if (want == _awake) return;
     _awake = want;
     unawaited(awake.keep(want));
@@ -132,6 +135,26 @@ class AppState extends ChangeNotifier {
 
   /// Sending and receiving, and their history (WP-B.3).
   late final Transfers transfers;
+
+  /// Web Share: a browser sends and receives (J7). Listens to the core from the start.
+  late final WebShare webShare = WebShare(core, openPicks: _openPicks, closeFiles: filePicker.close);
+
+  /// The home's picks made ready for the core, as a send does: paths on a desktop, and for the
+  /// folders on Android; files opened by the app otherwise (STO-16).
+  Future<({List<String> paths, List<OpenFile> files})> _openPicks(List<Pick> picks) async {
+    if (desktop) return (paths: [for (final p in picks) p.path], files: const <OpenFile>[]);
+    final others = [
+      for (final p in picks)
+        if (p.kind != PickKind.folder) (path: p.path, name: p.name),
+    ];
+    return (
+      paths: [
+        for (final p in picks)
+          if (p.kind == PickKind.folder) p.path,
+      ],
+      files: others.isEmpty ? const <OpenFile>[] : await library.open(others),
+    );
+  }
 
   /// Files and folders chosen on a desktop; the received folder opened.
   final FilePicker filePicker;

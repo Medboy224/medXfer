@@ -21,13 +21,28 @@ type Item struct {
 	Size   int64  `json:"size"`
 	Folder bool   `json:"folder"`
 	path   string
+	file   *os.File // an open file offered (Options.Files): read by position, never moved
 }
 
-// itemsOf lists the paths offered, each with its ID: its place in the list. A folder's size is
-// that of its regular files.
-func itemsOf(paths []string) ([]Item, error) {
-	items := make([]Item, 0, len(paths))
-	for i, p := range paths {
+// OpenFile is a file offered open already, and the name the guest sees.
+type OpenFile struct {
+	File *os.File
+	Name string
+}
+
+func closeFiles(files []OpenFile) {
+	for _, f := range files {
+		if f.File != nil {
+			_ = f.File.Close()
+		}
+	}
+}
+
+// itemsOf lists the paths and the open files offered, each with its ID: its place in the
+// session's list, from first on. A folder's size is that of its regular files.
+func itemsOf(first int, paths []string, files []OpenFile) ([]Item, error) {
+	items := make([]Item, 0, len(paths)+len(files))
+	for _, p := range paths {
 		abs, err := filepath.Abs(p)
 		if err != nil {
 			return nil, err
@@ -36,7 +51,7 @@ func itemsOf(paths []string) ([]Item, error) {
 		if err != nil {
 			return nil, fmt.Errorf("webshare: %w", err)
 		}
-		it := Item{ID: strconv.Itoa(i), Name: filepath.Base(abs), path: abs, Folder: fi.IsDir()}
+		it := Item{ID: strconv.Itoa(first + len(items)), Name: filepath.Base(abs), path: abs, Folder: fi.IsDir()}
 		if it.Folder {
 			_ = filepath.WalkDir(abs, func(_ string, d fs.DirEntry, err error) error {
 				if err == nil && d.Type().IsRegular() {
@@ -50,6 +65,20 @@ func itemsOf(paths []string) ([]Item, error) {
 			it.Size = fi.Size()
 		}
 		items = append(items, it)
+	}
+	for _, f := range files {
+		if f.File == nil {
+			return nil, fmt.Errorf("webshare: no file for %q", f.Name)
+		}
+		fi, err := f.File.Stat()
+		if err != nil || !fi.Mode().IsRegular() {
+			return nil, fmt.Errorf("webshare: %q is not a regular file", f.Name)
+		}
+		name := filepath.Base(f.Name)
+		if f.Name == "" || name == "." || name == string(filepath.Separator) {
+			name = "file"
+		}
+		items = append(items, Item{ID: strconv.Itoa(first + len(items)), Name: name, Size: fi.Size(), file: f.File})
 	}
 	return items, nil
 }
@@ -101,11 +130,78 @@ func (s *Session) handleDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
-	it, _ := s.item(l.item)
+	it, ok := s.item(l.item)
+	if !ok { // withdrawn by the host since
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
 	s.serveItem(w, r, it)
 }
 
+// Add offers more, the session running: the guest's page lists them at its next look. The open
+// files are the session's from the call on, closed with it, or at once if they cannot be added.
+func (s *Session) Add(paths []string, files []OpenFile) error {
+	// One addition at a time, its folders walked outside mu: the guest's requests go on meanwhile.
+	s.adding.Lock()
+	defer s.adding.Unlock()
+	s.mu.Lock()
+	first, closed := s.nextID, s.closed != ""
+	s.mu.Unlock()
+	if closed {
+		closeFiles(files)
+		return fmt.Errorf("webshare: session closed")
+	}
+	items, err := itemsOf(first, paths, files)
+	if err != nil {
+		closeFiles(files)
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed != "" { // ended meanwhile: its files are closed already
+		closeFiles(files)
+		return fmt.Errorf("webshare: session closed")
+	}
+	s.items = append(s.items, items...)
+	s.files = append(s.files, files...)
+	s.nextID += len(items)
+	return nil
+}
+
+// Remove withdraws an item: gone from the guest's list, its downloads refused from now on, its
+// file closed when the session held it open. An ID is never given again.
+func (s *Session) Remove(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, it := range s.items {
+		if it.ID != id {
+			continue
+		}
+		s.items = append(s.items[:i:i], s.items[i+1:]...)
+		if it.file != nil {
+			for j, f := range s.files {
+				if f.File == it.file {
+					s.files = append(s.files[:j:j], s.files[j+1:]...)
+					break
+				}
+			}
+			_ = it.file.Close()
+		}
+		return nil
+	}
+	return fmt.Errorf("webshare: no item %q", id)
+}
+
+// Items is what the session offers.
+func (s *Session) Items() []Item {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Item(nil), s.items...)
+}
+
 func (s *Session) item(id string) (Item, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, it := range s.items {
 		if it.ID == id {
 			return it, true
@@ -121,19 +217,24 @@ func (s *Session) serveItem(w http.ResponseWriter, r *http.Request, it Item) {
 	defer s.finish()
 	s.emit(Event{Kind: "download_started", Data: map[string]any{"id": it.ID, "name": it.Name}})
 	if !it.Folder {
-		f, err := os.Open(it.path)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "not_found")
-			return
+		f := it.file
+		if f == nil {
+			opened, err := os.Open(it.path)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "not_found")
+				return
+			}
+			defer opened.Close()
+			f = opened
 		}
-		defer f.Close()
 		fi, err := f.Stat()
 		if err != nil {
 			writeError(w, http.StatusNotFound, "not_found")
 			return
 		}
 		w.Header().Set("Content-Disposition", attachment(it.Name))
-		http.ServeContent(w, r, it.Name, fi.ModTime(), f)
+		// By position: two downloads of an open file at once never move each other.
+		http.ServeContent(w, r, it.Name, fi.ModTime(), io.NewSectionReader(f, 0, fi.Size()))
 		s.emit(Event{Kind: "download_done", Data: map[string]any{"id": it.ID, "name": it.Name}})
 		return
 	}

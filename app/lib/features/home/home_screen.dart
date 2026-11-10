@@ -25,6 +25,7 @@ import '../history/history_tab.dart';
 import '../settings/settings_screen.dart';
 import '../transfer/transfer_screen.dart';
 import '../trusted/trusted_screen.dart';
+import '../webshare/web_share_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -50,10 +51,12 @@ class HomeScreen extends StatelessWidget {
               icon: const Icon(Icons.menu_rounded),
               onSelected: (v) => switch (v) {
                 'trusted' => _open(context, const TrustedScreen()),
+                'browser' => _open(context, const WebShareScreen()),
                 'dev' => DevPanel.open(Navigator.of(context)),
                 _ => _open(context, const SettingsScreen()),
               },
               itemBuilder: (_) => [
+                PopupMenuItem(value: 'browser', key: const Key('menu-browser'), child: Text(l.webShareTitle)),
                 PopupMenuItem(value: 'trusted', child: Text(l.trustedDevices)),
                 PopupMenuItem(value: 'settings', child: Text(l.settings)),
                 if (AppScope.of(context, listen: false).settings.devMode) PopupMenuItem(value: 'dev', child: Text(l.devPanel)),
@@ -74,6 +77,7 @@ class HomeScreen extends StatelessWidget {
             children: [
               const _CoreLine(),
               const _SessionBanner(),
+              WebShareBanner(onOpen: () => _open(context, const WebShareScreen())),
               Container(
                 color: c.section,
                 padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
@@ -422,6 +426,16 @@ class _Basket extends StatelessWidget {
             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
           ),
         ),
+        // A guest without medXfer: its browser (J7). Sending to a device with it stays first.
+        IconButton.outlined(
+          key: const Key('basket-browser'),
+          tooltip: l.webShareTitle,
+          icon: const Icon(Icons.public_rounded),
+          onPressed: () => unawaited(
+            offerSelectionToBrowser(context, open: () => unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const WebShareScreen())))),
+          ),
+        ),
+        const SizedBox(width: 8),
         FilledButton.icon(
           key: const Key('basket-send'),
           style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),

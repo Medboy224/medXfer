@@ -31,6 +31,8 @@ class _Picker implements FilePicker {
   Future<Picked> files() async => Picked(paths: paths);
   @override
   Future<String?> folder() async => null;
+  @override
+  Future<void> close(List<OpenFile> files) async {}
 }
 
 /// Android without the access to all files, until it is asked.

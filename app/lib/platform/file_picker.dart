@@ -41,6 +41,9 @@ abstract interface class FilePicker {
 
   /// The path of the folder chosen; null when the user cancels, or without [folders].
   Future<String?> folder();
+
+  /// Closes files picked that will not reach the core, which would close them (Android).
+  Future<void> close(List<OpenFile> files);
 }
 
 class NoFilePicker implements FilePicker {
@@ -57,6 +60,9 @@ class NoFilePicker implements FilePicker {
 
   @override
   Future<String?> folder() async => null;
+
+  @override
+  Future<void> close(List<OpenFile> files) async {}
 }
 
 class SelectorFilePicker implements FilePicker {
@@ -73,6 +79,9 @@ class SelectorFilePicker implements FilePicker {
 
   @override
   Future<String?> folder() => fs.getDirectoryPath();
+
+  @override
+  Future<void> close(List<OpenFile> files) async {} // paths: nothing open
 }
 
 /// The system's picker, through the app's Kotlin (Storage.kt).
@@ -95,6 +104,12 @@ class AndroidFilePicker implements FilePicker {
 
   @override
   Future<String?> folder() async => null;
+
+  @override
+  Future<void> close(List<OpenFile> files) async {
+    if (files.isEmpty) return;
+    await platformChannel.invokeMethod<void>('closeFiles', {'fds': [for (final f in files) f.fd]});
+  }
 }
 
 FilePicker systemFilePicker() {

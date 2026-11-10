@@ -24,9 +24,10 @@ import '../history/history_tab.dart';
 import '../settings/settings_screen.dart';
 import '../transfer/transfer_screen.dart';
 import '../trusted/trusted_screen.dart';
+import '../webshare/web_share_screen.dart';
 import 'send_page.dart';
 
-enum DesktopPage { home, history, trusted, settings }
+enum DesktopPage { home, history, browser, trusted, settings }
 
 class DesktopHome extends StatefulWidget {
   const DesktopHome({super.key});
@@ -43,10 +44,22 @@ class _DesktopHomeState extends State<DesktopHome> {
   bool _hadSession = false;
   Timer? _stopLater; // this computer's network, kept after a session lost (J6c)
 
+  late final _ws = AppScope.of(context, listen: false).state.webShare;
+
+  /// The selection sent to a browser (the Accueil's button): its page shown.
+  void _browserWanted() {
+    if (!_ws.wanted || !mounted) return;
+    if (_page != DesktopPage.browser) setState(() => _page = DesktopPage.browser);
+    _ws.shown();
+  }
+
   @override
   void initState() {
     super.initState();
     _c.addListener(_changed);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _ws.addListener(_browserWanted);
+    });
     // After the first frame: the model tells its listeners at once, and the home builds now.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -64,6 +77,7 @@ class _DesktopHomeState extends State<DesktopHome> {
     _rescan?.cancel();
     _stopLater?.cancel();
     _c.removeListener(_changed);
+    _ws.removeListener(_browserWanted);
     // Not during the unmount: the model tells its listeners, and the tree is locked now.
     scheduleMicrotask(() => unawaited(_c.closeConnect()));
     super.dispose();
@@ -121,6 +135,7 @@ class _DesktopHomeState extends State<DesktopHome> {
                 appBar: AppBar(title: Text(l.tabHistory)),
                 body: const HistoryTab(),
               ),
+              DesktopPage.browser => const WebShareScreen(page: true),
               DesktopPage.trusted => const TrustedScreen(),
               DesktopPage.settings => const SettingsScreen(),
             },
@@ -145,7 +160,13 @@ class _SideMenu extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final c = context.colors;
     final accent = Theme.of(context).colorScheme.primary;
-    final labels = {DesktopPage.home: l.navHome, DesktopPage.history: l.tabHistory, DesktopPage.trusted: l.trustedDevices, DesktopPage.settings: l.settings};
+    final labels = {
+      DesktopPage.home: l.navHome,
+      DesktopPage.history: l.tabHistory,
+      DesktopPage.browser: l.navBrowser,
+      DesktopPage.trusted: l.trustedDevices,
+      DesktopPage.settings: l.settings,
+    };
     return Container(
       key: const Key('side-menu'),
       width: 240,
@@ -191,6 +212,14 @@ class _SideMenu extends StatelessWidget {
               ),
             ),
           const Spacer(),
+          // The browser sharing running, whatever the page: a click back to it.
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: WebShareBanner(onOpen: state.webShare.show),
+            ),
+          ),
           const _Status(),
         ],
       ),
