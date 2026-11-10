@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -15,12 +16,15 @@ import (
 
 // WebShareStartPayload is web_share_start's.
 type WebShareStartPayload struct {
-	Paths      []string `json:"paths"`       // what the guest may download
-	Receive    bool     `json:"receive"`     // the guest may send, into the download folder
-	ReceiveDir string   `json:"receive_dir"` // another folder than the download folder
-	AutoAccept bool     `json:"auto_accept"` // the guest's uploads without asking (WEB-06)
-	Addr       string   `json:"addr"`        // the interface's address; the one status shows when ""
-	Port       int      `json:"port"`        // 19999 when 0 (decision D5 of the J7 plan)
+	Paths []string `json:"paths"` // what the guest may download
+	// Items: files open already, as send takes them (Android, STO-16). The core owns their
+	// descriptors from the call on, and closes them when the session ends.
+	Items      []SendItem `json:"items,omitempty"`
+	Receive    bool       `json:"receive"`     // the guest may send, into the download folder
+	ReceiveDir string     `json:"receive_dir"` // another folder than the download folder
+	AutoAccept bool       `json:"auto_accept"` // the guest's uploads without asking (WEB-06)
+	Addr       string     `json:"addr"`        // the interface's address; the one status shows when ""
+	Port       int        `json:"port"`        // 19999 when 0 (decision D5 of the J7 plan)
 }
 
 // WebShareTicketPayload is web_share_answer's and web_share_cancel's.
@@ -51,6 +55,13 @@ func (s *DaemonServer) handleWebShareStart(rs Responder, req RequestMessage) {
 			return
 		}
 	}
+	var files []webshare.OpenFile
+	for _, it := range p.Items {
+		if it.FD < 0 {
+			continue
+		}
+		files = append(files, webshare.OpenFile{File: os.NewFile(uintptr(it.FD), it.Name), Name: it.Name})
+	}
 	s.stopWebShare()
 	if p.Addr == "" {
 		p.Addr = statusAddress()
@@ -70,6 +81,7 @@ func (s *DaemonServer) handleWebShareStart(rs Responder, req RequestMessage) {
 		Port:       p.Port,
 		Name:       name,
 		Paths:      p.Paths,
+		Files:      files,
 		ReceiveDir: dir,
 		AutoAccept: p.AutoAccept,
 		Events:     s.relayWebShare,

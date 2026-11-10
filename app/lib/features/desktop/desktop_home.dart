@@ -24,9 +24,10 @@ import '../history/history_tab.dart';
 import '../settings/settings_screen.dart';
 import '../transfer/transfer_screen.dart';
 import '../trusted/trusted_screen.dart';
+import '../webshare/web_share_screen.dart';
 import 'send_page.dart';
 
-enum DesktopPage { home, history, trusted, settings }
+enum DesktopPage { home, history, browser, trusted, settings }
 
 class DesktopHome extends StatefulWidget {
   const DesktopHome({super.key});
@@ -121,6 +122,7 @@ class _DesktopHomeState extends State<DesktopHome> {
                 appBar: AppBar(title: Text(l.tabHistory)),
                 body: const HistoryTab(),
               ),
+              DesktopPage.browser => const WebShareScreen(page: true),
               DesktopPage.trusted => const TrustedScreen(),
               DesktopPage.settings => const SettingsScreen(),
             },
@@ -145,7 +147,13 @@ class _SideMenu extends StatelessWidget {
     final l = AppLocalizations.of(context);
     final c = context.colors;
     final accent = Theme.of(context).colorScheme.primary;
-    final labels = {DesktopPage.home: l.navHome, DesktopPage.history: l.tabHistory, DesktopPage.trusted: l.trustedDevices, DesktopPage.settings: l.settings};
+    final labels = {
+      DesktopPage.home: l.navHome,
+      DesktopPage.history: l.tabHistory,
+      DesktopPage.browser: l.navBrowser,
+      DesktopPage.trusted: l.trustedDevices,
+      DesktopPage.settings: l.settings,
+    };
     return Container(
       key: const Key('side-menu'),
       width: 240,

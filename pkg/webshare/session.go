@@ -52,6 +52,10 @@ type Options struct {
 	Name string
 	// Paths are the files and folders offered to the guest.
 	Paths []string
+	// Files are offered too: files open already, under the name the guest sees (Android hands
+	// out descriptors, not paths, STO-16). The session owns them and closes them at its end,
+	// or at once when it does not start.
+	Files []OpenFile
 	// TTL: DefaultTTL when 0.
 	TTL time.Duration
 	// PinIP: once the guest is authenticated, requests from another address are refused
@@ -114,6 +118,12 @@ func Start(opts Options) (*Session, error) {
 }
 
 func start(opts Options, now func() time.Time, failWait time.Duration) (*Session, error) {
+	ok := false
+	defer func() {
+		if !ok {
+			closeFiles(opts.Files) // owned from the call on, whatever fails
+		}
+	}()
 	ip := net.ParseIP(opts.Addr)
 	if ip == nil || ip.IsUnspecified() {
 		return nil, fmt.Errorf("webshare: give the address of the interface to serve on, not %q", opts.Addr)
@@ -124,7 +134,7 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 	if opts.Logf == nil {
 		opts.Logf = log.Printf
 	}
-	items, err := itemsOf(opts.Paths)
+	items, err := itemsOf(opts.Paths, opts.Files)
 	if err != nil {
 		return nil, err
 	}
@@ -177,6 +187,7 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 	s.timer = time.AfterFunc(opts.TTL, s.checkExpiry)
 	s.mu.Unlock()
 	go func() { _ = s.srv.ServeTLS(ln, "", "") }()
+	ok = true
 	return s, nil
 }
 
@@ -238,6 +249,7 @@ func (s *Session) end(why string) {
 	}
 	s.mu.Unlock()
 	s.dropUploads() // no part file left behind
+	closeFiles(s.opts.Files)
 	// Off the request that may have ended it: Shutdown waits for it.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

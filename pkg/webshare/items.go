@@ -21,12 +21,27 @@ type Item struct {
 	Size   int64  `json:"size"`
 	Folder bool   `json:"folder"`
 	path   string
+	file   *os.File // an open file offered (Options.Files): read by position, never moved
 }
 
-// itemsOf lists the paths offered, each with its ID: its place in the list. A folder's size is
-// that of its regular files.
-func itemsOf(paths []string) ([]Item, error) {
-	items := make([]Item, 0, len(paths))
+// OpenFile is a file offered open already, and the name the guest sees.
+type OpenFile struct {
+	File *os.File
+	Name string
+}
+
+func closeFiles(files []OpenFile) {
+	for _, f := range files {
+		if f.File != nil {
+			_ = f.File.Close()
+		}
+	}
+}
+
+// itemsOf lists the paths and the open files offered, each with its ID: its place in the list.
+// A folder's size is that of its regular files.
+func itemsOf(paths []string, files []OpenFile) ([]Item, error) {
+	items := make([]Item, 0, len(paths)+len(files))
 	for i, p := range paths {
 		abs, err := filepath.Abs(p)
 		if err != nil {
@@ -50,6 +65,20 @@ func itemsOf(paths []string) ([]Item, error) {
 			it.Size = fi.Size()
 		}
 		items = append(items, it)
+	}
+	for _, f := range files {
+		if f.File == nil {
+			return nil, fmt.Errorf("webshare: no file for %q", f.Name)
+		}
+		fi, err := f.File.Stat()
+		if err != nil || !fi.Mode().IsRegular() {
+			return nil, fmt.Errorf("webshare: %q is not a regular file", f.Name)
+		}
+		name := filepath.Base(f.Name)
+		if f.Name == "" || name == "." || name == string(filepath.Separator) {
+			name = "file"
+		}
+		items = append(items, Item{ID: strconv.Itoa(len(items)), Name: name, Size: fi.Size(), file: f.File})
 	}
 	return items, nil
 }
@@ -121,19 +150,24 @@ func (s *Session) serveItem(w http.ResponseWriter, r *http.Request, it Item) {
 	defer s.finish()
 	s.emit(Event{Kind: "download_started", Data: map[string]any{"id": it.ID, "name": it.Name}})
 	if !it.Folder {
-		f, err := os.Open(it.path)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "not_found")
-			return
+		f := it.file
+		if f == nil {
+			opened, err := os.Open(it.path)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "not_found")
+				return
+			}
+			defer opened.Close()
+			f = opened
 		}
-		defer f.Close()
 		fi, err := f.Stat()
 		if err != nil {
 			writeError(w, http.StatusNotFound, "not_found")
 			return
 		}
 		w.Header().Set("Content-Disposition", attachment(it.Name))
-		http.ServeContent(w, r, it.Name, fi.ModTime(), f)
+		// By position: two downloads of an open file at once never move each other.
+		http.ServeContent(w, r, it.Name, fi.ModTime(), io.NewSectionReader(f, 0, fi.Size()))
 		s.emit(Event{Kind: "download_done", Data: map[string]any{"id": it.ID, "name": it.Name}})
 		return
 	}
