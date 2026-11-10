@@ -180,8 +180,13 @@
   $('tab-send').addEventListener('click', () => tab('send'));
 
   // What the host shares, named by ID (WEB-07); saved through a link of its own, the browser
-  // writing the file as it comes rather than holding it in memory.
+  // writing the file as it comes rather than holding it in memory. Drawn again only when it
+  // changed: the host may add files during the session.
+  let shownItems = '';
   function renderItems(items) {
+    const key = JSON.stringify(items);
+    if (key === shownItems) return;
+    shownItems = key;
     const list = $('items');
     list.replaceChildren();
     $('items-empty').hidden = items.length > 0;
@@ -232,6 +237,15 @@
     show('main');
     if (!session.data.receive) tab('receive');
   }
+
+  // Every 5 seconds, the page in sight: what the host added since.
+  setInterval(async () => {
+    if (!token || $('main').hidden || document.hidden) return;
+    try {
+      const items = await api('GET', '/api/items');
+      if (items.status === 200 && Array.isArray(items.data)) renderItems(items.data);
+    } catch (e) { /* said by api */ }
+  }, 5000);
 
   // Every half minute: the expiry moves while files come, and an ended session is said.
   setInterval(async () => {

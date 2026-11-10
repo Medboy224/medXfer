@@ -59,3 +59,51 @@ func TestOpenFilesOffered(t *testing.T) {
 		t.Fatal("the file is still open after a session that did not start")
 	}
 }
+
+// Files added to a running session (real test of 10 November 2026: the host had no way to add
+// any once started): listed after the others, under the next IDs, downloaded by them; the open
+// ones closed at the end, or at once when the session ended already.
+func TestAddDuringSession(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "premier.txt")
+	_ = os.WriteFile(first, []byte("un"), 0o644)
+	s, g, _ := startGuest(t, Options{Paths: []string{first}})
+	later := filepath.Join(dir, "ajout.txt")
+	_ = os.WriteFile(later, []byte("deux"), 0o644)
+	open, err := os.Open(later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add([]string{later}, []OpenFile{{File: open, Name: "ouvert.txt"}}); err != nil {
+		t.Fatal(err)
+	}
+	var items []Item
+	if err := json.NewDecoder(g.do("GET", "/api/items", s.Token(), nil).Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range items {
+		got = append(got, it.ID+":"+it.Name)
+	}
+	if len(got) != 3 || got[0] != "0:premier.txt" || got[1] != "1:ajout.txt" || got[2] != "2:ouvert.txt" {
+		t.Fatalf("items %v", got)
+	}
+	if body := readAll(t, g.do("GET", "/api/items/2", s.Token(), nil).Body); string(body) != "deux" {
+		t.Fatalf("the open file added: %q", body)
+	}
+	if err := s.Add([]string{filepath.Join(dir, "absent")}, nil); err == nil {
+		t.Fatal("a missing path added")
+	}
+	s.Close()
+	waitDone(t, s)
+	if _, err := open.Stat(); err == nil {
+		t.Fatal("the open file added is still open after the session")
+	}
+	late, _ := os.Open(later)
+	if err := s.Add(nil, []OpenFile{{File: late, Name: "tard.txt"}}); err == nil {
+		t.Fatal("added to an ended session")
+	}
+	if _, err := late.Stat(); err == nil {
+		t.Fatal("a file refused stays open")
+	}
+}

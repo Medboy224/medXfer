@@ -44,10 +44,20 @@ class _DesktopHomeState extends State<DesktopHome> {
   bool _hadSession = false;
   Timer? _stopLater; // this computer's network, kept after a session lost (J6c)
 
+  late final _ws = AppScope.of(context, listen: false).state.webShare;
+
+  /// The selection sent to a browser (the Accueil's button): its page shown.
+  void _browserWanted() {
+    if (_ws.wanted && _page != DesktopPage.browser && mounted) setState(() => _page = DesktopPage.browser);
+  }
+
   @override
   void initState() {
     super.initState();
     _c.addListener(_changed);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _ws.addListener(_browserWanted);
+    });
     // After the first frame: the model tells its listeners at once, and the home builds now.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -65,6 +75,7 @@ class _DesktopHomeState extends State<DesktopHome> {
     _rescan?.cancel();
     _stopLater?.cancel();
     _c.removeListener(_changed);
+    _ws.removeListener(_browserWanted);
     // Not during the unmount: the model tells its listeners, and the tree is locked now.
     scheduleMicrotask(() => unawaited(_c.closeConnect()));
     super.dispose();

@@ -90,7 +90,9 @@ type Session struct {
 	pin         string
 	fingerprint string
 	cert        tls.Certificate // the session's, drawn for it (bible §11.2)
-	items       []Item
+	items       []Item          // guarded by mu: Add appends
+	files       []OpenFile      // the open files offered, closed at the end; guarded by mu
+	adding      sync.Mutex      // one Add at a time
 
 	srv *http.Server
 	ln  net.Listener
@@ -135,7 +137,7 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 	if opts.Logf == nil {
 		opts.Logf = log.Printf
 	}
-	items, err := itemsOf(opts.Paths, opts.Files)
+	items, err := itemsOf(0, opts.Paths, opts.Files)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +167,7 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 		fingerprint: fp,
 		cert:        cert,
 		items:       items,
+		files:       opts.Files,
 		ln:          ln,
 		expires:     now().Add(opts.TTL),
 		uploads:     map[string]*upload{},
@@ -255,7 +258,11 @@ func (s *Session) end(why string) {
 	}
 	s.mu.Unlock()
 	s.dropUploads() // no part file left behind
-	closeFiles(s.opts.Files)
+	s.mu.Lock()
+	files := s.files
+	s.files = nil
+	s.mu.Unlock()
+	closeFiles(files)
 	// Off the request that may have ended it: Shutdown waits for it.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

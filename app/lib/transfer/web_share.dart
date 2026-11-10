@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../core/core.dart';
+import '../library/selection.dart';
 import '../platform/file_picker.dart';
 
 /// The guest session running: what the host's screen shows. The token and the PIN reach this
@@ -93,7 +94,10 @@ class WebShare extends ChangeNotifier {
   WebShareEnd? _ended;
   WebShareUpload? _upload;
   final _received = <String>[];
+  final _offered = <String>[];
   int _downloads = 0;
+  final _pending = <Pick>[];
+  bool _wanted = false;
 
   /// The session running, or null.
   WebShareSession? get session => _session;
@@ -108,6 +112,27 @@ class WebShare extends ChangeNotifier {
   /// The guest's upload: waiting for an answer (not [WebShareUpload.accepted]), or coming.
   WebShareUpload? get upload => _upload;
 
+  /// The names of what the guest is offered, in order.
+  List<String> get offered => List.unmodifiable(_offered);
+
+  /// The home's selection, sent here (its « Navigateur » button): waits for the screen, which
+  /// takes it ([takePending]). [wanted]: the screen is to be shown (the desktop's page).
+  void offer(Iterable<Pick> picks) {
+    _pending.addAll(picks);
+    _wanted = true;
+    notifyListeners();
+  }
+
+  bool get wanted => _wanted;
+
+  /// The selection waiting, given once.
+  List<Pick> takePending() {
+    final picks = List.of(_pending);
+    _pending.clear();
+    _wanted = false;
+    return picks;
+  }
+
   /// The names of the files received in this session, newest last.
   List<String> get received => List.unmodifiable(_received);
 
@@ -121,13 +146,24 @@ class WebShare extends ChangeNotifier {
   /// Starts the guest session: paths (desktops) or files open already (Android); the guest may
   /// send into the receive folder when [receive]. [address]: the interface to serve on, the
   /// core's own choice when null (this device's network made for the occasion when it runs).
-  Future<void> start({List<String> paths = const [], List<OpenFile> files = const [], bool receive = true, bool autoAccept = false, String? address}) async {
+  /// [names]: what the host's screen lists as offered.
+  Future<void> start({
+    List<String> paths = const [],
+    List<OpenFile> files = const [],
+    List<String> names = const [],
+    bool receive = true,
+    bool autoAccept = false,
+    String? address,
+  }) async {
     if (_starting) return;
     _starting = true;
     _error = null;
     _ended = null;
     _upload = null;
     _received.clear();
+    _offered
+      ..clear()
+      ..addAll(names);
     _downloads = 0;
     notifyListeners();
     try {
@@ -148,6 +184,25 @@ class WebShare extends ChangeNotifier {
       _starting = false;
       notifyListeners();
     }
+  }
+
+  /// Offers more, the session running (real test of 10 November 2026): the guest's page lists
+  /// them within seconds. False when the core refused ([error] says why).
+  Future<bool> add({List<String> paths = const [], List<OpenFile> files = const [], List<String> names = const []}) async {
+    if (_session == null || (paths.isEmpty && files.isEmpty)) return false;
+    final reply = await core.call('web_share_add', {
+      if (paths.isNotEmpty) 'paths': paths,
+      if (files.isNotEmpty) 'items': [for (final f in files) f.toJson()],
+    });
+    if (reply.first('web_share_added') == null) {
+      _error = reply.first('action_error')?.map['error'] as String? ?? reply.error ?? 'web_share_add';
+      notifyListeners();
+      return false;
+    }
+    _error = null;
+    _offered.addAll(names);
+    notifyListeners();
+    return true;
   }
 
   /// Ends the session: the listener, the certificate, the token and the PIN go (WEB-10).

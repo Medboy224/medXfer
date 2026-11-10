@@ -340,5 +340,9 @@
   "webShareExpires": "Partage ouvert jusqu’à {time}, plus longtemps pendant un transfert.",
   "webShareEndedExpired": "Le partage s’est arrêté : 15 minutes sans transfert.",
   "webShareEndedPin": "Le partage s’est arrêté : 5 codes faux ont été tapés.",
-  "webShareFailed": "Le partage n’a pas démarré ({error})."
+  "webShareFailed": "Le partage n’a pas démarré ({error}).",
+  "webShareAddFiles": "Ajouter des fichiers",
+  "webShareAddFolder": "Ajouter un dossier",
+  "webShareAdded": "{count, plural, =1{1 élément ajouté au partage} other{{count} éléments ajoutés au partage}}",
+  "webShareOfferedMore": "et {count} autres"
 }

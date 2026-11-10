@@ -86,9 +86,22 @@ func TestWebShareActions(t *testing.T) {
 		t.Fatalf("received %q %v", got, err)
 	}
 
+	// More offered, the session running.
+	more := filepath.Join(t.TempDir(), "ajout.txt")
+	_ = os.WriteFile(more, []byte("encore"), 0o644)
+	if e := n.WaitReply(n.Request("web_share_add", map[string]any{"paths": []string{more}}), 0); e.Event != "web_share_added" || !strings.Contains(string(e.Data), `"count":2`) {
+		t.Fatalf("web_share_add: %s %s", e.Event, e.Data)
+	}
+	if resp := do("GET", "/api/items/1", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the file added: %d", resp.StatusCode)
+	}
+
 	n.Request("web_share_stop", nil)
 	if closed := n.WaitEvent("web_share_closed", 0); !strings.Contains(string(closed.Data), `"stopped"`) {
 		t.Fatalf("stopped: %s", closed.Data)
+	}
+	if e := n.WaitReply(n.Request("web_share_add", map[string]any{"paths": []string{more}}), 0); e.Event != "action_error" {
+		t.Fatalf("an addition without a session: %s", e.Event)
 	}
 	if e := n.WaitReply(n.Request("web_share_answer", map[string]any{"ticket": up.Ticket, "accept": true}), 0); e.Event != "action_error" {
 		t.Fatalf("an answer without a session: %s", e.Event)

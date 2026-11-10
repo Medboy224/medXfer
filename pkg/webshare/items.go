@@ -38,11 +38,11 @@ func closeFiles(files []OpenFile) {
 	}
 }
 
-// itemsOf lists the paths and the open files offered, each with its ID: its place in the list.
-// A folder's size is that of its regular files.
-func itemsOf(paths []string, files []OpenFile) ([]Item, error) {
+// itemsOf lists the paths and the open files offered, each with its ID: its place in the
+// session's list, from first on. A folder's size is that of its regular files.
+func itemsOf(first int, paths []string, files []OpenFile) ([]Item, error) {
 	items := make([]Item, 0, len(paths)+len(files))
-	for i, p := range paths {
+	for _, p := range paths {
 		abs, err := filepath.Abs(p)
 		if err != nil {
 			return nil, err
@@ -51,7 +51,7 @@ func itemsOf(paths []string, files []OpenFile) ([]Item, error) {
 		if err != nil {
 			return nil, fmt.Errorf("webshare: %w", err)
 		}
-		it := Item{ID: strconv.Itoa(i), Name: filepath.Base(abs), path: abs, Folder: fi.IsDir()}
+		it := Item{ID: strconv.Itoa(first + len(items)), Name: filepath.Base(abs), path: abs, Folder: fi.IsDir()}
 		if it.Folder {
 			_ = filepath.WalkDir(abs, func(_ string, d fs.DirEntry, err error) error {
 				if err == nil && d.Type().IsRegular() {
@@ -78,7 +78,7 @@ func itemsOf(paths []string, files []OpenFile) ([]Item, error) {
 		if f.Name == "" || name == "." || name == string(filepath.Separator) {
 			name = "file"
 		}
-		items = append(items, Item{ID: strconv.Itoa(len(items)), Name: name, Size: fi.Size(), file: f.File})
+		items = append(items, Item{ID: strconv.Itoa(first + len(items)), Name: name, Size: fi.Size(), file: f.File})
 	}
 	return items, nil
 }
@@ -134,7 +134,45 @@ func (s *Session) handleDownload(w http.ResponseWriter, r *http.Request) {
 	s.serveItem(w, r, it)
 }
 
+// Add offers more, the session running: the guest's page lists them at its next look. The open
+// files are the session's from the call on, closed with it, or at once if they cannot be added.
+func (s *Session) Add(paths []string, files []OpenFile) error {
+	// One addition at a time, its folders walked outside mu: the guest's requests go on meanwhile.
+	s.adding.Lock()
+	defer s.adding.Unlock()
+	s.mu.Lock()
+	first, closed := len(s.items), s.closed != ""
+	s.mu.Unlock()
+	if closed {
+		closeFiles(files)
+		return fmt.Errorf("webshare: session closed")
+	}
+	items, err := itemsOf(first, paths, files)
+	if err != nil {
+		closeFiles(files)
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed != "" { // ended meanwhile: its files are closed already
+		closeFiles(files)
+		return fmt.Errorf("webshare: session closed")
+	}
+	s.items = append(s.items, items...)
+	s.files = append(s.files, files...)
+	return nil
+}
+
+// Items is what the session offers.
+func (s *Session) Items() []Item {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Item(nil), s.items...)
+}
+
 func (s *Session) item(id string) (Item, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, it := range s.items {
 		if it.ID == id {
 			return it, true

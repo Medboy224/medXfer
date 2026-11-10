@@ -48,6 +48,7 @@ void main() {
       ..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy A57', 'instance': 'medXfer-7810'})]))
       ..on('web_share_start', (_) => const FakeAnswer(replies: [_started]))
       ..on('web_share_answer', (_) => const FakeAnswer())
+      ..on('web_share_add', (_) => const FakeAnswer(replies: [CoreEvent('web_share_added', data: {'count': 2})]))
       ..on('web_share_stop', (_) => const FakeAnswer(broadcast: [CoreEvent('web_share_closed', data: {'reason': 'stopped'})]));
     final state = AppState(core: core, folders: const _Folders(), filePicker: _Picker(), history: MemoryHistoryStore());
     tester.platformDispatcher.localesTestValue = [const Locale('fr')];
@@ -80,6 +81,19 @@ void main() {
     expect(find.text('054 461'), findsOneWidget);
     expect(find.textContaining('https://192.168.1.20:19999/s'), findsOneWidget);
     expect(find.byKey(const Key('web-share-warning')), findsOneWidget);
+    expect(find.byKey(const ValueKey('web-share-offered-Vacances.mp4')), findsOneWidget);
+
+    // More offered, the session running (real test of 10 November 2026).
+    await tester.ensureVisible(find.byKey(const Key('web-share-add-files')));
+    await tester.tap(find.byKey(const Key('web-share-add-files')));
+    await tester.pumpAndSettle();
+    expect(core.calls.last.action, 'web_share_add');
+    expect(core.calls.last.payload, {
+      'items': [
+        {'fd': 41, 'name': 'Vacances.mp4'},
+      ],
+    });
+    expect(state.webShare.offered, ['Vacances.mp4', 'Vacances.mp4']);
 
     core.emit(const CoreEvent('web_share_upload_request', data: {
       'ticket': 't1',

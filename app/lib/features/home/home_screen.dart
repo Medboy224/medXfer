@@ -425,6 +425,16 @@ class _Basket extends StatelessWidget {
             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
           ),
         ),
+        // A guest without medXfer: its browser (J7). Sending to a device with it stays first.
+        IconButton.outlined(
+          key: const Key('basket-browser'),
+          tooltip: l.webShareTitle,
+          icon: const Icon(Icons.public_rounded),
+          onPressed: () => unawaited(
+            offerSelectionToBrowser(context, open: () => unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const WebShareScreen())))),
+          ),
+        ),
+        const SizedBox(width: 8),
         FilledButton.icon(
           key: const Key('basket-send'),
           style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),

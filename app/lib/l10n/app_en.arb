@@ -426,5 +426,11 @@
   "webShareEndedExpired": "Sharing stopped: 15 minutes without a transfer.",
   "webShareEndedPin": "Sharing stopped: 5 wrong codes were typed.",
   "webShareFailed": "Sharing did not start ({error}).",
-  "@webShareFailed": {"placeholders": {"error": {"type": "String"}}}
+  "@webShareFailed": {"placeholders": {"error": {"type": "String"}}},
+  "webShareAddFiles": "Add files",
+  "webShareAddFolder": "Add a folder",
+  "webShareAdded": "{count, plural, =1{1 item added to the share} other{{count} items added to the share}}",
+  "@webShareAdded": {"placeholders": {"count": {"type": "int"}}},
+  "webShareOfferedMore": "and {count} more",
+  "@webShareOfferedMore": {"placeholders": {"count": {"type": "int"}}}
 }

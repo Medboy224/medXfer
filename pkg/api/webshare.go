@@ -55,13 +55,7 @@ func (s *DaemonServer) handleWebShareStart(rs Responder, req RequestMessage) {
 			return
 		}
 	}
-	var files []webshare.OpenFile
-	for _, it := range p.Items {
-		if it.FD < 0 {
-			continue
-		}
-		files = append(files, webshare.OpenFile{File: os.NewFile(uintptr(it.FD), it.Name), Name: it.Name})
-	}
+	files := openFiles(p.Items)
 	s.stopWebShare()
 	if p.Addr == "" {
 		p.Addr = statusAddress()
@@ -104,6 +98,47 @@ func (s *DaemonServer) handleWebShareStart(rs Responder, req RequestMessage) {
 		"receive":     dir != "",
 		"expires":     sess.Expires().UTC().Format(time.RFC3339),
 	}, req.ID))
+}
+
+// openFiles takes the descriptors the app hands over: the core owns them from here on.
+func openFiles(items []SendItem) []webshare.OpenFile {
+	var files []webshare.OpenFile
+	for _, it := range items {
+		if it.FD >= 0 {
+			files = append(files, webshare.OpenFile{File: os.NewFile(uintptr(it.FD), it.Name), Name: it.Name})
+		}
+	}
+	return files
+}
+
+// WebShareAddPayload is web_share_add's: more to offer, the session running.
+type WebShareAddPayload struct {
+	Paths []string   `json:"paths"`
+	Items []SendItem `json:"items,omitempty"` // files open already (Android): the core owns them
+}
+
+// handleWebShareAdd offers more to the guest, the session running (real test of 10 November
+// 2026): its page lists them at its next look. Answers web_share_added with the count offered.
+func (s *DaemonServer) handleWebShareAdd(rs Responder, req RequestMessage) {
+	var p WebShareAddPayload
+	if err := json.Unmarshal(req.Payload, &p); err != nil {
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "invalid web_share_add payload"}, req.ID))
+		return
+	}
+	files := openFiles(p.Items)
+	sess := s.webShareSession()
+	if sess == nil {
+		for _, f := range files {
+			_ = f.File.Close()
+		}
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "no Web Share session"}, req.ID))
+		return
+	}
+	if err := sess.Add(p.Paths, files); err != nil {
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+		return
+	}
+	rs.Reply(NewEvent("web_share_added", map[string]any{"count": len(sess.Items())}, req.ID))
 }
 
 // handleWebShareStop: web_share_closed follows, reason "stopped".

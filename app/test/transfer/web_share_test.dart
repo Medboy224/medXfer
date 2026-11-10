@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
+import 'package:medxfer/library/selection.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/transfer/web_share.dart';
 
@@ -73,6 +74,32 @@ void main() {
     core.emit(const CoreEvent('web_share_closed', data: {'reason': 'expired'}));
     await _settle();
     expect((ws.session, ws.ended, ws.active), (null, WebShareEnd.expired, false));
+  });
+
+  test('J7: more offered during the session; the home\'s selection waits for the screen', () async {
+    final core = FakeCore()
+      ..on('web_share_start', (_) => const FakeAnswer(replies: [_started]))
+      ..on('web_share_add', (_) => const FakeAnswer(replies: [CoreEvent('web_share_added', data: {'count': 3})]));
+    final ws = WebShare(core);
+    addTearDown(ws.dispose);
+    expect(await ws.add(paths: ['/x']), isFalse, reason: 'no session yet');
+    ws.offer(const [Pick(path: '/home/a/b.pdf', name: 'b.pdf', size: 3, kind: PickKind.file)]);
+    expect(ws.wanted, isTrue);
+    expect([for (final p in ws.takePending()) p.name], ['b.pdf']);
+    expect(ws.wanted, isFalse);
+    expect(ws.takePending(), isEmpty);
+    await ws.start(paths: ['/home/a/f.pdf'], names: ['f.pdf']);
+    expect(await ws.add(paths: ['/home/a/g.pdf'], files: const [OpenFile(fd: 9, name: 'h.mp4')], names: ['g.pdf', 'h.mp4']), isTrue);
+    expect(core.calls.last.payload, {
+      'paths': ['/home/a/g.pdf'],
+      'items': [
+        {'fd': 9, 'name': 'h.mp4'},
+      ],
+    });
+    expect(ws.offered, ['f.pdf', 'g.pdf', 'h.mp4']);
+    core.on('web_share_add', (_) => const FakeAnswer(replies: [CoreEvent('action_error', data: {'error': 'webshare: x is not a regular file'})]));
+    expect(await ws.add(paths: ['/dev/x'], names: ['x']), isFalse);
+    expect((ws.error, ws.offered.length), ('webshare: x is not a regular file', 3));
   });
 
   test('J7: refused at once on screen; a start the core refuses is said', () async {
