@@ -95,6 +95,13 @@ func TestWebShareActions(t *testing.T) {
 	if resp := do("GET", "/api/items/1", nil); resp.StatusCode != http.StatusOK {
 		t.Fatalf("the file added: %d", resp.StatusCode)
 	}
+	// Withdrawn: gone from the guest's list.
+	if e := n.WaitReply(n.Request("web_share_remove", map[string]any{"id": "1"}), 0); e.Event != "web_share_removed" {
+		t.Fatalf("web_share_remove: %s %s", e.Event, e.Data)
+	}
+	if resp := do("GET", "/api/items/1", nil); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("the file withdrawn: %d", resp.StatusCode)
+	}
 
 	n.Request("web_share_stop", nil)
 	if closed := n.WaitEvent("web_share_closed", 0); !strings.Contains(string(closed.Data), `"stopped"`) {

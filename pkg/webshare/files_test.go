@@ -107,3 +107,44 @@ func TestAddDuringSession(t *testing.T) {
 		t.Fatal("a file refused stays open")
 	}
 }
+
+// The host withdraws an item (real test of 10 November 2026: the selection could not be
+// changed): gone from the guest's list, its download and its link refused, its open file closed;
+// the next one added never takes its ID.
+func TestRemoveDuringSession(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.txt")
+	_ = os.WriteFile(a, []byte("a"), 0o644)
+	f, err := os.Open(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, g, _ := startGuest(t, Options{Paths: []string{a}, Files: []OpenFile{{File: f, Name: "ouvert.txt"}}})
+	var link map[string]string
+	_ = json.NewDecoder(g.do("POST", "/api/items/1/link", s.Token(), nil).Body).Decode(&link)
+	if err := s.Remove("1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Stat(); err == nil {
+		t.Fatal("the file withdrawn is still open")
+	}
+	if resp := g.do("GET", "/api/items/1", s.Token(), nil); resp.StatusCode != 404 {
+		t.Fatalf("download of an item withdrawn: %d", resp.StatusCode)
+	}
+	if resp := g.do("GET", link["url"], "", nil); resp.StatusCode != 404 {
+		t.Fatalf("its link: %d", resp.StatusCode)
+	}
+	if err := s.Remove("1"); err == nil {
+		t.Fatal("withdrawn twice")
+	}
+	if err := s.Add([]string{a}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, it := range s.Items() {
+		ids = append(ids, it.ID)
+	}
+	if len(ids) != 2 || ids[0] != "0" || ids[1] != "2" {
+		t.Fatalf("IDs %v: an ID given again", ids)
+	}
+}

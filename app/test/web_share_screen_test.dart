@@ -1,5 +1,6 @@
 // « Partager avec un navigateur » (WP-W.5 of the J7 plan) on the fake core: what is offered,
-// the session's QR code and PIN, the guest's upload accepted, and the session ended on leaving.
+// edited before and during the session, the QR code and PIN, the guest's upload accepted, and
+// the screen left and found again with the session still running (real test of 10 November).
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:medxfer/app.dart';
@@ -19,16 +20,21 @@ class _Folders implements Folders {
   Future<String> downloadDir() async => '/tmp/medxfer-test/out';
 }
 
-/// Android's picker: files open already.
+/// Android's picker: files open already, a new descriptor each time.
 class _Picker implements FilePicker {
+  int _fd = 40;
+  final closed = <int>[];
+
   @override
   bool get supported => true;
   @override
   bool get folders => false;
   @override
-  Future<Picked> files() async => const Picked(files: [OpenFile(fd: 41, name: 'Vacances.mp4')]);
+  Future<Picked> files() async => Picked(files: [OpenFile(fd: ++_fd, name: 'Vacances-$_fd.mp4')]);
   @override
   Future<String?> folder() async => null;
+  @override
+  Future<void> close(List<OpenFile> files) async => closed.addAll([for (final f in files) f.fd]);
 }
 
 const _started = CoreEvent('web_share_started', data: {
@@ -40,17 +46,29 @@ const _started = CoreEvent('web_share_started', data: {
   'port': 19999,
   'receive': true,
   'expires': '2026-11-10T12:00:00Z',
+  'items': [
+    {'id': '0', 'name': 'Vacances-41.mp4', 'size': 2048},
+  ],
 });
 
 void main() {
-  testWidgets('J7: a file offered, the session\'s code and PIN, the guest\'s upload accepted, the session ended on leaving', (tester) async {
+  testWidgets('J7: chosen, edited, started; more added and withdrawn; the upload accepted; the screen left and found again, the session running', (tester) async {
+    final picker = _Picker();
     final core = FakeCore()
       ..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy A57', 'instance': 'medXfer-7810'})]))
       ..on('web_share_start', (_) => const FakeAnswer(replies: [_started]))
       ..on('web_share_answer', (_) => const FakeAnswer())
-      ..on('web_share_add', (_) => const FakeAnswer(replies: [CoreEvent('web_share_added', data: {'count': 2})]))
+      ..on('web_share_add', (_) => const FakeAnswer(replies: [
+            CoreEvent('web_share_added', data: {
+              'count': 2,
+              'items': [
+                {'id': '1', 'name': 'Vacances-43.mp4', 'size': 10},
+              ],
+            }),
+          ]))
+      ..on('web_share_remove', (p) => FakeAnswer(replies: [CoreEvent('web_share_removed', data: {'id': p['id']})]))
       ..on('web_share_stop', (_) => const FakeAnswer(broadcast: [CoreEvent('web_share_closed', data: {'reason': 'stopped'})]));
-    final state = AppState(core: core, folders: const _Folders(), filePicker: _Picker(), history: MemoryHistoryStore());
+    final state = AppState(core: core, folders: const _Folders(), filePicker: picker, history: MemoryHistoryStore());
     tester.platformDispatcher.localesTestValue = [const Locale('fr')];
     addTearDown(tester.platformDispatcher.clearLocalesTestValue);
     tester.view.physicalSize = const Size(1080, 2400);
@@ -60,19 +78,37 @@ void main() {
     await state.start();
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('home-menu')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('menu-browser')));
-    await tester.pumpAndSettle();
+    Future<void> openScreen() async {
+      await tester.tap(find.byKey(const Key('home-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('menu-browser')));
+      await tester.pumpAndSettle();
+    }
+
+    await openScreen();
     expect(find.text('Aucun : l’invité pourra seulement vous envoyer des fichiers.'), findsOneWidget);
     await tester.tap(find.byKey(const Key('web-share-files')));
     await tester.pumpAndSettle();
-    expect(find.text('Vacances.mp4'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('web-share-files')));
+    await tester.pumpAndSettle();
+    expect(find.text('Vacances-41.mp4'), findsOneWidget);
+    expect(find.text('Vacances-42.mp4'), findsOneWidget);
+    // Withdrawn before the start: its file, open already, closed.
+    await tester.tap(find.descendant(of: find.byKey(const ValueKey('web-share-draft-1')), matching: find.byIcon(Icons.close_rounded)));
+    await tester.pumpAndSettle();
+    expect(find.text('Vacances-42.mp4'), findsNothing);
+    expect(picker.closed, [42]);
+    // Left and found again before the start: as it was.
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    await openScreen();
+    expect(find.text('Vacances-41.mp4'), findsOneWidget);
+
     await tester.tap(find.byKey(const Key('web-share-start')));
     await tester.pumpAndSettle();
     expect(core.calls.firstWhere((c) => c.action == 'web_share_start').payload, {
       'items': [
-        {'fd': 41, 'name': 'Vacances.mp4'},
+        {'fd': 41, 'name': 'Vacances-41.mp4'},
       ],
       'receive': true,
       'auto_accept': false,
@@ -81,19 +117,22 @@ void main() {
     expect(find.text('054 461'), findsOneWidget);
     expect(find.textContaining('https://192.168.1.20:19999/s'), findsOneWidget);
     expect(find.byKey(const Key('web-share-warning')), findsOneWidget);
-    expect(find.byKey(const ValueKey('web-share-offered-Vacances.mp4')), findsOneWidget);
+    expect(find.byKey(const ValueKey('web-share-item-0')), findsOneWidget);
 
-    // More offered, the session running (real test of 10 November 2026).
-    await tester.ensureVisible(find.byKey(const Key('web-share-add-files')));
-    await tester.tap(find.byKey(const Key('web-share-add-files')));
+    // More offered, then one withdrawn, the session running.
+    await tester.ensureVisible(find.byKey(const Key('web-share-files')));
+    await tester.tap(find.byKey(const Key('web-share-files')));
     await tester.pumpAndSettle();
-    expect(core.calls.last.action, 'web_share_add');
     expect(core.calls.last.payload, {
       'items': [
-        {'fd': 41, 'name': 'Vacances.mp4'},
+        {'fd': 43, 'name': 'Vacances-43.mp4'},
       ],
     });
-    expect(state.webShare.offered, ['Vacances.mp4', 'Vacances.mp4']);
+    expect(find.byKey(const ValueKey('web-share-item-1')), findsOneWidget);
+    await tester.tap(find.descendant(of: find.byKey(const ValueKey('web-share-item-0')), matching: find.byIcon(Icons.close_rounded)));
+    await tester.pumpAndSettle();
+    expect(core.calls.last.payload, {'id': '0'});
+    expect(find.byKey(const ValueKey('web-share-item-0')), findsNothing);
 
     core.emit(const CoreEvent('web_share_upload_request', data: {
       'ticket': 't1',
@@ -114,13 +153,30 @@ void main() {
       ..emit(const CoreEvent('web_share_upload_file_done', data: {'ticket': 't1', 'name': 'photo.jpg'}))
       ..emit(const CoreEvent('web_share_upload_done', data: {'ticket': 't1'}));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('web-share-received')), findsOneWidget);
-    expect(find.byKey(const Key('web-share-accept')), findsNothing);
+    expect(state.webShare.received, ['photo.jpg']);
 
-    // Leaving the screen ends the session (WEB-10).
+    // Left: the session goes on, its banner on the home, a tap back to it.
     await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    expect(core.calls.where((c) => c.action == 'web_share_stop'), isEmpty);
+    expect(find.byKey(const Key('web-share-banner')), findsOneWidget);
+    expect(find.text('code 054 461'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('web-share-banner')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('web-share-qr')), findsOneWidget);
+    await tester.scrollUntilVisible(find.byKey(const Key('web-share-received')), 200, scrollable: find.byType(Scrollable).last);
+    expect(find.byKey(const Key('web-share-received')), findsOneWidget);
+
+    // Stopped by the host: the banner goes.
+    await tester.scrollUntilVisible(find.byKey(const Key('web-share-stop')), 300, scrollable: find.byType(Scrollable).last);
+    await tester.drag(find.byType(Scrollable).last, const Offset(0, -300));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('web-share-stop')));
     await tester.pumpAndSettle();
     expect(core.calls.where((c) => c.action == 'web_share_stop'), hasLength(1));
     expect(state.webShare.session, isNull);
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('web-share-banner')), findsNothing);
   });
 }

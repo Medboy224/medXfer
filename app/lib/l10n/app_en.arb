@@ -432,5 +432,8 @@
   "webShareAdded": "{count, plural, =1{1 item added to the share} other{{count} items added to the share}}",
   "@webShareAdded": {"placeholders": {"count": {"type": "int"}}},
   "webShareOfferedMore": "and {count} more",
-  "@webShareOfferedMore": {"placeholders": {"count": {"type": "int"}}}
+  "@webShareOfferedMore": {"placeholders": {"count": {"type": "int"}}},
+  "webShareRunning": "Browser sharing running",
+  "webShareRunningPin": "code {pin}",
+  "@webShareRunningPin": {"placeholders": {"pin": {"type": "String"}}}
 }

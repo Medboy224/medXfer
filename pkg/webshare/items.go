@@ -130,7 +130,11 @@ func (s *Session) handleDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
-	it, _ := s.item(l.item)
+	it, ok := s.item(l.item)
+	if !ok { // withdrawn by the host since
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
 	s.serveItem(w, r, it)
 }
 
@@ -141,7 +145,7 @@ func (s *Session) Add(paths []string, files []OpenFile) error {
 	s.adding.Lock()
 	defer s.adding.Unlock()
 	s.mu.Lock()
-	first, closed := len(s.items), s.closed != ""
+	first, closed := s.nextID, s.closed != ""
 	s.mu.Unlock()
 	if closed {
 		closeFiles(files)
@@ -160,7 +164,32 @@ func (s *Session) Add(paths []string, files []OpenFile) error {
 	}
 	s.items = append(s.items, items...)
 	s.files = append(s.files, files...)
+	s.nextID += len(items)
 	return nil
+}
+
+// Remove withdraws an item: gone from the guest's list, its downloads refused from now on, its
+// file closed when the session held it open. An ID is never given again.
+func (s *Session) Remove(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, it := range s.items {
+		if it.ID != id {
+			continue
+		}
+		s.items = append(s.items[:i:i], s.items[i+1:]...)
+		if it.file != nil {
+			for j, f := range s.files {
+				if f.File == it.file {
+					s.files = append(s.files[:j:j], s.files[j+1:]...)
+					break
+				}
+			}
+			_ = it.file.Close()
+		}
+		return nil
+	}
+	return fmt.Errorf("webshare: no item %q", id)
 }
 
 // Items is what the session offers.

@@ -14,7 +14,12 @@ const _started = CoreEvent('web_share_started', data: {
   'port': 19999,
   'receive': true,
   'expires': '2026-11-10T12:00:00Z',
+  'items': [
+    {'id': '0', 'name': 'f.pdf', 'size': 3, 'folder': false},
+  ],
 });
+
+const _photo = Pick(path: '/storage/DCIM/p.jpg', name: 'p.jpg', size: 5, kind: PickKind.media);
 
 Future<void> _settle() async {
   for (var i = 0; i < 5; i++) {
@@ -23,26 +28,89 @@ Future<void> _settle() async {
 }
 
 void main() {
-  test('J7: the session started, the guest\'s upload asked, accepted, followed, and its end said', () async {
-    final core = FakeCore()
-      ..on('web_share_start', (_) => const FakeAnswer(replies: [_started]))
-      ..on('web_share_answer', (_) => const FakeAnswer())
-      ..on('web_share_stop', (_) => const FakeAnswer(broadcast: [CoreEvent('web_share_closed', data: {'reason': 'stopped'})]));
-    final ws = WebShare(core);
+  test('J7: what is chosen is kept before the session, edited, then offered at the start', () async {
+    final core = FakeCore()..on('web_share_start', (_) => const FakeAnswer(replies: [_started]));
+    final closed = <int>[];
+    final ws = WebShare(
+      core,
+      // Android: the home's picks opened by the app at the start only.
+      openPicks: (picks) async => (paths: const <String>[], files: [for (final (i, p) in picks.indexed) OpenFile(fd: 70 + i, name: p.name)]),
+      closeFiles: (files) async => closed.addAll([for (final f in files) f.fd]),
+    );
     addTearDown(ws.dispose);
-    await ws.start(paths: ['/home/a/f.pdf'], files: const [OpenFile(fd: 7, name: 'v.mp4')], autoAccept: false, address: '192.168.1.20');
+    ws
+      ..addPaths(['/home/a/f.pdf', '/home/a/f.pdf']) // twice: once
+      ..addFiles(const [OpenFile(fd: 7, name: 'v.mp4'), OpenFile(fd: 8, name: 'x.mp4')])
+      ..addPicks(const [_photo, _photo])
+      ..receive = true
+      ..autoAccept = true;
+    expect([for (final d in ws.draft) d.name], ['f.pdf', 'v.mp4', 'x.mp4', 'p.jpg']);
+    await ws.removeDraft(2); // x.mp4: open already, closed
+    expect(closed, [8]);
+    ws.receive = false;
+    expect(ws.autoAccept, isFalse, reason: 'nothing to accept without receiving');
+    ws.receive = true;
+
+    await ws.start(address: '192.168.1.20');
     expect(core.calls.single.payload, {
       'paths': ['/home/a/f.pdf'],
       'items': [
         {'fd': 7, 'name': 'v.mp4'},
+        {'fd': 70, 'name': 'p.jpg'},
       ],
       'receive': true,
-      'auto_accept': false,
+      'auto_accept': true,
       'addr': '192.168.1.20',
     });
     final s = ws.session!;
-    expect((s.pinShown, s.address, s.receive, ws.active), ('054 461', 'https://192.168.1.20:19999', true, true));
+    expect((s.pinShown, s.address, s.receive, ws.active, ws.draft.isEmpty), ('054 461', 'https://192.168.1.20:19999', true, true, true));
+    expect([for (final it in ws.items) '${it.id}:${it.name}'], ['0:f.pdf']);
+  });
 
+  test('J7: the session running, more offered and some withdrawn; the home\'s selection added to it', () async {
+    final core = FakeCore()
+      ..on('web_share_start', (_) => const FakeAnswer(replies: [_started]))
+      ..on('web_share_add', (_) => const FakeAnswer(replies: [
+            CoreEvent('web_share_added', data: {
+              'count': 2,
+              'items': [
+                {'id': '1', 'name': 'g.pdf', 'size': 4},
+              ],
+            }),
+          ]))
+      ..on('web_share_remove', (p) => FakeAnswer(replies: [CoreEvent('web_share_removed', data: {'id': p['id']})]));
+    final ws = WebShare(core);
+    addTearDown(ws.dispose);
+    expect(await ws.add(paths: ['/x']), isFalse, reason: 'no session yet');
+    // Without a session, the home's selection waits on the screen, which is asked for.
+    expect(await ws.offerSelection(const [_photo]), isTrue);
+    expect(ws.wanted, isTrue);
+    expect([for (final d in ws.draft) d.name], ['p.jpg']);
+    ws.shown();
+    expect(ws.wanted, isFalse);
+
+    await ws.start();
+    expect(await ws.offerSelection(const [_photo]), isTrue); // running: added (by path on a desktop)
+    expect(core.calls.last.payload, {
+      'paths': ['/storage/DCIM/p.jpg'],
+    });
+    expect([for (final it in ws.items) it.name], ['f.pdf', 'g.pdf']);
+    await ws.remove('0');
+    expect(core.calls.last.payload, {'id': '0'});
+    expect([for (final it in ws.items) it.id], ['1']);
+
+    core.on('web_share_add', (_) => const FakeAnswer(replies: [CoreEvent('action_error', data: {'error': 'webshare: x is not a regular file'})]));
+    expect(await ws.add(paths: ['/dev/x']), isFalse);
+    expect((ws.error, ws.items.length), ('webshare: x is not a regular file', 1));
+  });
+
+  test('J7: the guest\'s upload asked, accepted, followed, and the session\'s end said', () async {
+    final core = FakeCore()
+      ..on('web_share_start', (_) => const FakeAnswer(replies: [_started]))
+      ..on('web_share_answer', (_) => const FakeAnswer());
+    final ws = WebShare(core);
+    addTearDown(ws.dispose);
+    await ws.start();
     core.emit(const CoreEvent('web_share_upload_request', data: {
       'ticket': 't1',
       'total': 30,
@@ -62,7 +130,6 @@ void main() {
       ..emit(const CoreEvent('web_share_upload_file_done', data: {'ticket': 't1', 'name': 'a.jpg'}));
     await _settle();
     expect((ws.upload!.accepted, ws.upload!.received), (true, 12));
-    expect(ws.received, ['a.jpg']);
     core
       ..emit(const CoreEvent('web_share_upload_file_done', data: {'ticket': 't1', 'name': 'b (1).jpg'}))
       ..emit(const CoreEvent('web_share_upload_done', data: {'ticket': 't1'}))
@@ -73,36 +140,10 @@ void main() {
 
     core.emit(const CoreEvent('web_share_closed', data: {'reason': 'expired'}));
     await _settle();
-    expect((ws.session, ws.ended, ws.active), (null, WebShareEnd.expired, false));
+    expect((ws.session, ws.ended, ws.active, ws.items.isEmpty), (null, WebShareEnd.expired, false, true));
   });
 
-  test('J7: more offered during the session; the home\'s selection waits for the screen', () async {
-    final core = FakeCore()
-      ..on('web_share_start', (_) => const FakeAnswer(replies: [_started]))
-      ..on('web_share_add', (_) => const FakeAnswer(replies: [CoreEvent('web_share_added', data: {'count': 3})]));
-    final ws = WebShare(core);
-    addTearDown(ws.dispose);
-    expect(await ws.add(paths: ['/x']), isFalse, reason: 'no session yet');
-    ws.offer(const [Pick(path: '/home/a/b.pdf', name: 'b.pdf', size: 3, kind: PickKind.file)]);
-    expect(ws.wanted, isTrue);
-    expect([for (final p in ws.takePending()) p.name], ['b.pdf']);
-    expect(ws.wanted, isFalse);
-    expect(ws.takePending(), isEmpty);
-    await ws.start(paths: ['/home/a/f.pdf'], names: ['f.pdf']);
-    expect(await ws.add(paths: ['/home/a/g.pdf'], files: const [OpenFile(fd: 9, name: 'h.mp4')], names: ['g.pdf', 'h.mp4']), isTrue);
-    expect(core.calls.last.payload, {
-      'paths': ['/home/a/g.pdf'],
-      'items': [
-        {'fd': 9, 'name': 'h.mp4'},
-      ],
-    });
-    expect(ws.offered, ['f.pdf', 'g.pdf', 'h.mp4']);
-    core.on('web_share_add', (_) => const FakeAnswer(replies: [CoreEvent('action_error', data: {'error': 'webshare: x is not a regular file'})]));
-    expect(await ws.add(paths: ['/dev/x'], names: ['x']), isFalse);
-    expect((ws.error, ws.offered.length), ('webshare: x is not a regular file', 3));
-  });
-
-  test('J7: refused at once on screen; a start the core refuses is said', () async {
+  test('J7: refused at once on screen; a start the core refuses is said, the open files not kept', () async {
     final core = FakeCore()
       ..on('web_share_start', (_) => const FakeAnswer(replies: [_started]))
       ..on('web_share_answer', (_) => const FakeAnswer());
@@ -115,11 +156,17 @@ void main() {
     expect(ws.upload, isNull);
     expect(core.calls.last.payload, {'ticket': 't2', 'accept': false});
 
-    core.on('web_share_start', (_) => const FakeAnswer(replies: [CoreEvent('action_error', data: {'error': 'no address'})]));
-    core.emit(const CoreEvent('web_share_closed', data: {'reason': 'pin_attempts'}));
+    core
+      ..on('web_share_start', (_) => const FakeAnswer(replies: [CoreEvent('action_error', data: {'error': 'no address'})]))
+      ..emit(const CoreEvent('web_share_closed', data: {'reason': 'pin_attempts'}));
     await _settle();
     expect(ws.ended, WebShareEnd.pinAttempts);
+    ws
+      ..addPaths(['/home/a/f.pdf'])
+      ..addFiles(const [OpenFile(fd: 7, name: 'v.mp4')]);
     await ws.start();
     expect((ws.session, ws.error), (null, 'no address'));
+    // The core closed the file it was handed; the path stays, to try again.
+    expect([for (final d in ws.draft) d.name], ['f.pdf']);
   });
 }

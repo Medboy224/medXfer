@@ -1,7 +1,9 @@
 /// « Partager avec un navigateur » (WP-W.5 of the J7 plan, bible chapter 11): before the
 /// session, what the guest is offered and whether it may send; during it, the QR code, the PIN,
-/// the browser's warning explained, the guest's uploads to accept, and what came. Leaving the
-/// screen ends the session (WEB-10).
+/// the browser's warning explained, what is offered, the guest's uploads to accept, and what
+/// came. What the host chose lives in the model (WebShare), not here: the screen may be left and
+/// found again as it was, and the session goes on meanwhile (real test of 10 November 2026). It
+/// ends on « Arrêter le partage », at its expiry, or with the app (WEB-10).
 library;
 
 import 'dart:async';
@@ -10,50 +12,28 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app.dart';
-import '../../app_state.dart';
 import '../../l10n/app_localizations.dart';
-import '../../library/selection.dart';
-import '../../platform/file_picker.dart';
 import '../../theme.dart';
 import '../../transfer/web_share.dart';
 import '../../widgets/format.dart';
 import '../../widgets/qr_view.dart';
 
-/// What picks become for the core: paths on a desktop, and for folders on Android; files open by
-/// the app otherwise (Android, STO-16), as a send does.
-Future<({List<String> paths, List<OpenFile> files})> _offerOf(AppState state, List<Pick> picks) async {
-  if (state.desktop) return (paths: [for (final p in picks) p.path], files: const <OpenFile>[]);
-  final others = [
-    for (final p in picks)
-      if (p.kind != PickKind.folder) (path: p.path, name: p.name),
-  ];
-  return (
-    paths: [
-      for (final p in picks)
-        if (p.kind == PickKind.folder) p.path,
-    ],
-    files: others.isEmpty ? const <OpenFile>[] : await state.library.open(others),
-  );
-}
-
-/// The home's selection to a browser (its « Navigateur » button, real test of 10 November 2026):
-/// added to the session running, said in a line; else waiting for the screen, which [open]
-/// shows. A device with medXfer stays the faster way: « Envoyer » is still beside it.
+/// The home's selection to a browser (its « Navigateur » button): added to the session running,
+/// said in a line; else listed on the screen, which [open] shows. The selection stays: the same
+/// files may go to a device with medXfer too.
 Future<void> offerSelectionToBrowser(BuildContext context, {required VoidCallback open}) async {
   final state = AppScope.of(context, listen: false).state;
   final l = AppLocalizations.of(context);
   final messenger = ScaffoldMessenger.of(context);
   final picks = state.selection.items.toList();
   if (picks.isEmpty) return;
-  state.selection.clear();
   final ws = state.webShare;
   if (ws.session == null) {
-    ws.offer(picks);
+    await ws.offerSelection(picks);
     open();
     return;
   }
-  final offer = await _offerOf(state, picks);
-  final ok = await ws.add(paths: offer.paths, files: offer.files, names: [for (final p in picks) p.name]);
+  final ok = await ws.offerSelection(picks);
   messenger
     ..clearSnackBars()
     ..showSnackBar(SnackBar(content: Text(ok ? l.webShareAdded(picks.length) : l.webShareFailed(ws.error ?? ''))));
@@ -71,70 +51,37 @@ class WebShareScreen extends StatefulWidget {
 
 class _WebShareScreenState extends State<WebShareScreen> {
   late final WebShare _ws = AppScope.of(context, listen: false).state.webShare;
-  final _paths = <String>[];
-  final _files = <OpenFile>[];
-  final _picks = <Pick>[]; // the home's selection, opened at the start only
-  bool _receive = true;
-  bool _autoAccept = false;
 
   @override
   void initState() {
     super.initState();
-    _ws.addListener(_selectionCame);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _selectionCame());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _ws.shown());
   }
-
-  /// The home's selection sent here, the session not started: listed with the rest.
-  void _selectionCame() {
-    if (!mounted || !_ws.wanted || _ws.session != null) return;
-    setState(() => _picks.addAll(_ws.takePending()));
-  }
-
-  @override
-  void dispose() {
-    _ws.removeListener(_selectionCame);
-    // Leaving the screen ends the session (WEB-10). Not during the unmount: the model tells its
-    // listeners, and the tree is locked now.
-    final ws = _ws;
-    scheduleMicrotask(() => unawaited(ws.stop()));
-    super.dispose();
-  }
-
-  List<String> get _names => [for (final p in _picks) p.name, for (final p in _paths) _base(p), for (final f in _files) f.name];
-
-  static String _base(String path) => path.split(RegExp(r'[\\/]')).last;
 
   Future<void> _pickFiles() async {
     final picked = await AppScope.of(context, listen: false).state.filePicker.files();
-    if (!mounted || picked.isEmpty) return;
-    setState(() {
-      _paths.addAll(picked.paths);
-      _files.addAll(picked.files);
-    });
+    if (picked.isEmpty) return;
+    if (_ws.session != null) {
+      await _ws.add(paths: picked.paths, files: picked.files);
+    } else {
+      _ws
+        ..addPaths(picked.paths)
+        ..addFiles(picked.files);
+    }
   }
 
   Future<void> _pickFolder() async {
     final folder = await AppScope.of(context, listen: false).state.filePicker.folder();
-    if (!mounted || folder == null) return;
-    setState(() => _paths.add(folder));
+    if (folder == null) return;
+    if (_ws.session != null) {
+      await _ws.add(paths: [folder]);
+    } else {
+      _ws.addPaths([folder]);
+    }
   }
 
   Future<void> _start() async {
-    final state = AppScope.of(context, listen: false).state;
-    final names = _names;
-    final fromHome = await _offerOf(state, List.of(_picks));
-    _picks.clear();
-    // The files open are the core's from now on: handed once.
-    final files = [..._files, ...fromHome.files];
-    _files.clear();
-    await _ws.start(
-      paths: [..._paths, ...fromHome.paths],
-      files: files,
-      names: names,
-      receive: _receive,
-      autoAccept: _receive && _autoAccept,
-      address: state.connection.myHotspot?.address,
-    );
+    await _ws.start(address: AppScope.of(context, listen: false).state.connection.myHotspot?.address);
   }
 
   @override
@@ -159,14 +106,47 @@ class _WebShareScreenState extends State<WebShareScreen> {
     );
   }
 
+  /// One line of what is offered, with its ✕.
+  Widget _line(BuildContext context, {required Key key, required String name, required bool folder, String? detail, required VoidCallback onRemove}) {
+    final c = context.colors;
+    final l = AppLocalizations.of(context);
+    return Padding(
+      key: key,
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Icon(folder ? Icons.folder_outlined : Icons.insert_drive_file_outlined, size: 18, color: c.muted),
+          const SizedBox(width: 8),
+          Expanded(child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis)),
+          if (detail != null) Text(detail, style: TextStyle(color: c.muted, fontSize: 13)),
+          IconButton(tooltip: l.removeOne, icon: Icon(Icons.close_rounded, size: 18, color: c.muted), onPressed: onRemove),
+        ],
+      ),
+    );
+  }
+
+  /// Adding, before or during the session.
+  Widget _addButtons(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final picker = AppScope.of(context).state.filePicker;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        if (picker.supported)
+          OutlinedButton.icon(key: const Key('web-share-files'), onPressed: () => unawaited(_pickFiles()), icon: const Icon(Icons.add_rounded), label: Text(l.webShareAddFiles)),
+        if (picker.folders)
+          OutlinedButton.icon(key: const Key('web-share-folder'), onPressed: () => unawaited(_pickFolder()), icon: const Icon(Icons.create_new_folder_outlined), label: Text(l.webShareAddFolder)),
+      ],
+    );
+  }
+
   /// Before the session: what is offered, whether the guest may send, the network.
   List<Widget> _setup(BuildContext context) {
     final l = AppLocalizations.of(context);
     final c = context.colors;
-    final state = AppScope.of(context).state;
-    final picker = state.filePicker;
-    final connection = state.connection;
-    final names = _names;
+    final connection = AppScope.of(context).state.connection;
+    final draft = _ws.draft;
     final hotspot = connection.myHotspot;
     return [
       Text(l.webShareIntro, style: TextStyle(color: c.muted, height: 1.4)),
@@ -174,48 +154,41 @@ class _WebShareScreenState extends State<WebShareScreen> {
         const SizedBox(height: 12),
         Text(
           key: const Key('web-share-ended'),
-          switch (ended) {
-            WebShareEnd.expired => l.webShareEndedExpired,
-            WebShareEnd.pinAttempts => l.webShareEndedPin,
-            WebShareEnd.stopped => '', // asked by the host: nothing to say
-          },
+          ended == WebShareEnd.expired ? l.webShareEndedExpired : l.webShareEndedPin,
           style: TextStyle(color: c.danger),
         ),
       ],
       const SizedBox(height: 20),
       Text(l.webShareOffered, style: const TextStyle(fontWeight: FontWeight.w700)),
       const SizedBox(height: 6),
-      if (names.isEmpty)
+      if (draft.isEmpty)
         Text(l.webShareNothingOffered, style: TextStyle(color: c.muted))
       else
-        for (final n in names)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Row(children: [Icon(Icons.insert_drive_file_outlined, size: 18, color: c.muted), const SizedBox(width: 8), Expanded(child: Text(n))]),
+        for (final (i, d) in draft.indexed)
+          _line(
+            context,
+            key: ValueKey('web-share-draft-$i'),
+            name: d.name,
+            folder: d.folder,
+            detail: d.pick != null && d.pick!.size > 0 ? formatBytes(context, d.pick!.size) : null,
+            onRemove: () => unawaited(_ws.removeDraft(i)),
           ),
       const SizedBox(height: 8),
-      Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          if (picker.supported) OutlinedButton.icon(key: const Key('web-share-files'), onPressed: _pickFiles, icon: const Icon(Icons.add_rounded), label: Text(l.webShareChooseFiles)),
-          if (picker.folders) OutlinedButton.icon(key: const Key('web-share-folder'), onPressed: _pickFolder, icon: const Icon(Icons.folder_outlined), label: Text(l.webShareChooseFolder)),
-        ],
-      ),
+      _addButtons(context),
       const SizedBox(height: 12),
       SwitchListTile(
         key: const Key('web-share-receive'),
         contentPadding: EdgeInsets.zero,
-        value: _receive,
-        onChanged: (v) => setState(() => _receive = v),
+        value: _ws.receive,
+        onChanged: (v) => _ws.receive = v,
         title: Text(l.webShareReceive),
         subtitle: Text(l.webShareReceiveHint),
       ),
       SwitchListTile(
         key: const Key('web-share-auto'),
         contentPadding: EdgeInsets.zero,
-        value: _receive && _autoAccept,
-        onChanged: _receive ? (v) => setState(() => _autoAccept = v) : null,
+        value: _ws.autoAccept,
+        onChanged: _ws.receive ? (v) => _ws.autoAccept = v : null,
         title: Text(l.webShareAutoAccept),
       ),
       // No common Wi-Fi: this device's own network, which the guest joins first (DISC-12).
@@ -242,32 +215,18 @@ class _WebShareScreenState extends State<WebShareScreen> {
       FilledButton.icon(
         key: const Key('web-share-start'),
         style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-        onPressed: _ws.starting || connection.hotspotBusy || (names.isEmpty && !_receive) ? null : () => unawaited(_start()),
+        onPressed: _ws.starting || connection.hotspotBusy || (draft.isEmpty && !_ws.receive) ? null : () => unawaited(_start()),
         icon: _ws.starting ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.public_rounded),
         label: Text(l.webShareStart),
       ),
     ];
   }
 
-  /// More offered, the session running: the guest's page lists them within seconds.
-  Future<void> _addFiles() async {
-    final picked = await AppScope.of(context, listen: false).state.filePicker.files();
-    if (picked.isEmpty) return;
-    await _ws.add(paths: picked.paths, files: picked.files, names: [for (final p in picked.paths) _base(p), for (final f in picked.files) f.name]);
-  }
-
-  Future<void> _addFolder() async {
-    final folder = await AppScope.of(context, listen: false).state.filePicker.folder();
-    if (folder == null) return;
-    await _ws.add(paths: [folder], names: [_base(folder)]);
-  }
-
-  /// During the session: how the guest comes in, what it asks, what came.
+  /// During the session: how the guest comes in, what is offered, what it asks, what came.
   List<Widget> _running(BuildContext context, WebShareSession s) {
     final l = AppLocalizations.of(context);
     final c = context.colors;
     final hotspot = AppScope.of(context).state.connection.myHotspot;
-    final picker = AppScope.of(context).state.filePicker;
     final up = _ws.upload;
     final time = s.expires == null ? null : TimeOfDay.fromDateTime(s.expires!).format(context);
     return [
@@ -288,24 +247,23 @@ class _WebShareScreenState extends State<WebShareScreen> {
         Text(l.webShareNetwork(hotspot.ssid ?? '', hotspot.passphrase ?? ''), textAlign: TextAlign.center),
       ],
       const SizedBox(height: 16),
-      // What the guest is offered, and more to add (real test of 10 November 2026).
+      // What the guest is offered: added or withdrawn at any time (real test of 10 November 2026).
       Text(l.webShareOffered, style: const TextStyle(fontWeight: FontWeight.w700)),
       const SizedBox(height: 4),
-      if (_ws.offered.isEmpty)
+      if (_ws.items.isEmpty)
         Text(l.webShareNothingOffered, style: TextStyle(color: c.muted, fontSize: 13))
-      else ...[
-        for (final n in _ws.offered.take(5)) Text(n, key: ValueKey('web-share-offered-$n'), style: TextStyle(color: c.muted, fontSize: 13)),
-        if (_ws.offered.length > 5) Text(l.webShareOfferedMore(_ws.offered.length - 5), style: TextStyle(color: c.muted, fontSize: 13)),
-      ],
+      else
+        for (final it in _ws.items)
+          _line(
+            context,
+            key: ValueKey('web-share-item-${it.id}'),
+            name: it.name,
+            folder: it.folder,
+            detail: it.size > 0 ? formatBytes(context, it.size) : null,
+            onRemove: () => unawaited(_ws.remove(it.id)),
+          ),
       const SizedBox(height: 6),
-      Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          if (picker.supported) OutlinedButton.icon(key: const Key('web-share-add-files'), onPressed: () => unawaited(_addFiles()), icon: const Icon(Icons.add_rounded), label: Text(l.webShareAddFiles)),
-          if (picker.folders) OutlinedButton.icon(key: const Key('web-share-add-folder'), onPressed: () => unawaited(_addFolder()), icon: const Icon(Icons.create_new_folder_outlined), label: Text(l.webShareAddFolder)),
-        ],
-      ),
+      _addButtons(context),
       if (_ws.error case final error?) Text(l.webShareFailed(error), style: TextStyle(color: c.danger, fontSize: 13)),
       const SizedBox(height: 16),
       // The warning every guest meets: said before it surprises (gate G5).
@@ -381,5 +339,58 @@ class _WebShareScreenState extends State<WebShareScreen> {
         label: Text(l.webShareStop),
       ),
     ];
+  }
+}
+
+/// The session running, wherever the user is (real test of 10 November 2026: leaving the screen
+/// must not lose it): one line, its code, a tap back to its screen.
+class WebShareBanner extends StatelessWidget {
+  const WebShareBanner({super.key, required this.onOpen});
+
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final ws = AppScope.of(context).state.webShare;
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    final accent = Theme.of(context).colorScheme.primary;
+    return ListenableBuilder(
+      listenable: ws,
+      builder: (context, _) {
+        final s = ws.session;
+        if (s == null) return const SizedBox.shrink();
+        return Material(
+          color: c.chip,
+          child: InkWell(
+            key: const Key('web-share-banner'),
+            onTap: onOpen,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              // Narrow (the desktop's side menu): the code under the line, not squeezed beside it.
+              child: LayoutBuilder(
+                builder: (context, box) {
+                  final title = Text(l.webShareRunning, style: const TextStyle(fontWeight: FontWeight.w700));
+                  final code = Text(l.webShareRunningPin(s.pinShown), style: TextStyle(color: c.muted));
+                  return Row(
+                    children: [
+                      Icon(Icons.public_rounded, size: 20, color: accent),
+                      const SizedBox(width: 10),
+                      if (box.maxWidth < 320)
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [title, code]))
+                      else ...[
+                        Expanded(child: title),
+                        code,
+                      ],
+                      Icon(Icons.chevron_right_rounded, color: c.muted),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }

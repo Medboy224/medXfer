@@ -93,6 +93,7 @@ type Session struct {
 	items       []Item          // guarded by mu: Add appends
 	files       []OpenFile      // the open files offered, closed at the end; guarded by mu
 	adding      sync.Mutex      // one Add at a time
+	nextID      int             // the next item's ID: never one withdrawn (Remove); guarded by mu
 
 	srv *http.Server
 	ln  net.Listener
@@ -167,6 +168,7 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 		fingerprint: fp,
 		cert:        cert,
 		items:       items,
+		nextID:      len(items),
 		files:       opts.Files,
 		ln:          ln,
 		expires:     now().Add(opts.TTL),

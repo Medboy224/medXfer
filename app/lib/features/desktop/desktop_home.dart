@@ -48,7 +48,9 @@ class _DesktopHomeState extends State<DesktopHome> {
 
   /// The selection sent to a browser (the Accueil's button): its page shown.
   void _browserWanted() {
-    if (_ws.wanted && _page != DesktopPage.browser && mounted) setState(() => _page = DesktopPage.browser);
+    if (!_ws.wanted || !mounted) return;
+    if (_page != DesktopPage.browser) setState(() => _page = DesktopPage.browser);
+    _ws.shown();
   }
 
   @override
@@ -210,6 +212,14 @@ class _SideMenu extends StatelessWidget {
               ),
             ),
           const Spacer(),
+          // The browser sharing running, whatever the page: a click back to it.
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: WebShareBanner(onOpen: state.webShare.show),
+            ),
+          ),
           const _Status(),
         ],
       ),

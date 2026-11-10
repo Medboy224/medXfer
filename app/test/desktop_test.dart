@@ -37,6 +37,8 @@ class _Picker implements FilePicker {
   Future<Picked> files() async => Picked(paths: paths);
   @override
   Future<String?> folder() async => folderPath;
+  @override
+  Future<void> close(List<OpenFile> files) async {}
 }
 
 const _file = '/home/a/rapport.pdf';
@@ -491,13 +493,14 @@ void main() {
     await tester.ensureVisible(find.byKey(const Key('send-browser')));
     await tester.tap(find.byKey(const Key('send-browser')));
     await tester.pumpAndSettle();
-    expect(state.selection.isEmpty, isTrue);
+    expect(state.selection.count, 2, reason: 'kept: the same files may go to a device with medXfer too');
+    expect([for (final d in state.webShare.draft) d.name], ['rapport.pdf', 'Vacances 2026']);
     expect(find.text('rapport.pdf'), findsOneWidget); // listed on the page, offered at the start
     expect(find.text('Vacances 2026'), findsOneWidget);
     await tester.ensureVisible(find.byKey(const Key('web-share-start')));
     await tester.tap(find.byKey(const Key('web-share-start')));
     await tester.pumpAndSettle();
     expect(core.calls.firstWhere((c) => c.action == 'web_share_start').payload['paths'], [_file, _folder]);
-    expect(state.webShare.offered, ['rapport.pdf', 'Vacances 2026']);
+    expect((state.webShare.session != null, state.webShare.draft.isEmpty), (true, true));
   });
 }

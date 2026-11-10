@@ -72,6 +72,14 @@ class MainActivity : FlutterActivity() {
                     "askAllFiles" -> storage.askAllFiles { result.success(it) }
                     // Sending from the phone: the system's picker, by descriptor (STO-16).
                     "pickFiles" -> storage.pickFiles { result.success(it) }
+                    // Files picked then left aside before reaching the core: closed here, not
+                    // kept open until the app ends (Web Share's list, J7).
+                    "closeFiles" -> {
+                        for (fd in call.argument<List<Int>>("fds") ?: emptyList()) {
+                            try { android.os.ParcelFileDescriptor.adoptFd(fd).close() } catch (_: Exception) {}
+                        }
+                        result.success(null)
+                    }
                     "openFolder" -> result.success(storage.openFolder(call.argument<String>("path") ?: ""))
                     // The interfaces the core cannot list by itself (DISC-10), the multicast lock (DISC-03).
                     "networkInterfaces" -> result.success(network.interfaces())

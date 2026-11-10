@@ -32,6 +32,8 @@ class _Picker implements FilePicker {
   Future<Picked> files() async => const Picked();
   @override
   Future<String?> folder() async => dir;
+  @override
+  Future<void> close(List<OpenFile> files) async {}
 }
 
 void main() {

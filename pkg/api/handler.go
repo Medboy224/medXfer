@@ -108,6 +108,9 @@ func (s *DaemonServer) dispatch(rs Responder, req RequestMessage) {
 	case "web_share_add":
 		s.handleWebShareAdd(rs, req)
 
+	case "web_share_remove":
+		s.handleWebShareRemove(rs, req)
+
 	case "web_share_answer":
 		s.handleWebShareAnswer(rs, req)
 

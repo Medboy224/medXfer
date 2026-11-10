@@ -344,5 +344,7 @@
   "webShareAddFiles": "Ajouter des fichiers",
   "webShareAddFolder": "Ajouter un dossier",
   "webShareAdded": "{count, plural, =1{1 élément ajouté au partage} other{{count} éléments ajoutés au partage}}",
-  "webShareOfferedMore": "et {count} autres"
+  "webShareOfferedMore": "et {count} autres",
+  "webShareRunning": "Partage par navigateur en cours",
+  "webShareRunningPin": "code {pin}"
 }

@@ -97,6 +97,7 @@ func (s *DaemonServer) handleWebShareStart(rs Responder, req RequestMessage) {
 		"port":        sess.Port(),
 		"receive":     dir != "",
 		"expires":     sess.Expires().UTC().Format(time.RFC3339),
+		"items":       sess.Items(),
 	}, req.ID))
 }
 
@@ -134,11 +135,37 @@ func (s *DaemonServer) handleWebShareAdd(rs Responder, req RequestMessage) {
 		rs.Reply(NewEvent("action_error", map[string]string{"error": "no Web Share session"}, req.ID))
 		return
 	}
+	before := len(sess.Items())
 	if err := sess.Add(p.Paths, files); err != nil {
 		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
 		return
 	}
-	rs.Reply(NewEvent("web_share_added", map[string]any{"count": len(sess.Items())}, req.ID))
+	items := sess.Items()
+	added := items
+	if before <= len(items) {
+		added = items[before:]
+	}
+	rs.Reply(NewEvent("web_share_added", map[string]any{"count": len(items), "items": added}, req.ID))
+}
+
+// WebShareRemovePayload is web_share_remove's: the item withdrawn.
+type WebShareRemovePayload struct {
+	ID string `json:"id"`
+}
+
+// handleWebShareRemove withdraws an item from the guest's list (real test of 10 November 2026).
+func (s *DaemonServer) handleWebShareRemove(rs Responder, req RequestMessage) {
+	var p WebShareRemovePayload
+	sess := s.webShareSession()
+	if err := json.Unmarshal(req.Payload, &p); err != nil || p.ID == "" || sess == nil {
+		rs.Reply(NewEvent("action_error", map[string]string{"error": "no such Web Share item"}, req.ID))
+		return
+	}
+	if err := sess.Remove(p.ID); err != nil {
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+		return
+	}
+	rs.Reply(NewEvent("web_share_removed", map[string]any{"id": p.ID}, req.ID))
 }
 
 // handleWebShareStop: web_share_closed follows, reason "stopped".

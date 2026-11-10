@@ -36,7 +36,8 @@ import (
 // Web Share is gone (share_web_files, clear_web_files, toggle_web_share, regenerate_share_pin,
 // set_web_share_auto_accept, accept_web_upload, reject_web_upload, web_share_pause,
 // web_share_resume, their events, and status's web_share_* and portal_* fields). Added since,
-// without a break: web_share_add and web_share_added (files added to a running session).
+// without a break: web_share_add, web_share_added, web_share_remove and web_share_removed
+// (files added to a running session, or withdrawn); web_share_started lists the items.
 const SchemaVersion = 5
 
 // DefaultQueueSize bounds the event queue (B11): past it, an event is dropped and counted, and

@@ -77,6 +77,7 @@ class HomeScreen extends StatelessWidget {
             children: [
               const _CoreLine(),
               const _SessionBanner(),
+              WebShareBanner(onOpen: () => _open(context, const WebShareScreen())),
               Container(
                 color: c.section,
                 padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),

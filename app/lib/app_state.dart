@@ -137,7 +137,24 @@ class AppState extends ChangeNotifier {
   late final Transfers transfers;
 
   /// Web Share: a browser sends and receives (J7). Listens to the core from the start.
-  late final WebShare webShare = WebShare(core);
+  late final WebShare webShare = WebShare(core, openPicks: _openPicks, closeFiles: filePicker.close);
+
+  /// The home's picks made ready for the core, as a send does: paths on a desktop, and for the
+  /// folders on Android; files opened by the app otherwise (STO-16).
+  Future<({List<String> paths, List<OpenFile> files})> _openPicks(List<Pick> picks) async {
+    if (desktop) return (paths: [for (final p in picks) p.path], files: const <OpenFile>[]);
+    final others = [
+      for (final p in picks)
+        if (p.kind != PickKind.folder) (path: p.path, name: p.name),
+    ];
+    return (
+      paths: [
+        for (final p in picks)
+          if (p.kind == PickKind.folder) p.path,
+      ],
+      files: others.isEmpty ? const <OpenFile>[] : await library.open(others),
+    );
+  }
 
   /// Files and folders chosen on a desktop; the received folder opened.
   final FilePicker filePicker;
