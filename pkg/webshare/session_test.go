@@ -89,7 +89,7 @@ func startGuest(t *testing.T, opts Options) (*Session, *guest, *recorder) {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	cert, err := x509.ParseCertificate(s.srv.TLSConfig.Certificates[0].Certificate[0])
+	cert, err := x509.ParseCertificate(s.cert.Certificate[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestSessionSecrets(t *testing.T) {
 // served, its SHA-256 fingerprint given to the host as browsers show it.
 func TestSessionCertificate(t *testing.T) {
 	s, _, _ := startGuest(t, Options{})
-	der := s.srv.TLSConfig.Certificates[0].Certificate[0]
+	der := s.cert.Certificate[0]
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
 		t.Fatal(err)

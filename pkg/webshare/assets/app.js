@@ -271,6 +271,28 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // One chunk, by XMLHttpRequest rather than fetch: its upload reports the bytes as they leave,
+  // the bar moving during a chunk (real test of 10 November 2026: an 8 MiB chunk took seconds
+  // on a slow network, and the bar waited for it). onSent gets the bytes of this chunk sent.
+  function putChunk(path, blob, onSent) {
+    return new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open('PUT', path);
+      x.setRequestHeader('Authorization', 'Bearer ' + token);
+      x.upload.onprogress = (ev) => onSent(ev.loaded);
+      x.onerror = () => reject(new Error('network'));
+      x.ontimeout = () => reject(new Error('network'));
+      x.onload = () => {
+        let data = {};
+        try { data = JSON.parse(x.responseText); } catch (e) { /* no JSON */ }
+        if (x.status === 410) { ended(); reject(new Stop()); return; }
+        if (x.status === 401) { forget(); askPIN(); reject(new Stop()); return; }
+        resolve({ status: x.status, data });
+      };
+      x.send(blob);
+    });
+  }
+
   async function state(ticket) {
     const { status: code, data } = await api('GET', '/api/uploads/' + ticket);
     return code === 200 ? data : null;
@@ -304,9 +326,13 @@
       const total = files.reduce((n, f) => n + f.size, 0);
       let done = 0;
       const began = Date.now();
-      const progress = () => {
-        const secs = Math.max((Date.now() - began) / 1000, 0.5);
-        status(t('sending', size(done), size(total), size(Math.round(done / secs))));
+      let shownAt = 0;
+      const progress = (moving) => {
+        const now = Date.now();
+        if (moving && now - shownAt < 250) return; // 4 times a second at most
+        shownAt = now;
+        const secs = Math.max((now - began) / 1000, 0.5);
+        status(t('sending', size(moving), size(total), size(Math.round(moving / secs))));
       };
       for (let i = 0; i < files.length && !sending.stop; i++) {
         const f = files[i];
@@ -314,8 +340,12 @@
         let misses = 0;
         while (offset < f.size && !sending.stop) {
           let r;
+          const base = offset;
           try {
-            r = await api('PUT', '/api/uploads/' + sending.ticket + '/' + i + '?offset=' + offset, f.slice(offset, offset + chunk), true);
+            r = await putChunk('/api/uploads/' + sending.ticket + '/' + i + '?offset=' + offset, f.slice(offset, offset + chunk), (sent) => {
+              f.bar.value = base + sent;
+              progress(done + sent);
+            });
           } catch (e) {
             if (e instanceof Stop) return;
             r = null; // the network: asked again below
@@ -342,7 +372,7 @@
             continue;
           }
           f.bar.value = offset;
-          progress();
+          progress(done);
         }
         f.bar.value = f.size;
         f.li.classList.add('done');

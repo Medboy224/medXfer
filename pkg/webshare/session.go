@@ -89,6 +89,7 @@ type Session struct {
 	token       string
 	pin         string
 	fingerprint string
+	cert        tls.Certificate // the session's, drawn for it (bible §11.2)
 	items       []Item
 
 	srv *http.Server
@@ -162,6 +163,7 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 		token:       token,
 		pin:         pin,
 		fingerprint: fp,
+		cert:        cert,
 		items:       items,
 		ln:          ln,
 		expires:     now().Add(opts.TTL),
@@ -173,20 +175,24 @@ func start(opts Options, now func() time.Time, failWait time.Duration) (*Session
 		recheck:     30 * time.Second,
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	s.url = "https://" + net.JoinHostPort(ip.String(), strconv.Itoa(port)) + "/s#t=" + token
+	base := "https://" + net.JoinHostPort(ip.String(), strconv.Itoa(port))
+	s.url = base + "/s#t=" + token
 	s.srv = &http.Server{
 		Handler: s.handler(),
 		// WEB-08: a slow or oversized client holds nothing open.
 		ReadHeaderTimeout: 10 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 		IdleTimeout:       2 * time.Minute,
-		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 		ErrorLog:          log.New(logWriter(opts.Logf), "", 0),
+		// HTTP/1.1 only: large uploads through Go's HTTP/2 server go chunk by chunk of its flow
+		// control, slower than one connection per request (real test of 10 November 2026).
+		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
 	}
+	tlsConfig := &tls.Config{Certificates: []tls.Certificate{s.cert}, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}
 	s.mu.Lock()
 	s.timer = time.AfterFunc(opts.TTL, s.checkExpiry)
 	s.mu.Unlock()
-	go func() { _ = s.srv.ServeTLS(ln, "", "") }()
+	go func() { _ = s.srv.Serve(tls.NewListener(newSniffing(ln, base+"/s"), tlsConfig)) }()
 	ok = true
 	return s, nil
 }
