@@ -172,7 +172,7 @@ type ChunkSink interface {
 | Code `XXX-YYY` avec octet d'IP | ❌ Supprimé. | Réduisait le PIN à 900 valeurs (~10 bits). | — |
 | Daemon + WebSocket | ❌ Remplacé par un cœur Go en-processus (§10). Confirmé par le prototype G2a sur Windows, Linux et Android (`g2a-report.md`). | iOS interdit de lancer un autre programme et Android a fortement restreint l'exécution de binaires embarqués : un daemon séparé est impossible sur mobile. Un port d'écoute est en plus une surface d'attaque inutile. | Le prototype G2a échoue sur une plateforme de bureau (un processus séparé reste alors un plan B). |
 | Tableau de bord web hôte (`IndexHTML`) | ⏸ Outil de développement seulement (`DEV-19`), absent des versions publiées, gelé, à supprimer. | Duplique l'interface Flutter, 2 400 lignes sans tests réels, surface d'attaque (sélecteur natif, dépôt temporaire). | Jamais en production. |
-| Chiffrement WebCrypto du Web Share | ❌ Supprimé (§11.4). | `crypto.subtle` n'existe qu'en contexte sécurisé ; le JavaScript est servi par le même canal. | — |
+| Chiffrement WebCrypto du Web Share | ❌ Supprimé (§11.5). | `crypto.subtle` n'existe qu'en contexte sécurisé ; le JavaScript est servi par le même canal. | — |
 | Chroot virtuel HTTP | ✅ Conservé via `os.Root` (Go ≥ 1.24). | Confinement sans fenêtre TOCTOU. | — |
 
 ---
@@ -829,10 +829,10 @@ Vérifié sur Windows, Linux et Android (`g2a-report.md`, §6).
 ### 11.2 Conception retenue
 **Un jeton porteur, sans cookie.** Il n'y a donc aucune attaque CSRF possible : une page tierce ne peut pas lire le jeton pour l'ajouter à ses requêtes.
 
-1. L'hôte crée une **session invité** : `session_id`, `token` (128 bits, `crypto/rand`), expiration (15 min par défaut).
-2. Le QR contient `https://<ip>:<port>/s#t=<token>`. Le **fragment** `#…` n'est jamais envoyé au serveur, ni dans les journaux ni dans l'en-tête Referer. Le JavaScript de la page le lit et l'envoie ensuite dans `Authorization: Bearer <token>` à chaque appel.
+1. L'hôte crée une **session invité** : `session_id`, `token` (128 bits, `crypto/rand`), PIN de 6 chiffres, expiration (15 min par défaut, prolongée tant qu'un transfert tourne). Une session à la fois ; elle finit quand l'hôte quitte son écran (`WEB-10`).
+2. Le QR contient `https://<ip>:<port>/s#t=<token>`, le port étant 19999 par défaut, un autre s'il est pris (une seule règle de pare-feu sous Windows). Le **fragment** `#…` n'est jamais envoyé au serveur, ni dans les journaux ni dans l'en-tête Referer. Le JavaScript de la page le lit et l'envoie ensuite dans `Authorization: Bearer <token>` à chaque appel.
 3. **Repli sans caméra :** l'invité saisit un PIN à 6 chiffres sur la page d'accueil ; `POST /api/unlock{pin}` renvoie le jeton. Le PIN est limité à **5 essais par session** (pas par IP) ; au-delà la session est invalidée et l'hôte est alerté. Comparaison en temps constant, délai de 500 ms par échec (déjà dans le code).
-4. **HTTPS par défaut**, avec un certificat auto-signé *dédié à la session* (jamais la clé d'identité de l'appareil). L'invité voit un avertissement navigateur : c'est inévitable sans autorité de certification publique, et l'écran de l'hôte l'explique. Un mode HTTP existe seulement via une option explicite « réseau de confiance » avec avertissement visible.
+4. **HTTPS**, avec un certificat auto-signé *dédié à la session* (ECDSA P-256, `crypto/x509` et `crypto/tls` de Go, jamais la clé d'identité de l'appareil). L'invité voit un avertissement navigateur : c'est inévitable sans autorité de certification publique, et l'écran de l'hôte l'explique, avec l'empreinte du certificat qu'un invité prudent peut comparer. Un mode HTTP « réseau de confiance », avec avertissement visible, n'est pas écrit en J7 : il sera décidé après la gate G5, selon ce que les invités font de l'avertissement (décision D3 du plan J7).
 
 ```go
 func randomPIN(digits int) string { // uniforme, sans biais, via crypto/rand
@@ -845,17 +845,35 @@ func randomPIN(digits int) string { // uniforme, sans biais, via crypto/rand
 ### 11.3 Exigences
 | Id | Exigence | Statut |
 |---|---|---|
-| `WEB-01` | Le listener Web Share est distinct du contrôle (§10), lié à l'interface réseau choisie, et inexistant tant que le module est désactivé. | ✅ |
+| `WEB-01` | Le listener Web Share est distinct du contrôle (§10), lié à l'interface réseau choisie, et inexistant tant que le module est désactivé. | 📏 J7 : le code de transition sert Web Share sur le serveur HTTP du démon, toujours ouvert (plan J7, §0) |
 | `WEB-02` | Jeton de 128 bits via `crypto/rand`, transmis par fragment d'URL puis en-tête `Authorization`. Aucun cookie d'authentification. | 📏 J7 (#157) : le code de transition pose encore un cookie `medxfer_pin` sur `GET /share?pin=` (audit du 18/10) |
 | `WEB-03` | PIN de repli : `crypto/rand`, 5 essais par session, comparaison en temps constant. | 📏 J7 (#157) : `GET /share?pin=` compare avec `==`, sans verrouillage ni comptage (audit du 18/10) |
-| `WEB-04` | Ni le PIN, ni le jeton, ni un PIN tenté n'apparaissent dans les journaux, les événements ou l'URL. | ✅ |
-| `WEB-05` | En-têtes sur toutes les réponses : `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store` sur l'API. Cela impose de sortir le JavaScript et le CSS de la page en fichiers servis via `embed.FS`, au lieu du bloc inline actuel. | ✅ |
-| `WEB-06` | L'hôte approuve chaque dépôt d'invité (déjà fait) ; quotas : taille maximale par session, nombre de fichiers, espace disque libre ; un seul transfert actif. | ✅ |
-| `WEB-07` | Les téléchargements se désignent par **identifiant d'élément**, pas par nom de fichier fourni (le code actuel rapproche par `RelPath` ou `Base()`, ambigu). Les noms déposés passent par `SafeRelPath` puis ne gardent que le nom de base. | ✅ |
+| `WEB-04` | Ni le PIN, ni le jeton, ni un PIN tenté n'apparaissent dans les journaux, les événements ou l'URL. Seule l'interface de l'hôte les reçoit, pour les montrer. | 📏 J7 : masqués dans le journal, mais dans la requête de l'URL et dans `status.portal_url` (plan J7, §0) |
+| `WEB-05` | En-têtes sur toutes les réponses : `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store` sur l'API. Cela impose de sortir le JavaScript et le CSS de la page en fichiers servis via `embed.FS`, au lieu du bloc inline actuel. | 📏 J7 : pas de CSP, JavaScript en ligne, `innerHTML` de données de l'invité (#157) |
+| `WEB-06` | L'hôte approuve chaque dépôt d'invité, ou l'acceptation automatique qu'il a choisie ; quotas : taille maximale par session, nombre de fichiers, espace disque libre ; un seul transfert actif. | 📏 J7 : l'approbation existe, pas les quotas ni l'espace libre (plan J7, §0) |
+| `WEB-07` | Les téléchargements se désignent par **identifiant d'élément**, pas par nom de fichier fourni (le code actuel rapproche par `RelPath` ou `Base()`, ambigu). Les noms déposés passent par `SafeRelPath` puis ne gardent que le nom de base, et une collision prend un autre nom (« nom (2).ext »), jamais un fichier existant écrasé. | 📏 J7 : téléchargement par nom (`?file=`), dépôt ouvert avec `O_TRUNC`, sans `SafeRelPath` ni gestion de collision (#157) |
 | `WEB-08` | `ReadHeaderTimeout`, `MaxHeaderBytes`, `http.MaxBytesReader` sur toutes les routes. | 📏 J7 (#157) : le serveur HTTP n'a ni `ReadHeaderTimeout` ni `MaxHeaderBytes` (audit du 18/10) |
-| `WEB-09` | Épinglage de l'IP de l'invité : optionnel, désactivé par défaut (une IP change et un NAT en partage une). | ✅ |
+| `WEB-09` | Épinglage de l'IP de l'invité : optionnel, désactivé par défaut (une IP change et un NAT en partage une). | 📏 J7 : l'option n'existe pas dans le code de transition |
+| `WEB-10` | **Session invité.** Une à la fois ; 15 minutes, prolongées tant qu'un transfert tourne ; finie quand l'hôte quitte son écran, ou après 5 PIN faux, l'hôte alerté. Le listener, le certificat, le jeton et le PIN disparaissent avec elle. | 📏 J7 |
 
-### 11.4 Pourquoi pas de chiffrement WebCrypto de bout en bout
+### 11.4 L'API du portail
+
+Le portail n'appelle que ces routes, toutes en HTTPS sur le listener de la session. Les fichiers de la page (`/s`, `/s/app.js`, `/s/app.css`) sont servis sans jeton ; tout le reste exige `Authorization: Bearer <jeton>`. Les réponses sont en JSON, sauf les fichiers.
+
+| Route | Rôle | Réponses |
+|---|---|---|
+| `POST /api/unlock` `{pin}` | Le PIN de repli contre le jeton | `200 {token}` ; `401 {error: "invalid_pin", tries_left}` ; `410 {error: "session_closed"}` après le 5e échec |
+| `GET /api/session` | Le nom générique de l'hôte (`DISC-07`), l'expiration, les quotas restants | `200` |
+| `GET /api/items` | Ce que l'hôte propose | `200 [{id, name, size, folder}]` |
+| `GET /api/items/{id}` | Un fichier, ou un dossier en zip à la volée (`WEB-07`) | le contenu, `Content-Disposition` ; `404` |
+| `POST /api/uploads` `{files: [{name, size}]}` | Une demande de dépôt : un ticket | `201 {ticket, state}` ; `413` au-delà des quotas ; `507` sans assez d'espace libre ; `409` si un transfert est déjà actif |
+| `GET /api/uploads/{ticket}` | Son état : `pending`, `accepted`, `refused`, `done` | `200 {state, files: [{index, received}]}` |
+| `PUT /api/uploads/{ticket}/{index}?offset=N` | Un morceau du fichier `index`, à sa position | `200 {received}` ; `409` si `offset` n'est pas la position attendue ; `413` au-delà de la taille annoncée |
+| `DELETE /api/uploads/{ticket}` | L'invité abandonne : les fichiers incomplets sont supprimés | `204` |
+
+Sans jeton valide : `401 {error: "unauthorized"}`. Session finie ou expirée : `410 {error: "session_closed"}`. Aucune réponse ne répète le jeton ou le PIN, sauf `unlock`.
+
+### 11.5 Pourquoi pas de chiffrement WebCrypto de bout en bout
 `window.crypto.subtle` n'existe que dans un *contexte sécurisé* (HTTPS ou `localhost`) : il est absent sur `http://192.168.x.x`. Et en HTTP, un attaquant actif peut modifier le JavaScript qui implémente le chiffrement. Seul HTTPS résout les deux ; une fois HTTPS en place, WebCrypto n'ajoute rien face à A1 et A2.
 
 ---

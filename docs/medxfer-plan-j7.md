@@ -132,7 +132,7 @@ Nouveau paquet, séparé de `DaemonServer` (une implémentation derrière une in
 
 ## 3. Hors périmètre
 
-- Chiffrement de bout en bout par WebCrypto (§11.4) : HTTPS suffit face à A1 et A2.
+- Chiffrement de bout en bout par WebCrypto (§11.5) : HTTPS suffit face à A1 et A2.
 - Plusieurs invités qui transfèrent en même temps : une session, un transfert actif (`WEB-06`).
 - Web Share par Internet ou par un relais : réseau local uniquement.
 - Le mode HTTP « réseau de confiance » : décidé après G5 (D3).
@@ -140,15 +140,17 @@ Nouveau paquet, séparé de `DaemonServer` (une implémentation derrière une in
 
 ## 4. Décisions
 
-| # | Question | Proposition | Autre option |
+Toutes les propositions acceptées le 10 novembre 2026.
+
+| # | Question | Décision | Autre option |
 |---|---|---|---|
-| D1 | Web Share dans l'application | **Oui, en J7** : sans écran, le module n'existe pour aucun utilisateur. | Le garder en CLI jusqu'à J8 : J7 plus court (5 à 7 j), mais rien de visible. |
-| D2 | Réécrire ou corriger `share.go` | **Réécrire dans `pkg/webshare`**, l'ancien code retiré en WP-W.4 : ses choix (secrets dans l'URL, cookies, JavaScript en ligne) touchent toutes les routes. | Corriger sur place : moins de travail au départ, mais chaque correction tire sur les autres. |
-| D3 | Le mode HTTP « réseau de confiance » (§11.2) | **Pas en J7.** HTTPS seulement ; on décide après G5, selon ce que les invités font de l'avertissement. | L'écrire dès J7, comme le prévoit la bible. |
-| D4 | La session invité | **15 minutes, prolongées tant qu'un transfert tourne, une à la fois, finie quand l'hôte quitte l'écran.** | Sans expiration tant que l'écran est ouvert. |
-| D5 | Le port | **Fixe par défaut (19999, celui de `xfer share`)**, un autre s'il est pris : une seule règle de pare-feu sous Windows. | Un port tiré à chaque session : une règle par programme plutôt que par port. |
-| D6 | L'empreinte du certificat | **Montrée sur l'écran de l'hôte** : un invité prudent peut la comparer à celle du navigateur. Rien ne l'y oblige. | Ne pas la montrer : un écran plus simple. |
-| D7 | Safari iOS pour G5 | **À confirmer :** y a-t-il un iPhone disponible ? Sinon, G5 passe sur Chrome Android et les navigateurs de PC, et Safari iOS devient une réserve du rapport. | — |
+| D1 | Web Share dans l'application | ✅ **Oui, en J7** : sans écran, le module n'existe pour aucun utilisateur. | Le garder en CLI jusqu'à J8 : J7 plus court (5 à 7 j), mais rien de visible. |
+| D2 | Réécrire ou corriger `share.go` | ✅ **Réécrire dans `pkg/webshare`**, l'ancien code retiré en WP-W.4 : ses choix (secrets dans l'URL, cookies, JavaScript en ligne) touchent toutes les routes. | Corriger sur place : moins de travail au départ, mais chaque correction tire sur les autres. |
+| D3 | Le mode HTTP « réseau de confiance » (§11.2) | ✅ **Pas en J7.** HTTPS seulement ; on décide après G5, selon ce que les invités font de l'avertissement. | L'écrire dès J7, comme le prévoit la bible. |
+| D4 | La session invité | ✅ **15 minutes, prolongées tant qu'un transfert tourne, une à la fois, finie quand l'hôte quitte l'écran.** | Sans expiration tant que l'écran est ouvert. |
+| D5 | Le port | ✅ **Fixe par défaut (19999, celui de `xfer share`)**, un autre s'il est pris : une seule règle de pare-feu sous Windows. | Un port tiré à chaque session : une règle par programme plutôt que par port. |
+| D6 | L'empreinte du certificat | ✅ **Montrée sur l'écran de l'hôte** : un invité prudent peut la comparer à celle du navigateur. Rien ne l'y oblige. | Ne pas la montrer : un écran plus simple. |
+| D7 | Safari iOS pour G5 | ✅ **Un iPhone sera disponible pour G5** (10 novembre). | Sans iPhone : Safari iOS en réserve du rapport. |
 
 ## 5. Risques
 
