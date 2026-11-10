@@ -12,7 +12,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -22,7 +21,6 @@ import (
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/identity"
-	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/securechan"
 	"github.com/Medboy224/medXfer/pkg/session"
@@ -39,28 +37,21 @@ type IPAuthRecord struct {
 
 // DaemonServer manages the headless background engine and WebSocket connections
 type DaemonServer struct {
-	mu                 sync.RWMutex
-	config             Config
-	activeSession      *session.Channel
-	outEvents          *daemonEvents // the transfer this device sends, while it runs
-	pairedDeviceName   string
-	pendingOffer       *session.Message // a complete offer waiting for respond_offer
-	incomingOffer      *session.Message // an offer whose pages are still arriving (D2)
-	lastOffered        *outgoingOffer   // what this device offered, until the peer answers
-	webSharedManifest  *manifest.Manifest
-	webSharedFile      string
-	webShareEnabled    bool
-	webSharePIN        string
-	webShareToken      string
-	webShareAutoAccept bool
-	pendingWebUploads  map[string]*WebUploadRequest
-	transferCancel     context.CancelFunc // set while a transfer is active (LIM-08)
-	activeTransferID   string
-	endedTransferID    string             // the transfer endTransfer just ended: its peer's "complete" may come after (#129)
-	activeReceiver     *transfer.Receiver // this side's scheduler, when it receives
-	isPaused           bool
-	currentBatchItems  []BatchFileInfo // the queue the dashboard shows
-	sessionGraceTimer  *time.Timer
+	mu                sync.RWMutex
+	config            Config
+	activeSession     *session.Channel
+	outEvents         *daemonEvents // the transfer this device sends, while it runs
+	pairedDeviceName  string
+	pendingOffer      *session.Message   // a complete offer waiting for respond_offer
+	incomingOffer     *session.Message   // an offer whose pages are still arriving (D2)
+	lastOffered       *outgoingOffer     // what this device offered, until the peer answers
+	transferCancel    context.CancelFunc // set while a transfer is active (LIM-08)
+	activeTransferID  string
+	endedTransferID   string             // the transfer endTransfer just ended: its peer's "complete" may come after (#129)
+	activeReceiver    *transfer.Receiver // this side's scheduler, when it receives
+	isPaused          bool
+	currentBatchItems []BatchFileInfo // the queue the dashboard shows
+	sessionGraceTimer *time.Timer
 	// sentCompletedID is the last transfer this device sent that was completed (completeSent).
 	sentCompletedID string
 	// completedTransferID is the last transfer this device received whole (answerCheck).
@@ -71,22 +62,7 @@ type DaemonServer struct {
 	redialTo     string
 	redialCancel context.CancelFunc
 	httpPort     int
-
-	authFailMu   sync.Mutex
-	lastAuthFail map[string]time.Time
-	ipLockouts   map[string]*IPAuthRecord
-
-	webShareTransferMu        sync.Mutex
-	webShareTransferCancel    context.CancelFunc
-	webShareTransferPaused    bool
-	webShareTransferPauseCond *sync.Cond
-	webShareTransferDirection string // "upload" | "download"
-	webShareTransferFile      string
-	webShareTransferClientIP  string
-	webShareTransferDestPath  string
-	webShareTransferLastBytes int64
-	webShareTransferLastTime  time.Time
-	webShareTransferSpeed     float64
+	webShare     webShareHost // the guest session of Web Share, if any (J7)
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -166,156 +142,16 @@ func NewDaemonServerAt(dataDir string, port int, defaultOutDir, deviceName strin
 	registerSecrets(pin, token, pCode)
 
 	srv := &DaemonServer{
-		gate:               securechan.NewGate(),
-		config:             cfg,
-		webSharePIN:        pin,
-		webShareToken:      token,
-		webShareEnabled:    false,
-		webShareAutoAccept: false,
-		pairingCode:        pCode,
-		pendingWebUploads:  make(map[string]*WebUploadRequest),
-		lastAuthFail:       make(map[string]time.Time),
-		ipLockouts:         make(map[string]*IPAuthRecord),
-		benchPongChan:      make(chan session.Message, 10),
-		benchBurstAckChan:  make(chan session.Message, 10),
-		ctx:                ctx,
-		cancel:             cancel,
-		dataDir:            dataDir,
+		gate:              securechan.NewGate(),
+		config:            cfg,
+		pairingCode:       pCode,
+		benchPongChan:     make(chan session.Message, 10),
+		benchBurstAckChan: make(chan session.Message, 10),
+		ctx:               ctx,
+		cancel:            cancel,
+		dataDir:           dataDir,
 	}
-	srv.webShareTransferPauseCond = sync.NewCond(&srv.webShareTransferMu)
 	return srv
-}
-
-// CheckLockout returns true if the client IP is currently locked out from brute-force protection
-func (s *DaemonServer) CheckLockout(clientIP string) (bool, int) {
-	s.authFailMu.Lock()
-	defer s.authFailMu.Unlock()
-	if s.ipLockouts == nil {
-		return false, 0
-	}
-	rec, ok := s.ipLockouts[clientIP]
-	if !ok || rec == nil {
-		return false, 0
-	}
-	now := time.Now()
-	if now.Before(rec.LockedUntil) {
-		remaining := int(rec.LockedUntil.Sub(now).Seconds())
-		if remaining < 1 {
-			remaining = 1
-		}
-		return true, remaining
-	}
-	return false, 0
-}
-
-// RecordAuthFailure registers a failed PIN attempt, enforces progressive lockout,
-// and triggers emergency PIN rotation on 10 consecutive failures (Panic Mode)
-func (s *DaemonServer) RecordAuthFailure(clientIP string) (locked bool, remainingSec int, pinRegenerated bool) {
-	s.authFailMu.Lock()
-	if s.ipLockouts == nil {
-		s.ipLockouts = make(map[string]*IPAuthRecord)
-	}
-	rec, ok := s.ipLockouts[clientIP]
-	if !ok || rec == nil {
-		rec = &IPAuthRecord{}
-		s.ipLockouts[clientIP] = rec
-	}
-
-	now := time.Now()
-	if !rec.LastFail.IsZero() && now.Sub(rec.LastFail) > 15*time.Minute {
-		rec.FailCount = 0
-	}
-	rec.LastFail = now
-	rec.FailCount++
-
-	if rec.FailCount >= 10 {
-		rec.LockedUntil = now.Add(5 * time.Minute)
-		locked = true
-		remainingSec = 300
-		pinRegenerated = true
-	} else if rec.FailCount >= 5 {
-		rec.LockedUntil = now.Add(1 * time.Minute)
-		locked = true
-		remainingSec = 60
-	}
-	s.authFailMu.Unlock()
-
-	log.Printf("[Security] Web Share failed attempt #%d from %s", rec.FailCount, clientIP)
-
-	if locked {
-		log.Printf("[Security] 🚨 Brute force lockout applied to IP %s for %d seconds", clientIP, remainingSec)
-		s.Broadcast(NewEvent("web_share_brute_force_blocked", map[string]interface{}{
-			"client_ip":       clientIP,
-			"fail_count":      rec.FailCount,
-			"locked_seconds":  remainingSec,
-			"pin_regenerated": pinRegenerated,
-			"timestamp":       now.Format("15:04:05"),
-		}))
-	} else {
-		s.notifyAuthFailure(clientIP)
-	}
-
-	if pinRegenerated {
-		s.regeneratePINInternal(6)
-	}
-
-	return locked, remainingSec, pinRegenerated
-}
-
-// RecordAuthSuccess resets the failed attempt counter for a client IP upon successful authentication
-func (s *DaemonServer) RecordAuthSuccess(clientIP string) {
-	s.authFailMu.Lock()
-	if s.ipLockouts != nil {
-		delete(s.ipLockouts, clientIP)
-	}
-	s.authFailMu.Unlock()
-}
-
-// regeneratePINInternal generates a new random PIN and crypto token, then broadcasts status
-func (s *DaemonServer) regeneratePINInternal(digits int) {
-	if digits != 4 {
-		digits = 6
-	}
-	pin, err := randomPIN(digits)
-	if err != nil {
-		log.Printf("[Security] Web Share credential rotation failed: %v", err)
-		return
-	}
-	token, err := randomHex(16)
-	if err != nil {
-		log.Printf("[Security] Web Share credential rotation failed: %v", err)
-		return
-	}
-	registerSecrets(pin, token, "")
-	s.mu.Lock()
-	s.webSharePIN = pin
-	s.webShareToken = token
-	s.mu.Unlock()
-
-	log.Printf("[Security] Web Share credentials rotated") // never log the PIN or token (WEB-04)
-	s.Broadcast(NewEvent("status", s.getStatus()))
-}
-
-// notifyAuthFailure logs and broadcasts an authentication failure event, rate-limited per client IP
-func (s *DaemonServer) notifyAuthFailure(clientIP string) {
-	s.authFailMu.Lock()
-	if s.lastAuthFail == nil {
-		s.lastAuthFail = make(map[string]time.Time)
-	}
-	last, ok := s.lastAuthFail[clientIP]
-	now := time.Now()
-	if ok && now.Sub(last) < 3*time.Second {
-		s.authFailMu.Unlock()
-		return
-	}
-	s.lastAuthFail[clientIP] = now
-	s.authFailMu.Unlock()
-
-	log.Printf("[Security] Web Share invalid PIN attempt from %s", clientIP)
-	s.Broadcast(NewEvent("web_share_auth_failed", map[string]interface{}{
-		"client_ip": clientIP,
-		"timestamp": now.Format("15:04:05"),
-	}))
 }
 
 // randomHex returns n bytes from crypto/rand, hex-encoded.
@@ -340,133 +176,6 @@ func randomPIN(digits int) (string, error) {
 // secureEq compares secrets in constant time.
 func secureEq(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
-}
-
-func (s *DaemonServer) RegisterWebShareTransfer(direction, clientIP, fileName string, cancelFunc context.CancelFunc, destPath string) {
-	s.webShareTransferMu.Lock()
-	defer s.webShareTransferMu.Unlock()
-	s.webShareTransferDirection = direction
-	s.webShareTransferClientIP = clientIP
-	s.webShareTransferFile = fileName
-	s.webShareTransferCancel = cancelFunc
-	s.webShareTransferDestPath = destPath
-	s.webShareTransferPaused = false
-	s.webShareTransferLastBytes = 0
-	s.webShareTransferLastTime = time.Now()
-	s.webShareTransferSpeed = 0
-}
-
-func (s *DaemonServer) UnregisterWebShareTransfer() {
-	s.webShareTransferMu.Lock()
-	defer s.webShareTransferMu.Unlock()
-	s.webShareTransferDirection = ""
-	s.webShareTransferClientIP = ""
-	s.webShareTransferFile = ""
-	s.webShareTransferCancel = nil
-	s.webShareTransferDestPath = ""
-	s.webShareTransferPaused = false
-	s.webShareTransferLastBytes = 0
-	s.webShareTransferSpeed = 0
-	if s.webShareTransferPauseCond != nil {
-		s.webShareTransferPauseCond.Broadcast()
-	}
-}
-
-func (s *DaemonServer) PauseWebShareTransfer() bool {
-	s.webShareTransferMu.Lock()
-	defer s.webShareTransferMu.Unlock()
-	if s.webShareTransferDirection == "" {
-		return false
-	}
-	s.webShareTransferPaused = true
-	dir := s.webShareTransferDirection
-	file := s.webShareTransferFile
-	clientIP := s.webShareTransferClientIP
-
-	s.Broadcast(NewEvent("web_share_paused", map[string]interface{}{
-		"direction": dir,
-		"file":      file,
-		"client_ip": clientIP,
-		"message":   "Web Share transfer paused by host",
-	}))
-	return true
-}
-
-func (s *DaemonServer) ResumeWebShareTransfer() bool {
-	s.webShareTransferMu.Lock()
-	defer s.webShareTransferMu.Unlock()
-	if s.webShareTransferDirection == "" {
-		return false
-	}
-	s.webShareTransferPaused = false
-	if s.webShareTransferPauseCond != nil {
-		s.webShareTransferPauseCond.Broadcast()
-	}
-	dir := s.webShareTransferDirection
-	file := s.webShareTransferFile
-	clientIP := s.webShareTransferClientIP
-
-	s.Broadcast(NewEvent("web_share_resumed", map[string]interface{}{
-		"direction": dir,
-		"file":      file,
-		"client_ip": clientIP,
-		"message":   "Web Share transfer resumed by host",
-	}))
-	return true
-}
-
-func (s *DaemonServer) CancelWebShareTransfer() bool {
-	s.webShareTransferMu.Lock()
-	cancel := s.webShareTransferCancel
-	s.webShareTransferCancel = nil
-	destPath := s.webShareTransferDestPath
-	s.webShareTransferDestPath = ""
-	dir := s.webShareTransferDirection
-	file := s.webShareTransferFile
-	clientIP := s.webShareTransferClientIP
-	s.webShareTransferDirection = ""
-	s.webShareTransferFile = ""
-	s.webShareTransferClientIP = ""
-	s.webShareTransferPaused = false
-	s.webShareTransferLastBytes = 0
-	s.webShareTransferSpeed = 0
-	if s.webShareTransferPauseCond != nil {
-		s.webShareTransferPauseCond.Broadcast()
-	}
-	s.webShareTransferMu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-	if destPath != "" {
-		_ = os.Remove(destPath)
-	}
-
-	s.Broadcast(NewEvent("web_share_canceled", map[string]interface{}{
-		"direction": dir,
-		"file":      file,
-		"client_ip": clientIP,
-		"message":   "Web Share transfer canceled",
-	}))
-	return true
-}
-
-func (s *DaemonServer) CheckWebSharePause(ctx context.Context) error {
-	s.webShareTransferMu.Lock()
-	defer s.webShareTransferMu.Unlock()
-	for s.webShareTransferPaused {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		s.webShareTransferPauseCond.Wait()
-	}
-	return ctx.Err()
-}
-
-func (s *DaemonServer) IsWebShareTransferPaused() bool {
-	s.webShareTransferMu.Lock()
-	defer s.webShareTransferMu.Unlock()
-	return s.webShareTransferPaused
 }
 
 // Listen binds the HTTP listener synchronously, falling back to next available port if busy
@@ -542,22 +251,12 @@ func (s *DaemonServer) startNode() error {
 	return nil
 }
 
-// serveHTTP serves the Web Share portal and the health probe.
+// serveHTTP serves the health probe. Web Share has its own listener, per guest session
+// (pkg/webshare, WEB-01).
 func (s *DaemonServer) serveHTTP(httpLn net.Listener) error {
-	s.SetDiscoverable(true) // the dashboard's daemon is up for discovery while it serves
-	// 3. Start HTTP/WebSocket Router
+	s.SetDiscoverable(true) // the daemon is up for discovery while it serves
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/share", shareHeaders(s.handleSharePortal, true))
-	mux.HandleFunc("/api/share/list", shareHeaders(s.handleShareList, true))
-	mux.HandleFunc("/api/share/download", shareHeaders(s.handleShareDownload, false))
-	mux.HandleFunc("/api/share/request_upload", shareHeaders(s.handleShareRequestUpload, false))
-	mux.HandleFunc("/api/share/upload", shareHeaders(s.handleShareUpload, false))
-	mux.HandleFunc("/api/share/upload_chunk", shareHeaders(s.handleShareUploadChunk, false))
-	mux.HandleFunc("/api/share/pause", shareHeaders(s.handleSharePause, false))
-	mux.HandleFunc("/api/share/resume", shareHeaders(s.handleShareResume, false))
-	mux.HandleFunc("/api/share/cancel", shareHeaders(s.handleShareCancel, false))
 
 	httpSrv := newHTTPServer(mux)
 	s.mu.Lock()
@@ -568,9 +267,8 @@ func (s *DaemonServer) serveHTTP(httpLn net.Listener) error {
 	return httpSrv.Serve(httpLn)
 }
 
-// newHTTPServer is the server of the dashboard and the portal. The headers of a request and an
-// idle connection are bounded: a slow client holds nothing open (§3.7, #156). Reads and writes
-// are not, for the WebSocket and the uploads; the portal's own limits come with J7.
+// newHTTPServer is the daemon's server. The headers of a request and an idle connection are
+// bounded: a slow client holds nothing open (§3.7, #156).
 func newHTTPServer(h http.Handler) *http.Server {
 	return &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 }
@@ -586,6 +284,7 @@ func (s *DaemonServer) Start(port int) error {
 
 // Stop shuts down the daemon gracefully
 func (s *DaemonServer) Stop() {
+	s.stopWebShare()
 	s.cancel()
 	s.mu.Lock()
 	if s.transferCancel != nil {
@@ -633,19 +332,6 @@ func isLoopbackRequest(r *http.Request) bool {
 	return false
 }
 
-func (s *DaemonServer) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	// The web dashboard was removed at gate G7 (DEV-19-R): "/" leads to the Web Share portal.
-	redirectURL := "/share"
-	if r.URL.RawQuery != "" {
-		redirectURL += "?" + r.URL.RawQuery
-	}
-	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
-}
-
 func (s *DaemonServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Liveness probe without token (decision D0-4), but loopback and Host only.
 	if !isLoopbackRequest(r) || !s.hostAllowed(r.Host) {
@@ -664,56 +350,6 @@ func (s *DaemonServer) Broadcast(evt EventMessage) {
 		fn(evt) // must not block (pkg/core: a bounded queue that drops, B11)
 	}
 	s.sinkMu.RUnlock()
-}
-
-// SharePaths configures files or directories to be immediately available on the Web Share portal
-func (s *DaemonServer) SharePaths(paths []string) error {
-	if len(paths) == 0 {
-		return fmt.Errorf("no paths provided")
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if len(paths) == 1 {
-		fi, err := os.Stat(paths[0])
-		if err == nil && !fi.IsDir() {
-			s.webSharedFile = paths[0]
-			s.webSharedManifest = nil
-			return nil
-		}
-	}
-
-	m, err := manifest.Build(paths)
-	if err != nil {
-		return err
-	}
-	s.webSharedManifest = m
-	s.webSharedFile = ""
-	return nil
-}
-
-// SetPIN configures the 4-digit security PIN for Web Share
-func (s *DaemonServer) SetPIN(pin string) {
-	registerSecrets(pin, "", "")
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.webSharePIN = pin
-}
-
-// SetAutoAccept toggles automatic acceptance of Web Share incoming uploads
-func (s *DaemonServer) SetAutoAccept(autoAccept bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.webShareAutoAccept = autoAccept
-}
-
-// SetWebShareEnabled enables or disables Web Share access and broadcasts status
-func (s *DaemonServer) SetWebShareEnabled(enabled bool) {
-	s.mu.Lock()
-	s.webShareEnabled = enabled
-	s.mu.Unlock()
-	s.Broadcast(NewEvent("status", s.getStatus(), ""))
 }
 
 // GetStatus returns the current daemon status
@@ -742,21 +378,17 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 	// code) runs outside it, or every other action would wait meanwhile (audit 9, #156).
 	s.mu.RLock()
 	st := DaemonStatus{
-		Status:             "idle",
-		DeviceName:         s.config.DeviceName,
-		DownloadDir:        s.config.DownloadDir,
-		CollisionPolicy:    s.config.CollisionPolicy,
-		Paired:             s.activeSession != nil,
-		ActiveTransfer:     s.transferCancel != nil,
-		IsPaused:           s.isPaused,
-		Version:            "1.0.0",
-		LocalPort:          s.httpPort,
-		WebShareEnabled:    s.webShareEnabled,
-		WebSharePIN:        s.webSharePIN,
-		WebShareToken:      s.webShareToken,
-		WebShareAutoAccept: s.webShareAutoAccept,
-		PairingCode:        s.pairingCode,
-		Discoverable:       s.discCancel != nil,
+		Status:          "idle",
+		DeviceName:      s.config.DeviceName,
+		DownloadDir:     s.config.DownloadDir,
+		CollisionPolicy: s.config.CollisionPolicy,
+		Paired:          s.activeSession != nil,
+		ActiveTransfer:  s.transferCancel != nil,
+		IsPaused:        s.isPaused,
+		Version:         "1.0.0",
+		LocalPort:       s.httpPort,
+		PairingCode:     s.pairingCode,
+		Discoverable:    s.discCancel != nil,
 	}
 	if st.Paired {
 		st.Status = "paired"
@@ -775,17 +407,6 @@ func (s *DaemonServer) getStatus() DaemonStatus {
 		st.LocalPort = 19999
 	}
 	st.LocalIP = statusAddress()
-	if st.LocalIP != "" {
-		switch {
-		case st.WebShareToken != "" && st.WebSharePIN != "":
-			st.PortalURL = fmt.Sprintf("http://%s:%d/share?token=%s&pin=%s", st.LocalIP, st.LocalPort, st.WebShareToken, st.WebSharePIN)
-		case st.WebSharePIN != "":
-			st.PortalURL = fmt.Sprintf("http://%s:%d/share?pin=%s", st.LocalIP, st.LocalPort, st.WebSharePIN)
-		default:
-			st.PortalURL = fmt.Sprintf("http://%s:%d/share", st.LocalIP, st.LocalPort)
-		}
-		st.PortalQR, _ = GenerateURLQRDataURI(st.PortalURL, 220)
-	}
 	st.Instance = s.instance()
 	return st
 }

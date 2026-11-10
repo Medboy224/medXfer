@@ -232,11 +232,10 @@ func (s *Session) end(why string) {
 		s.mu.Unlock()
 		return
 	}
-	s.closed = why
+	s.closed = why // from here, every request gets 410
 	if s.timer != nil {
 		s.timer.Stop()
 	}
-	close(s.done)
 	s.mu.Unlock()
 	s.dropUploads() // no part file left behind
 	// Off the request that may have ended it: Shutdown waits for it.
@@ -248,6 +247,9 @@ func (s *Session) end(why string) {
 		}
 	}()
 	s.emit(Event{Kind: "session_closed", Data: map[string]any{"reason": why}})
+	// Last: whoever waits on Done finds the part files gone and the host told (a test read the
+	// events too early on the CI's Ubuntu, under the race detector).
+	close(s.done)
 }
 
 // checkExpiry ends the session at its expiry, unless a transfer runs: then it looks again a

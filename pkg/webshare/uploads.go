@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/Medboy224/medXfer/pkg/engine"
 )
@@ -47,6 +48,24 @@ type upload struct {
 	state  string
 	files  []*upFile
 	total  int64
+	said   time.Time // the last upload_progress
+}
+
+// progressGap is the least time between two upload_progress events.
+const progressGap = 250 * time.Millisecond
+
+// progress tells the host what came, ProgressGap apart at most. Its lock is held.
+func (s *Session) progress(up *upload) {
+	now := time.Now()
+	if now.Sub(up.said) < progressGap {
+		return
+	}
+	up.said = now
+	var received int64
+	for _, f := range up.files {
+		received += f.received
+	}
+	s.emit(Event{Kind: "upload_progress", Data: map[string]any{"ticket": up.ticket, "received": received, "total": up.total}})
 }
 
 type upFile struct {
@@ -325,6 +344,7 @@ func (s *Session) handleChunk(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "interrupted", "received": f.received})
 		return
 	}
+	s.progress(up)
 	if f.received == f.Size {
 		if err := s.complete(up, index); err != nil {
 			writeError(w, http.StatusInternalServerError, "write_failed")
