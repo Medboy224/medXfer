@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/testkit"
 )
 
@@ -115,5 +116,57 @@ func TestWebShareActions(t *testing.T) {
 	}
 	if e := n.WaitReply(n.Request("web_share_start", map[string]any{"addr": "0.0.0.0"}), 0); e.Event != "action_error" {
 		t.Fatalf("every interface at once: %s", e.Event)
+	}
+}
+
+// Real tests of 10 November 2026 (WP-W.6): a session never serves on mobile data, and serves on
+// the Wi-Fi first; the address asked is one of the guest's networks.
+func TestWebShareNetworks(t *testing.T) {
+	ranked := discovery.RankForGuest([]discovery.Path{
+		{IP: "169.254.185.66", Kind: discovery.KindEthernet},
+		{IP: "192.168.81.175", Kind: discovery.KindEthernet}, // another phone's cable
+		{IP: "10.0.0.5", Kind: discovery.KindOther},
+		{IP: "192.168.49.174", Kind: discovery.KindWiFi}, // the A57's network
+	})
+	var order []string
+	for _, p := range ranked {
+		order = append(order, p.IP)
+	}
+	if strings.Join(order, " ") != "192.168.49.174 192.168.81.175 10.0.0.5 169.254.185.66" {
+		t.Fatalf("order: %v", order)
+	}
+
+	old := webShareNetworks
+	t.Cleanup(func() { webShareNetworks = old })
+	webShareNetworks = func() []discovery.Path {
+		return []discovery.Path{{IP: "192.168.49.174", Kind: discovery.KindWiFi}, {IP: "192.168.81.175", Kind: discovery.KindEthernet}}
+	}
+	addr := ""
+	if kind, err := guestNetwork(&addr); err != nil || addr != "192.168.49.174" || kind != discovery.KindWiFi {
+		t.Fatalf("by default: %q %q %v", addr, kind, err)
+	}
+	addr = "192.168.81.175"
+	if kind, err := guestNetwork(&addr); err != nil || kind != discovery.KindEthernet {
+		t.Fatalf("the cable, chosen: %q %v", kind, err)
+	}
+
+	s := NewDaemonServerAt(t.TempDir(), 0, t.TempDir(), "Hôte")
+	n := testkit.StartNode(t, s)
+	e := n.WaitReply(n.Request("web_share_networks", nil), 0)
+	var got struct{ Networks []discovery.Path }
+	if e.Event != "web_share_networks" || e.Decode(&got) != nil || len(got.Networks) != 2 || got.Networks[0].IP != "192.168.49.174" {
+		t.Fatalf("web_share_networks: %s %s", e.Event, e.Data)
+	}
+	// The A57's mobile data, asked for: refused.
+	if e := n.WaitReply(n.Request("web_share_start", map[string]any{"addr": "10.31.5.248"}), 0); e.Event != "action_error" || !strings.Contains(string(e.Data), "address_not_local") {
+		t.Fatalf("mobile data: %s %s", e.Event, e.Data)
+	}
+	// Only mobile data: no session, and the app offers to create a network.
+	webShareNetworks = func() []discovery.Path { return nil }
+	if e := n.WaitReply(n.Request("web_share_start", nil), 0); e.Event != "action_error" || !strings.Contains(string(e.Data), "no_local_network") {
+		t.Fatalf("no local network: %s %s", e.Event, e.Data)
+	}
+	if e := n.WaitReply(n.Request("web_share_networks", nil), 0); !strings.Contains(string(e.Data), `"networks":[]`) {
+		t.Fatalf("no network listed: %s", e.Data)
 	}
 }

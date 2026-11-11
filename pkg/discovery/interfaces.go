@@ -630,10 +630,15 @@ func IsSubnetReachable(ipStr string) bool {
 // DefaultRouteIP returns the local IPv4 address the system uses to reach the Internet, or ""
 // without a default route. A UDP "connection" only selects a route: no packet is sent.
 // isCellular reports whether a (lower-case) interface name is a cellular data modem: no
-// device of the local network can reach its address.
+// device of the local network can reach its address. seth_lte1 is the TECNO's (real test of 10
+// November 2026); clat4 and v4-rmnet* carry IPv4 over an IPv6-only mobile network (464XLAT).
 func isCellular(lower string) bool {
-	return strings.HasPrefix(lower, "rmnet") || strings.HasPrefix(lower, "ccmni") ||
-		strings.HasPrefix(lower, "pdp") || strings.HasPrefix(lower, "wwan")
+	for _, p := range []string{"rmnet", "ccmni", "pdp", "wwan", "seth", "clat", "v4-"} {
+		if strings.HasPrefix(lower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // choosePrimaryIP picks the address other devices can reach. The interface that carries the

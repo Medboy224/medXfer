@@ -122,8 +122,8 @@ func TestDownloadLink(t *testing.T) {
 		if body := readAll(t, resp.Body); resp.StatusCode != http.StatusOK || string(body) != "contenu" {
 			t.Fatalf("download %d: %d %q", i, resp.StatusCode, body)
 		}
-		if resp.Header.Get("Content-Security-Policy") != CSP {
-			t.Fatal("a download without the headers")
+		if resp.Header.Get("Content-Security-Policy") != CSP || resp.Header.Get("Cache-Control") != "no-store" {
+			t.Fatal("a download without the headers: a browser may keep it in its cache")
 		}
 	}
 	if resp := g.do("GET", "/dl/"+strings.Repeat("a", 32), "", nil); resp.StatusCode != http.StatusNotFound {

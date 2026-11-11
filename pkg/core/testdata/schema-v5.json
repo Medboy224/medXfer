@@ -36,6 +36,7 @@
     "web_share_add",
     "web_share_answer",
     "web_share_cancel",
+    "web_share_networks",
     "web_share_remove",
     "web_share_start",
     "web_share_stop"
@@ -91,6 +92,7 @@
     "web_share_closed",
     "web_share_download_done",
     "web_share_download_started",
+    "web_share_networks",
     "web_share_removed",
     "web_share_started",
     "web_share_upload_accepted",

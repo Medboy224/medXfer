@@ -1719,7 +1719,7 @@ func selectOneShotSender() *discovery.Peer {
 
 func handleShare(args []string) {
 	shareCmd := flag.NewFlagSet("share", flag.ExitOnError)
-	addrFlag := shareCmd.String("addr", "", "Address of the interface to serve on (default: this device's main address)")
+	addrFlag := shareCmd.String("addr", "", "Address of the interface to serve on (default: the Wi-Fi's, never mobile data)")
 	portFlag := shareCmd.Int("port", webshare.DefaultPort, "Port of the guest session (another one if it is taken)")
 	outDirFlag := shareCmd.String("out", "", "Folder for the guest's files (default: the download folder)")
 	autoAcceptFlag := shareCmd.Bool("auto-accept", false, "Accept the guest's files without asking")
@@ -1728,9 +1728,19 @@ func handleShare(args []string) {
 	defer startJournal()()
 	paths := shareCmd.Args()
 
+	// By default the guest's network: never mobile data, Wi-Fi first (real tests of 10 November
+	// 2026: the address of the Internet route was a phone's cable, where the guest was not).
 	addr := *addrFlag
 	if addr == "" {
-		addr = discovery.GetPrimaryLocalIP()
+		nets := discovery.GuestPaths()
+		if len(nets) == 0 {
+			fmt.Fprintln(os.Stderr, "[-] No local network: join a Wi-Fi, or create one, then try again.")
+			os.Exit(1)
+		}
+		addr = nets[0].IP
+		for _, n := range nets[1:] {
+			fmt.Printf("[i] Also on %s (%s): --addr %s to serve there.\n", n.IP, n.Kind, n.IP)
+		}
 	}
 	recv := *outDirFlag
 	if recv == "" {
@@ -1744,18 +1754,27 @@ func handleShare(args []string) {
 		Paths:      paths,
 		ReceiveDir: recv,
 		AutoAccept: *autoAcceptFlag,
+		// Each line with its time: a transfer's rate reads from its start and end (WP-W.6).
 		Events: func(e webshare.Event) {
+			at := time.Now().Format("15:04:05.000")
 			switch e.Kind {
 			case "upload_request":
+				fmt.Printf("%s [?] The guest asks to send %v (%v bytes).\n", at, e.Data["files"], e.Data["total"])
 				if !*autoAcceptFlag {
 					answers <- e.Data
 				}
+			case "upload_accepted":
+				fmt.Printf("%s [+] Accepted.\n", at)
 			case "upload_file_done":
-				fmt.Printf("[+] Received %v\n", e.Data["path"])
+				fmt.Printf("%s [+] Received %v (%v bytes)\n", at, e.Data["path"], e.Data["size"])
+			case "upload_cancelled":
+				fmt.Printf("%s [-] The upload was cancelled.\n", at)
+			case "download_started":
+				fmt.Printf("%s [>] Download started: %v\n", at, e.Data["name"])
 			case "download_done":
-				fmt.Printf("[+] Downloaded by the guest: %v\n", e.Data["name"])
+				fmt.Printf("%s [+] Downloaded by the guest: %v\n", at, e.Data["name"])
 			case "session_closed":
-				fmt.Printf("[*] Web Share ended (%v).\n", e.Data["reason"])
+				fmt.Printf("%s [*] Web Share ended (%v).\n", at, e.Data["reason"])
 			}
 		},
 	})

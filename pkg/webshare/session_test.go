@@ -202,7 +202,7 @@ func TestHeadersEverywhere(t *testing.T) {
 		if h.Get("Content-Security-Policy") != CSP || h.Get("Referrer-Policy") != "no-referrer" || h.Get("X-Content-Type-Options") != "nosniff" {
 			t.Errorf("%s: headers %v", path, h)
 		}
-		if strings.HasPrefix(path, "/api/") && h.Get("Cache-Control") != "no-store" {
+		if h.Get("Cache-Control") != "no-store" { // the files shared and the page too
 			t.Errorf("%s: Cache-Control %q", path, h.Get("Cache-Control"))
 		}
 		if len(resp.Cookies()) > 0 {
