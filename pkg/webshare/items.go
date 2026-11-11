@@ -234,8 +234,11 @@ func (s *Session) serveItem(w http.ResponseWriter, r *http.Request, it Item) {
 		}
 		w.Header().Set("Content-Disposition", attachment(it.Name))
 		// By position: two downloads of an open file at once never move each other.
-		http.ServeContent(w, r, it.Name, fi.ModTime(), io.NewSectionReader(f, 0, fi.Size()))
-		s.emit(Event{Kind: "download_done", Data: map[string]any{"id": it.ID, "name": it.Name}})
+		sw := &sentWriter{ResponseWriter: w}
+		http.ServeContent(sw, r, it.Name, fi.ModTime(), io.NewSectionReader(f, 0, fi.Size()))
+		if sw.complete(r) {
+			s.emit(Event{Kind: "download_done", Data: map[string]any{"id": it.ID, "name": it.Name}})
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/zip")
@@ -274,6 +277,41 @@ func (s *Session) serveItem(w http.ResponseWriter, r *http.Request, it Item) {
 	if err == nil && zw.Close() == nil {
 		s.emit(Event{Kind: "download_done", Data: map[string]any{"id": it.ID, "name": it.Name}})
 	}
+}
+
+// sentWriter counts what reaches the guest. A download is done once all of it went: real test
+// of 10 November 2026, the guest's browser gave up after 7 MB of 1 GiB, and the host was told
+// the download was done.
+type sentWriter struct {
+	http.ResponseWriter
+	status int
+	sent   int64
+}
+
+func (w *sentWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *sentWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.sent += int64(n)
+	return n, err
+}
+
+// complete: the whole body announced went, for a GET answered 200 or 206 (a range: a download
+// resumed, or one of the parts a browser fetches at once).
+func (w *sentWriter) complete(r *http.Request) bool {
+	if r.Method != http.MethodGet || (w.status != http.StatusOK && w.status != http.StatusPartialContent) {
+		return false
+	}
+	want, err := strconv.ParseInt(w.Header().Get("Content-Length"), 10, 64)
+	return err == nil && w.sent == want
 }
 
 // attachment is a Content-Disposition that keeps any name, accents included (RFC 6266).
