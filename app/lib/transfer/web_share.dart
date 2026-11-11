@@ -23,6 +23,7 @@ class WebShareSession {
     required this.address,
     required this.receive,
     required this.expires,
+    this.kind = '',
   });
 
   factory WebShareSession.fromMap(Map<String, Object?> m) {
@@ -35,8 +36,12 @@ class WebShareSession {
       address: port > 0 ? 'https://$addr:$port' : addr,
       receive: m['receive'] == true,
       expires: DateTime.tryParse('${m['expires'] ?? ''}')?.toLocal(),
+      kind: '${m['kind'] ?? ''}',
     );
   }
+
+  /// The kind of the network served on: "wifi", "ethernet" or "other". The guest must be on it.
+  final String kind;
 
   /// What the QR code carries: the token in its fragment.
   final String url;
@@ -112,6 +117,20 @@ class WebShareUpload {
   int received = 0;
 }
 
+/// A network the session may serve on (web_share_networks): never mobile data. The guest must be
+/// on the same one.
+@immutable
+class WebShareNetwork {
+  const WebShareNetwork(this.ip, this.kind);
+
+  factory WebShareNetwork.fromMap(Map<Object?, Object?> m) => WebShareNetwork('${m['ip'] ?? ''}', '${m['kind'] ?? ''}');
+
+  final String ip;
+
+  /// "wifi", "ethernet" or "other".
+  final String kind;
+}
+
 /// Why the session ended, as web_share_closed says it.
 enum WebShareEnd { stopped, expired, pinAttempts }
 
@@ -148,6 +167,8 @@ class WebShare extends ChangeNotifier {
   bool _receive = true;
   bool _autoAccept = false;
   bool _wanted = false;
+  List<WebShareNetwork> _networks = const [];
+  String? _network;
 
   /// The session running, or null.
   WebShareSession? get session => _session;
@@ -191,6 +212,30 @@ class WebShare extends ChangeNotifier {
   bool get autoAccept => _receive && _autoAccept;
   set autoAccept(bool on) {
     _autoAccept = on;
+    notifyListeners();
+  }
+
+  /// The networks a session may serve on, best first (Wi-Fi first, never mobile data), as last
+  /// read by [loadNetworks]. Several: the host chooses the guest's ([network]).
+  List<WebShareNetwork> get networks => List.unmodifiable(_networks);
+
+  /// The address of the network chosen; the first of [networks] when none was, or when the one
+  /// chosen is gone.
+  String? get network => _networks.any((n) => n.ip == _network) ? _network : (_networks.isEmpty ? null : _networks.first.ip);
+  set network(String? ip) {
+    _network = ip;
+    notifyListeners();
+  }
+
+  /// Reads the networks again (the screen opens, a network came or went). Real tests of 10
+  /// November 2026: the core served on the mobile data, or on a cable where the guest was not.
+  Future<void> loadNetworks() async {
+    final reply = await core.call('web_share_networks');
+    final list = reply.first('web_share_networks')?.map['networks'];
+    _networks = [
+      for (final m in (list as List?) ?? const [])
+        if (m is Map) WebShareNetwork.fromMap(m),
+    ];
     notifyListeners();
   }
 
@@ -238,9 +283,10 @@ class WebShare extends ChangeNotifier {
   }
 
   /// Starts the guest session with what was chosen ([draft], [receive], [autoAccept]).
-  /// [address]: the interface to serve on, the core's own choice when null (this device's
-  /// network made for the occasion when it runs).
+  /// [address]: the interface to serve on (this device's network made for the occasion when it
+  /// runs), else the [network] chosen, else the core's own choice (its first).
   Future<void> start({String? address}) async {
+    address ??= network;
     if (_starting || _session != null) return;
     _starting = true;
     _error = null;

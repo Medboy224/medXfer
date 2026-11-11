@@ -91,13 +91,13 @@ class _DesktopHomeState extends State<DesktopHome> {
     final had = _hadSession;
     _hadSession = _c.session != null;
     if (_hadSession) _stopLater?.cancel();
-    if (had && !_hadSession && _c.myHotspot != null && !_c.codeOpen) {
+    if (had && !_hadSession && _c.myHotspot != null && !_c.codeOpen && !_c.hotspotInUse()) {
       if (_c.lastEndTimedOut) {
         // Lost, not ended: the other device joins this network again (J6c). Stopped at once,
         // it had nothing to come back to; it waits as long as the device tries (rejoinFor).
         _stopLater?.cancel();
         _stopLater = Timer(Connection.rejoinFor, () {
-          if (mounted && _c.session == null && _c.myHotspot != null && !_c.codeOpen) unawaited(_c.stopHotspot());
+          if (mounted && _c.session == null && _c.myHotspot != null && !_c.codeOpen && !_c.hotspotInUse()) unawaited(_c.stopHotspot());
         });
       } else {
         unawaited(_c.stopHotspot());
