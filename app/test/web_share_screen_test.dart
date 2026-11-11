@@ -179,4 +179,68 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('web-share-banner')), findsNothing);
   });
+
+  testWidgets('J7: the guest\'s network chosen, never mobile data; none, said (real tests of 10 November)', (tester) async {
+    var networks = <Map<String, Object?>>[
+      {'ip': '192.168.49.174', 'kind': 'wifi'},
+      {'ip': '192.168.81.175', 'kind': 'ethernet'},
+    ];
+    final core = FakeCore()
+      ..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'PC', 'instance': 'medXfer-7810'})]))
+      ..on('web_share_networks', (_) => FakeAnswer(replies: [CoreEvent('web_share_networks', data: {'networks': networks})]))
+      ..on('web_share_start', (p) => p['addr'] == null
+          ? const FakeAnswer(ok: false, error: 'no_local_network', replies: [CoreEvent('action_error', data: {'error': 'no_local_network'})])
+          : FakeAnswer(replies: [
+              CoreEvent('web_share_started', data: {..._started.map, 'addr': p['addr'], 'kind': 'ethernet'}),
+            ]))
+      ..on('web_share_stop', (_) => const FakeAnswer(broadcast: [CoreEvent('web_share_closed', data: {'reason': 'stopped'})]));
+    final state = AppState(core: core, folders: const _Folders(), filePicker: _Picker(), history: MemoryHistoryStore());
+    tester.platformDispatcher.localesTestValue = [const Locale('fr')];
+    addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 2.75;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MedxferApp(state: state, settings: AppSettings()));
+    await state.start();
+    await tester.pumpAndSettle();
+
+    Future<void> openScreen() async {
+      await tester.tap(find.byKey(const Key('home-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('menu-browser')));
+      await tester.pumpAndSettle();
+    }
+
+    // Two networks: the Wi-Fi first, the cable chosen.
+    await openScreen();
+    expect(find.text('Wi-Fi · 192.168.49.174'), findsOneWidget);
+    expect(find.text('Câble · 192.168.81.175'), findsOneWidget);
+    expect(state.webShare.network, '192.168.49.174');
+    await tester.ensureVisible(find.byKey(const ValueKey('web-share-network-192.168.81.175')));
+    await tester.tap(find.byKey(const ValueKey('web-share-network-192.168.81.175')));
+    await tester.pumpAndSettle();
+    expect(find.text('L’invité doit être sur le même réseau filaire que cet appareil.'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('web-share-start')));
+    await tester.tap(find.byKey(const Key('web-share-start')));
+    await tester.pumpAndSettle();
+    expect(core.calls.lastWhere((c) => c.action == 'web_share_start').payload['addr'], '192.168.81.175');
+    expect(find.byKey(const Key('web-share-same-network')), findsOneWidget);
+
+    await tester.scrollUntilVisible(find.byKey(const Key('web-share-stop')), 300, scrollable: find.byType(Scrollable).last);
+    await tester.tap(find.byKey(const Key('web-share-stop')));
+    await tester.pumpAndSettle();
+
+    // Only mobile data: said, and the core's refusal said in words.
+    networks = [];
+    await tester.ensureVisible(find.byKey(const Key('web-share-networks-refresh')));
+    await tester.tap(find.byKey(const Key('web-share-networks-refresh')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('web-share-no-network')), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('web-share-start')));
+    await tester.tap(find.byKey(const Key('web-share-start')));
+    await tester.pumpAndSettle();
+    expect(state.webShare.session, isNull);
+    expect(state.webShare.error, 'no_local_network');
+    expect(find.textContaining('les données mobiles ne servent jamais'), findsNWidgets(2));
+  });
 }

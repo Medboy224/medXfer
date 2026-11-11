@@ -57,9 +57,10 @@ func (s *Session) headers(next http.Handler) http.Handler {
 		h.Set("Content-Security-Policy", CSP)
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("X-Content-Type-Options", "nosniff")
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			h.Set("Cache-Control", "no-store")
-		}
+		// Nothing kept by the guest's browser: neither the API's answers nor the files shared
+		// (real test of 10 November 2026: Chrome on Android gave a 1 GiB download again from its
+		// cache, the session that served it ended), nor a page of an ended session.
+		h.Set("Cache-Control", "no-store")
 		if s.Closed() != "" {
 			writeError(w, http.StatusGone, "session_closed")
 			return

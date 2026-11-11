@@ -540,6 +540,30 @@ void main() {
     expect(h.log.last, 'stop');
   });
 
+  test('a network that serves a browser share stays: Connect closed, a session ended; released after (J7)', () async {
+    final core = _core()..on('set_network_info', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    var sharing = true;
+    c.hotspotInUse = () => sharing;
+    await c.openConnect();
+    await c.startHotspot();
+    await c.closeConnect(); // real test of 10 November 2026: the network went with Connect
+    expect(h.log, isNot(contains('stop')));
+    c.take(const CoreEvent('paired', data: {'ip': '192.168.49.174', 'device_name': 'PC'}));
+    c.take(const CoreEvent('disconnected', data: {'reason': 'peer requested disconnect'}));
+    await _settle();
+    await _settle();
+    expect(h.log, isNot(contains('stop')), reason: 'a medXfer session ended, the browser share goes on');
+    await c.releaseHotspot();
+    expect(h.log, isNot(contains('stop')), reason: 'still sharing');
+    sharing = false;
+    await c.releaseHotspot();
+    expect(h.log.last, 'stop');
+    expect(c.myHotspot, isNull);
+    c.dispose();
+  });
+
   test('a session lost, not left: this device\'s network waits rejoinFor for the other to come back', () async {
     final old = Connection.rejoinFor;
     Connection.rejoinFor = const Duration(milliseconds: 80);

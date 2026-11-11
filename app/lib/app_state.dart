@@ -74,6 +74,9 @@ class AppState extends ChangeNotifier {
     keeper = BackgroundKeeper(background: background, connection: connection, transfers: transfers);
     transfers.addListener(_keepAwake);
     webShare.addListener(_keepAwake);
+    // This device's network serves the browser share as long as it runs, then goes.
+    connection.hotspotInUse = () => webShare.active;
+    webShare.addListener(_webShareEnded);
     dev = DevTools(core, downloadDir: folders.downloadDir);
   }
 
@@ -125,6 +128,14 @@ class AppState extends ChangeNotifier {
     if (want == _awake) return;
     _awake = want;
     unawaited(awake.keep(want));
+  }
+
+  bool _webShareRan = false;
+
+  void _webShareEnded() {
+    final ran = _webShareRan;
+    _webShareRan = webShare.active;
+    if (ran && !_webShareRan) unawaited(connection.releaseHotspot());
   }
 
   /// The path by BLE (bible §6.6, WP-D.3): the radio, the core, and this device's networks.

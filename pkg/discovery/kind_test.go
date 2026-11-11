@@ -15,6 +15,7 @@ import (
 func TestNameKind(t *testing.T) {
 	want := map[string]string{
 		"wlan0": KindWiFi, "wlo1": KindWiFi, "swlan0": KindWiFi, "Wi-Fi": KindWiFi, "Wi-Fi 2": KindWiFi,
+		"p2p-wlan0-0": KindWiFi, "ap0": KindWiFi, "softap0": KindWiFi, "apple0": KindOther,
 		"eth0": KindEthernet, "usb0": KindEthernet, "rndis0": KindEthernet, "ncm0": KindEthernet, "lxcbr0": KindOther, "rmnet_data0": KindOther, "": KindOther,
 	}
 	if runtime.GOOS != "darwin" && runtime.GOOS != "ios" {
@@ -114,5 +115,20 @@ func TestLocalPaths(t *testing.T) {
 	want := []Path{{IP: "169.254.185.66", Kind: KindEthernet}, {IP: "192.0.2.174", Kind: KindWiFi}}
 	if got := LocalPaths(); !slices.Equal(got, want) {
 		t.Fatalf("LocalPaths() = %+v, want %+v", got, want)
+	}
+}
+
+// Mobile data is never a path nor a guest's network (real test of 10 November 2026: the TECNO's
+// seth_lte1 and the A57's rmnet0); Wi-Fi, cable and a phone's own network are.
+func TestIsCellular(t *testing.T) {
+	for _, name := range []string{"rmnet0", "rmnet_data0", "ccmni1", "pdp0", "wwan0", "seth_lte1", "clat4", "v4-rmnet_data0"} {
+		if !isCellular(strings.ToLower(name)) {
+			t.Errorf("%q not taken for mobile data", name)
+		}
+	}
+	for _, name := range []string{"wlan0", "p2p-wlan0-0", "ap0", "swlan0", "usb0", "eth0", "Wi-Fi", "Ethernet 8"} {
+		if isCellular(strings.ToLower(name)) {
+			t.Errorf("%q taken for mobile data", name)
+		}
 	}
 }

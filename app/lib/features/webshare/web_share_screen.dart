@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app.dart';
+import '../../connection/connection.dart';
 import '../../l10n/app_localizations.dart';
 import '../../theme.dart';
 import '../../transfer/web_share.dart';
@@ -51,11 +52,25 @@ class WebShareScreen extends StatefulWidget {
 
 class _WebShareScreenState extends State<WebShareScreen> {
   late final WebShare _ws = AppScope.of(context, listen: false).state.webShare;
+  late final Connection _connection = AppScope.of(context, listen: false).state.connection;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _ws.shown());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _connection; // read now: the context is no longer there in dispose
+      _ws.shown();
+      if (_ws.session == null) unawaited(_ws.loadNetworks());
+    });
+  }
+
+  @override
+  void dispose() {
+    // A network made here for a share that never started goes with the screen; one that serves a
+    // share stays (Connection.hotspotInUse). Not during the unmount: the model tells its listeners.
+    final connection = _connection;
+    if (_ws.session == null) scheduleMicrotask(() => unawaited(connection.releaseHotspot()));
+    super.dispose();
   }
 
   Future<void> _pickFiles() async {
@@ -81,7 +96,10 @@ class _WebShareScreenState extends State<WebShareScreen> {
   }
 
   Future<void> _start() async {
-    await _ws.start(address: AppScope.of(context, listen: false).state.connection.myHotspot?.address);
+    final hotspot = AppScope.of(context, listen: false).state.connection.myHotspot?.address;
+    // The networks of now: one may have gone since the screen opened.
+    if (hotspot == null) await _ws.loadNetworks();
+    await _ws.start(address: hotspot);
   }
 
   @override
@@ -97,7 +115,9 @@ class _WebShareScreenState extends State<WebShareScreen> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 560),
             child: ListView(
-              padding: const EdgeInsets.all(16),
+              // Above the system's gesture bar: « Arrêter le partage », the last line, was under
+              // it on the Galaxy A57 (real test of 10 November 2026).
+              padding: const EdgeInsets.all(16) + EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom),
               children: _ws.session == null ? _setup(context) : _running(context, _ws.session!),
             ),
           ),
@@ -191,6 +211,9 @@ class _WebShareScreenState extends State<WebShareScreen> {
         onChanged: _ws.receive ? (v) => _ws.autoAccept = v : null,
         title: Text(l.webShareAutoAccept),
       ),
+      // The guest's network: never mobile data; chosen among several (real tests of 10 November
+      // 2026: the core served on the mobile data, or on a cable where the guest was not).
+      if (hotspot == null) ..._networkChoice(context),
       // No common Wi-Fi: this device's own network, which the guest joins first (DISC-12).
       if (hotspot != null)
         Padding(
@@ -209,7 +232,7 @@ class _WebShareScreenState extends State<WebShareScreen> {
         ),
       if (_ws.error case final error?) ...[
         const SizedBox(height: 8),
-        Text(l.webShareFailed(error), style: TextStyle(color: c.danger)),
+        Text(_failure(l, error), style: TextStyle(color: c.danger)),
       ],
       const SizedBox(height: 16),
       FilledButton.icon(
@@ -219,6 +242,77 @@ class _WebShareScreenState extends State<WebShareScreen> {
         icon: _ws.starting ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.public_rounded),
         label: Text(l.webShareStart),
       ),
+    ];
+  }
+
+  /// The core's reason in the host's words, when it has some.
+  static String _failure(AppLocalizations l, String error) => switch (error) {
+        'no_local_network' => l.webShareNoNetwork,
+        'address_not_local' => l.webShareNetworkGone,
+        _ => l.webShareFailed(error),
+      };
+
+  static String _kind(AppLocalizations l, String kind) => switch (kind) {
+        'wifi' => l.webShareKindWifi,
+        'ethernet' => l.webShareKindCable,
+        _ => l.webShareKindOther,
+      };
+
+  /// The network the guest must be on, said in words: the same Wi-Fi, the same cable network.
+  static String _sameNetwork(AppLocalizations l, String kind) => switch (kind) {
+        'wifi' => l.webShareSameWifi,
+        'ethernet' => l.webShareSameCable,
+        _ => l.webShareSameNetwork,
+      };
+
+  /// Before the session, without this device's own network: the networks the guest may be on.
+  /// None: said (mobile data never serves). One: said. Several: the host chooses.
+  List<Widget> _networkChoice(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    final nets = _ws.networks;
+    final chosen = _ws.network;
+    final refresh = IconButton(
+      key: const Key('web-share-networks-refresh'),
+      tooltip: l.webShareNetworksRefresh,
+      icon: const Icon(Icons.refresh_rounded, size: 20),
+      onPressed: () => unawaited(_ws.loadNetworks()),
+    );
+    if (nets.isEmpty) {
+      return [
+        Row(children: [
+          Expanded(child: Text(l.webShareNoNetwork, key: const Key('web-share-no-network'), style: TextStyle(color: c.danger))),
+          refresh,
+        ]),
+      ];
+    }
+    final net = nets.firstWhere((n) => n.ip == chosen, orElse: () => nets.first);
+    return [
+      const SizedBox(height: 8),
+      Row(children: [
+        Expanded(child: Text(l.webShareGuestNetwork, style: const TextStyle(fontWeight: FontWeight.w700))),
+        refresh,
+      ]),
+      if (nets.length == 1)
+        Text('${_kind(l, net.kind)} · ${net.ip}', key: const Key('web-share-network-one'))
+      else
+        RadioGroup<String>(
+          groupValue: chosen,
+          onChanged: (ip) => _ws.network = ip,
+          child: Column(
+            children: [
+              for (final n in nets)
+                RadioListTile<String>(
+                  key: ValueKey('web-share-network-${n.ip}'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  value: n.ip,
+                  title: Text('${_kind(l, n.kind)} · ${n.ip}'),
+                ),
+            ],
+          ),
+        ),
+      Text(_sameNetwork(l, net.kind), style: TextStyle(color: c.muted, fontSize: 13)),
     ];
   }
 
@@ -242,10 +336,11 @@ class _WebShareScreenState extends State<WebShareScreen> {
         textAlign: TextAlign.center,
         style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, letterSpacing: 4),
       ),
-      if (hotspot != null) ...[
-        const SizedBox(height: 8),
-        Text(l.webShareNetwork(hotspot.ssid ?? '', hotspot.passphrase ?? ''), textAlign: TextAlign.center),
-      ],
+      const SizedBox(height: 8),
+      if (hotspot != null)
+        Text(l.webShareNetwork(hotspot.ssid ?? '', hotspot.passphrase ?? ''), textAlign: TextAlign.center)
+      else
+        Text(_sameNetwork(l, s.kind), key: const Key('web-share-same-network'), textAlign: TextAlign.center, style: TextStyle(color: c.muted)),
       const SizedBox(height: 16),
       // What the guest is offered: added or withdrawn at any time (real test of 10 November 2026).
       Text(l.webShareOffered, style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -264,7 +359,7 @@ class _WebShareScreenState extends State<WebShareScreen> {
           ),
       const SizedBox(height: 6),
       _addButtons(context),
-      if (_ws.error case final error?) Text(l.webShareFailed(error), style: TextStyle(color: c.danger, fontSize: 13)),
+      if (_ws.error case final error?) Text(_failure(l, error), style: TextStyle(color: c.danger, fontSize: 13)),
       const SizedBox(height: 16),
       // The warning every guest meets: said before it surprises (gate G5).
       Container(

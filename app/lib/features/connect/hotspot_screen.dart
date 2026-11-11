@@ -59,7 +59,7 @@ class _HotspotScreenState extends State<HotspotScreen> {
     // Not during the unmount: the model tells its listeners, and the tree is locked now.
     scheduleMicrotask(() {
       _c.closeCode();
-      if (_c.session == null) unawaited(_c.stopHotspot()); // nobody joined
+      if (_c.session == null && !_c.hotspotInUse()) unawaited(_c.stopHotspot()); // nobody joined
     });
     super.dispose();
   }

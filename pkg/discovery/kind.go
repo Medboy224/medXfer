@@ -51,6 +51,11 @@ func nameKind(name string) string {
 	case strings.HasPrefix(lower, "wl") || strings.HasPrefix(lower, "swlan") ||
 		strings.Contains(lower, "wi-fi") || strings.Contains(lower, "wifi"):
 		return KindWiFi
+	// A phone's own network: Wi-Fi Direct (p2p-wlan0-0 on the Galaxy A57, real test of 10 November
+	// 2026) or an access point (ap0, softap0).
+	case strings.HasPrefix(lower, "p2p") || strings.HasPrefix(lower, "softap") ||
+		(len(lower) > 2 && strings.HasPrefix(lower, "ap") && lower[2] >= '0' && lower[2] <= '9'):
+		return KindWiFi
 	case strings.HasPrefix(lower, "eth"):
 		return KindEthernet
 	// A phone's USB tethering, seen from the phone itself (usb0 on the Galaxy A57, real test of 9
@@ -124,6 +129,32 @@ func LocalPaths() []Path {
 	}
 	sortPaths(out)
 	return out
+}
+
+// GuestPaths are this device's addresses a browser guest may reach (Web Share, WEB-01): those of
+// LocalPaths, never mobile data, but Wi-Fi first. Real tests of 10 November 2026: the A57
+// without Wi-Fi served on its mobile data (10.31.5.248), which a PC reached through another
+// phone's; a PC on a phone's Wi-Fi and on another phone's cable served on the cable, the one its
+// route to the Internet goes through, where the guest was not. A guest is a phone or a computer
+// on Wi-Fi more often than on a cable.
+func GuestPaths() []Path { return RankForGuest(LocalPaths()) }
+
+// RankForGuest orders paths for a browser guest: Wi-Fi, then a cable, then the rest; a
+// link-local address (a cable without DHCP) last.
+func RankForGuest(paths []Path) []Path {
+	rank := func(p Path) int {
+		switch {
+		case strings.HasPrefix(p.IP, "169.254."):
+			return 3
+		case p.Kind == KindWiFi:
+			return 0
+		case p.Kind == KindEthernet:
+			return 1
+		}
+		return 2
+	}
+	sort.SliceStable(paths, func(i, j int) bool { return rank(paths[i]) < rank(paths[j]) })
+	return paths
 }
 
 // sortPaths orders paths by kind, then by address: the same order whatever the order they

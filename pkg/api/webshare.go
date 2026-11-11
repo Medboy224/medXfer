@@ -2,11 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
+	"net"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/webshare"
 )
 
@@ -23,7 +26,7 @@ type WebShareStartPayload struct {
 	Receive    bool       `json:"receive"`     // the guest may send, into the download folder
 	ReceiveDir string     `json:"receive_dir"` // another folder than the download folder
 	AutoAccept bool       `json:"auto_accept"` // the guest's uploads without asking (WEB-06)
-	Addr       string     `json:"addr"`        // the interface's address; the one status shows when ""
+	Addr       string     `json:"addr"`        // one of web_share_networks'; the first of them when ""
 	Port       int        `json:"port"`        // 19999 when 0 (decision D5 of the J7 plan)
 }
 
@@ -57,8 +60,13 @@ func (s *DaemonServer) handleWebShareStart(rs Responder, req RequestMessage) {
 	}
 	files := openFiles(p.Items)
 	s.stopWebShare()
-	if p.Addr == "" {
-		p.Addr = statusAddress()
+	kind, err := guestNetwork(&p.Addr)
+	if err != nil {
+		for _, f := range files {
+			_ = f.File.Close()
+		}
+		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))
+		return
 	}
 	dir := p.ReceiveDir
 	if dir == "" && p.Receive {
@@ -94,11 +102,56 @@ func (s *DaemonServer) handleWebShareStart(rs Responder, req RequestMessage) {
 		"pin":         sess.PIN(),
 		"fingerprint": sess.Fingerprint(),
 		"addr":        p.Addr,
+		"kind":        kind,
 		"port":        sess.Port(),
 		"receive":     dir != "",
 		"expires":     sess.Expires().UTC().Format(time.RFC3339),
 		"items":       sess.Items(),
 	}, req.ID))
+}
+
+// webShareNetworks are the networks a guest may reach this device on (WEB-01), best first:
+// never mobile data (discovery.GuestPaths). Tests replace it.
+var webShareNetworks = discovery.GuestPaths
+
+// Why a session cannot start on the address asked, or on none.
+var (
+	errNoLocalNetwork  = errors.New("no_local_network")
+	errAddressNotLocal = errors.New("address_not_local")
+)
+
+// guestNetwork settles the address a session serves on, and says its kind: the first of
+// webShareNetworks when none is asked, else the one asked when it is one of them (the host chose
+// it among them, or it is this device's own network). Loopback stays possible (tests, a browser
+// of the same machine).
+func guestNetwork(addr *string) (string, error) {
+	nets := webShareNetworks()
+	if *addr == "" {
+		if len(nets) == 0 {
+			return "", errNoLocalNetwork
+		}
+		*addr = nets[0].IP
+		return nets[0].Kind, nil
+	}
+	if ip := net.ParseIP(*addr); ip != nil && ip.IsLoopback() {
+		return discovery.KindOther, nil
+	}
+	for _, n := range nets {
+		if n.IP == *addr {
+			return n.Kind, nil
+		}
+	}
+	return "", errAddressNotLocal
+}
+
+// handleWebShareNetworks lists the networks a session may serve on, best first: the host chooses
+// among them when there are several (the guest must be on the same one).
+func (s *DaemonServer) handleWebShareNetworks(rs Responder, req RequestMessage) {
+	nets := webShareNetworks()
+	if nets == nil {
+		nets = []discovery.Path{}
+	}
+	rs.Reply(NewEvent("web_share_networks", map[string]any{"networks": nets}, req.ID))
 }
 
 // openFiles takes the descriptors the app hands over: the core owns them from here on.

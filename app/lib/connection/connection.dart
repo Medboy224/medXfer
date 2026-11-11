@@ -433,6 +433,19 @@ class Connection extends ChangeNotifier {
   /// The Connect screen is open: this device announces itself.
   bool get showing => _showing;
 
+  /// Something else serves on this device's network: a browser share (J7). The stops that come by
+  /// themselves (a screen left, a session ended, a device met by BLE that never joined) leave the
+  /// network then. Real test of 10 November 2026: the network made on the Connect screen went
+  /// with it, and the share served on the mobile data. AppState says it ([releaseHotspot]).
+  bool Function() hotspotInUse = _notInUse;
+  static bool _notInUse() => false;
+
+  /// The browser share ended: its network goes too, unless a session or the Connect screen
+  /// still has it.
+  Future<void> releaseHotspot() async {
+    if (_myHotspot != null && _session == null && !_showing && !_codeOpen && !hotspotInUse()) await stopHotspot();
+  }
+
   List<NearbyDevice> get nearby => _nearby;
   bool get scanning => _scanning;
   QrInvitation? get invitation => _invitation;
@@ -492,7 +505,7 @@ class Connection extends ChangeNotifier {
     notifyListeners();
     await _call('set_discoverable', {'on': false});
     await network.multicast(false);
-    if (_myHotspot != null && _session == null) await stopHotspot();
+    if (_myHotspot != null && _session == null && !hotspotInUse()) await stopHotspot();
   }
 
   /// Gives the core the interfaces the platform sees (DISC-10). While this device's access point
@@ -822,7 +835,7 @@ class Connection extends ChangeNotifier {
         _bleUnjoined?.cancel();
         _bleUnjoined = Timer(bleUnjoinedFor, () {
           _bleUnjoined = null;
-          if (_session == null) unawaited(stopHotspot());
+          if (_session == null && !hotspotInUse()) unawaited(stopHotspot());
         });
       }
     }
@@ -995,11 +1008,11 @@ class Connection extends ChangeNotifier {
         // other device as long as that one comes back (rejoinFor, as on the joining side): it was
         // stopped at once, and the phone that joined it again 8 s later found none (real test of
         // 2 November 2026).
-        if (_myHotspot != null && !_showing) {
+        if (_myHotspot != null && !_showing && !hotspotInUse()) {
           if (m['reason'] == 'connection timed out') {
             _hotspotGiveUp?.cancel();
             _hotspotGiveUp = Timer(rejoinFor, () {
-              if (_session == null && !_showing) unawaited(stopHotspot());
+              if (_session == null && !_showing && !hotspotInUse()) unawaited(stopHotspot());
             });
           } else {
             unawaited(stopHotspot());

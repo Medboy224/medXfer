@@ -3,10 +3,13 @@ package webshare
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // STO-16: Android offers files open already, not paths. They are offered under the name given,
@@ -146,5 +149,60 @@ func TestRemoveDuringSession(t *testing.T) {
 	}
 	if len(ids) != 2 || ids[0] != "0" || ids[1] != "2" {
 		t.Fatalf("IDs %v: an ID given again", ids)
+	}
+}
+
+// A download the guest gave up is not done (real test of 10 November 2026: 7 MB of 1 GiB, and the
+// host was told it was done); one that went to the end is, a range too.
+func TestDownloadDoneOnlyWhenComplete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gros.bin")
+	if err := os.WriteFile(path, bytes.Repeat([]byte{7}, 32<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, g, rec := startGuest(t, Options{Paths: []string{path}})
+	done := func() int {
+		n := 0
+		for _, k := range rec.kinds() {
+			if k == "download_done" {
+				n++
+			}
+		}
+		return n
+	}
+	idle := func() {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+			s.mu.Lock()
+			busy := s.busy
+			s.mu.Unlock()
+			if busy == 0 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the download did not end")
+			}
+		}
+	}
+
+	resp := g.do("GET", "/api/items/0", s.Token(), nil)
+	if _, err := io.ReadFull(resp.Body, make([]byte, 1024)); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close() // the guest leaves
+	idle()
+	if n := done(); n != 0 {
+		t.Fatalf("a download given up counted as done: %d", n)
+	}
+
+	if got := readAll(t, g.do("GET", "/api/items/0", s.Token(), nil).Body); len(got) != 32<<20 {
+		t.Fatalf("download: %d bytes", len(got))
+	}
+	part := g.do("GET", "/api/items/0", s.Token(), nil, "Range", "bytes=100-199")
+	if got := readAll(t, part.Body); part.StatusCode != http.StatusPartialContent || len(got) != 100 {
+		t.Fatalf("range: %d, %d bytes", part.StatusCode, len(got))
+	}
+	idle()
+	if n := done(); n != 2 {
+		t.Fatalf("downloads done: %d, want 2", n)
 	}
 }

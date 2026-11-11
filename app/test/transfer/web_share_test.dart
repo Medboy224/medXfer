@@ -169,4 +169,30 @@ void main() {
     // The core closed the file it was handed; the path stays, to try again.
     expect([for (final d in ws.draft) d.name], ['f.pdf']);
   });
+
+  test('J7: the guest\'s network: listed Wi-Fi first, chosen, used at the start; gone, the first again (WP-W.6)', () async {
+    final core = FakeCore()
+      ..on('web_share_networks', (_) => const FakeAnswer(replies: [
+            CoreEvent('web_share_networks', data: {
+              'networks': [
+                {'ip': '192.168.49.174', 'kind': 'wifi'},
+                {'ip': '192.168.81.175', 'kind': 'ethernet'},
+              ],
+            }),
+          ]))
+      ..on('web_share_start', (_) => const FakeAnswer(replies: [_started]));
+    final ws = WebShare(core);
+    addTearDown(ws.dispose);
+    expect(ws.network, isNull);
+    await ws.loadNetworks();
+    expect([for (final n in ws.networks) '${n.kind} ${n.ip}'], ['wifi 192.168.49.174', 'ethernet 192.168.81.175']);
+    expect(ws.network, '192.168.49.174');
+    ws.network = '10.31.5.248'; // not among them: the first
+    expect(ws.network, '192.168.49.174');
+    ws
+      ..network = '192.168.81.175'
+      ..addPaths(['/home/a/f.pdf']);
+    await ws.start();
+    expect(core.calls.last.payload['addr'], '192.168.81.175');
+  });
 }
