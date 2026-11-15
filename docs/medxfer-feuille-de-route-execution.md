@@ -297,6 +297,10 @@ D'abord une sonde : rôles BLE (annonce et serveur, balayage et client) sur le G
 ### J7 — Web Share v2 · ≈ 5 à 7 jours
 Bible chapitre 11 : listener séparé, jeton porteur sans cookie (fragment d'URL), HTTPS auto-signé, CSP (JavaScript externalisé), PIN de repli à 5 essais par session, retrait du bouton « 4 chiffres », collision gérée pour le dépôt par morceaux (`WEB-07`). Gate G5 (test utilisateur de l'avertissement de certificat).
 
+**Intégration dans l'application** (décision D1 du plan, 10 novembre) : l'écran « Partager avec un navigateur », sur Android, Windows et Linux. Plan : [medxfer-plan-j7.md](medxfer-plan-j7.md).
+
+**Résultat (15/11/2026) :** le jalon est terminé (PR #274 à #281, #286, et celle du rapport). Un navigateur sans medXfer envoie et reçoit en HTTPS, avec un PIN de 6 chiffres ou le QR ; l'hôte accepte chaque dépôt, jamais sur les données mobiles. 1 Gio à 53 MB/s vers Chrome sur le téléphone, 48 MB/s depuis Edge sur le PC, 26 MB/s depuis Chrome sur le téléphone. **G5 reportée à la bêta**, avec ses testeurs, et la décision D3 (mode HTTP) avec elle. Réserves : l'envoi depuis Chrome sur le téléphone, des finitions de l'écran. Détail dans [j7-report.md](j7-report.md).
+
 ### J8 — Mesure, optimisation, finitions v1 · ≈ 3 à 5 jours
 Matrice d'appareils réels (§14.3), gate G3, optimisations ciblées d'après le rapport par étape (le point d'accès Wi-Fi Direct à 5 GHz, prévu ici, est avancé en J6d), benchmark nocturne en CI (`DEV-21`), suppression de `devui` si G7 est remplie, ingénierie de livraison (signature, paquets, `SECURITY.md`, documentation d'utilisation, premier `README`). **Critère de sortie :** objectif de 80 % d'iperf3 atteint ou plan écrit ; toutes les exigences ont leur test vert.
 

@@ -1,6 +1,6 @@
 # medXfer — Rapport de sortie du jalon J7 (Web Share v2)
 
-**Date :** brouillon du 11 novembre 2026, à compléter après la gate G5 · **Plan :** [medxfer-plan-j7.md](medxfer-plan-j7.md) · **Bible :** chapitre 11, `WEB-01` à `WEB-10`, gate G5 (§15) · **PR :** #274 à #281, et celle de ce rapport.
+**Date :** 15 novembre 2026 · **Plan :** [medxfer-plan-j7.md](medxfer-plan-j7.md) · **Bible :** chapitre 11, `WEB-01` à `WEB-10`, gate G5 (§15) · **PR :** #274 à #281, #286, et celle de ce rapport.
 
 Ce rapport répond au critère de sortie du plan :
 - les exigences `WEB-01` à `WEB-09` tenues, chacune par un test (et `WEB-10`, ajoutée en WP-W.0) ;
@@ -13,7 +13,7 @@ Ce rapport répond au critère de sortie du plan :
 
 ## 1. Verdict
 
-**En attente de la gate G5** (§3). Tout le reste du critère est tenu ; les réserves du §6 ne bloquent pas.
+**J7 est terminé. La gate G5 est reportée à la bêta** (décision du 15 novembre, §3), et la décision D3 avec elle. Tout le reste du critère est tenu ; les réserves du §6 ne bloquent pas.
 
 Un téléphone ou un PC **sans medXfer** envoie et reçoit des fichiers avec son navigateur. L'hôte ouvre « Partager avec un navigateur », l'invité scanne le QR ou tape l'adresse et le PIN, et l'hôte accepte chaque dépôt.
 
@@ -30,14 +30,14 @@ Un téléphone ou un PC **sans medXfer** envoie et reçoit des fichiers avec son
 
 ## 2. Critère de sortie (plan, en-tête)
 
-Essais réels des 10 et 11 novembre : Galaxy A57 (Android 16), TECNO BF6 (Android 12), PC Windows 11 (Intel AC 8265).
+Essais réels des 10, 11 et 15 novembre : un iPhone (Safari), Galaxy A57 (Android 16), TECNO BF6 (Android 12), PC Windows 11 (Intel AC 8265).
 
 | # | Critère | Résultat | Preuve |
 |---|---|---|---|
 | 1 | `WEB-01` à `WEB-10`, chacune par un test | ✅ | Bible §11, colonne des statuts ; tests de `pkg/webshare` et `pkg/api` |
 | 2 | Les constats de #157, chacun par un test qui échouait avant | ✅ | Les tests écrits en WP-W.1 à WP-W.4 (#276 à #279) ; #157 fermée avec #279 |
 | 3 | Web Share depuis l'application | ✅ | WP-W.5 (#280), corrigé après les essais (#281) |
-| 4 | Gate G5 | ⏳ | §3, à faire avec des personnes qui ne connaissent pas medXfer |
+| 4 | Gate G5 | ⏭️ reportée | À la bêta, avec ses testeurs (§3). Essais indicatifs : Chrome Android et Safari iPhone franchissent l'avertissement |
 | 5 | Envoi et dépôt réels, téléphone et PC, débits mesurés | ✅ | §5 |
 
 ---
@@ -46,29 +46,33 @@ Essais réels des 10 et 11 novembre : Galaxy A57 (Android 16), TECNO BF6 (Androi
 
 **Question (bible §15) :** le HTTPS auto-signé est-il acceptable pour l'invité ? Concrètement : une personne qui ne connaît pas medXfer franchit-elle seule l'avertissement du navigateur, à partir de l'explication de l'écran de l'hôte ?
 
-### 3.1 Déroulement
+### 3.1 La décision : reportée à la bêta
 
-- **Participants** : au moins deux personnes qui n'ont jamais utilisé medXfer. Personne ne les aide : la seule explication est celle de l'écran de l'hôte.
-- **Hôte** : le PC ou l'A57, sur le réseau de l'hôte (créé depuis l'écran si besoin). Un fichier proposé, la réception activée, l'acceptation automatique éteinte.
-- **Ce que fait l'invité** :
-  1. rejoindre le réseau indiqué ;
-  2. scanner le QR, ou taper l'adresse ;
-  3. franchir l'avertissement (« Votre connexion n'est pas privée » → Paramètres avancés → Continuer, selon le navigateur) ;
-  4. taper le PIN, s'il a tapé l'adresse ;
-  5. télécharger le fichier proposé, puis envoyer un fichier.
-- **Ce qu'on note**, par personne et par navigateur : le temps de l'étape 3, les hésitations, ce que la personne dit, et l'abandon s'il y en a un.
-- **Réussite** : la personne arrive à la page des fichiers sans aide. G5 passe si chaque participant y arrive sur Chrome Android ; Safari iOS est noté à part (son avertissement est différent).
+Le 15 novembre, l'utilisateur a reporté G5 à la bêta, quand l'application s'installera depuis le Play Store et que ses testeurs donneront leurs retours. Ils sont exactement les personnes que G5 cherche : ils ne connaissent pas medXfer, ont leurs propres téléphones et navigateurs, et personne n'est à côté d'eux pour aider.
 
-### 3.2 Résultats
+Rien n'attend G5, sauf la décision D3 (le mode HTTP « réseau de confiance »), reportée avec elle. D'ici là, HTTPS seulement, le choix le plus sûr ; Web Share reste désactivé par défaut. Comme G4, la gate attend sans bloquer la suite.
 
-| Participant | Navigateur | Avertissement franchi | Temps | Hésitations, remarques |
-|---|---|---|---|---|
-| — | Chrome Android | | | |
-| — | Safari iOS | | | |
-| — | Edge (PC) | | | |
-| — | Firefox (PC) | | | |
+### 3.2 Les essais indicatifs
 
-**Décision D3** (le mode HTTP « réseau de confiance ») : à prendre selon ces résultats.
+Faits par l'utilisateur, qui connaît medXfer : ils montrent que le parcours marche, pas qu'un inconnu le trouve seul. Le temps va du premier refus du certificat, vu dans le journal du serveur, au téléchargement.
+
+| Navigateur | Avertissement franchi | Du premier refus au téléchargement | Remarque |
+|---|---|---|---|
+| Chrome Android | ✅ | 7 s | — |
+| Safari iPhone | ✅ | 47 s | L'écran de l'hôte ne donnait que les mots de Chrome : il a fallu lire pour trouver le chemin de Safari. Corrigé (#286) : une ligne par navigateur |
+
+Le certificat est tiré à chaque partage : un navigateur qui a accepté celui d'un partage revoit l'avertissement au suivant. Un participant peut donc reprendre le même téléphone, à condition de relancer le partage.
+
+### 3.3 Ce qu'on demandera aux testeurs de la bêta
+
+À chaque testeur qui a essayé « Partager avec un navigateur », trois questions :
+1. L'invité a-t-il franchi seul l'avertissement « connexion non privée » ?
+2. En combien de temps, à peu près ?
+3. Quelqu'un a-t-il abandonné, et sur quel navigateur ?
+
+En option (J8) : le serveur de l'hôte voit déjà chaque refus du certificat (ses erreurs de connexion). L'écran pourrait dire « Un invité voit l'avertissement de sécurité » et compter, sur l'appareil seulement et sans rien envoyer, les invités qui le franchissent.
+
+**G5 passe** si les invités des testeurs franchissent l'avertissement seuls sur Chrome Android ; Safari est noté à part. **D3** se décide sur ces retours.
 
 ---
 
@@ -84,6 +88,7 @@ Essais réels des 10 et 11 novembre : Galaxy A57 (Android 16), TECNO BF6 (Androi
 | #279 | WP-W.4 | Les actions `web_share_*` dans le cœur, schéma v5 ; l'ancien `share.go` retiré ; `xfer share` |
 | #280 | WP-W.5 | L'écran « Partager avec un navigateur » ; la session qui survit à l'écran quitté |
 | #281 | WP-W.6 | Les corrections des essais réels (§5.3) |
+| #286 | WP-W.6 | L'avertissement du certificat expliqué navigateur par navigateur (§3.2) |
 | ce rapport | WP-W.6 | Essais réels, G5 |
 
 ---
@@ -118,6 +123,7 @@ Sur le point d'accès à 2,4 GHz de l'A57 (802.11n, 144 Mbit/s), PC → Chrome s
 | L'A57 sans Wi-Fi, données mobiles allumées | ✅ Aucune adresse proposée ; l'écran le dit et propose de créer un réseau |
 | PC sur le Wi-Fi de l'A57 et sur le câble du TECNO | ✅ Le choix est proposé, le Wi-Fi d'abord, avec la consigne pour l'invité |
 | Le réseau de l'A57 pendant un partage, l'écran quitté | ✅ Il reste ; il s'éteint à « Arrêter le partage » |
+| 404 Mo vers Safari sur un iPhone, en changeant d'application et l'écran verrouillé en cours de route | ✅ Arrivé entier ; la barre de Safari a continué normalement (point d'accès 2,4 GHz du TECNO, débit non significatif) |
 
 ### 5.3 Ce que les essais ont trouvé, et sa correction (#281)
 
@@ -136,16 +142,18 @@ Sur le point d'accès à 2,4 GHz de l'A57 (802.11n, 144 Mbit/s), PC → Chrome s
 
 | # | Réserve | Suite |
 |---|---|---|
+| G5 | Gate G5, et la décision D3 qui en dépend (§3) | À la bêta : les trois questions aux testeurs ; en option, l'écran de l'hôte qui voit l'avertissement (J8) |
 | 1 | Envoi depuis Chrome sur le téléphone à 26 MB/s (§5.1) | Lot vitesse (J8) : mesurer dans Chrome avant de toucher au serveur |
 | 2 | Sur Android, « Ajouter des fichiers » de l'écran ne propose pas de dossier : il faut passer par l'onglet des fichiers et « Navigateur », et rien ne le dit | Finitions des écrans Web Share |
 | 3 | La page de l'invité, la session finie, demande « un nouveau code QR » même à qui a tapé l'adresse | Finitions |
 | 4 | Après la fin d'un partage par les PIN faux, la sélection est à refaire | Finitions |
 | 5 | Sur le point d'accès à 2,4 GHz, Chrome sur l'A57 n'a ouvert l'adresse qu'au troisième rechargement | À reproduire ; à rapprocher du propriétaire du groupe vu « hors ligne » par Chrome |
 | 6 | Chrome lance chaque téléchargement trois fois avant de le garder | Sans effet sur l'hôte depuis #281 (« terminé » une seule fois) ; à comprendre |
-| 7 | Le nom du Wi-Fi n'est pas affiché à l'invité, seulement « le même Wi-Fi que cet appareil » et l'adresse | Il demande la permission de localisation sous Android |
+| 7 | L'écran de l'hôte ne dit pas le nom du Wi-Fi, seulement « le même Wi-Fi que cet appareil » et l'adresse | Il demande la permission de localisation sous Android |
 | 8 | « Connecter » a créé une fois un point d'accès à 2,4 GHz plutôt que le groupe à 5 GHz | À reproduire |
 | 9 | Une fois (10 nov.), après « Arrêter le partage », l'application Android n'a plus rien reçu de son cœur ; l'application tournait depuis 6 h | Non reproduit ; à surveiller |
-| 10 | Guide d'utilisation de l'application | **Reporté à la première version** : l'application change encore |
+| 10 | L'hôte ne voit pas la progression d'un téléchargement de l'invité, seulement son début et sa fin (essai iPhone, 404 Mo) | Finitions : le cœur compte déjà les octets envoyés (#281) |
+| 11 | Guide d'utilisation de l'application | **Reporté à la première version** : l'application change encore |
 
 **Suite** (feuille de route) : J8, mesure, optimisation, finitions v1.
 
@@ -153,7 +161,8 @@ Sur le point d'accès à 2,4 GHz de l'A57 (802.11n, 144 Mbit/s), PC → Chrome s
 
 ## 7. Environnement
 
+- **iPhone** : Safari (essais du 15 novembre).
 - **Android** : Galaxy A57 (SM-A576B), Android 16, arm64 ; TECNO BF6, Android 12, 32 bits. APK de débogage (`dev.medxfer.app.debug`) installés par adb.
 - **Windows** : PC Windows 11, Intel Dual Band Wireless-AC 8265 ; application de débogage ; Edge.
-- **Réseaux** : le groupe Wi-Fi Direct de l'A57 (5 GHz) et son point d'accès à 2,4 GHz ; le partage de connexion USB du TECNO pour le câble du PC.
-- **Mesures** : octets envoyés par la carte Wi-Fi du PC, relevés toutes les 0,5 s ; le débit est compté de la première rafale à la dernière.
+- **Réseaux** : le groupe Wi-Fi Direct de l'A57 (5 GHz) et son point d'accès à 2,4 GHz ; le point d'accès à 2,4 GHz du TECNO (15 novembre) ; son partage de connexion USB pour le câble du PC.
+- **Mesures** : octets envoyés ou reçus par la carte Wi-Fi du PC, relevés toutes les 0,5 s ; le débit est compté de la première rafale à la dernière.
