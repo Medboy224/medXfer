@@ -117,6 +117,11 @@ void main() {
     expect(find.text('054 461'), findsOneWidget);
     expect(find.textContaining('https://192.168.1.20:19999/s'), findsOneWidget);
     expect(find.byKey(const Key('web-share-warning')), findsOneWidget);
+    // The way past the warning, in each browser's own words (Safari's differ).
+    for (final b in ['chrome', 'safari', 'firefox']) {
+      expect(find.byKey(Key('web-share-warning-$b')), findsOneWidget);
+    }
+    expect(find.textContaining('Safari'), findsOneWidget);
     expect(find.byKey(const ValueKey('web-share-item-0')), findsOneWidget);
 
     // More offered, then one withdrawn, the session running.

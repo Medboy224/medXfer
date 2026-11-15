@@ -370,6 +370,13 @@ class _WebShareScreenState extends State<WebShareScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(l.webShareWarning, style: const TextStyle(fontSize: 13, height: 1.4)),
+            // Each browser says it in its own words: Safari's differ (iPhone, 15 November 2026).
+            for (final (key, line) in [('chrome', l.webShareWarningChrome), ('safari', l.webShareWarningSafari), ('firefox', l.webShareWarningFirefox)])
+              Padding(
+                key: Key('web-share-warning-$key'),
+                padding: const EdgeInsets.only(top: 4, left: 8),
+                child: Text('• $line', style: const TextStyle(fontSize: 13, height: 1.4)),
+              ),
             const SizedBox(height: 6),
             GestureDetector(
               onLongPress: () => unawaited(Clipboard.setData(ClipboardData(text: s.fingerprint))),
