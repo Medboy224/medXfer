@@ -12,6 +12,32 @@ import 'folders.dart' show platformChannel;
 
 enum MediaKind { images, video, audio }
 
+/// What the media are sorted by.
+enum MediaSort { date, name, size }
+
+/// The order and the search of a list of media (plan J8, WP-8.1b): done by the platform, over
+/// the whole library.
+class MediaOrder {
+  const MediaOrder({this.sort = MediaSort.date, this.descending = true, this.search = ''});
+
+  final MediaSort sort;
+
+  /// Newest, last in the alphabet, or largest first.
+  final bool descending;
+
+  /// Kept: the media whose name or album holds it; empty: all.
+  final String search;
+
+  MediaOrder copyWith({MediaSort? sort, bool? descending, String? search}) =>
+      MediaOrder(sort: sort ?? this.sort, descending: descending ?? this.descending, search: search ?? this.search);
+
+  @override
+  bool operator ==(Object other) => other is MediaOrder && other.sort == sort && other.descending == descending && other.search == search;
+
+  @override
+  int get hashCode => Object.hash(sort, descending, search);
+}
+
 class AppEntry {
   const AppEntry({required this.package, required this.label, required this.path, required this.size, this.split = false});
 
@@ -90,8 +116,8 @@ abstract interface class Library {
   Future<List<AppEntry>> apps();
   Future<Uint8List?> appIcon(String package, int size);
 
-  /// One page, newest first.
-  Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200});
+  /// One page, in [order] (newest first by default).
+  Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200, MediaOrder order = const MediaOrder()});
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size);
 
   /// Whether photos, videos and music can be read; [askMedia] asks Android.
@@ -128,7 +154,7 @@ class NoLibrary implements Library {
   @override
   Future<Uint8List?> appIcon(String package, int size) async => null;
   @override
-  Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200}) async => const [];
+  Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200, MediaOrder order = const MediaOrder()}) async => const [];
   @override
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size) async => null;
   @override
@@ -187,9 +213,17 @@ class AndroidLibrary implements Library {
   Future<Uint8List?> appIcon(String package, int size) => platformChannel.invokeMethod<Uint8List>('libAppIcon', {'package': package, 'size': size});
 
   @override
-  Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200}) async => [
+  Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200, MediaOrder order = const MediaOrder()}) async => [
     for (final m
-        in await platformChannel.invokeListMethod<Map<Object?, Object?>>('libMedia', {'kind': kind.name, 'offset': offset, 'limit': limit}) ?? const [])
+        in await platformChannel.invokeListMethod<Map<Object?, Object?>>('libMedia', {
+              'kind': kind.name,
+              'offset': offset,
+              'limit': limit,
+              'sort': order.sort.name,
+              'descending': order.descending,
+              'search': order.search,
+            }) ??
+            const [])
       MediaEntry.fromMap(kind, m),
   ];
 

@@ -66,8 +66,40 @@ class Explorer extends ChangeNotifier {
   final _files = {for (final c in FileCategory.values) c: FileList()};
   final _sizing = <String>{};
 
+  final _orders = {for (final k in MediaKind.values) k: const MediaOrder()};
+  final _columns = {MediaKind.images: 3, MediaKind.video: 2, MediaKind.audio: 1};
+  final _asList = {MediaKind.images: false, MediaKind.video: false, MediaKind.audio: true};
+
   List<AppEntry>? get apps => _apps;
   MediaList media(MediaKind k) => _media[k]!;
+
+  /// The order and search of a kind of media.
+  MediaOrder order(MediaKind k) => _orders[k]!;
+
+  /// A new order or search: the list loads again from its start, in that order.
+  void setOrder(MediaKind k, MediaOrder o) {
+    if (_orders[k] == o) return;
+    _orders[k] = o;
+    _media[k] = MediaList();
+    notifyListeners();
+    unawaited(more(k));
+  }
+
+  /// Columns of a grid (2 to 5), or a list.
+  int columns(MediaKind k) => _columns[k]!;
+  bool asList(MediaKind k) => _asList[k]!;
+
+  static const minColumns = 2;
+  static const maxColumns = 5;
+
+  void setLayout(MediaKind k, {int? columns, bool? asList}) {
+    final c = (columns ?? _columns[k]!).clamp(minColumns, maxColumns);
+    final l = asList ?? _asList[k]!;
+    if (c == _columns[k] && l == _asList[k]) return;
+    _columns[k] = c;
+    _asList[k] = l;
+    notifyListeners();
+  }
   bool? get mediaAllowed => _mediaAllowed;
   String get dir => _dir ?? library.storageRoot;
   List<FileEntry>? get entries => _entries;
@@ -141,7 +173,9 @@ class Explorer extends ChangeNotifier {
     // No notice yet: it may be called while a tab builds; the answer notifies.
     m.loading = true;
     try {
-      final page = await library.media(kind, offset: m.items.length, limit: pageSize);
+      final page = await library.media(kind, offset: m.items.length, limit: pageSize, order: _orders[kind]!);
+      // Another order asked meanwhile: this page belongs to a list no longer shown.
+      if (!identical(_media[kind], m)) return;
       m.items.addAll(page);
       if (kDebugMode) debugPrint('explorer: ${kind.name} +${page.length} (${m.items.length})');
       m.done = page.length < pageSize;

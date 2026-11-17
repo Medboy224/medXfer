@@ -223,7 +223,7 @@ ThemeData buildTheme(Palette palette, Accent accent) {
   final colors = MedxferColors.of(palette, accent);
   final brightness = palette.brightness;
   final shape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(controlRadius));
-  const label = TextStyle(fontFamily: fontFamily, fontWeight: FontWeight.w800, fontSize: 15);
+  const label = TextStyle(fontFamily: fontFamily, fontWeight: FontWeight.w800, fontSize: 14);
   final scheme = ColorScheme.fromSeed(seedColor: accent.bright, brightness: brightness).copyWith(
     primary: colors.accent,
     onPrimary: brightness == Brightness.light ? Colors.white : palette.background,
@@ -248,7 +248,7 @@ ThemeData buildTheme(Palette palette, Accent accent) {
       backgroundColor: colors.background,
       surfaceTintColor: Colors.transparent,
       foregroundColor: colors.text,
-      titleTextStyle: titleStyle(21, color: colors.text),
+      titleTextStyle: titleStyle(18, color: colors.text),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
@@ -256,7 +256,7 @@ ThemeData buildTheme(Palette palette, Accent accent) {
         foregroundColor: colors.onStrong,
         disabledBackgroundColor: colors.section,
         disabledForegroundColor: colors.muted,
-        minimumSize: const Size(48, 48),
+        minimumSize: const Size(44, 44),
         shape: shape,
         textStyle: label,
       ),
@@ -265,7 +265,7 @@ ThemeData buildTheme(Palette palette, Accent accent) {
       style: OutlinedButton.styleFrom(
         foregroundColor: colors.text,
         side: BorderSide(color: colors.border, width: 2),
-        minimumSize: const Size(48, 48),
+        minimumSize: const Size(44, 44),
         shape: shape,
         textStyle: label.copyWith(fontWeight: FontWeight.w700),
       ),
@@ -278,7 +278,7 @@ ThemeData buildTheme(Palette palette, Accent accent) {
         textStyle: label.copyWith(fontWeight: FontWeight.w700, fontSize: 14),
       ),
     ),
-    iconButtonTheme: IconButtonThemeData(style: IconButton.styleFrom(minimumSize: const Size(48, 48), shape: shape)),
+    iconButtonTheme: IconButtonThemeData(style: IconButton.styleFrom(minimumSize: const Size(44, 44), shape: shape)),
     cardTheme: CardThemeData(
       color: colors.surface,
       surfaceTintColor: Colors.transparent,
@@ -348,8 +348,8 @@ ThemeData buildTheme(Palette palette, Accent accent) {
       unselectedLabelColor: colors.muted,
       indicator: BoxDecoration(color: colors.strong, borderRadius: BorderRadius.circular(controlRadius)),
       indicatorSize: TabBarIndicatorSize.tab,
-      labelStyle: const TextStyle(fontFamily: fontFamily, fontWeight: FontWeight.w700, fontSize: 14),
-      unselectedLabelStyle: const TextStyle(fontFamily: fontFamily, fontWeight: FontWeight.w700, fontSize: 14),
+      labelStyle: const TextStyle(fontFamily: fontFamily, fontWeight: FontWeight.w700, fontSize: 13),
+      unselectedLabelStyle: const TextStyle(fontFamily: fontFamily, fontWeight: FontWeight.w700, fontSize: 13),
       tabAlignment: TabAlignment.start,
       dividerColor: Colors.transparent,
       labelPadding: const EdgeInsets.symmetric(horizontal: 14),

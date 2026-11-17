@@ -171,10 +171,10 @@ class _AppsTabState extends State<AppsTab> with AutomaticKeepAliveClientMixin {
                       clipBehavior: Clip.none,
                       children: [
                         SizedBox.square(
-                          dimension: 56,
+                          dimension: 50,
                           child: LibraryImage(cacheKey: 'app:${a.package}', fit: BoxFit.contain, load: (px) => state.library.appIcon(a.package, px)),
                         ),
-                        Positioned(right: -8, top: -8, child: PickBox(on: on, size: 24)),
+                        Positioned(right: -6, top: -6, child: PickBox(on: on, size: 20)),
                       ],
                     ),
                     const SizedBox(height: 6),
@@ -182,9 +182,9 @@ class _AppsTabState extends State<AppsTab> with AutomaticKeepAliveClientMixin {
                       a.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                     ),
-                    Text(formatBytes(context, a.size), style: TextStyle(color: context.colors.muted, fontSize: 12)),
+                    Text(formatBytes(context, a.size), style: TextStyle(color: context.colors.muted, fontSize: 11)),
                   ],
                 ),
               ),
@@ -280,7 +280,11 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
         }
         final albums = <String>{for (final m in list.items) m.album}.where((a) => a.isNotEmpty).toList();
         final items = _album == null ? list.items : list.items.where((m) => m.album == _album).toList();
-        final images = widget.kind == MediaKind.images;
+        final ex = state.explorer;
+        final asList = ex.asList(widget.kind);
+        final columns = ex.columns(widget.kind);
+        // By day while sorted by date (photos and videos); one block for a name or a size.
+        final byDay = ex.order(widget.kind).sort == MediaSort.date;
         return Column(
           children: [
             if (albums.length > 1)
@@ -305,27 +309,27 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                   if (n.metrics.extentAfter < 1500) unawaited(state.explorer.more(widget.kind));
                   return false;
                 },
-                child: CustomScrollView(
-                  key: ValueKey('media-${widget.kind.name}'),
-                  slivers: [
-                    if (images)
-                      for (final day in _days(items)) ...[
-                        SliverToBoxAdapter(child: _DayHeader(day: day.$1, items: day.$2)),
-                        SliverGrid(
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 3, crossAxisSpacing: 3),
-                          delegate: SliverChildBuilderDelegate((context, i) => _MediaTile(kind: widget.kind, entry: day.$2[i]), childCount: day.$2.length),
-                        ),
-                      ]
-                    else
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
-                        sliver: SliverGrid(
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 16, crossAxisSpacing: 10, mainAxisExtent: 156),
-                          delegate: SliverChildBuilderDelegate((context, i) => _VideoTile(entry: items[i]), childCount: items.length),
-                        ),
-                      ),
-                    SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
-                  ],
+                child: _Pinch(
+                  // Two fingers change the columns (plan J8, WP-8.1b); one finger still scrolls.
+                  onPinch: (more) => ex.setLayout(widget.kind, columns: ex.columns(widget.kind) + (more ? -1 : 1), asList: false),
+                  child: CustomScrollView(
+                    key: ValueKey('media-${widget.kind.name}'),
+                    slivers: [
+                      if (asList)
+                        SliverPadding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          sliver: SliverList.builder(itemCount: items.length, itemBuilder: (context, i) => _MediaRow(kind: widget.kind, entry: items[i])),
+                        )
+                      else if (byDay)
+                        for (final day in _days(items)) ...[
+                          SliverToBoxAdapter(child: _DayHeader(day: day.$1, items: day.$2)),
+                          _grid(day.$2, columns),
+                        ]
+                      else
+                        _grid(items, columns),
+                      SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -336,7 +340,12 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
     );
   }
 
-  /// The photos by day, newest first: what « Tout ce jour » picks.
+  Widget _grid(List<MediaEntry> items, int columns) => SliverGrid(
+    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, mainAxisSpacing: 2, crossAxisSpacing: 2),
+    delegate: SliverChildBuilderDelegate((context, i) => _MediaTile(kind: widget.kind, entry: items[i], columns: columns), childCount: items.length),
+  );
+
+  /// The media by day, in the order shown: what « Tout ce jour » picks.
   static List<(DateTime, List<MediaEntry>)> _days(List<MediaEntry> items) {
     final out = <(DateTime, List<MediaEntry>)>[];
     for (final m in items) {
@@ -374,7 +383,7 @@ class _DayHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 6, 6, 2),
       child: Row(
         children: [
-          Expanded(child: Text(name, style: titleStyle(15))),
+          Expanded(child: Text(name, style: titleStyle(14))),
           BoxToggle(
             label: l.selectDay,
             semanticLabel: l.selectDayLabel(name),
@@ -390,10 +399,11 @@ class _DayHeader extends StatelessWidget {
 
 /// A photo: all of it picks; the square box and a thick edge say it is picked.
 class _MediaTile extends StatelessWidget {
-  const _MediaTile({required this.kind, required this.entry});
+  const _MediaTile({required this.kind, required this.entry, this.columns = 3});
 
   final MediaKind kind;
   final MediaEntry entry;
+  final int columns;
 
   @override
   Widget build(BuildContext context) {
@@ -413,8 +423,21 @@ class _MediaTile extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             LibraryImage(cacheKey: '${kind.name}:${m.id}', load: (px) => state.library.thumbnail(kind, m.id, px)),
-            if (on) DecoratedBox(decoration: BoxDecoration(border: Border.all(color: c.strong, width: 4))),
-            Positioned(right: 8, top: 8, child: PickBox(on: on, onImage: true)),
+            if (on) DecoratedBox(decoration: BoxDecoration(border: Border.all(color: c.strong, width: columns >= 5 ? 2 : 3))),
+            if (kind == MediaKind.video)
+              Positioned(
+                left: 4,
+                bottom: 4,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.72), borderRadius: BorderRadius.circular(6)),
+                  child: Text(
+                    formatDuration(context, m.durationMs ~/ 1000),
+                    style: TextStyle(color: Colors.white, fontSize: columns >= 4 ? 10 : 11, fontWeight: FontWeight.w700, fontFeatures: tabular),
+                  ),
+                ),
+              ),
+            Positioned(right: 5, top: 5, child: PickBox(on: on, onImage: true, size: columns >= 5 ? 18 : 22)),
           ],
         ),
       ),
@@ -422,10 +445,11 @@ class _MediaTile extends StatelessWidget {
   }
 }
 
-/// A video: its picture with the duration, its name and size under it.
-class _VideoTile extends StatelessWidget {
-  const _VideoTile({required this.entry});
+/// A photo or a video as a row of the list layout: its thumbnail, name, details, box.
+class _MediaRow extends StatelessWidget {
+  const _MediaRow({required this.kind, required this.entry});
 
+  final MediaKind kind;
   final MediaEntry entry;
 
   @override
@@ -435,58 +459,107 @@ class _VideoTile extends StatelessWidget {
     final m = entry;
     final pick = Explorer.pickMedia(m);
     final on = state.selection.contains(pick.path);
-    return Semantics(
-      button: true,
-      toggled: on,
-      child: GestureDetector(
-        key: ValueKey('media-${m.id}'),
-        behavior: HitTestBehavior.opaque,
-        onTap: () => state.selection.toggle(pick),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              height: 108,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(controlRadius),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    LibraryImage(cacheKey: 'video:${m.id}', load: (px) => state.library.thumbnail(MediaKind.video, m.id, px)),
-                    if (on)
-                      DecoratedBox(
-                        decoration: BoxDecoration(border: Border.all(color: c.strong, width: 4), borderRadius: BorderRadius.circular(controlRadius)),
-                      ),
-                    Positioned(
-                      left: 8,
-                      bottom: 8,
-                      child: Container(
-                        padding: const EdgeInsets.fromLTRB(6, 3, 8, 3),
-                        decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.72), borderRadius: BorderRadius.circular(8)),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.play_arrow_rounded, size: 14, color: Colors.white),
-                            const SizedBox(width: 2),
-                            Text(
-                              formatDuration(context, m.durationMs ~/ 1000),
-                              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700, fontFeatures: tabular),
-                            ),
-                          ],
-                        ),
-                      ),
+    final when = DateTime.fromMillisecondsSinceEpoch(m.modified * 1000);
+    final date = MaterialLocalizations.of(context).formatShortDate(when);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Material(
+        color: on ? c.soft : Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          key: ValueKey('media-${m.id}'),
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => state.selection.toggle(pick),
+          child: Semantics(
+            toggled: on,
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: SizedBox.square(
+                      dimension: 48,
+                      child: LibraryImage(cacheKey: '${kind.name}:${m.id}', load: (px) => state.library.thumbnail(kind, m.id, px)),
                     ),
-                    Positioned(right: 8, top: 8, child: PickBox(on: on, onImage: true)),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                        Text(
+                          [date, if (kind == MediaKind.video) formatDuration(context, m.durationMs ~/ 1000), formatBytes(context, m.size)].join(' · '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12, color: c.muted, fontFeatures: tabular),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  PickBox(on: on, size: 22),
+                  const SizedBox(width: 4),
+                ],
               ),
             ),
-            const SizedBox(height: 6),
-            Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-            Text(formatBytes(context, m.size), style: TextStyle(fontSize: 13, color: c.muted, fontFeatures: tabular)),
-          ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+/// Two fingers spread or pinched over the grid: [onPinch] (true: spread, larger tiles) once per
+/// step of the gesture. Pointers only: one finger's scrolling is left to the list.
+class _Pinch extends StatefulWidget {
+  const _Pinch({required this.onPinch, required this.child});
+
+  final void Function(bool spread) onPinch;
+  final Widget child;
+
+  @override
+  State<_Pinch> createState() => _PinchState();
+}
+
+class _PinchState extends State<_Pinch> {
+  final _points = <int, Offset>{};
+  double? _start;
+
+  double? _spread() {
+    if (_points.length < 2) return null;
+    final p = _points.values.take(2).toList();
+    return (p[0] - p[1]).distance;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerDown: (e) {
+        _points[e.pointer] = e.localPosition;
+        _start = _spread();
+      },
+      onPointerMove: (e) {
+        if (!_points.containsKey(e.pointer)) return;
+        _points[e.pointer] = e.localPosition;
+        final now = _spread(), start = _start;
+        if (now == null || start == null || start <= 0) return;
+        final ratio = now / start;
+        if (ratio > 1.35 || ratio < 0.74) {
+          widget.onPinch(ratio > 1);
+          _start = now; // the next step from here
+        }
+      },
+      onPointerUp: (e) {
+        _points.remove(e.pointer);
+        _start = _spread();
+      },
+      onPointerCancel: (e) {
+        _points.remove(e.pointer);
+        _start = _spread();
+      },
+      child: widget.child,
     );
   }
 }
@@ -539,7 +612,7 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
             key: const Key('music-list'),
             padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
             itemCount: list.items.length,
-            itemExtent: 70,
+            itemExtent: 60,
             itemBuilder: (context, i) {
               final m = list.items[i];
               final pick = Explorer.pickMedia(m);
@@ -560,9 +633,9 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
                         child: Row(
                           children: [
                             Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(color: c.section, borderRadius: BorderRadius.circular(12)),
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(color: c.section, borderRadius: BorderRadius.circular(10)),
                               child: Icon(Icons.music_note_rounded, color: c.accent),
                             ),
                             const SizedBox(width: 12),
@@ -571,18 +644,18 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                                  Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                                   Text(
                                     [if (m.album.isNotEmpty) m.album, formatDuration(context, m.durationMs ~/ 1000), formatBytes(context, m.size)].join(' · '),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(fontSize: 13, color: c.muted, fontFeatures: tabular),
+                                    style: TextStyle(fontSize: 12, color: c.muted, fontFeatures: tabular),
                                   ),
                                 ],
                               ),
                             ),
                             const SizedBox(width: 8),
-                            PickBox(on: on),
+                            PickBox(on: on, size: 22),
                             const SizedBox(width: 4),
                           ],
                         ),
@@ -772,7 +845,7 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
                   key: ValueKey('files-list:${ex.dir}'), // a new folder opens at its top
                   padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
                   itemCount: entries.length,
-                  itemExtent: 66,
+                  itemExtent: 58,
                   itemBuilder: (context, i) => _FileRow(entry: entries[i], onOpen: () => unawaited(ex.open(entries[i].path))),
                 ),
         ),
@@ -795,7 +868,7 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
         key: ValueKey('files-${cat.name}'),
         padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
         itemCount: list.items.length,
-        itemExtent: 66,
+        itemExtent: 58,
         itemBuilder: (context, i) => _FileRow(entry: list.items[i], showFolder: true),
       ),
     );
@@ -868,9 +941,9 @@ class _FileRow extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                            Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                             if (sub != null)
-                              Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c.muted, fontSize: 13, fontFeatures: tabular)),
+                              Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c.muted, fontSize: 12, fontFeatures: tabular)),
                           ],
                         ),
                       ),
@@ -888,7 +961,7 @@ class _FileRow extends StatelessWidget {
               child: InkWell(
                 borderRadius: BorderRadius.circular(16),
                 onTap: toggle,
-                child: SizedBox.square(dimension: 56, child: Center(child: PickBox(on: on))),
+                child: SizedBox.square(dimension: 48, child: Center(child: PickBox(on: on, size: 22))),
               ),
             ),
           ],

@@ -33,8 +33,15 @@ class _Storage extends NoReceiveStorage {
 
 /// A phone with two apps, three photos, a song, and a folder.
 class _Library implements Library {
+  _Library({this.photos = 3});
+
+  /// How many photos the phone holds.
+  final int photos;
   bool allowed = true;
   final opened = <List<({String path, String name})>>[];
+
+  /// The orders asked, kind by kind: done by the platform (WP-8.1b).
+  final orders = <(MediaKind, MediaOrder)>[];
 
   @override
   bool get supported => true;
@@ -46,11 +53,16 @@ class _Library implements Library {
   @override
   Future<Uint8List?> appIcon(String package, int size) async => null;
   @override
-  Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200}) async => offset > 0
+  Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200, MediaOrder order = const MediaOrder()}) async {
+    if (offset == 0) orders.add((kind, order));
+    return _media(kind, offset, order);
+  }
+
+  List<MediaEntry> _media(MediaKind kind, int offset, MediaOrder order) => offset > 0 || (order.search.isNotEmpty && order.search != 'IMG_2')
       ? const []
       : switch (kind) {
           MediaKind.images => [
-            for (var i = 1; i <= 3; i++)
+            for (var i = 1; i <= photos; i++)
               MediaEntry(id: i, kind: kind, name: 'IMG_$i.jpg', path: '/storage/emulated/0/DCIM/Camera/IMG_$i.jpg', size: 1 << 20, album: i < 3 ? 'Camera' : 'WhatsApp'),
           ],
           MediaKind.audio => [
@@ -174,6 +186,65 @@ void main() {
     await tester.tap(find.byKey(const Key('media-allow')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('media-1')), findsOneWidget);
+  });
+
+  testWidgets('WP-8.1b: search, sort and layout ask the platform, from the start of the list', (tester) async {
+    final library = _Library();
+    await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    expect(find.text("Date · Récent d'abord"), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('gallery-search-open')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('gallery-search')), 'IMG_2');
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+    expect(library.orders.last, (MediaKind.images, const MediaOrder(search: 'IMG_2')));
+    await tester.tap(find.byKey(const Key('gallery-search-close')));
+    await tester.pumpAndSettle();
+    expect(library.orders.last.$2.search, '');
+
+    await tester.tap(find.byKey(const Key('gallery-sort')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('sort-name')));
+    await tester.pumpAndSettle();
+    expect(library.orders.last, (MediaKind.images, const MediaOrder(sort: MediaSort.name, descending: false)));
+    await tester.tap(find.byKey(const Key('order-second')));
+    await tester.pumpAndSettle();
+    expect(library.orders.last.$2.descending, isTrue);
+    await tester.tapAt(const Offset(20, 20)); // the sheet closed
+    await tester.pumpAndSettle();
+    expect(find.text('Nom · Z → A'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('gallery-layout')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('layout-5')));
+    await tester.pumpAndSettle();
+    final ex = AppScope.of(tester.element(find.byType(Scaffold).first), listen: false).state.explorer;
+    expect((ex.columns(MediaKind.images), ex.asList(MediaKind.images)), (5, false));
+  });
+
+  testWidgets('WP-8.1b: scrolling down folds the top away and hides the bar; up, both come back; a pick keeps the bar', (tester) async {
+    final library = _Library(photos: 90);
+    await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('home-menu')), findsOneWidget);
+    final grid = find.byKey(const ValueKey('media-images'));
+    await tester.drag(grid, const Offset(0, -200));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('home-menu')), findsNothing, reason: 'the top line stays when scrolling down');
+    expect(tester.widget<IgnorePointer>(find.ancestor(of: find.byKey(const Key('bottom-bar')), matching: find.byType(IgnorePointer)).first).ignoring, isTrue);
+    await tester.drag(grid, const Offset(0, 120));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('home-menu')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('media-1')));
+    await tester.drag(grid, const Offset(0, -200));
+    await tester.pumpAndSettle();
+    expect(tester.widget<IgnorePointer>(find.ancestor(of: find.byKey(const Key('bottom-bar')), matching: find.byType(IgnorePointer)).first).ignoring, isFalse,
+        reason: 'the basket stays while something is picked');
   });
 
   test('the plan: descriptors without folders, paths with them, never apps with folders', () {

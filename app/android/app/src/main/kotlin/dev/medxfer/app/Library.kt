@@ -88,10 +88,15 @@ class Library(private val activity: Activity) {
     }
 
     /**
-     * One page of a kind of media (images, video, audio), newest first: id, name, path, size,
-     * date, album (the folder for images and videos, the album for music), duration.
+     * One page of a kind of media (images, video, audio): id, name, path, size, date, album (the
+     * folder for images and videos, the album for music), duration. Sorted by [sort] (date, name,
+     * size) in the order asked; [search], if any, keeps those whose name or album holds it (plan
+     * J8, WP-8.1b: over the whole library, not only the pages already shown).
      */
-    fun media(kind: String, offset: Int, limit: Int, done: (List<Map<String, Any?>>?, String?) -> Unit) = later({
+    fun media(
+        kind: String, offset: Int, limit: Int, sort: String, descending: Boolean, search: String,
+        done: (List<Map<String, Any?>>?, String?) -> Unit,
+    ) = later({
         val uri = collection(kind)
         val album = if (kind == "audio") MediaStore.Audio.Media.ALBUM else MediaStore.MediaColumns.BUCKET_DISPLAY_NAME
         @Suppress("DEPRECATION") // DATA: the path, readable with the access to the media (Android 11+)
@@ -100,9 +105,27 @@ class Library(private val activity: Activity) {
             MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, album,
         )
         if (kind != "images") columns.add(MediaStore.MediaColumns.DURATION)
+        val by = when (sort) {
+            "name" -> MediaStore.MediaColumns.DISPLAY_NAME
+            "size" -> MediaStore.MediaColumns.SIZE
+            else -> MediaStore.MediaColumns.DATE_MODIFIED
+        }
         val args = android.os.Bundle().apply {
-            putStringArray(android.content.ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(MediaStore.MediaColumns.DATE_MODIFIED))
-            putInt(android.content.ContentResolver.QUERY_ARG_SORT_DIRECTION, android.content.ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
+            putStringArray(android.content.ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(by))
+            putInt(
+                android.content.ContentResolver.QUERY_ARG_SORT_DIRECTION,
+                if (descending) android.content.ContentResolver.QUERY_SORT_DIRECTION_DESCENDING else android.content.ContentResolver.QUERY_SORT_DIRECTION_ASCENDING,
+            )
+            // Names in the user's order of letters, not by character codes.
+            if (sort == "name") putInt(android.content.ContentResolver.QUERY_ARG_SORT_COLLATION, java.text.Collator.SECONDARY)
+            if (search.isNotBlank()) {
+                val like = "%" + search.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                putString(
+                    android.content.ContentResolver.QUERY_ARG_SQL_SELECTION,
+                    "(${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ? ESCAPE '\\' OR $album LIKE ? ESCAPE '\\')",
+                )
+                putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arrayOf(like, like))
+            }
             putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, limit)
             putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, offset)
         }

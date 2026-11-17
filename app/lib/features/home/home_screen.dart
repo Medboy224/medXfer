@@ -6,6 +6,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 
 import '../../app.dart';
 import '../../app_state.dart';
@@ -23,6 +24,7 @@ import '../connect/connect_screen.dart';
 import '../connect/dialogs.dart';
 import '../dev/dev_panel.dart';
 import '../explorer/explorer_tabs.dart';
+import '../explorer/gallery_toolbar.dart';
 import '../history/history_tab.dart';
 import '../settings/settings_screen.dart';
 import '../transfer/transfer_screen.dart';
@@ -33,137 +35,7 @@ class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    final c = context.colors;
-    final tabs = [
-      (l.tabHistory, Icons.history_rounded),
-      (l.tabApps, Icons.apps_rounded),
-      (l.tabPhotos, Icons.image_outlined),
-      (l.tabVideos, Icons.smart_display_outlined),
-      (l.tabMusic, Icons.music_note_outlined),
-      (l.tabFiles, Icons.folder_outlined),
-    ];
-    return DefaultTabController(
-      length: tabs.length,
-      initialIndex: 1,
-      child: Scaffold(
-        // The bar floats: the grids run under it (their bottom padding leaves room).
-        extendBody: true,
-        appBar: AppBar(
-          titleSpacing: 16,
-          title: Text(l.appTitle, style: titleStyle(23, weight: FontWeight.w900, color: c.text).copyWith(fontStyle: FontStyle.italic)),
-          actions: [
-            IconButton(tooltip: l.scanQr, icon: const Icon(Icons.qr_code_scanner_rounded), onPressed: () => _joinByQr(context)),
-            PopupMenuButton<String>(
-              key: const Key('home-menu'),
-              tooltip: l.menu,
-              icon: const Icon(Icons.more_vert_rounded),
-              offset: const Offset(0, 48),
-              onSelected: (v) => switch (v) {
-                'trusted' => _open(context, const TrustedScreen()),
-                'browser' => _open(context, const WebShareScreen()),
-                'dev' => DevPanel.open(Navigator.of(context)),
-                _ => _open(context, const SettingsScreen()),
-              },
-              itemBuilder: (_) => [
-                _menuItem(context, 'browser', Icons.public_rounded, l.webShareTitle, key: const Key('menu-browser')),
-                _menuItem(context, 'trusted', Icons.verified_user_outlined, l.trustedDevices),
-                _menuItem(context, 'settings', Icons.tune_rounded, l.settings),
-                if (AppScope.of(context, listen: false).settings.devMode) _menuItem(context, 'dev', Icons.code_rounded, l.devPanel),
-              ],
-            ),
-            const SizedBox(width: 4),
-          ],
-          bottom: TabBar(
-            isScrollable: true,
-            padding: const EdgeInsets.fromLTRB(9, 0, 9, 8),
-            labelPadding: const EdgeInsets.symmetric(horizontal: 17),
-            indicatorPadding: const EdgeInsets.symmetric(horizontal: 3),
-            tabs: [
-              for (final (label, icon) in tabs)
-                Tab(
-                  height: 44,
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, size: 18), const SizedBox(width: 7), Text(label)]),
-                ),
-            ],
-          ),
-        ),
-        body: ListenableBuilder(
-          listenable: AppScope.of(context).state.connection,
-          builder: (context, child) => DropZone(
-            enabled: AppScope.of(context).state.connection.session != null,
-            hint: l.dropHere,
-            onPaths: (paths) => unawaited(AppScope.of(context, listen: false).state.transfers.send(paths)),
-            child: child!,
-          ),
-          child: Column(
-            children: [
-              const _CoreLine(),
-              const _SessionBanner(),
-              WebShareBanner(onOpen: () => _open(context, const WebShareScreen())),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 6, 0),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(l.onThisDevice, style: TextStyle(color: c.muted, fontWeight: FontWeight.w700, fontSize: 13)),
-                    ),
-                    const _SelectAll(),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: TabBarView(
-                  children: [
-                    const HistoryTab(),
-                    if (AppScope.of(context).state.library.supported) ...[
-                      const AppsTab(),
-                      const MediaGridTab(kind: MediaKind.images),
-                      const MediaGridTab(kind: MediaKind.video),
-                      const MusicTab(),
-                      FilesTab(onSystemPicker: () => unawaited(_sendPicked(context))),
-                    ] else
-                      for (final _ in tabs.skip(1))
-                        Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(32),
-                            child: Text(l.desktopTabs, textAlign: TextAlign.center, style: TextStyle(color: c.muted)),
-                          ),
-                        ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        bottomNavigationBar: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
-            child: DecoratedBox(
-              key: const Key('bottom-bar'),
-              decoration: BoxDecoration(
-                color: c.section,
-                borderRadius: BorderRadius.circular(22),
-                boxShadow: [BoxShadow(color: c.shadow, blurRadius: 30, offset: const Offset(0, 10))],
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: ListenableBuilder(
-                  listenable: Listenable.merge([
-                    AppScope.of(context).state.connection,
-                    AppScope.of(context).state.transfers,
-                    AppScope.of(context).state.selection,
-                  ]),
-                  builder: (context, _) => _bar(context),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => const DefaultTabController(length: 6, initialIndex: 1, child: _HomeFrame());
 
   static PopupMenuItem<String> _menuItem(BuildContext context, String value, IconData icon, String label, {Key? key}) => PopupMenuItem(
     value: value,
@@ -179,7 +51,7 @@ class HomeScreen extends StatelessWidget {
   );
 
   /// What the floating bar holds: the transfer running, the basket, or the next step.
-  Widget _bar(BuildContext context) {
+  static Widget _bar(BuildContext context) {
     final l = AppLocalizations.of(context);
     final c = context.colors;
     final state = AppScope.of(context).state;
@@ -253,7 +125,7 @@ class HomeScreen extends StatelessWidget {
       children: [
         const SizedBox(width: 10),
         Expanded(
-          child: Text(l.noDeviceConnected, style: TextStyle(color: c.muted, fontWeight: FontWeight.w600, fontSize: 14)),
+          child: Text(l.noDeviceConnected, style: TextStyle(color: c.muted, fontWeight: FontWeight.w600, fontSize: 13)),
         ),
         Flexible(
           child: FilledButton.icon(
@@ -286,6 +158,193 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
+/// The home screen's frame (plan J8, WP-8.1b): scrolling down folds the top line and the
+/// toolbar away and hides the bar, for the content; scrolling up brings them back. The bar stays
+/// while something is picked or a transfer runs.
+class _HomeFrame extends StatefulWidget {
+  const _HomeFrame();
+
+  @override
+  State<_HomeFrame> createState() => _HomeFrameState();
+}
+
+class _HomeFrameState extends State<_HomeFrame> {
+  bool _folded = false;
+
+  bool _scrolled(UserScrollNotification n) {
+    if (n.metrics.axis != Axis.vertical) return false;
+    final fold = switch (n.direction) {
+      ScrollDirection.reverse => true,
+      ScrollDirection.forward => false,
+      ScrollDirection.idle => _folded && n.metrics.pixels > n.metrics.minScrollExtent,
+    };
+    if (fold != _folded) setState(() => _folded = fold);
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    final state = AppScope.of(context).state;
+    final tabs = [
+      (l.tabHistory, Icons.history_rounded),
+      (l.tabApps, Icons.apps_rounded),
+      (l.tabPhotos, Icons.image_outlined),
+      (l.tabVideos, Icons.smart_display_outlined),
+      (l.tabMusic, Icons.music_note_outlined),
+      (l.tabFiles, Icons.folder_outlined),
+    ];
+    final motion = MediaQuery.of(context).disableAnimations ? Duration.zero : const Duration(milliseconds: 200);
+    return Scaffold(
+      // The bar floats: the grids run under it (their bottom padding leaves room).
+      extendBody: true,
+      body: SafeArea(
+        bottom: false,
+        child: ListenableBuilder(
+          listenable: state.connection,
+          builder: (context, child) => DropZone(
+            enabled: state.connection.session != null,
+            hint: l.dropHere,
+            onPaths: (paths) => unawaited(AppScope.of(context, listen: false).state.transfers.send(paths)),
+            child: child!,
+          ),
+          child: Column(
+            children: [
+              AnimatedSize(
+                duration: motion,
+                curve: Curves.easeOutCubic,
+                child: _folded ? const SizedBox(width: double.infinity) : const _TopLine(),
+              ),
+              TabBar(
+                isScrollable: true,
+                padding: const EdgeInsets.fromLTRB(7, 2, 7, 4),
+                labelPadding: const EdgeInsets.symmetric(horizontal: 15),
+                indicatorPadding: const EdgeInsets.symmetric(horizontal: 3),
+                tabs: [
+                  for (final (label, icon) in tabs)
+                    Tab(
+                      height: 40,
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, size: 16), const SizedBox(width: 6), Text(label)]),
+                    ),
+                ],
+              ),
+              const _CoreLine(),
+              const _SessionBanner(),
+              WebShareBanner(onOpen: () => HomeScreen._open(context, const WebShareScreen())),
+              AnimatedSize(
+                duration: motion,
+                curve: Curves.easeOutCubic,
+                child: _folded ? const SizedBox(width: double.infinity) : const GalleryToolbar(),
+              ),
+              Expanded(
+                child: NotificationListener<UserScrollNotification>(
+                  onNotification: _scrolled,
+                  child: TabBarView(
+                    children: [
+                      const HistoryTab(),
+                      if (state.library.supported) ...[
+                        const AppsTab(),
+                        const MediaGridTab(kind: MediaKind.images),
+                        const MediaGridTab(kind: MediaKind.video),
+                        const MusicTab(),
+                        FilesTab(onSystemPicker: () => unawaited(HomeScreen._sendPicked(context))),
+                      ] else
+                        for (final _ in tabs.skip(1))
+                          Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(32),
+                              child: Text(l.desktopTabs, textAlign: TextAlign.center, style: TextStyle(color: c.muted)),
+                            ),
+                          ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      bottomNavigationBar: ListenableBuilder(
+        listenable: Listenable.merge([state.connection, state.transfers, state.selection]),
+        builder: (context, _) {
+          final a = state.transfers.active;
+          final keep = !state.selection.isEmpty || (a != null && a.stage != Stage.done);
+          final hidden = _folded && !keep;
+          return SafeArea(
+            child: AnimatedSlide(
+              offset: hidden ? const Offset(0, 1.6) : Offset.zero,
+              duration: motion,
+              curve: Curves.easeOutCubic,
+              child: AnimatedOpacity(
+                opacity: hidden ? 0 : 1,
+                duration: motion,
+                child: IgnorePointer(
+                  ignoring: hidden,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                    child: DecoratedBox(
+                      key: const Key('bottom-bar'),
+                      decoration: BoxDecoration(
+                        color: c.section,
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: [BoxShadow(color: c.shadow, blurRadius: 24, offset: const Offset(0, 8))],
+                      ),
+                      child: Padding(padding: const EdgeInsets.all(4), child: HomeScreen._bar(context)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// The name, the QR reader and the menu: the line that folds away.
+class _TopLine extends StatelessWidget {
+  const _TopLine();
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    return SizedBox(
+      height: 48,
+      child: Row(
+        children: [
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text(l.appTitle, style: titleStyle(19, weight: FontWeight.w900, color: c.text).copyWith(fontStyle: FontStyle.italic)),
+          ),
+          IconButton(tooltip: l.scanQr, icon: const Icon(Icons.qr_code_scanner_rounded, size: 21), onPressed: () => HomeScreen._joinByQr(context)),
+          PopupMenuButton<String>(
+            key: const Key('home-menu'),
+            tooltip: l.menu,
+            icon: const Icon(Icons.more_vert_rounded, size: 21),
+            offset: const Offset(0, 44),
+            onSelected: (v) => switch (v) {
+              'trusted' => HomeScreen._open(context, const TrustedScreen()),
+              'browser' => HomeScreen._open(context, const WebShareScreen()),
+              'dev' => DevPanel.open(Navigator.of(context)),
+              _ => HomeScreen._open(context, const SettingsScreen()),
+            },
+            itemBuilder: (_) => [
+              HomeScreen._menuItem(context, 'browser', Icons.public_rounded, l.webShareTitle, key: const Key('menu-browser')),
+              HomeScreen._menuItem(context, 'trusted', Icons.verified_user_outlined, l.trustedDevices),
+              HomeScreen._menuItem(context, 'settings', Icons.tune_rounded, l.settings),
+              if (AppScope.of(context, listen: false).settings.devMode) HomeScreen._menuItem(context, 'dev', Icons.code_rounded, l.devPanel),
+            ],
+          ),
+          const SizedBox(width: 2),
+        ],
+      ),
+    );
+  }
+}
+
 /// A small label over a name: « Connecté à » / « PC Naruto ».
 class _Who extends StatelessWidget {
   const _Who({required this.label, required this.name});
@@ -300,8 +359,8 @@ class _Who extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(label, style: TextStyle(color: c.muted, fontSize: 13)),
-        Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+        Text(label, style: TextStyle(color: c.muted, fontSize: 12)),
+        Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
       ],
     );
   }
@@ -449,36 +508,6 @@ class _SessionBanner extends StatelessWidget {
   }
 }
 
-/// « Tout sélectionner » and its square box: picks every item of the tab on screen, or unpicks them.
-class _SelectAll extends StatelessWidget {
-  const _SelectAll();
-
-  @override
-  Widget build(BuildContext context) {
-    final state = AppScope.of(context).state;
-    final l = AppLocalizations.of(context);
-    final tabs = DefaultTabController.of(context);
-    return ListenableBuilder(
-      listenable: Listenable.merge([tabs, state.selection, state.explorer]),
-      builder: (context, _) {
-        final picks = state.library.supported ? state.explorer.picksOf(tabs.index) : const <Pick>[];
-        final all = state.selection.allOf(picks);
-        return BoxToggle(
-          key: const Key('select-all'),
-          label: l.selectAll,
-          on: all,
-          onPressed: picks.isEmpty
-              ? null
-              : () {
-                  state.selection.toggleAll(picks);
-                  state.explorer.sizeFolders(state.selection);
-                },
-        );
-      },
-    );
-  }
-}
-
 /// The basket: how many items, how large; to a browser, then send (or connect first).
 class _Basket extends StatelessWidget {
   const _Basket({required this.connected});
@@ -524,8 +553,8 @@ class _Basket extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(l.itemsCount(sel.count), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, fontFeatures: tabular)),
-                Text(formatBytes(context, sel.bytes), maxLines: 1, style: TextStyle(color: c.muted, fontSize: 13, fontFeatures: tabular)),
+                Text(l.itemsCount(sel.count), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14, fontFeatures: tabular)),
+                Text(formatBytes(context, sel.bytes), maxLines: 1, style: TextStyle(color: c.muted, fontSize: 12, fontFeatures: tabular)),
               ],
             ),
           ),
