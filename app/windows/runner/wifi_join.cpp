@@ -7,8 +7,10 @@
 #include <iphlpapi.h>
 #include <wlanapi.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <thread>
 #include <vector>
 
@@ -91,6 +93,28 @@ class Wlan {
     WlanFreeMemory(channel);
     if (ch == 14) return 2484;
     return ch < 14 ? 2407 + 5 * ch : 5000 + 5 * ch;
+  }
+
+  // Whether Windows' list of networks around has [ssid]: a network created a second ago is
+  // not in it yet, and joining it fails at once (« network not available », 17 November 2026).
+  bool Visible(const GUID& card, const std::string& ssid) const {
+    WLAN_AVAILABLE_NETWORK_LIST* list = nullptr;
+    if (WlanGetAvailableNetworkList(h_, &card, 0, nullptr, &list) != ERROR_SUCCESS || !list) return false;
+    bool seen = false;
+    for (DWORD i = 0; i < list->dwNumberOfItems && !seen; i++) {
+      const DOT11_SSID& s = list->Network[i].dot11Ssid;
+      seen = s.uSSIDLength == ssid.size() && std::memcmp(s.ucSSID, ssid.data(), ssid.size()) == 0;
+    }
+    WlanFreeMemory(list);
+    return seen;
+  }
+
+  // A scan for [ssid] alone: quicker to find a new network, a 5 GHz one above all.
+  void Scan(const GUID& card, const std::string& ssid) const {
+    DOT11_SSID s{};
+    s.uSSIDLength = static_cast<ULONG>(std::min<size_t>(ssid.size(), DOT11_SSID_MAX_LENGTH));
+    std::memcpy(s.ucSSID, ssid.data(), s.uSSIDLength);
+    WlanScan(h_, &card, &s, nullptr, nullptr);
   }
 
   bool Connect(const GUID& card, const std::wstring& profile) const {
@@ -232,15 +256,29 @@ winrt::fire_and_forget WifiJoin::Join(std::string ssid, std::string passphrase, 
       previous = wlan.Connected(card);
       DWORD reason = 0;
       auto xml = Wide(Profile(Narrow(profile.c_str()), ssid, passphrase, security));
-      if (WlanSetProfile(wlan.get(), &card, WLAN_PROFILE_USER, xml.c_str(), nullptr, TRUE, nullptr, &reason) != ERROR_SUCCESS ||
-          !wlan.Connect(card, profile)) {
+      if (WlanSetProfile(wlan.get(), &card, WLAN_PROFILE_USER, xml.c_str(), nullptr, TRUE, nullptr, &reason) != ERROR_SUCCESS) {
         error = "join_failed";
       } else {
-        // Connected within 20 s, then an address within 15 more.
-        auto until = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-        while (wlan.Connected(card) != profile && std::chrono::steady_clock::now() < until) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        // Connected within 20 s, then an address within 15 more. The network may be seconds
+        // old: scanned for until Windows lists it, then joined; a failed attempt (Windows
+        // gone back to its previous network) is tried again within the 20 s.
+        using clock = std::chrono::steady_clock;
+        auto until = clock::now() + std::chrono::seconds(20);
+        int attempts = 0;
+        while (wlan.Connected(card) != profile && clock::now() < until) {
+          auto listed = clock::now() + std::chrono::seconds(4);
+          if (!wlan.Visible(card, ssid)) wlan.Scan(card, ssid);
+          while (!wlan.Visible(card, ssid) && clock::now() < listed && clock::now() < until) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+          }
+          if (!wlan.Connect(card, profile)) break;
+          attempts++;
+          auto attempt = clock::now() + std::chrono::seconds(6);
+          while (wlan.Connected(card) != profile && clock::now() < attempt && clock::now() < until) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+          }
         }
+        std::fprintf(stderr, "wifi: join %s, %d attempt(s)\n", wlan.Connected(card) == profile ? "done" : "failed", attempts);
         if (wlan.Connected(card) != profile) {
           error = "join_failed";
         } else {
