@@ -169,7 +169,8 @@ void main() {
           'groupStart' when groupError != null => throw PlatformException(code: 'group', message: groupError),
           'groupStart' => {'ssid': 'DIRECT-KQ-medXfer', 'passphrase': 'secret', 'security': 1, 'frequency': frequency, 'address': '192.168.49.1'},
           'hotspotStart' => {'ssid': 'AndroidShare_1732', 'passphrase': 'secret', 'security': 2, 'address': '10.46.56.232'},
-          'groupAlive' || 'hotspotAlive' || 'otherWifi' => true,
+          'groupAlive' || 'hotspotAlive' => true,
+          'otherWifi' => 2412, // its frequency, MHz
           _ => null,
         };
       });
@@ -181,7 +182,7 @@ void main() {
       final info = await h.start();
       expect((info.ssid, info.security, info.address, info.band), ('DIRECT-KQ-medXfer', 1, '192.168.49.1', WifiBand.ghz5));
       expect(await h.alive(), isTrue);
-      expect(await h.otherWifi(), isTrue);
+      expect(await h.otherWifi(), 2412);
       await h.stop();
       expect(calls, ['groupStart {band: 5}', 'groupAlive', 'otherWifi', 'groupStop']);
     });
@@ -202,7 +203,7 @@ void main() {
       final info = await h.start();
       expect((info.ssid, info.wifiOff), ('AndroidShare_1732', true)); // said: 2.4 GHz for want of Wi-Fi
       expect(await h.alive(), isTrue);
-      expect(await h.otherWifi(), isFalse, reason: 'measured for the group only');
+      expect(await h.otherWifi(), 0, reason: 'measured for the group only');
       await h.stop();
       expect(calls, ['groupStart {band: 5}', 'hotspotStart', 'hotspotAlive', 'hotspotStop']);
     });

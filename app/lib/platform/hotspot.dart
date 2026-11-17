@@ -50,6 +50,7 @@ class HotspotInfo {
     this.addressHeldBy,
     this.sharingAddress,
     this.band,
+    this.frequency = 0,
     this.wifiOff = false,
   });
 
@@ -60,6 +61,7 @@ class HotspotInfo {
         address: m['address'] as String?,
         interfaces: [for (final i in (m['interfaces'] as List?) ?? const []) '$i'],
         band: WifiBand.of((m['frequency'] as num?)?.toInt() ?? 0),
+        frequency: (m['frequency'] as num?)?.toInt() ?? 0,
         wifiOff: wifiOff,
       );
 
@@ -69,6 +71,9 @@ class HotspotInfo {
 
   /// The band obtained; null when the system does not say (Android's local hotspot, Windows).
   final WifiBand? band;
+
+  /// Its frequency in MHz, for the transfer reports; 0 when the system does not say.
+  final int frequency;
 
   /// Name and passphrase, chosen by Android: secrets of the network, never logged.
   final String? ssid;
@@ -147,8 +152,10 @@ abstract interface class Hotspot {
 
   /// Whether this device's Wi-Fi is connected to another network while the access point runs,
   /// which slows the access point to a crawl: Android's Wi-Fi Direct group, whose radio then
-  /// switches between the two channels (215 ms of ping, WP-C.0 of the J6c plan).
-  Future<bool> otherWifi();
+  /// switches between the two channels (215 ms of ping, WP-C.0 of the J6c plan; about 3 times
+  /// slower, real tests of 17 November 2026). That network's frequency in MHz; 0 for none, 1
+  /// for one whose frequency is not known.
+  Future<int> otherWifi();
 
   /// Whether the Wi-Fi [start] needs is on: a desktop's network needs it (#219); Android's local
   /// hotspot starts with Wi-Fi off.
@@ -227,7 +234,7 @@ class AndroidHotspot implements Hotspot {
   Future<bool> openWifiPanel({bool always = false}) async => await channel.invokeMethod<bool>('openWifiPanel', {'always': always}) ?? false;
 
   @override
-  Future<bool> otherWifi() async => _group && (await channel.invokeMethod<bool>('otherWifi') ?? false);
+  Future<int> otherWifi() async => _group ? await channel.invokeMethod<int>('otherWifi') ?? 0 : 0;
 
   @override
   Future<bool> alive() async => await channel.invokeMethod<bool>(_group ? 'groupAlive' : 'hotspotAlive') ?? false;
@@ -274,7 +281,7 @@ class NoHotspot implements Hotspot {
   Future<bool> openWifiPanel({bool always = false}) async => false;
 
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
 
   @override
   Future<bool> alive() async => false;
@@ -392,7 +399,7 @@ class WindowsHotspot implements Hotspot {
 
   /// The group is a second, virtual interface beside the computer's Wi-Fi (WP-C.1).
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
 
   @override
   Future<bool> alive() async => await channel.invokeMethod<bool>('alive') ?? false;
@@ -498,7 +505,7 @@ class LinuxHotspot implements Hotspot {
 
   /// The card is the network's only: the Wi-Fi it was on is left ([leavesWifi]).
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
 
   /// The connection still active: NetworkManager gives the Wi-Fi device back to another network
   /// the user picks, ending it.
