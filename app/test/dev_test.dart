@@ -154,7 +154,7 @@ void main() {
     await tester.tap(find.text('Réglages'));
     await tester.pumpAndSettle();
     // Below the receive folder: further down the list.
-    await tester.ensureVisible(find.byKey(const Key('dev-mode')));
+    await tester.scrollUntilVisible(find.byKey(const Key('dev-mode')), 200, scrollable: find.byType(Scrollable).last);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('dev-mode')));
     await tester.pumpAndSettle();

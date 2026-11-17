@@ -472,5 +472,9 @@
   "cancelReceive": "Cancel the reception",
   "filesDoneLine": "{count, plural, =1{1 file} other{{count} files}} · {done} done",
   "@filesDoneLine": {"placeholders": {"count": {"type": "int"}, "done": {"type": "int"}}},
-  "notSameNetwork": "Not on the same network?"
+  "notSameNetwork": "Not on the same network?",
+  "accentVolt": "Volt green",
+  "accentBlue": "Blue",
+  "accentOrange": "Orange",
+  "accentViolet": "Violet"
 }

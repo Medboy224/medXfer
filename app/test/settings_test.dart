@@ -67,6 +67,8 @@ void main() {
     expect(find.text(chosen.path), findsOneWidget);
     expect(await tester.runAsync(state.receiveFolders.current), chosen.path);
 
+    await tester.ensureVisible(find.byKey(const Key('receive-reset')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('receive-reset')));
     await tester.pumpAndSettle();
     expect(settings.receiveDir, '');
