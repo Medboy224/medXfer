@@ -470,11 +470,13 @@
   "keepTransfer": "Keep going",
   "cancelSend": "Cancel the send",
   "cancelReceive": "Cancel the reception",
-  "filesDoneLine": "{count, plural, =1{1 file} other{{count} files}} · {done} done",
+  "filesDoneLine": "{count, plural, =1{1 file} other{{count} files}} · {done, plural, =0{none done} other{{done} done}}",
   "@filesDoneLine": {"placeholders": {"count": {"type": "int"}, "done": {"type": "int"}}},
   "notSameNetwork": "Not on the same network?",
   "accentVolt": "Volt green",
   "accentBlue": "Blue",
   "accentOrange": "Orange",
-  "accentViolet": "Violet"
+  "accentViolet": "Violet",
+  "speedAverage": "{unit} on average",
+  "@speedAverage": {"placeholders": {"unit": {"type": "String"}}}
 }

@@ -104,7 +104,10 @@ class _Header extends StatelessWidget {
     // The speed in big figures while data flows (V4); a dash otherwise.
     final flowing = a.stage == Stage.running && !a.paused && a.speedMBps > 0;
     final locale = Localizations.localeOf(context).toLanguageTag();
-    final speed = flowing ? NumberFormat(a.speedMBps >= 100 ? '0' : '0.0', locale).format(a.speedMBps) : '—';
+    String figure(double v) => NumberFormat(v >= 100 ? '0' : '0.0', locale).format(v);
+    // Ended: the average of the whole transfer; waiting or paused: 0.
+    final average = a.stage == Stage.done && a.outcome == Outcome.completed ? a.averageMBps : null;
+    final speed = flowing ? figure(a.speedMBps) : (average != null ? figure(average) : '0');
     final received = a.direction == Direction.received;
     final stat = TextStyle(fontSize: 19, fontWeight: FontWeight.w800, fontFeatures: tabular, color: c.text);
     final label = TextStyle(fontSize: 13, color: c.muted);
@@ -143,8 +146,8 @@ class _Header extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Semantics(
-            label: flowing ? '$speed ${l.speedUnit}' : null,
-            excludeSemantics: flowing,
+            label: flowing || average != null ? '$speed ${l.speedUnit}' : null,
+            excludeSemantics: flowing || average != null,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.baseline,
               textBaseline: TextBaseline.alphabetic,
@@ -156,12 +159,13 @@ class _Header extends StatelessWidget {
                     child: Text(
                       speed,
                       key: const Key('transfer-speed'),
-                      style: titleStyle(72, weight: FontWeight.w900, color: flowing ? c.accent : c.muted).copyWith(fontStyle: FontStyle.italic, height: 1, fontFeatures: tabular),
+                      style: titleStyle(72, weight: FontWeight.w900, color: flowing || average != null ? c.accent : c.muted)
+                          .copyWith(fontStyle: FontStyle.italic, height: 1, fontFeatures: tabular),
                     ),
                   ),
                 ),
                 const SizedBox(width: 10),
-                Text(l.speedUnit, style: titleStyle(20, color: c.muted)),
+                Flexible(child: Text(average != null ? l.speedAverage(l.speedUnit) : l.speedUnit, style: titleStyle(20, color: c.muted))),
               ],
             ),
           ),

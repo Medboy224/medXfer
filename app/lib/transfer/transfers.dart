@@ -118,6 +118,7 @@ class ActiveTransfer {
     this.lost = false,
     this.outcome,
     this.started,
+    this.finished,
   });
 
   final Direction direction;
@@ -137,6 +138,17 @@ class ActiveTransfer {
   final Outcome? outcome;
   final DateTime? started;
 
+  /// When it ended: with [started], its average speed.
+  final DateTime? finished;
+
+  /// MB/s over the whole transfer, once ended; null if too short to say.
+  double? get averageMBps {
+    final s = started, f = finished;
+    if (s == null || f == null || totalBytes <= 0) return null;
+    final seconds = f.difference(s).inMilliseconds / 1000;
+    return seconds < 0.05 ? null : totalBytes / 1048576 / seconds;
+  }
+
   double get fraction => outcome == Outcome.completed ? 1 : (totalBytes <= 0 ? 0 : (bytes / totalBytes).clamp(0, 1).toDouble());
 
   int count(ItemStatus s) => items.where((i) => i.status == s).length;
@@ -152,6 +164,7 @@ class ActiveTransfer {
     bool? lost,
     Outcome? outcome,
     DateTime? started,
+    DateTime? finished,
   }) => ActiveTransfer(
     direction: direction,
     device: device,
@@ -166,6 +179,7 @@ class ActiveTransfer {
     lost: lost ?? this.lost,
     outcome: outcome ?? this.outcome,
     started: started ?? this.started,
+    finished: finished ?? this.finished,
   );
 }
 
@@ -227,6 +241,10 @@ class Transfers extends ChangeNotifier {
   /// bar still, for minutes (real test of 3 November). With the session alive, the core's own
   /// speed falls to 0 when nothing moves.
   static Duration speedStale = const Duration(seconds: 4);
+
+  /// How long a speed is kept through a silence of the network, before it reads 0.
+  static Duration speedHold = const Duration(seconds: 3);
+  DateTime? _speedAt;
   Timer? _stale;
 
   void _watchStale() {
@@ -444,11 +462,24 @@ class Transfers extends ChangeNotifier {
           for (final p in (m['items'] as List?) ?? const [])
             if (p is Map<String, Object?>) (p['index'] as num).toInt(): (p['bytes'] as num?)?.toInt() ?? 0,
         };
+        // The bar never goes back for the same batch (real test of 17 November: it went back
+        // and forth on a slow link); a second without data keeps the last speed, said 0 after
+        // [speedHold].
+        final total = (m['batch_total_bytes'] as num?)?.toInt();
+        var bytes = (m['batch_bytes'] as num?)?.toInt();
+        if (bytes != null && (total == null || total == a.totalBytes) && bytes < a.bytes) bytes = a.bytes;
+        var speed = (m['speed_mbps'] as num?)?.toDouble();
+        final now = DateTime.now();
+        if (speed != null && speed > 0) {
+          _speedAt = now;
+        } else if (speed != null && a.speedMBps > 0 && _speedAt != null && now.difference(_speedAt!) < speedHold) {
+          speed = a.speedMBps;
+        }
         _active = a.copyWith(
           stage: Stage.running,
-          bytes: (m['batch_bytes'] as num?)?.toInt(),
-          totalBytes: (m['batch_total_bytes'] as num?)?.toInt(),
-          speedMBps: (m['speed_mbps'] as num?)?.toDouble(),
+          bytes: bytes,
+          totalBytes: total,
+          speedMBps: speed,
           etaSeconds: (m['eta_seconds'] as num?)?.toInt(),
           paused: m['is_paused'] == true,
           items: [
@@ -524,7 +555,7 @@ class Transfers extends ChangeNotifier {
   }
 
   void _finish(ActiveTransfer a, Outcome outcome) {
-    _active = a.copyWith(stage: Stage.done, outcome: outcome, speedMBps: 0, etaSeconds: 0, paused: false);
+    _active = a.copyWith(stage: Stage.done, outcome: outcome, speedMBps: 0, etaSeconds: 0, paused: false, finished: DateTime.now());
     unawaited(_record(a, outcome));
   }
 

@@ -378,10 +378,11 @@
   "keepTransfer": "Continuer",
   "cancelSend": "Annuler l'envoi",
   "cancelReceive": "Annuler la réception",
-  "filesDoneLine": "{count, plural, =1{1 fichier} other{{count} fichiers}} · {done} terminés",
+  "filesDoneLine": "{count, plural, =1{1 fichier} other{{count} fichiers}} · {done, plural, =0{aucun terminé} =1{1 terminé} other{{done} terminés}}",
   "notSameNetwork": "Pas sur le même réseau ?",
   "accentVolt": "Vert volt",
   "accentBlue": "Bleu",
   "accentOrange": "Orange",
-  "accentViolet": "Violet"
+  "accentViolet": "Violet",
+  "speedAverage": "{unit} en moyenne"
 }
