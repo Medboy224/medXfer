@@ -38,6 +38,8 @@ class SettingsScreen extends StatelessWidget {
         builder: (context, _) => ListView(
           padding: const EdgeInsets.fromLTRB(0, 0, 0, 24),
           children: [
+            heading(l.thisDeviceSection),
+            const _Card(child: _DeviceName()),
             heading(l.theme),
             _Card(
               child: RadioGroup<ThemeChoice>(
@@ -243,4 +245,106 @@ class _Card extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 12),
     child: Material(color: context.colors.surface, borderRadius: BorderRadius.circular(cardRadius), clipBehavior: Clip.antiAlias, child: child),
   );
+}
+
+/// This device's name, and renaming it (plan J8, WP-8.1b).
+class _DeviceName extends StatelessWidget {
+  const _DeviceName();
+
+  Future<void> _rename(BuildContext context) async {
+    final state = AppScope.of(context, listen: false).state;
+    final l = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final name = await showDialog<String>(context: context, builder: (_) => _RenameDialog(initial: state.deviceName));
+    if (name == null || name.trim() == state.deviceName) return;
+    final ok = await state.renameDevice(name);
+    messenger
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(ok ? l.deviceNameSaved : l.deviceNameRefused)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context).state;
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    return ListenableBuilder(
+      listenable: Listenable.merge([state, state.connection]),
+      builder: (context, _) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(color: c.section, borderRadius: BorderRadius.circular(12)),
+                  child: Icon(state.desktop ? Icons.computer_rounded : Icons.smartphone_rounded, size: 20, color: c.accent),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(l.deviceNameLabel, style: TextStyle(fontSize: 12, color: c.muted)),
+                      Text(state.deviceName, key: const Key('device-name'), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+                ),
+                OutlinedButton(key: const Key('device-rename'), onPressed: () => unawaited(_rename(context)), child: Text(l.rename)),
+              ],
+            ),
+            if (state.connection.instance.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(l.deviceNameHint(state.connection.instance), style: TextStyle(fontSize: 12, height: 1.45, color: c.muted)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The new name: 64 characters at most (the core's limit), never empty.
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final _field = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _field.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final empty = _field.text.trim().isEmpty;
+    return AlertDialog(
+      title: Text(l.deviceNameLabel),
+      content: TextField(
+        key: const Key('device-name-field'),
+        controller: _field,
+        autofocus: true,
+        maxLength: 64,
+        decoration: InputDecoration(errorText: empty ? l.deviceNameEmpty : null),
+        onChanged: (_) => setState(() {}),
+        onSubmitted: (v) => empty ? null : Navigator.of(context).pop(v),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(l.cancel)),
+        FilledButton(key: const Key('device-name-save'), onPressed: empty ? null : () => Navigator.of(context).pop(_field.text), child: Text(l.save)),
+      ],
+    );
+  }
 }

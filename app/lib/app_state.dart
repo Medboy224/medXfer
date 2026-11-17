@@ -189,7 +189,9 @@ class AppState extends ChangeNotifier {
   Future<void> start() async {
     _events ??= core.events.listen(_onEvent);
     try {
-      final started = await core.start(CoreConfig(dataDir: await folders.dataDir(), downloadDir: await folders.downloadDir()));
+      final started = await core.start(
+        CoreConfig(dataDir: await folders.dataDir(), downloadDir: await folders.downloadDir(), deviceName: settings.deviceName),
+      );
       if (!started.ok) {
         return _fail(started.error ?? 'unknown error');
       }
@@ -234,6 +236,20 @@ class AppState extends ChangeNotifier {
 
   void _onEvent(CoreEvent e) {
     if (e.name == 'status') _takeStatus(e);
+  }
+
+  /// Renames this device (plan J8, WP-8.1b): kept in the settings for the next start, and
+  /// given to the core now. Paired devices take it at their next connection, unless their user
+  /// renamed this one (the core's trust store). Returns false if the core refused it.
+  Future<bool> renameDevice(String name) async {
+    final clean = name.trim();
+    if (clean.isEmpty) return false;
+    final reply = await core.call('set_config', {'device_name': clean});
+    if (reply.first('action_error') != null) return false;
+    settings.deviceName = clean;
+    _deviceName = clean;
+    notifyListeners();
+    return true;
   }
 
   void _takeStatus(CoreEvent e) {
