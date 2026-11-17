@@ -68,7 +68,25 @@ func journalEvent(evt EventMessage) {
 			return
 		}
 	}
+	// Why a session ended: who closed it, or lost (real test of 17 November 2026, a session
+	// ended without its journal saying by whom). Only the reasons this core writes: one from
+	// the peer is its own text, never written.
+	if evt.Event == "disconnected" {
+		if m, ok := evt.Data.(map[string]string); ok {
+			j.Printf("event disconnected (%s)", journalReason(m["reason"]))
+			return
+		}
+	}
 	j.Event(evt.Event)
+}
+
+// journalReason is reason when it is one of this core's own, "other" else.
+func journalReason(reason string) string {
+	switch reason {
+	case "user requested disconnect", "peer requested disconnect", "connection timed out", "pairing rejected by peer":
+		return reason
+	}
+	return "other"
 }
 
 // registerSecrets tells the redactor about this daemon's secrets as soon as they exist, so

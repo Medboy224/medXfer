@@ -101,16 +101,20 @@ class BleLink extends ChangeNotifier {
   static int touchTries = 3;
   static Duration touchRetryAfter = const Duration(milliseconds: 600);
 
-  /// A recognition takes 1 to 2 s; one longer is given up, the device tried again later. A
-  /// recognition waits for the one before it: an old address of a phone, no longer advertised,
-  /// held the computer's list 26 s (real test of 7 November).
-  static Duration recognizeWithin = const Duration(seconds: 8);
+  /// A recognition takes 1 to 5 s (real test of 17 November: 1.1 to 4.9 s); one longer is
+  /// given up, the device tried again later. A recognition waits for the one before it: an old
+  /// address of a phone, no longer advertised, held the computer's list 26 s (real test of
+  /// 7 November).
+  static Duration recognizeWithin = const Duration(seconds: 6);
   static Duration retryAfter = const Duration(seconds: 5);
 
   /// A recognition the radio dropped (Android's error 133, at the edge of reach) is tried again
   /// sooner: after these, in turn, then [retryAfter]. Through two walls, three tries 5 s apart
   /// kept the computer out of the phone's list 22 s (real test of 8 November). One that got no
-  /// answer at all, an old address most often, waits [retryAfter] at once.
+  /// answer at all waits [retryAfter] at once when the device was not seen meanwhile, an old
+  /// address most often; seen, it still advertises, and is tried again soon too: three such
+  /// tries, 8 s each and 5 s apart, kept the phone out of the computer's list 42 s (real test
+  /// of 17 November).
   static List<Duration> retrySoonAfter = const [Duration(seconds: 1), Duration(seconds: 2)];
   Timer? _nextTry;
 
@@ -419,6 +423,7 @@ class BleLink extends ChangeNotifier {
   /// same device under a new address replaces the old one.
   Future<void> _recognize(BleDevice d) async {
     final clock = Stopwatch()..start();
+    final started = DateTime.now();
     String? failed;
     try {
       // Not at the same moment as the other device, which may be recognizing this one.
@@ -453,9 +458,12 @@ class BleLink extends ChangeNotifier {
       unawaited(ble.disconnect(d.device));
     } finally {
       if (failed != null) {
-        debugPrint('ble: ${d.device} not recognized ($failed), ${clock.elapsedMilliseconds} ms');
-        final soon = failed != 'timeout' && failed != 'refused' && d.failures < retrySoonAfter.length;
-        d.retryAt = DateTime.now().add(soon ? retrySoonAfter[d.failures] : retryAfter);
+        final now = DateTime.now();
+        final advertising = d.seenAt.isAfter(started);
+        debugPrint('ble: ${d.device} not recognized ($failed), ${clock.elapsedMilliseconds} ms, '
+            'last seen ${now.difference(d.seenAt).inMilliseconds} ms ago');
+        final soon = failed != 'refused' && (failed != 'timeout' || advertising) && d.failures < retrySoonAfter.length;
+        d.retryAt = now.add(soon ? retrySoonAfter[d.failures] : retryAfter);
         d.failures++;
       }
       _recognizing.remove(d.device);

@@ -20,7 +20,7 @@ void main() {
     addTearDown(() => debugPrint = print);
     final printed = <String?>[];
     debugPrint = (String? message, {int? wrapWidth}) => printed.add(message);
-    AppLog.install();
+    AppLog.install(stamped: false);
     debugPrint('ble: started, 70 ms');
     debugPrint('core log: {"msg":"listening"}');
     expect(printed, ['ble: started, 70 ms', 'core log: {"msg":"listening"}']); // still printed
@@ -28,5 +28,16 @@ void main() {
     expect(text, contains(' app: ')); // the system first
     expect(text, contains(' ble: started, 70 ms\n'));
     expect(text, isNot(contains('listening')));
+  });
+
+  test('a desktop\'s lines printed with their local time, to the millisecond', () {
+    final print = debugPrint;
+    addTearDown(() => debugPrint = print);
+    final printed = <String?>[];
+    debugPrint = (String? message, {int? wrapWidth}) => printed.add(message);
+    AppLog.install(stamped: true);
+    debugPrint('hotspot: joined again');
+    expect(printed.single, matches(RegExp(r'^\d\d:\d\d:\d\d\.\d{3} hotspot: joined again$')));
+    expect(AppLog.clock(DateTime(2026, 11, 17, 14, 3, 7, 42)), '14:03:07.042');
   });
 }

@@ -65,3 +65,19 @@ func TestPairFailureCauseInJournal(t *testing.T) {
 		t.Fatalf("the journal lacks the failure's cause: %q", text)
 	}
 }
+
+// A session's end says why in the journal, the core's own reasons only: a peer's text never.
+func TestDisconnectReasonInJournal(t *testing.T) {
+	dir := t.TempDir()
+	stop := StartJournal(dir)
+	t.Cleanup(func() { stop(); SetJournal(nil); log.SetOutput(os.Stderr) })
+	journalEvent(NewEvent("disconnected", map[string]string{"reason": "connection timed out"}))
+	journalEvent(NewEvent("disconnected", map[string]string{"reason": "Vacances 2026.mp4"}))
+	text := readJournal(t, dir)
+	if !strings.Contains(text, "event disconnected (connection timed out)") {
+		t.Errorf("the reason missing: %q", text)
+	}
+	if strings.Contains(text, "Vacances") || !strings.Contains(text, "event disconnected (other)") {
+		t.Errorf("a peer's text in the journal: %q", text)
+	}
+}
