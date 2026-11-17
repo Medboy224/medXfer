@@ -54,8 +54,8 @@ WP-8.0 décisions, compte Play ──► WP-8.1 refonte V4 ──► WP-8.2 lect
 
 - Les décisions du §4 (prises le 17 novembre).
 - **Compte développeur Google Play** : créé par l'utilisateur (compte personnel, frais d'inscription uniques), avec la vérification d'identité demandée par Google.
-- **Licence de la bibliothèque des lecteurs** (D8) : le paquet Flutter, et la façon dont sa bibliothèque native est construite et liée, vérifiées libres et compatibles avec la licence Apache 2.0 de medXfer ; la taille ajoutée à l'APK, mesurée.
-- Bible : rattacher chaque exigence 📏 au lot qui la ferme ; noter G3 « en cours » ; ajouter les exigences des lecteurs (WP-8.2).
+- ✅ **Bibliothèque des lecteurs** (D8) : les paquets lus le 17 novembre ; un adaptateur par système, tous libres, rien de non maintenu livré. La taille ajoutée à l'APK est mesurée en WP-8.2.
+- ✅ Bible : chaque exigence 📏 rattachée au lot qui la ferme ; G3 « en cours ».
 
 ### WP-8.1 — La refonte « Version 4 » · L
 
@@ -80,7 +80,8 @@ Demandés le 17 novembre : vérifier ce qu'on envoie, et ouvrir ce qu'on reçoit
   - les fichiers reçus, depuis l'écran de réception et l'historique ;
   - sur Android, Windows et Linux.
 - **Images** : plein écran, zoom au pincement et à la molette, passage à l'image voisine par glissement ou par flèches, avec Flutter seul (`InteractiveViewer`), sans bibliothèque de plus.
-- **Vidéos et musique** : lecture, pause, position, volume ; passage au morceau ou à la vidéo voisin ; plein écran pour la vidéo. Une interface `MediaPlayer` dans l'application, et une bibliothèque derrière un adaptateur (D8) ; une autre pourra la remplacer sans toucher aux écrans.
+- **Vidéos et musique** : lecture, pause, position, volume ; passage au morceau ou à la vidéo voisin ; plein écran pour la vidéo. Une interface `MediaPlayer` dans l'application, et un adaptateur par système (D8) ; un autre pourra le remplacer sans toucher aux écrans. Un format que le système ne lit pas le dit, et propose « Ouvrir avec une autre application ».
+- **Linux** : le paquet `.deb` dépend de la libmpv de la distribution ; sans elle (le `tar.gz`), les images s'ouvrent, et la vidéo et la musique disent quel paquet installer.
 - **Lus là où ils sont** (`STO-16`) : aucun fichier copié pour être lu ; sous Android, l'URI `content://` directement.
 - Hors de ce lot : la lecture en arrière-plan, écran éteint, et les sous-titres. À rouvrir après la bêta si les testeurs les demandent.
 - Accessibilité : chaque commande nommée pour le lecteur d'écran, 44 px au moins, le clavier sur le bureau (espace, flèches, Échap).
@@ -170,7 +171,7 @@ Réserves 2 à 10 du rapport J7 :
 
 ## 4. Décisions
 
-Prises le 17 novembre 2026 : D1 et D6 par l'utilisateur, D9 sur sa réponse ; D2 à D5 et D7, propositions acceptées ; D8 à confirmer en WP-8.0 par la vérification de la licence.
+Prises le 17 novembre 2026 : D1 et D6 par l'utilisateur, D9 sur sa réponse ; D2 à D5 et D7, propositions acceptées ; D8 revue en WP-8.0, après lecture des paquets.
 
 | # | Question | Décision | Pourquoi |
 |---|---|---|---|
@@ -181,7 +182,7 @@ Prises le 17 novembre 2026 : D1 et D6 par l'utilisateur, D9 sur sa réponse ; D2
 | D5 | Les paquets Linux | ✅ **`tar.gz` et `.deb`** | `.deb` couvre Zorin, Ubuntu et Debian ; Flatpak ou AppImage plus tard si des testeurs le demandent. |
 | D6 | La distribution Android | ✅ **Test ouvert du Play Store**, ouvert à tous, l'application marquée « bêta » ; WhatsApp en parallèle pour les retours ; l'APK aussi sur GitHub | Demande de l'utilisateur. Un compte personnel récent doit d'abord tenir un **test fermé** de 12 testeurs pendant 14 jours avant toute publication plus large (règle de Google, à revérifier à l'inscription) : le groupe WhatsApp le fournit (WP-8.3), puis le test ouvert prend le relais (WP-8.8). |
 | D7 | Le numéro de la version publiée | ✅ **0.9.0, « bêta »**, puis 1.0.0 après les retours de la bêta, la gate G5 et la revue G4 | Une v1 annoncée avant G5 et la revue G4 promettrait plus qu'elle ne tient ; la bêta porte l'avertissement sur la cryptographie BLE. |
-| D8 | La bibliothèque de lecture vidéo et audio | **`media_kit`** (lecteur libre au-dessus de libmpv, Android, Windows, Linux), derrière l'interface `MediaPlayer` ; à confirmer en WP-8.0 | Le lecteur vidéo officiel de Flutter ne couvre ni Windows ni Linux. La licence du paquet et de sa libmpv (LGPL attendue) et la taille ajoutée à l'APK sont vérifiées avant de l'adopter ; sinon, un autre adaptateur (par exemple le lecteur du système sur Android). |
+| D8 | La bibliothèque de lecture vidéo et audio | ✅ **Revue en WP-8.0 (17 novembre)** : le lecteur officiel de Flutter, `video_player` (BSD-3), derrière l'interface `MediaPlayer`, avec un adaptateur par système : **Android**, son implémentation officielle sur ExoPlayer (Media3, Apache 2.0) ; **Windows**, `video_player_win` (BSD-3), qui lit par Media Foundation, intégré à Windows (une DLL d'environ 130 Ko, aucune bibliothèque tierce) ; **Linux**, `media_kit` (MIT) sur la libmpv **du système**, déclarée comme dépendance du paquet `.deb` et jamais livrée par medXfer. `media_kit` partout est écarté | Vérifié dans les paquets publiés : sous Windows, `media_kit` télécharge une libmpv de septembre 2023, d'un projet de compilation archivé depuis octobre 2024, dont la licence (LGPL ou GPL) n'est écrite nulle part ; un FFmpeg de 2023 livré ne recevrait plus de corrections de sécurité. Sous Android, il livre la variante « default » de libmpv, en plus d'ExoPlayer qu'on peut avoir seul. Un format que le système ne lit pas (certains MKV sous Windows, par exemple) donne un message clair et « Ouvrir avec une autre application ». |
 | D9 | Comment ouvrir le lecteur depuis une vignette | ✅ **Un bouton ⤢ visible** sur chaque vignette ; toucher ailleurs sélectionne | Réponse de l'utilisateur : rien de caché, et la sélection garde la plus grande zone. |
 
 ## 5. Risques
@@ -189,7 +190,7 @@ Prises le 17 novembre 2026 : D1 et D6 par l'utilisateur, D9 sur sa réponse ; D2
 | Risque | Parade |
 |---|---|
 | La refonte casse des parcours déjà essayés | Les tests de widgets d'abord, puis un essai réel de chaque parcours avant la fusion de WP-8.1. |
-| La bibliothèque des lecteurs alourdit l'APK ou pose un problème de licence | Vérifié en WP-8.0, avant tout code ; l'interface `MediaPlayer` permet de changer d'adaptateur, et les images n'en dépendent pas. |
+| Un lecteur ne lit pas un format courant (Media Foundation sous Windows est plus limité qu'ExoPlayer) | Les formats essayés en WP-8.2 sur chaque système et listés dans le guide ; le message et « Ouvrir avec une autre application » ; l'interface `MediaPlayer` permet un autre adaptateur. |
 | La mesure de la matrice demande beaucoup d'essais réels, et un seul travail lourd à la fois sur le PC | Une paire par séance, préparée à l'avance (fichiers sur `M:`, `iperf3` installé) ; les gestes physiques par l'utilisateur. |
 | G3 échoue sur le Wi-Fi pour une cause radio, pas logicielle | Le rapport par étape sépare l'attente du réseau du reste ; le câble sert de contrôle. |
 | Le test fermé est refusé ou recommence (un testeur qui se désinscrit, une activité jugée trop faible) | Plus de 12 testeurs inscrits, une mise à jour par semaine pour les faire revenir ; la demande d'accès à la publication faite dès les 14 jours atteints. |
