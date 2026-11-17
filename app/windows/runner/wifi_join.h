@@ -41,8 +41,15 @@ class WifiJoin {
                               std::function<void(std::optional<std::string> error, JoinedNetwork joined)> done);
   void Leave();
 
+  // Joins again the network joined last, if Windows left it (a cut, then another network
+  // chosen by Windows: real test of 17 November 2026), its profile kept: within 15 s, and its
+  // address within 10 more. done, on the calling thread: true when this call joined it again;
+  // false when it was still on it, when nothing is joined, or when it did not come back.
+  winrt::fire_and_forget Rejoin(std::function<void(bool joined)> done);
+
  private:
   std::wstring profile_;   // the app's profile, while joined
+  std::string ssid_;       // its network's name, while joined
   std::wstring previous_;  // the profile of the network the computer was on
   GUID card_{};
 };

@@ -308,6 +308,12 @@ class Connection extends ChangeNotifier {
   /// as long as the core dials it again (redialFor, J6c). Then left.
   static Duration rejoinFor = const Duration(minutes: 10);
 
+  /// While the session is lost, how often this device checks it is still on the joined network,
+  /// and joins it again if not ([Hotspot.rejoin]).
+  static Duration rejoinEvery = const Duration(seconds: 10);
+  Timer? _rejoinTimer;
+  bool _rejoining = false;
+
   /// A network created for a device met by BLE that nobody joined is stopped after this long
   /// (BLE-09): it runs only for that device.
   static Duration bleUnjoinedFor = const Duration(minutes: 2);
@@ -748,11 +754,38 @@ class Connection extends ChangeNotifier {
   Future<void> leaveJoined() async {
     _giveUp?.cancel();
     _giveUp = null;
+    _rejoinTimer?.cancel();
+    _rejoinTimer = null;
     if (_joined == null) return;
     _joined = null;
     notifyListeners();
     await hotspot.leave();
     await pushNetwork();
+  }
+
+  /// The session lost while on a joined network: this device back on it at once, then every
+  /// [rejoinEvery] until the session is back or the network left. On 17 November 2026 a cut of
+  /// 80 ms sent the computer to its usual network for good: the phone's, a metre away, was
+  /// never joined again, and the session dialed again in vain.
+  void _keepJoined() {
+    if (_joined == null || !hotspot.canJoin) return;
+    unawaited(_rejoin());
+    _rejoinTimer ??= Timer.periodic(rejoinEvery, (_) => unawaited(_rejoin()));
+  }
+
+  Future<void> _rejoin() async {
+    if (_rejoining || _joined == null) return;
+    _rejoining = true;
+    try {
+      if (await hotspot.rejoin() && _joined != null) {
+        debugPrint('hotspot: joined again');
+        await pushNetwork();
+      }
+    } on PlatformException catch (e) {
+      debugPrint('hotspot: rejoin failed ${e.code}');
+    } finally {
+      _rejoining = false;
+    }
   }
 
   /// A new QR code and PIN; the previous ones stop working.
@@ -972,6 +1005,8 @@ class Connection extends ChangeNotifier {
       case 'paired':
         _bleUnjoined?.cancel();
         _bleUnjoined = null;
+        _rejoinTimer?.cancel();
+        _rejoinTimer = null;
         final ip = (m['ip'] as String?) ?? '';
         final name = (m['device_name'] as String?) ?? '';
         final before = _session;
@@ -996,6 +1031,7 @@ class Connection extends ChangeNotifier {
         _notices.add(const PairFailed());
       case 'reconnecting':
         _reconnecting = true;
+        _keepJoined();
       case 'disconnected':
         _lastEndTimedOut = m['reason'] == 'connection timed out';
         if (_session != null) {
@@ -1027,6 +1063,7 @@ class Connection extends ChangeNotifier {
             _giveUp = Timer(rejoinFor, () {
               if (_session == null) unawaited(leaveJoined());
             });
+            _keepJoined();
           } else {
             unawaited(leaveJoined());
           }
@@ -1110,6 +1147,7 @@ class Connection extends ChangeNotifier {
     _connectingLimit?.cancel();
     _scanLimit?.cancel();
     _giveUp?.cancel();
+    _rejoinTimer?.cancel();
     _hotspotGiveUp?.cancel();
     _bleUnjoined?.cancel();
     _hotspotWatch?.cancel();

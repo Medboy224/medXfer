@@ -101,6 +101,9 @@ class _Hotspot implements Hotspot {
 
   @override
   Future<void> leave() async {}
+
+  @override
+  Future<bool> rejoin() async => false;
   @override
   Future<int> joinedNetwork() async => 0;
   @override
@@ -410,6 +413,28 @@ void main() {
     radio.add(const BleSeen('old', -70)); // seen again at once: not tried before retryAfter
     await _settle();
     expect(steps('ble_client').where((p) => p['step'] == 'hello' && p['conn'] == 'old'), hasLength(1));
+  });
+
+  test('a recognition with no answer from a device still advertising is tried again soon', () async {
+    final within = BleLink.recognizeWithin;
+    final soon = BleLink.retrySoonAfter;
+    BleLink.recognizeWithin = const Duration(milliseconds: 50);
+    BleLink.retrySoonAfter = const [Duration(milliseconds: 40), Duration(milliseconds: 80)];
+    addTearDown(() {
+      BleLink.recognizeWithin = within;
+      BleLink.retrySoonAfter = soon;
+    });
+    _client(core, {
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+    });
+    await link.start();
+    radio.hang.add('11:11');
+    radio.add(const BleSeen('11:11', -62));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    radio.add(const BleSeen('11:11', -62)); // its advertisements go on (every 2 s on Windows)
+    await Future<void>.delayed(const Duration(milliseconds: 90)); // given up at 50 ms, tried at 90
+    await _settle();
+    expect(steps('ble_client').where((p) => p['step'] == 'hello' && p['conn'] == '11:11'), hasLength(2));
   });
 
   test('BLE-09: a network created for BLE that nobody joins is stopped after bleUnjoinedFor', () async {

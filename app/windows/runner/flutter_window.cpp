@@ -99,6 +99,9 @@ bool FlutterWindow::OnCreate() {
     } else if (call.method_name() == "leave") {
       wifi_join_.Leave();
       result->Success();
+    } else if (call.method_name() == "rejoin") {
+      std::shared_ptr<flutter::MethodResult<flutter::EncodableValue>> reply = std::move(result);
+      wifi_join_.Rejoin([reply](bool joined) { reply->Success(flutter::EncodableValue(joined)); });
     } else if (call.method_name() == "alive") {
       result->Success(flutter::EncodableValue(hotspot_.Alive()));
     } else if (call.method_name() == "wifiOn" || call.method_name() == "turnWifiOn") {
