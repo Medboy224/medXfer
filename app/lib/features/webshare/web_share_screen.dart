@@ -465,9 +465,12 @@ class _WebShareScreenState extends State<WebShareScreen> {
 /// The session running, wherever the user is (real test of 10 November 2026: leaving the screen
 /// must not lose it): one line, its code, a tap back to its screen.
 class WebShareBanner extends StatelessWidget {
-  const WebShareBanner({super.key, required this.onOpen});
+  const WebShareBanner({super.key, required this.onOpen, this.margin = const EdgeInsets.fromLTRB(12, 0, 12, 8)});
 
   final VoidCallback onOpen;
+
+  /// Around the banner: the home screen's gutter, none in the desktop's side menu.
+  final EdgeInsets margin;
 
   @override
   Widget build(BuildContext context) {
@@ -481,7 +484,7 @@ class WebShareBanner extends StatelessWidget {
         final s = ws.session;
         if (s == null) return const SizedBox.shrink();
         return Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          padding: margin,
           child: Material(
           color: c.soft,
           borderRadius: BorderRadius.circular(controlRadius),
