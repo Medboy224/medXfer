@@ -378,5 +378,6 @@
   "keepTransfer": "Continuer",
   "cancelSend": "Annuler l'envoi",
   "cancelReceive": "Annuler la réception",
-  "filesDoneLine": "{count, plural, =1{1 fichier} other{{count} fichiers}} · {done} terminés"
+  "filesDoneLine": "{count, plural, =1{1 fichier} other{{count} fichiers}} · {done} terminés",
+  "notSameNetwork": "Pas sur le même réseau ?"
 }

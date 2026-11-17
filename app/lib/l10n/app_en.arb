@@ -471,5 +471,6 @@
   "cancelSend": "Cancel the send",
   "cancelReceive": "Cancel the reception",
   "filesDoneLine": "{count, plural, =1{1 file} other{{count} files}} · {done} done",
-  "@filesDoneLine": {"placeholders": {"count": {"type": "int"}, "done": {"type": "int"}}}
+  "@filesDoneLine": {"placeholders": {"count": {"type": "int"}, "done": {"type": "int"}}},
+  "notSameNetwork": "Not on the same network?"
 }
