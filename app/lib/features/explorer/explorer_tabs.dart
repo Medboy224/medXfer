@@ -267,11 +267,13 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   final _points = <int, Offset>{};
   double? _startSpread;
   double _carry = 1;
-  double _scale = 1;
+  final _scaleN = ValueNotifier<double>(1);
+  double get _scale => _scaleN.value;
+  set _scale(double v) => _scaleN.value = v;
   Offset _focal = Offset.zero;
   Size _box = Size.zero;
   late final AnimationController _settle = AnimationController(vsync: this, duration: const Duration(milliseconds: 240))
-    ..addListener(() => setState(() => _scale = _settleFrom + (_settleGoal - _settleFrom) * Curves.easeOutCubic.transform(_settle.value)))
+    ..addListener(() => _scale = _settleFrom + (_settleGoal - _settleFrom) * Curves.easeOutCubic.transform(_settle.value))
     ..addStatusListener((status) {
       if (status == AnimationStatus.completed) _settled();
     });
@@ -308,6 +310,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   @override
   void dispose() {
     _settle.dispose();
+    _scaleN.dispose();
     _scroll.dispose();
     _targetScroll?.dispose();
     super.dispose();
@@ -435,7 +438,12 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
     // Spreading: fewer columns; pinching: more; none past the ends.
     final want = scale > 1 ? c - 1 : (scale < 1 ? c + 1 : null);
     final t = want != null && want >= Explorer.minColumns && want <= Explorer.maxColumns ? want : null;
-    if (t != _target) _prepare(t);
+    // Only a new target or a new layout rebuilds; the zoom itself does not.
+    var rebuild = false;
+    if (t != _target) {
+      _prepare(t);
+      rebuild = true;
+    }
     if (t == null) {
       scale = scale.clamp(0.87, 1.15).toDouble(); // a little give at the ends
     } else if ((t < c && scale >= c / t) || (t > c && scale <= c / t)) {
@@ -443,8 +451,10 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
       _commit(ex, t);
       _carry /= c / t;
       scale /= c / t;
+      rebuild = true;
     }
-    setState(() => _scale = scale);
+    _scale = scale;
+    if (rebuild) setState(() {});
   }
 
   void _up(PointerEvent e) {
@@ -547,36 +557,31 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                         SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
                       ],
                     );
-                    final next = _target, nextScroll = _targetScroll, fade = _progress;
+                    final next = _target, nextScroll = _targetScroll;
+                    // Built once per layout: the zoom below only scales and fades them.
+                    final current = view(_scroll, columns, ValueKey('media-${widget.kind.name}'), frozen: pinching || next != null);
+                    final upcoming = next != null && nextScroll != null
+                        ? IgnorePointer(child: view(nextScroll, next, ValueKey('media-${widget.kind.name}-next'), frozen: true))
+                        : null;
                     return Listener(
                       onPointerDown: (e) => _down(e, ex),
                       onPointerMove: (e) => _move(e, ex),
                       onPointerUp: _up,
                       onPointerCancel: _up,
                       child: ClipRect(
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            Opacity(
-                              opacity: 1 - fade,
-                              child: Transform.scale(
-                                scale: _scale,
-                                alignment: align,
-                                child: view(_scroll, columns, ValueKey('media-${widget.kind.name}'), frozen: pinching || next != null),
-                              ),
-                            ),
-                            if (next != null && nextScroll != null && fade > 0)
-                              IgnorePointer(
-                                child: Opacity(
-                                  opacity: fade,
-                                  child: Transform.scale(
-                                    scale: _scale / (columns / next),
-                                    alignment: align,
-                                    child: view(nextScroll, next, ValueKey('media-${widget.kind.name}-next'), frozen: true),
-                                  ),
-                                ),
-                              ),
-                          ],
+                        child: ValueListenableBuilder<double>(
+                          valueListenable: _scaleN,
+                          builder: (context, scale, _) {
+                            final fade = _progress;
+                            return Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Opacity(opacity: 1 - fade, child: Transform.scale(scale: scale, alignment: align, child: current)),
+                                if (upcoming != null && fade > 0)
+                                  Opacity(opacity: fade, child: Transform.scale(scale: scale / (columns / next!), alignment: align, child: upcoming)),
+                              ],
+                            );
+                          },
                         ),
                       ),
                     );
