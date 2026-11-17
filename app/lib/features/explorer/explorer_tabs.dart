@@ -4,6 +4,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'dart:typed_data';
 
@@ -269,9 +270,20 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   double _scale = 1;
   Offset _focal = Offset.zero;
   Size _box = Size.zero;
-  late final AnimationController _settle = AnimationController(vsync: this, duration: const Duration(milliseconds: 220))
-    ..addListener(() => setState(() => _scale = _settleFrom + (1 - _settleFrom) * Curves.easeOutCubic.transform(_settle.value)));
+  late final AnimationController _settle = AnimationController(vsync: this, duration: const Duration(milliseconds: 240))
+    ..addListener(() => setState(() => _scale = _settleFrom + (_settleGoal - _settleFrom) * Curves.easeOutCubic.transform(_settle.value)))
+    ..addStatusListener((status) {
+      if (status == AnimationStatus.completed) _settled();
+    });
   double _settleFrom = 1;
+  double _settleGoal = 1;
+
+  // As in a phone's gallery (Samsung's, seen on 17 November): between two numbers of columns,
+  // the next grid fades in over the current one, both at the scale of the fingers and the tile
+  // under them at the same place.
+  int? _target;
+  ScrollController? _targetScroll;
+  double _targetOffset = 0;
 
   // The layout last shown, to keep the same tile in place when it changes.
   List<int> _groups = const [];
@@ -297,7 +309,51 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   void dispose() {
     _settle.dispose();
     _scroll.dispose();
+    _targetScroll?.dispose();
     super.dispose();
+  }
+
+  /// How far the fade toward [_target] is: 0 at the current size, 1 at the target's.
+  double get _progress {
+    final t = _target;
+    if (t == null) return 0;
+    final k = _shownColumns / t;
+    if (k > 1 ? _scale <= 1 : _scale >= 1) return 0;
+    return (math.log(_scale) / math.log(k)).clamp(0.0, 1.0).toDouble();
+  }
+
+  /// The layout of [t] columns readied under the fingers: its scroll puts the same tile there.
+  void _prepare(int? t) {
+    final old = _targetScroll;
+    _targetScroll = null;
+    _target = t;
+    if (old != null) WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+    if (t == null || !_scroll.hasClients) return;
+    final c = _shownColumns;
+    final index = _at(_scroll.offset + _focal.dy, c, false);
+    final within = _scroll.offset + _focal.dy - _top(index, c, false);
+    _targetOffset = (_top(index, t, false) + within * c / t - _focal.dy).clamp(0.0, double.infinity).toDouble();
+    _targetScroll = ScrollController(initialScrollOffset: _targetOffset);
+  }
+
+  /// The layout faded in becomes the one shown.
+  void _commit(Explorer ex, int t) {
+    final offset = _targetOffset;
+    ex.setLayout(widget.kind, columns: t, asList: false);
+    _prepare(null);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) _scroll.jumpTo(offset.clamp(_scroll.position.minScrollExtent, _scroll.position.maxScrollExtent));
+    });
+  }
+
+  void _settled() {
+    final t = _target;
+    if (t != null && _settleGoal != 1) {
+      _commit(AppScope.of(context, listen: false).state.explorer, t);
+      setState(() => _scale = 1);
+    } else {
+      setState(() => _prepare(null));
+    }
   }
 
   /// The top of item [index] in a layout: headers, rows of square tiles, or list rows.
@@ -374,22 +430,21 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
     _points[e.pointer] = e.localPosition;
     final start = _startSpread, now = _spread();
     if (start == null || now == null || start <= 0) return;
-    final columns = ex.columns(widget.kind);
+    final c = _shownColumns;
     var scale = now / start * _carry;
-    // Past a step, the next number of columns; the tiles there are larger (or smaller) by
-    // columns / next: the scale shown shrinks (or grows) by as much, so nothing jumps.
-    if (scale > 1.3 && columns > Explorer.minColumns) {
-      _carry *= (columns - 1) / columns;
-      scale *= (columns - 1) / columns;
-      _keep(columns, false, columns - 1, false, _focal.dy);
-      ex.setLayout(widget.kind, columns: columns - 1, asList: false);
-    } else if (scale < 0.77 && columns < Explorer.maxColumns) {
-      _carry *= (columns + 1) / columns;
-      scale *= (columns + 1) / columns;
-      _keep(columns, false, columns + 1, false, _focal.dy);
-      ex.setLayout(widget.kind, columns: columns + 1, asList: false);
+    // Spreading: fewer columns; pinching: more; none past the ends.
+    final want = scale > 1 ? c - 1 : (scale < 1 ? c + 1 : null);
+    final t = want != null && want >= Explorer.minColumns && want <= Explorer.maxColumns ? want : null;
+    if (t != _target) _prepare(t);
+    if (t == null) {
+      scale = scale.clamp(0.87, 1.15).toDouble(); // a little give at the ends
+    } else if ((t < c && scale >= c / t) || (t > c && scale <= c / t)) {
+      // The next grid reached: it becomes the current one, the gesture goes on from there.
+      _commit(ex, t);
+      _carry /= c / t;
+      scale /= c / t;
     }
-    setState(() => _scale = scale.clamp(0.6, 1.6).toDouble());
+    setState(() => _scale = scale);
   }
 
   void _up(PointerEvent e) {
@@ -397,10 +452,13 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
     if (_points.length >= 2 || _startSpread == null) return;
     _startSpread = null;
     explorerPinching.value = false;
-    // Back to the size of the layout reached, smoothly.
+    // Past half the fade, on to the next grid; else back to the current one.
+    final t = _target;
     _settleFrom = _scale;
+    _settleGoal = t != null && _progress >= 0.5 ? _shownColumns / t : 1;
     if (MediaQuery.of(context).disableAnimations) {
-      setState(() => _scale = 1);
+      _scale = _settleGoal;
+      _settled();
     } else {
       unawaited(_settle.forward(from: 0));
     }
@@ -467,37 +525,58 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                     final align = _box.width > 0 && _box.height > 0
                         ? Alignment(_focal.dx / _box.width * 2 - 1, _focal.dy / _box.height * 2 - 1)
                         : Alignment.center;
+                    Widget view(ScrollController controller, int cols, Key key, {bool frozen = false}) => CustomScrollView(
+                      key: key,
+                      controller: controller,
+                      physics: frozen ? const NeverScrollableScrollPhysics() : null,
+                      slivers: [
+                        if (asList)
+                          SliverPadding(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            sliver: SliverFixedExtentList.builder(
+                              itemExtent: _rowHeight,
+                              itemCount: items.length,
+                              itemBuilder: (context, i) => _MediaRow(kind: widget.kind, entry: items[i]),
+                            ),
+                          )
+                        else
+                          for (final day in days) ...[
+                            if (byDay) SliverToBoxAdapter(child: SizedBox(height: _headerHeight, child: _DayHeader(day: day.$1, items: day.$2))),
+                            _grid(day.$2, cols),
+                          ],
+                        SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
+                      ],
+                    );
+                    final next = _target, nextScroll = _targetScroll, fade = _progress;
                     return Listener(
                       onPointerDown: (e) => _down(e, ex),
                       onPointerMove: (e) => _move(e, ex),
                       onPointerUp: _up,
                       onPointerCancel: _up,
                       child: ClipRect(
-                        child: Transform.scale(
-                          scale: _scale,
-                          alignment: align,
-                          child: CustomScrollView(
-                            key: ValueKey('media-${widget.kind.name}'),
-                            controller: _scroll,
-                            physics: pinching ? const NeverScrollableScrollPhysics() : null,
-                            slivers: [
-                              if (asList)
-                                SliverPadding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                                  sliver: SliverFixedExtentList.builder(
-                                    itemExtent: _rowHeight,
-                                    itemCount: items.length,
-                                    itemBuilder: (context, i) => _MediaRow(kind: widget.kind, entry: items[i]),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Opacity(
+                              opacity: 1 - fade,
+                              child: Transform.scale(
+                                scale: _scale,
+                                alignment: align,
+                                child: view(_scroll, columns, ValueKey('media-${widget.kind.name}'), frozen: pinching || next != null),
+                              ),
+                            ),
+                            if (next != null && nextScroll != null && fade > 0)
+                              IgnorePointer(
+                                child: Opacity(
+                                  opacity: fade,
+                                  child: Transform.scale(
+                                    scale: _scale / (columns / next),
+                                    alignment: align,
+                                    child: view(nextScroll, next, ValueKey('media-${widget.kind.name}-next'), frozen: true),
                                   ),
-                                )
-                              else
-                                for (final day in days) ...[
-                                  if (byDay) SliverToBoxAdapter(child: SizedBox(height: _headerHeight, child: _DayHeader(day: day.$1, items: day.$2))),
-                                  _grid(day.$2, columns),
-                                ],
-                              SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
-                            ],
-                          ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     );
