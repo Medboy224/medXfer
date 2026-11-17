@@ -12,6 +12,7 @@ import '../../platform/storage.dart';
 import '../../theme.dart';
 import '../../transfer/transfers.dart';
 import '../../widgets/format.dart';
+import '../../widgets/v4.dart';
 import 'transfer_screen.dart';
 
 class TransferPrompts extends StatefulWidget {
@@ -162,7 +163,14 @@ class _OfferDialogState extends State<_OfferDialog> {
     if (o == null) return const SizedBox.shrink();
     const shown = 4;
     return AlertDialog(
-      title: Text(l.incomingTitle(o.device)),
+      // ↙: something comes in (V4), the same sign as in the history.
+      title: Row(
+        children: [
+          const DirectionBadge(received: true, size: 40),
+          const SizedBox(width: 12),
+          Expanded(child: Text(l.incomingTitle(o.device))),
+        ],
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -173,10 +181,11 @@ class _OfferDialogState extends State<_OfferDialog> {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
           ),
+          const SizedBox(height: 2),
           Text(
             '${l.filesCount(o.files)} · ${formatBytes(context, o.bytes)}',
             key: const Key('offer-size'),
-            style: TextStyle(color: c.muted),
+            style: titleStyle(22, weight: FontWeight.w900, color: c.accent).copyWith(fontFeatures: tabular),
           ),
           if (o.items.length > 1) ...[
             const SizedBox(height: 8),
@@ -194,7 +203,7 @@ class _OfferDialogState extends State<_OfferDialog> {
             Text(
               l.noSpaceWarning(formatBytes(context, o.bytes), o.freeBytes < 0 ? '?' : formatBytes(context, o.freeBytes)),
               key: const Key('offer-no-space'),
-              style: TextStyle(color: c.danger, fontWeight: FontWeight.w600),
+              style: TextStyle(color: c.danger, fontWeight: FontWeight.w700),
             ),
           ],
           if (_allFiles == false) ...[
@@ -207,9 +216,29 @@ class _OfferDialogState extends State<_OfferDialog> {
           ],
         ],
       ),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       actions: [
-        TextButton(key: const Key('offer-decline'), onPressed: () => unawaited(widget.transfers.reject()), child: Text(l.decline)),
-        FilledButton(key: const Key('offer-accept'), onPressed: () => unawaited(widget.transfers.accept()), child: Text(l.accept)),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                key: const Key('offer-decline'),
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                onPressed: () => unawaited(widget.transfers.reject()),
+                child: Text(l.decline),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton(
+                key: const Key('offer-accept'),
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                onPressed: () => unawaited(widget.transfers.accept()),
+                child: Text(l.accept),
+              ),
+            ),
+          ],
+        ),
       ],
     );
   }

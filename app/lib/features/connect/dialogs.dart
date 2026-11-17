@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../app.dart';
 import '../../connection/pair_link.dart';
 import '../../l10n/app_localizations.dart';
+import '../../theme.dart';
 
 /// Asks for the other device's PIN, and its address when [target] is not known yet. Returns
 /// (target, pin), or null.
@@ -71,7 +72,8 @@ class _PinDialogState extends State<_PinDialog> {
             autofocus: widget.target != null,
             keyboardType: TextInputType.number,
             inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9 ]')), LengthLimitingTextInputFormatter(9)],
-            style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: 4),
+            textAlign: TextAlign.center,
+            style: titleStyle(30, weight: FontWeight.w900).copyWith(letterSpacing: 4, fontFeatures: tabular),
             decoration: InputDecoration(labelText: l.pinField, hintText: '000 000'),
             onChanged: (_) => setState(() {}),
             onSubmitted: (_) => _submit(),
