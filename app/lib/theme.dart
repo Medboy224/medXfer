@@ -301,6 +301,16 @@ ThemeData buildTheme(Palette palette, Accent accent) {
       trackColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? colors.strong : Colors.transparent),
       trackOutlineColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? colors.strong : colors.muted),
     ),
+    segmentedButtonTheme: SegmentedButtonThemeData(
+      style: ButtonStyle(
+        minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
+        backgroundColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? colors.strong : colors.section),
+        foregroundColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? colors.onStrong : colors.text),
+        side: WidgetStatePropertyAll(BorderSide(color: colors.section, width: 2)),
+        shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(controlRadius))),
+        textStyle: const WidgetStatePropertyAll(TextStyle(fontFamily: fontFamily, fontWeight: FontWeight.w700, fontSize: 14)),
+      ),
+    ),
     progressIndicatorTheme: ProgressIndicatorThemeData(color: colors.accent, linearTrackColor: colors.section),
     popupMenuTheme: PopupMenuThemeData(
       color: colors.section,

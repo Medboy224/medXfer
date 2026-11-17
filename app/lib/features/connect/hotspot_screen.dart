@@ -151,11 +151,11 @@ class _HotspotScreenState extends State<HotspotScreen> {
                       key: const Key('hotspot-band'),
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(band == WifiBand.ghz24 ? Icons.wifi_rounded : Icons.speed_rounded, size: 18, color: Theme.of(context).colorScheme.primary),
+                        Icon(band == WifiBand.ghz24 ? Icons.wifi_rounded : Icons.speed_rounded, size: 18, color: c.accent),
                         const SizedBox(width: 6),
                         Text(
                           l.hotspotBandLine(switch (band) { WifiBand.ghz24 => l.band24, WifiBand.ghz5 => l.band5, WifiBand.ghz6 => l.band6 }),
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
                         ),
                       ],
                     ),
@@ -166,8 +166,8 @@ class _HotspotScreenState extends State<HotspotScreen> {
                   if (_c.hotspotOtherWifi) ...[
                     Container(
                       key: const Key('hotspot-other-wifi'),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(border: Border.all(color: c.danger), borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(color: c.surface, border: Border.all(color: c.warn, width: 2), borderRadius: BorderRadius.circular(cardRadius)),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -189,8 +189,8 @@ class _HotspotScreenState extends State<HotspotScreen> {
                   if (_c.hotspotSlowWifiOff) ...[
                     Container(
                       key: const Key('hotspot-wifi-off-slow'),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(border: Border.all(color: c.border), borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(color: c.surface, border: Border.all(color: c.border, width: 2), borderRadius: BorderRadius.circular(cardRadius)),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -212,8 +212,8 @@ class _HotspotScreenState extends State<HotspotScreen> {
                   if (h.dropsClients) ...[
                     Container(
                       key: const Key('hotspot-unstable'),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(border: Border.all(color: c.danger), borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(color: c.surface, border: Border.all(color: c.warn, width: 2), borderRadius: BorderRadius.circular(cardRadius)),
                       child: Text(
                         h.addressHeldBy != null && h.sharingAddress != null
                             ? l.hotspotUnstableHeld(h.addressHeldBy!, h.sharingAddress!)
@@ -227,7 +227,7 @@ class _HotspotScreenState extends State<HotspotScreen> {
                     Center(
                       child: Container(
                         padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24)),
                         // A computer's screen shows it at about 1 mm a module at 230 (real test of
                         // 29 October 2026): the camera needs to be close, where it cannot focus.
                         child: SizedBox.square(dimension: _phone ? 230 : 340, child: QrView(key: const Key('my-qr'), data: _c.qrData!)),
@@ -258,8 +258,12 @@ class _HotspotScreenState extends State<HotspotScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const SizedBox(height: 6),
-                          SelectableText(pin.address, key: const Key('my-address'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                          SelectableText(pin.pin, key: const Key('my-pin'), style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, letterSpacing: 4)),
+                          SelectableText(pin.address, key: const Key('my-address'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, fontFeatures: tabular)),
+                          SelectableText(
+                            pin.pin,
+                            key: const Key('my-pin'),
+                            style: titleStyle(40, weight: FontWeight.w900, color: c.accent).copyWith(letterSpacing: 2, fontFeatures: tabular),
+                          ),
                         ],
                       ),
                     ),
@@ -270,7 +274,7 @@ class _HotspotScreenState extends State<HotspotScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                      SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2.5, color: c.accent)),
                       const SizedBox(width: 8),
                       Flexible(child: Text(l.waitingOther, style: TextStyle(color: c.muted))),
                     ],
@@ -279,25 +283,35 @@ class _HotspotScreenState extends State<HotspotScreen> {
                   // 5 GHz by default (decision of 2 November 2026); off for a phone or a card
                   // without it (WP-D.4). Shown when there is a choice: the phone got 5 GHz, or
                   // left it. Not during a session: the network made again would cut it.
-                  if (h.band == WifiBand.ghz5 || _c.hotspotLowBand)
-                    SwitchListTile(
-                      key: const Key('hotspot-five-ghz'),
-                      value: !_c.hotspotLowBand,
-                      onChanged: _c.session == null ? (v) => unawaited(_c.setHotspotFiveGhz(v)) : null,
-                      title: Text(l.hotspotFiveGhz),
-                      subtitle: Text(l.hotspotFiveGhzHint),
+                  if (h.band == WifiBand.ghz5 || _c.hotspotLowBand) ...[
+                    _Card(
+                      child: SwitchListTile(
+                        key: const Key('hotspot-five-ghz'),
+                        value: !_c.hotspotLowBand,
+                        onChanged: _c.session == null ? (v) => unawaited(_c.setHotspotFiveGhz(v)) : null,
+                        title: Text(l.hotspotFiveGhz, style: const TextStyle(fontWeight: FontWeight.w700)),
+                        subtitle: Text(l.hotspotFiveGhzHint),
+                      ),
                     ),
-                  SwitchListTile(
-                    key: const Key('remember'),
-                    value: _c.remember,
-                    onChanged: (v) => unawaited(_c.setRemember(v)),
-                    title: Text(l.rememberDevice),
-                    subtitle: Text(l.rememberHint),
+                    const SizedBox(height: 8),
+                  ],
+                  _Card(
+                    child: SwitchListTile(
+                      key: const Key('remember'),
+                      value: _c.remember,
+                      onChanged: (v) => unawaited(_c.setRemember(v)),
+                      title: Text(l.rememberDevice, style: const TextStyle(fontWeight: FontWeight.w700)),
+                      subtitle: Text(l.rememberHint),
+                    ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
                   OutlinedButton.icon(
                     key: const Key('hotspot-stop'),
-                    style: OutlinedButton.styleFrom(foregroundColor: c.danger, minimumSize: const Size.fromHeight(52)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: c.danger,
+                      side: BorderSide(color: c.danger, width: 2),
+                      minimumSize: const Size.fromHeight(56),
+                    ),
                     onPressed: () => Navigator.of(context).pop(), // leaving stops it (dispose)
                     icon: const Icon(Icons.portable_wifi_off_rounded),
                     label: Text(l.hotspotStop),
@@ -323,18 +337,19 @@ class _Step extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final accent = Theme.of(context).colorScheme.primary;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(color: c.surface, border: Border.all(color: c.border), borderRadius: BorderRadius.circular(18)),
+      decoration: BoxDecoration(color: c.surface, borderRadius: BorderRadius.circular(cardRadius)),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
-            radius: 14,
-            backgroundColor: accent,
-            child: Text('$n', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+          Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: c.strong, borderRadius: BorderRadius.circular(10)),
+            child: Text('$n', style: TextStyle(color: c.onStrong, fontWeight: FontWeight.w900)),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -372,4 +387,15 @@ class _Field extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A card for a switch.
+class _Card extends StatelessWidget {
+  const _Card({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) =>
+      Material(color: context.colors.surface, borderRadius: BorderRadius.circular(cardRadius), clipBehavior: Clip.antiAlias, child: child);
 }
