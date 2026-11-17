@@ -222,7 +222,8 @@ void main() {
 
     core.emit(CoreEvent('transfer_complete', data: {'items': [_q(0, 'film.mp4', 60 << 20, 'completed')]}));
     await tester.pumpAndSettle();
-    expect(find.text('Mo/s en moyenne'), findsOneWidget);
+    expect(find.text('en moyenne'), findsOneWidget);
+    expect(find.text('Reçu'), findsOneWidget);
     expect(find.text('1 fichier · 1 terminé'), findsOneWidget);
   });
 

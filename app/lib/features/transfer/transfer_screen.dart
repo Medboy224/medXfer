@@ -112,7 +112,7 @@ class _Header extends StatelessWidget {
     final average = a.stage == Stage.done && a.outcome == Outcome.completed ? a.averageMBps : null;
     final speed = flowing ? figure(live) : (average != null ? figure(average) : '0');
     final received = a.direction == Direction.received;
-    final stat = TextStyle(fontSize: 19, fontWeight: FontWeight.w800, fontFeatures: tabular, color: c.text);
+    final stat = TextStyle(fontSize: 17, fontWeight: FontWeight.w800, fontFeatures: tabular, color: c.text);
     final label = TextStyle(fontSize: 13, color: c.muted);
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
@@ -131,7 +131,12 @@ class _Header extends StatelessWidget {
                   children: [
                     Icon(received ? Icons.south_west_rounded : Icons.north_east_rounded, size: 16, color: c.onStrong),
                     const SizedBox(width: 4),
-                    Text(received ? l.directionReceive : l.directionSend, style: TextStyle(color: c.onStrong, fontSize: 13, fontWeight: FontWeight.w800)),
+                    Text(
+                      a.stage == Stage.done
+                          ? (received ? l.directionReceived : l.directionSent)
+                          : (received ? l.directionReceive : l.directionSend),
+                      style: TextStyle(color: c.onStrong, fontSize: 13, fontWeight: FontWeight.w800),
+                    ),
                   ],
                 ),
               ),
@@ -168,7 +173,17 @@ class _Header extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 10),
-                Flexible(child: Text(average != null ? l.speedAverage(l.speedUnit) : l.speedUnit, style: titleStyle(20, color: c.muted))),
+                // « en moyenne » small, under the unit: never a unit broken over two lines.
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(l.speedUnit, style: titleStyle(20, color: c.muted)),
+                      if (average != null) Text(l.onAverage, style: TextStyle(fontSize: 13, color: c.muted, fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -197,6 +212,8 @@ class _Header extends StatelessWidget {
                   ],
                 ),
               ),
+              // Apart from the sizes, never against them (« 3,5 Go1 min », real test of 17 November).
+              const SizedBox(width: 12),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [Text(l.remainingLabel, style: label), Text(flowing ? formatDuration(context, a.etaSeconds) : '—', style: stat)],

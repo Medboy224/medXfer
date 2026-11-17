@@ -477,8 +477,9 @@
   "accentBlue": "Blue",
   "accentOrange": "Orange",
   "accentViolet": "Violet",
-  "speedAverage": "{unit} on average",
-  "@speedAverage": {"placeholders": {"unit": {"type": "String"}}},
   "itemsCount": "{count, plural, =1{1 item} other{{count} items}}",
-  "@itemsCount": {"placeholders": {"count": {"type": "int"}}}
+  "@itemsCount": {"placeholders": {"count": {"type": "int"}}},
+  "directionSent": "Sent",
+  "directionReceived": "Received",
+  "onAverage": "on average"
 }

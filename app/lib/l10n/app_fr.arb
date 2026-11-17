@@ -384,6 +384,8 @@
   "accentBlue": "Bleu",
   "accentOrange": "Orange",
   "accentViolet": "Violet",
-  "speedAverage": "{unit} en moyenne",
-  "itemsCount": "{count, plural, =1{1 élément} other{{count} éléments}}"
+  "itemsCount": "{count, plural, =1{1 élément} other{{count} éléments}}",
+  "directionSent": "Envoyé",
+  "directionReceived": "Reçu",
+  "onAverage": "en moyenne"
 }
