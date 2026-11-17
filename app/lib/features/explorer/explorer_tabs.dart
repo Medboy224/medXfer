@@ -5,6 +5,7 @@ library;
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' show lerpDouble;
 
 import 'dart:typed_data';
 
@@ -381,6 +382,77 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
     return y;
   }
 
+  /// Where item [index] sits in a grid of [columns]: its square, in the scroll's coordinates.
+  Rect _place(int index, int columns) {
+    final stride = (_box.width - (columns - 1) * _gap) / columns + _gap;
+    final tile = stride - _gap;
+    var y = 0.0;
+    var i = index;
+    for (final n in _groups) {
+      if (_headers) y += _headerHeight;
+      if (i < n) return Rect.fromLTWH((i % columns) * stride, y + (i ~/ columns) * stride, tile, tile);
+      i -= n;
+      y += ((n + columns - 1) ~/ columns) * stride - _gap;
+    }
+    return Rect.fromLTWH(0, y, tile, tile);
+  }
+
+  /// The top of group [g]'s header in a grid of [columns].
+  double _headerTop(int g, int columns) {
+    final stride = (_box.width - (columns - 1) * _gap) / columns + _gap;
+    var y = 0.0;
+    for (var k = 0; k < g; k++) {
+      y += _headerHeight + ((_groups[k] + columns - 1) ~/ columns) * stride - _gap;
+    }
+    return y;
+  }
+
+  /// The photos on their way from the grid of [from] columns to the one of [to] (as a phone's
+  /// gallery does, seen on 17 November): each one's square between its place in the first and
+  /// in the second, [t] of the way; the days' headers slide with them. Only the photos on
+  /// screen in either grid are drawn, from the thumbnails already loaded.
+  Widget _morph(BuildContext context, List<MediaEntry> items, List<(DateTime, List<MediaEntry>)> days, bool byDay, int from, int to, double t) {
+    final c = context.colors;
+    final state = AppScope.of(context, listen: false).state;
+    final offFrom = _scroll.hasClients ? _scroll.offset : 0.0;
+    final offTo = _targetOffset;
+    final h = _box.height;
+    final first = math.min(_at(offFrom, from, false), _at(offTo, to, false));
+    final last = math.min(items.length - 1, math.max(_at(offFrom + h, from, false) + from, _at(offTo + h, to, false) + to));
+    final children = <Widget>[];
+    if (byDay) {
+      for (var g = 0; g < days.length; g++) {
+        final y = lerpDouble(_headerTop(g, from) - offFrom, _headerTop(g, to) - offTo, t)!;
+        if (y > h || y < -_headerHeight) continue;
+        children.add(Positioned(
+          key: ValueKey('morph-day-$g'),
+          left: 0,
+          right: 0,
+          top: y,
+          height: _headerHeight,
+          child: _DayHeader(day: days[g].$1, items: days[g].$2),
+        ));
+      }
+    }
+    for (var i = first; i <= last; i++) {
+      final r = Rect.lerp(_place(i, from).shift(Offset(0, -offFrom)), _place(i, to).shift(Offset(0, -offTo)), t)!;
+      if (r.bottom < 0 || r.top > h) continue;
+      final m = items[i];
+      final bytes = state.explorer.cached('${widget.kind.name}:${m.id}');
+      final on = state.selection.contains(Explorer.pickMedia(m).path);
+      children.add(Positioned.fromRect(
+        key: ValueKey('morph-${m.id}'),
+        rect: r,
+        child: DecoratedBox(
+          decoration: BoxDecoration(color: c.chip, border: on ? Border.all(color: c.strong, width: 3) : null),
+          // One decoding size for the whole gesture: the squares change size every frame.
+          child: bytes == null ? null : Image.memory(bytes, fit: BoxFit.cover, cacheWidth: 320, gaplessPlayback: true, filterQuality: FilterQuality.low),
+        ),
+      ));
+    }
+    return IgnorePointer(child: ColoredBox(color: c.background, child: Stack(clipBehavior: Clip.none, children: children)));
+  }
+
   /// The item at height [y] of a layout, and at [x] across (the column under the fingers).
   int _at(double y, int columns, bool asList, {double x = 0}) {
     final count = _groups.fold(0, (a, b) => a + b);
@@ -540,9 +612,6 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                 child: LayoutBuilder(
                   builder: (context, box) {
                     _box = box.biggest;
-                    final align = _box.width > 0 && _box.height > 0
-                        ? Alignment(_focal.dx / _box.width * 2 - 1, _focal.dy / _box.height * 2 - 1)
-                        : Alignment.center;
                     Widget view(ScrollController controller, int cols, Key key, {bool frozen = false}) => CustomScrollView(
                       key: key,
                       controller: controller,
@@ -583,20 +652,16 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                         child: ValueListenableBuilder<double>(
                           valueListenable: _scaleN,
                           builder: (context, scale, _) {
-                            final fade = _progress;
+                            final t = _progress;
+                            final morphing = upcoming != null && t > 0;
                             return Stack(
                               fit: StackFit.expand,
                               children: [
-                                KeyedSubtree(
-                                  key: ValueKey('layer-$columns'),
-                                  child: Opacity(opacity: 1 - fade, child: Transform.scale(scale: scale, alignment: align, child: current)),
-                                ),
-                                // Built as soon as it is the target, faded in from 0: ready when reached.
-                                if (upcoming != null)
-                                  KeyedSubtree(
-                                    key: ValueKey('layer-$next'),
-                                    child: Opacity(opacity: fade, child: Transform.scale(scale: scale / (columns / next!), alignment: align, child: upcoming)),
-                                  ),
+                                // The real grids stay built (their scroll, their tiles); while
+                                // the photos move from one to the other, a layer draws them.
+                                KeyedSubtree(key: ValueKey('layer-$columns'), child: Offstage(offstage: morphing, child: current)),
+                                if (upcoming != null) KeyedSubtree(key: ValueKey('layer-$next'), child: Offstage(child: upcoming)),
+                                if (morphing) _morph(context, items, days, byDay, columns, next!, t),
                               ],
                             );
                           },

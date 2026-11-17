@@ -346,6 +346,35 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('real test of 17 November: half way through a pinch, each photo is between its two places, the one under the fingers at their height', (tester) async {
+    final library = _Library(photos: 90);
+    await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    final grid = find.byKey(const ValueKey('media-images')).first;
+    await tester.drag(grid, const Offset(0, -500));
+    await tester.pumpAndSettle();
+    final focal = tester.getCenter(grid);
+    final a = await tester.startGesture(focal - const Offset(60, 0));
+    final b = await tester.startGesture(focal + const Offset(60, 0), pointer: 11);
+    await tester.pump();
+    // 3 → 2 columns: tiles 1.5 times larger; half way in a log scale: about 1.22.
+    for (var i = 1; i <= 6; i++) {
+      await a.moveTo(focal - Offset(60 + i * 2.2, 0));
+      await b.moveTo(focal + Offset(60 + i * 2.2, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    final morph = find.byWidgetPredicate((w) => w is Positioned && w.key is ValueKey<String> && (w.key! as ValueKey<String>).value.startsWith('morph-') && !(w.key! as ValueKey<String>).value.startsWith('morph-day'));
+    expect(morph, findsWidgets, reason: 'no photo in transit');
+    // The photo whose square holds the point between the fingers.
+    final rects = tester.widgetList<Positioned>(morph).map((p) => tester.getRect(find.byWidget(p))).toList();
+    expect(rects.any((r) => r.contains(focal) || (r.center.dy - focal.dy).abs() < r.height), isTrue);
+    await a.up();
+    await b.up();
+    await tester.pumpAndSettle();
+    expect(morph, findsNothing, reason: 'the layer stays once the gesture is over');
+  });
+
   testWidgets('WP-8.1b: an app shows its box once picked only', (tester) async {
     final library = _Library();
     await _app(tester, library);
