@@ -59,3 +59,27 @@ func TestLastReportSurvivesARestart(t *testing.T) {
 		t.Fatalf("after a restart: %+v; want the saved report, 2 retries, with its text", rep)
 	}
 }
+
+// The Wi-Fi the app says (set_network_info) goes into the report of the transfer under way and
+// of the next ones; said with no link, none.
+func TestReportCarriesTheLinkTheAppSaid(t *testing.T) {
+	configMu.RLock()
+	previous := customConfigDir
+	configMu.RUnlock()
+	SetCustomConfigDir(t.TempDir())
+	t.Cleanup(func() { SetCustomConfigDir(previous) })
+
+	s := NewDaemonServer(0, t.TempDir(), "LinkNode")
+	s.setLink(&diag.Link{Network: diag.LinkCreated, FrequencyMHz: 5805})
+	s.StartTransferTracker("a.bin", 1, 4096)
+	s.setLink(&diag.Link{Network: diag.LinkCreated, FrequencyMHz: 5805, OtherWifiMHz: 2412}) // during it
+	rep := s.FinishTransferTracker(diag.OutcomeCompleted)
+	if rep.Link == nil || rep.Link.OtherWifiMHz != 2412 || rep.Link.FrequencyMHz != 5805 {
+		t.Fatalf("link %+v; want 5805 MHz, another Wi-Fi at 2412", rep.Link)
+	}
+	s.setLink(nil)
+	s.StartTransferTracker("b.bin", 1, 4096)
+	if rep := s.FinishTransferTracker(diag.OutcomeCompleted); rep.Link != nil {
+		t.Fatalf("no link said, yet %+v", rep.Link)
+	}
+}

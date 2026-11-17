@@ -37,6 +37,7 @@ type TransferSessionTracker struct {
 	stages           *Stages // per-chunk measures (DEV-03)
 	doneBytes        int64   // the last progress: what this side had when the transfer ended
 	outcome          string  // how it ended (Outcome*), set by Finish
+	link             *Link   // the Wi-Fi, as the app said it (SetLink)
 
 	// 4 Quartile buckets (0: 0-25%, 1: 25-50%, 2: 50-75%, 3: 75-100%)
 	phaseSpeedSum       [4]float64
@@ -159,6 +160,21 @@ func (t *TransferSessionTracker) RecordRetry() {
 	t.mu.Unlock()
 }
 
+// SetLink records the Wi-Fi the transfer goes through. Said again during the transfer, the
+// last one counts, but another Wi-Fi seen once stays: it slowed a part of the transfer.
+func (t *TransferSessionTracker) SetLink(l *Link) {
+	if l == nil || !l.Valid() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	next := *l
+	if next.OtherWifiMHz == 0 && t.link != nil {
+		next.OtherWifiMHz = t.link.OtherWifiMHz
+	}
+	t.link = &next
+}
+
 // GenerateReport compiles the full transfer diagnostic summary. With the zero ReportOptions
 // it carries no file name (DEV-05).
 func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
@@ -274,6 +290,9 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 	default:
 		diagnosisText = fmt.Sprintf("✓ Balanced transfer: continuous sequential writes (disk latency %.1f ms, network latency %.1f ms).", avgDiskLatency, avgNetLatency)
 	}
+	if t.link != nil && t.link.OtherWifiMHz > 0 {
+		diagnosisText += " This device was on another Wi-Fi as well: its radio shared its time between the two networks, about 3 times slower."
+	}
 
 	r := newReportHeader()
 	if opts.IncludeNames {
@@ -297,6 +316,10 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 	if bottleneck != nil {
 		r.Stages = t.stages.Stats()
 		r.Bottleneck = bottleneck
+	}
+	if t.link != nil {
+		l := *t.link
+		r.Link = &l
 	}
 	r.DiagnosisText = diagnosisText
 	r.FormattedReport = FormatText(&r)
