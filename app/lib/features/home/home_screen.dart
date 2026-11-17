@@ -516,10 +516,11 @@ class _Basket extends StatelessWidget {
         IconButton(tooltip: l.clearSelection, icon: const Icon(Icons.close_rounded), onPressed: sel.clear),
         Expanded(
           child: Text(
-            l.basketLine(sel.count, formatBytes(context, sel.bytes)),
+            // Kept whole on a narrow screen: the dot stays with the count, never alone at the start.
+            l.basketLine(sel.count, formatBytes(context, sel.bytes)).replaceAll(' · ', ' · '),
             key: const Key('basket-line'),
             maxLines: 2,
-            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, fontFeatures: tabular, fontVariations: wide),
+            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, fontFeatures: tabular),
           ),
         ),
         // A guest without medXfer: its browser (J7). Sending to a device with it stays first.
@@ -533,15 +534,13 @@ class _Basket extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 6),
-        Flexible(
-          child: FilledButton.icon(
+        FilledButton.icon(
           key: const Key('basket-send'),
           onPressed: () =>
               connected ? unawaited(_send(context)) : unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const ConnectScreen()))),
           icon: Icon(connected ? Icons.north_east_rounded : Icons.link_rounded),
           iconAlignment: connected ? IconAlignment.end : IconAlignment.start,
-          label: Text(connected ? l.sendSelection : l.connect, maxLines: 1, overflow: TextOverflow.ellipsis),
-        ),
+          label: Text(connected ? l.sendSelection : l.connect, maxLines: 1),
         ),
       ],
     );

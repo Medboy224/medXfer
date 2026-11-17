@@ -110,13 +110,13 @@ void main() {
     expect(find.text('Notes'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('app-org.notes')));
     await tester.pump();
-    expect(find.text('1 élément · 4 Mo'), findsOneWidget);
+    expect(find.text('1 élément · 4 Mo'), findsOneWidget);
 
     await tester.tap(find.text('Photos'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('media-2')));
     await tester.pump();
-    expect(find.text('2 éléments · 5 Mo'), findsOneWidget);
+    expect(find.text('2 éléments · 5 Mo'), findsOneWidget);
 
     // Not connected: the basket's button connects first.
     expect(find.text('Connecter'), findsWidgets);
@@ -145,7 +145,7 @@ void main() {
     await tester.tap(find.byKey(const Key('select-all')));
     await tester.pump();
     expect(state.selection.count, 3);
-    expect(find.text('3 éléments · 3 Mo'), findsOneWidget);
+    expect(find.text('3 éléments · 3 Mo'), findsOneWidget);
     await tester.tap(find.byKey(const Key('select-all')));
     await tester.pump();
     expect(state.selection.isEmpty, isTrue);
