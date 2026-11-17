@@ -72,6 +72,12 @@ android {
             applicationIdSuffix = ".debug"
             manifestPlaceholders["appLabel"] = "medXfer debug"
         }
+        // The frame measures (perf.dart) need a profile build: it takes the debug build's place,
+        // same key and same data, rather than the release (plan J8, WP-8.1).
+        maybeCreate("profile").apply {
+            applicationIdSuffix = ".debug"
+            manifestPlaceholders["appLabel"] = "medXfer debug"
+        }
         release {
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }

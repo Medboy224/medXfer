@@ -69,13 +69,24 @@ class _TrustedScreenState extends State<TrustedScreen> {
             );
           }
           return ListView.separated(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
             itemCount: devices.length,
-            separatorBuilder: (_, _) => Divider(height: 1, color: c.border),
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
             itemBuilder: (context, i) {
               final d = devices[i];
-              return ListTile(
+              return Material(
+                color: c.surface,
+                borderRadius: BorderRadius.circular(cardRadius),
+                clipBehavior: Clip.antiAlias,
+                child: ListTile(
                 key: ValueKey('trusted-${d.fingerprint}'),
-                leading: CircleAvatar(backgroundColor: c.chip, child: Icon(Icons.verified_user_rounded, color: Theme.of(context).colorScheme.primary)),
+                contentPadding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+                leading: Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(color: c.section, borderRadius: BorderRadius.circular(controlRadius)),
+                  child: Icon(Icons.verified_user_rounded, color: c.accent),
+                ),
                 title: Text(d.alias.isEmpty ? d.short : d.alias, style: const TextStyle(fontWeight: FontWeight.w700)),
                 subtitle: Text([l.keyLabel(d.short), if (d.lastAddress.isNotEmpty) d.lastAddress].join(' · ')),
                 trailing: PopupMenuButton<String>(
@@ -87,6 +98,7 @@ class _TrustedScreenState extends State<TrustedScreen> {
                     PopupMenuItem(value: 'forget', child: Text(l.forget)),
                   ],
                 ),
+              ),
               );
             },
           );

@@ -28,55 +28,73 @@ class SettingsScreen extends StatelessWidget {
     };
     Widget heading(String text) => Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-      child: Text(text, style: TextStyle(color: c.muted, fontWeight: FontWeight.w700)),
+      child: Text(text, style: titleStyle(15)),
     );
+    final accentNames = [l.accentVolt, l.accentBlue, l.accentOrange, l.accentViolet];
     return Scaffold(
       appBar: AppBar(title: Text(l.settings)),
       body: ListenableBuilder(
         listenable: settings,
         builder: (context, _) => ListView(
+          padding: const EdgeInsets.fromLTRB(0, 0, 0, 24),
           children: [
             heading(l.theme),
-            RadioGroup<ThemeChoice>(
+            _Card(
+              child: RadioGroup<ThemeChoice>(
               groupValue: settings.theme,
               onChanged: (t) => settings.theme = t ?? settings.theme,
               child: Column(
                 children: [
                   for (final t in ThemeChoice.values)
-                    RadioListTile<ThemeChoice>(key: ValueKey('theme-${t.name}'), value: t, title: Text(names[t]!)),
+                    RadioListTile<ThemeChoice>(key: ValueKey('theme-${t.name}'), value: t, title: Text(names[t]!, style: const TextStyle(fontWeight: FontWeight.w600))),
                 ],
               ),
+            ),
             ),
             heading(l.accentColor),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Wrap(
-                spacing: 12,
-                children: [
-                  for (final (i, a) in accents.indexed)
-                    InkWell(
-                      key: ValueKey('accent-$i'),
-                      customBorder: const CircleBorder(),
-                      onTap: () => settings.accent = a,
-                      child: CircleAvatar(
-                        radius: 20,
-                        backgroundColor: a,
-                        child: a == settings.accent ? const Icon(Icons.check_rounded, color: Colors.white) : null,
+            _Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Wrap(
+                  spacing: 14,
+                  runSpacing: 10,
+                  children: [
+                    for (final (i, a) in accents.indexed)
+                      Semantics(
+                        button: true,
+                        selected: a == settings.accent,
+                        label: accentNames[i],
+                        excludeSemantics: true,
+                        child: InkWell(
+                          key: ValueKey('accent-$i'),
+                          customBorder: const CircleBorder(),
+                          onTap: () => settings.accent = a,
+                          // The one chosen: a ring and a check, not the color alone.
+                          child: Container(
+                            padding: const EdgeInsets.all(3),
+                            decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: a == settings.accent ? c.text : Colors.transparent, width: 2)),
+                            child: CircleAvatar(
+                              radius: 22,
+                              backgroundColor: a.bright,
+                              child: a == settings.accent ? const Icon(Icons.check_rounded, color: Color(0xFF0D0F0E)) : null,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 12),
-            Divider(color: c.border),
             const _ReceiveSection(),
-            Divider(color: c.border),
-            SwitchListTile(
-              key: const Key('dev-mode'),
-              value: settings.devMode,
-              onChanged: (v) => settings.devMode = v,
-              title: Text(l.devMode),
-              subtitle: Text(l.devModeHint),
+            heading(l.devMode),
+            _Card(
+              child: SwitchListTile(
+                key: const Key('dev-mode'),
+                value: settings.devMode,
+                onChanged: (v) => settings.devMode = v,
+                title: Text(l.devMode, style: const TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: Text(l.devModeHint),
+              ),
             ),
           ],
         ),
@@ -160,9 +178,13 @@ class _ReceiveSectionState extends State<_ReceiveSection> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Text(l.receiveTitle, style: TextStyle(color: c.muted, fontWeight: FontWeight.w700)),
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+          child: Text(l.receiveTitle, style: titleStyle(15)),
         ),
+        _Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
         if (can == null)
           const Padding(padding: EdgeInsets.all(16), child: LinearProgressIndicator())
         else if (!can)
@@ -202,7 +224,23 @@ class _ReceiveSectionState extends State<_ReceiveSection> {
             title: Text(l.sortByType),
             subtitle: Text(l.sortByTypeHint),
           ),
+            ],
+          ),
+        ),
       ],
     );
   }
+}
+
+/// A section of the settings, in a card.
+class _Card extends StatelessWidget {
+  const _Card({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 12),
+    child: Material(color: context.colors.surface, borderRadius: BorderRadius.circular(cardRadius), clipBehavior: Clip.antiAlias, child: child),
+  );
 }

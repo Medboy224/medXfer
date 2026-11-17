@@ -71,7 +71,7 @@ void main() {
       await File('${dir.path}/settings.json').writeAsString('{"theme": "neon", "accent": 9, "dev_mode": "yes"}');
       final s = AppSettings(store: FileSettingsStore(() async => dir.path));
       await s.load();
-      expect((s.theme, s.accent, s.devMode), (ThemeChoice.system, accents.first, false));
+      expect((s.theme, s.accent, s.devMode), (ThemeChoice.dark, accents.first, false));
       await File('${dir.path}/settings.json').writeAsString('{not json');
       await s.load();
       expect(s.devMode, isFalse);
@@ -154,7 +154,7 @@ void main() {
     await tester.tap(find.text('Réglages'));
     await tester.pumpAndSettle();
     // Below the receive folder: further down the list.
-    await tester.ensureVisible(find.byKey(const Key('dev-mode')));
+    await tester.scrollUntilVisible(find.byKey(const Key('dev-mode')), 200, scrollable: find.byType(Scrollable).last);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('dev-mode')));
     await tester.pumpAndSettle();

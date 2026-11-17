@@ -1,6 +1,6 @@
-/// The home screen of the validated mockups (§1.2 of the J6b plan): tabs at the top, the
-/// "On this device" row, the banner of the session, and the Connect button. The tabs' content
-/// comes with WP-B.9.
+/// The home screen of « Version 4 » (plan J8, WP-8.1): the name, the tabs as pills, the
+/// selection over the whole screen, and a bar floating above it: the basket, the transfer
+/// running, or Connect.
 library;
 
 import 'dart:async';
@@ -14,9 +14,11 @@ import '../../library/selection.dart';
 import '../../platform/file_picker.dart' as fp;
 import '../../platform/library.dart';
 import '../../theme.dart';
+import '../../transfer/history.dart' show Direction;
 import '../../transfer/transfers.dart';
 import '../../widgets/drop_zone.dart';
 import '../../widgets/format.dart';
+import '../../widgets/v4.dart';
 import '../connect/connect_screen.dart';
 import '../connect/dialogs.dart';
 import '../dev/dev_panel.dart';
@@ -34,21 +36,30 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     final c = context.colors;
-    final tabs = [l.tabHistory, l.tabApps, l.tabPhotos, l.tabVideos, l.tabMusic, l.tabFiles];
+    final tabs = [
+      (l.tabHistory, Icons.history_rounded),
+      (l.tabApps, Icons.apps_rounded),
+      (l.tabPhotos, Icons.image_outlined),
+      (l.tabVideos, Icons.smart_display_outlined),
+      (l.tabMusic, Icons.music_note_outlined),
+      (l.tabFiles, Icons.folder_outlined),
+    ];
     return DefaultTabController(
       length: tabs.length,
       initialIndex: 1,
       child: Scaffold(
+        // The bar floats: the grids run under it (their bottom padding leaves room).
+        extendBody: true,
         appBar: AppBar(
-          backgroundColor: c.surface,
-          surfaceTintColor: Colors.transparent,
-          title: Text(l.appTitle, style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: -0.4)),
+          titleSpacing: 16,
+          title: Text(l.appTitle, style: titleStyle(23, weight: FontWeight.w900, color: c.text).copyWith(fontStyle: FontStyle.italic)),
           actions: [
             IconButton(tooltip: l.scanQr, icon: const Icon(Icons.qr_code_scanner_rounded), onPressed: () => _joinByQr(context)),
             PopupMenuButton<String>(
               key: const Key('home-menu'),
               tooltip: l.menu,
-              icon: const Icon(Icons.menu_rounded),
+              icon: const Icon(Icons.more_vert_rounded),
+              offset: const Offset(0, 48),
               onSelected: (v) => switch (v) {
                 'trusted' => _open(context, const TrustedScreen()),
                 'browser' => _open(context, const WebShareScreen()),
@@ -56,14 +67,27 @@ class HomeScreen extends StatelessWidget {
                 _ => _open(context, const SettingsScreen()),
               },
               itemBuilder: (_) => [
-                PopupMenuItem(value: 'browser', key: const Key('menu-browser'), child: Text(l.webShareTitle)),
-                PopupMenuItem(value: 'trusted', child: Text(l.trustedDevices)),
-                PopupMenuItem(value: 'settings', child: Text(l.settings)),
-                if (AppScope.of(context, listen: false).settings.devMode) PopupMenuItem(value: 'dev', child: Text(l.devPanel)),
+                _menuItem(context, 'browser', Icons.public_rounded, l.webShareTitle, key: const Key('menu-browser')),
+                _menuItem(context, 'trusted', Icons.verified_user_outlined, l.trustedDevices),
+                _menuItem(context, 'settings', Icons.tune_rounded, l.settings),
+                if (AppScope.of(context, listen: false).settings.devMode) _menuItem(context, 'dev', Icons.code_rounded, l.devPanel),
               ],
             ),
+            const SizedBox(width: 4),
           ],
-          bottom: TabBar(isScrollable: true, tabs: [for (final t in tabs) Tab(text: t)]),
+          bottom: TabBar(
+            isScrollable: true,
+            padding: const EdgeInsets.fromLTRB(9, 0, 9, 8),
+            labelPadding: const EdgeInsets.symmetric(horizontal: 17),
+            indicatorPadding: const EdgeInsets.symmetric(horizontal: 3),
+            tabs: [
+              for (final (label, icon) in tabs)
+                Tab(
+                  height: 44,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, size: 18), const SizedBox(width: 7), Text(label)]),
+                ),
+            ],
+          ),
         ),
         body: ListenableBuilder(
           listenable: AppScope.of(context).state.connection,
@@ -78,16 +102,12 @@ class HomeScreen extends StatelessWidget {
               const _CoreLine(),
               const _SessionBanner(),
               WebShareBanner(onOpen: () => _open(context, const WebShareScreen())),
-              Container(
-                color: c.section,
-                padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 6, 0),
                 child: Row(
                   children: [
                     Expanded(
-                      child: Text(
-                        l.onThisDevice,
-                        style: TextStyle(color: c.muted, fontWeight: FontWeight.w600),
-                      ),
+                      child: Text(l.onThisDevice, style: TextStyle(color: c.muted, fontWeight: FontWeight.w700, fontSize: 13)),
                     ),
                     const _SelectAll(),
                   ],
@@ -108,11 +128,7 @@ class HomeScreen extends StatelessWidget {
                         Center(
                           child: Padding(
                             padding: const EdgeInsets.all(32),
-                            child: Text(
-                              l.desktopTabs,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: c.muted),
-                            ),
+                            child: Text(l.desktopTabs, textAlign: TextAlign.center, style: TextStyle(color: c.muted)),
                           ),
                         ),
                   ],
@@ -122,114 +138,132 @@ class HomeScreen extends StatelessWidget {
           ),
         ),
         bottomNavigationBar: SafeArea(
-          child: Container(
-            key: const Key('bottom-bar'),
-            decoration: BoxDecoration(
-              color: c.surface,
-              border: Border(top: BorderSide(color: c.border)),
-            ),
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-            // heightFactor 1: centered, never stretched to the height the Scaffold offers.
-            child: Align(
-              heightFactor: 1,
-              child: ListenableBuilder(
-                listenable: Listenable.merge([
-                  AppScope.of(context).state.connection,
-                  AppScope.of(context).state.transfers,
-                  AppScope.of(context).state.selection,
-                ]),
-                builder: (context, _) {
-                  final state = AppScope.of(context).state;
-                  final connection = state.connection;
-                  final a = state.transfers.active;
-                  if (a != null && a.stage != Stage.done) {
-                    final see = FilledButton.tonalIcon(
-                      key: const Key('see-transfer'),
-                      style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
-                      onPressed: () => _open(context, const TransferScreen()),
-                      icon: const Icon(Icons.swap_vert_rounded),
-                      label: Text(
-                        '${a.name} · ${(a.fraction * 100).toStringAsFixed(0)} % · ${formatBytes(context, a.totalBytes)}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    );
-                    if (!a.lost || connection.session != null) return see;
-                    // The session lost for good: connecting again lets the transfer go on.
-                    return Wrap(
-                      alignment: WrapAlignment.center,
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        see,
-                        FilledButton.icon(
-                          key: const Key('connect'),
-                          style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
-                          onPressed: () => _open(context, const ConnectScreen()),
-                          icon: const Icon(Icons.link_rounded),
-                          label: Text(l.connect),
-                        ),
-                      ],
-                    );
-                  }
-                  // Something picked in the explorer: the basket, and send (or connect first).
-                  if (!state.selection.isEmpty) return _Basket(connected: connection.session != null);
-                  if (connection.session != null && state.filePicker.supported) {
-                    return Wrap(
-                      alignment: WrapAlignment.center,
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        FilledButton.icon(
-                          key: const Key('send-files'),
-                          style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
-                          onPressed: () async => state.transfers.sendPicked(await state.filePicker.files()),
-                          icon: const Icon(Icons.upload_file_rounded),
-                          label: Text(l.sendFiles),
-                        ),
-                        // A whole folder: the desktops (Android: with the explorer of WP-B.9).
-                        if (state.filePicker.folders)
-                          OutlinedButton.icon(
-                            key: const Key('send-folder'),
-                            style: OutlinedButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
-                            onPressed: () async {
-                              final folder = await state.filePicker.folder();
-                              if (folder != null) await state.transfers.send([folder]);
-                            },
-                            icon: const Icon(Icons.drive_folder_upload_rounded),
-                            label: Text(l.sendFolder),
-                          ),
-                      ],
-                    );
-                  }
-                  // Without a picker: the session's end.
-                  if (connection.session != null) {
-                    return OutlinedButton.icon(
-                      key: const Key('disconnect'),
-                      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
-                      onPressed: () => unawaited(connection.disconnect()),
-                      icon: const Icon(Icons.link_off_rounded),
-                      label: Text(l.disconnect),
-                    );
-                  }
-                  return FilledButton.icon(
-                    key: const Key('connect'),
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size(0, 52),
-                      padding: const EdgeInsets.symmetric(horizontal: 28),
-                      shape: const StadiumBorder(),
-                      textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w800, fontSize: 16),
-                    ),
-                    onPressed: () => _open(context, const ConnectScreen()),
-                    icon: const Icon(Icons.link_rounded),
-                    label: Text(l.connect),
-                  );
-                },
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
+            child: DecoratedBox(
+              key: const Key('bottom-bar'),
+              decoration: BoxDecoration(
+                color: c.section,
+                borderRadius: BorderRadius.circular(22),
+                boxShadow: [BoxShadow(color: c.shadow, blurRadius: 30, offset: const Offset(0, 10))],
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: ListenableBuilder(
+                  listenable: Listenable.merge([
+                    AppScope.of(context).state.connection,
+                    AppScope.of(context).state.transfers,
+                    AppScope.of(context).state.selection,
+                  ]),
+                  builder: (context, _) => _bar(context),
+                ),
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  static PopupMenuItem<String> _menuItem(BuildContext context, String value, IconData icon, String label, {Key? key}) => PopupMenuItem(
+    value: value,
+    key: key,
+    height: 52,
+    child: Row(
+      children: [
+        Icon(icon, size: 20, color: context.colors.accent),
+        const SizedBox(width: 12),
+        Flexible(child: Text(label)),
+      ],
+    ),
+  );
+
+  /// What the floating bar holds: the transfer running, the basket, or the next step.
+  Widget _bar(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final c = context.colors;
+    final state = AppScope.of(context).state;
+    final connection = state.connection;
+    final a = state.transfers.active;
+    if (a != null && a.stage != Stage.done) {
+      final see = _TransferLine(active: a, onOpen: () => _open(context, const TransferScreen()));
+      if (!a.lost || connection.session != null) return see;
+      // The session lost for good: connecting again lets the transfer go on.
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          see,
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              key: const Key('connect'),
+              onPressed: () => _open(context, const ConnectScreen()),
+              icon: const Icon(Icons.link_rounded),
+              label: Text(l.connect),
+            ),
+          ),
+        ],
+      );
+    }
+    // Something picked in the explorer: the basket, and send (or connect first).
+    if (!state.selection.isEmpty) return _Basket(connected: connection.session != null);
+    final s = connection.session;
+    if (s != null) {
+      return Row(
+        children: [
+          const SizedBox(width: 10),
+          Expanded(child: _Who(label: l.connectedToLabel, name: s.name.isEmpty ? s.ip : s.name)),
+          if (state.filePicker.supported) ...[
+            // A whole folder: the desktops (Android: with the explorer of WP-B.9).
+            if (state.filePicker.folders) ...[
+              IconButton.outlined(
+                key: const Key('send-folder'),
+                tooltip: l.sendFolder,
+                style: IconButton.styleFrom(side: BorderSide(color: c.border, width: 2)),
+                onPressed: () async {
+                  final folder = await state.filePicker.folder();
+                  if (folder != null) await state.transfers.send([folder]);
+                },
+                icon: const Icon(Icons.drive_folder_upload_rounded),
+              ),
+              const SizedBox(width: 6),
+            ],
+            Flexible(
+              child: FilledButton.icon(
+                key: const Key('send-files'),
+                onPressed: () async => state.transfers.sendPicked(await state.filePicker.files()),
+                icon: const Icon(Icons.north_east_rounded),
+                iconAlignment: IconAlignment.end,
+                label: Text(l.sendFiles, maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+            ),
+          ] else
+            // Without a picker: the session's end.
+            OutlinedButton.icon(
+              key: const Key('disconnect'),
+              onPressed: () => unawaited(connection.disconnect()),
+              icon: const Icon(Icons.link_off_rounded),
+              label: Text(l.disconnect),
+            ),
+        ],
+      );
+    }
+    return Row(
+      children: [
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(l.noDeviceConnected, style: TextStyle(color: c.muted, fontWeight: FontWeight.w600, fontSize: 14)),
+        ),
+        Flexible(
+          child: FilledButton.icon(
+            key: const Key('connect'),
+            onPressed: () => _open(context, const ConnectScreen()),
+            icon: const Icon(Icons.link_rounded),
+            label: Text(l.connect, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+        ),
+      ],
     );
   }
 
@@ -252,7 +286,80 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
-/// One line on the core: starting, ready under its name, or why it failed.
+/// A small label over a name: « Connecté à » / « PC Naruto ».
+class _Who extends StatelessWidget {
+  const _Who({required this.label, required this.name});
+
+  final String label;
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: TextStyle(color: c.muted, fontSize: 13)),
+        Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+      ],
+    );
+  }
+}
+
+/// The transfer running, in the floating bar: its direction, name, progress; a tap opens it.
+class _TransferLine extends StatelessWidget {
+  const _TransferLine({required this.active, required this.onOpen});
+
+  final ActiveTransfer active;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final a = active;
+    return InkWell(
+      key: const Key('see-transfer'),
+      borderRadius: BorderRadius.circular(controlRadius),
+      onTap: onOpen,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 2, 4, 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                DirectionBadge(received: a.direction == Direction.received),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(a.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                      Text(
+                        '${(a.fraction * 100).toStringAsFixed(0)} % · ${formatBytes(context, a.totalBytes)}',
+                        style: TextStyle(color: c.muted, fontSize: 13, fontFeatures: tabular),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right_rounded),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: LinearProgressIndicator(value: a.fraction.clamp(0, 1).toDouble(), minHeight: 6, backgroundColor: c.border, color: c.accent),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One line on the core while it starts or if it failed; once ready, nothing (the name shows in
+/// Connect).
 class _CoreLine extends StatelessWidget {
   const _CoreLine();
 
@@ -269,6 +376,8 @@ class _CoreLine extends StatelessWidget {
           CoreStatus.ready => (l.coreReady(state.deviceName), c.ok),
           CoreStatus.failed => (l.coreFailed(state.error ?? ''), c.danger),
         };
+        // Ready: the room goes to the selection (V4); the name shows in Connect.
+        if (state.status == CoreStatus.ready) return const SizedBox(width: double.infinity, height: 4);
         return Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -276,13 +385,7 @@ class _CoreLine extends StatelessWidget {
             children: [
               Icon(Icons.circle, size: 10, color: color),
               const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  text,
-                  key: const Key('core-line'),
-                  style: TextStyle(color: c.muted, fontSize: 13),
-                ),
-              ),
+              Expanded(child: Text(text, key: const Key('core-line'), style: TextStyle(color: c.muted, fontSize: 13))),
             ],
           ),
         );
@@ -291,7 +394,7 @@ class _CoreLine extends StatelessWidget {
   }
 }
 
-/// Who this device is connected to; both send and receive while it lasts (§1.2).
+/// Who this device is connected to; both send and receive while it lasts.
 class _SessionBanner extends StatelessWidget {
   const _SessionBanner();
 
@@ -300,7 +403,6 @@ class _SessionBanner extends StatelessWidget {
     final connection = AppScope.of(context).state.connection;
     final l = AppLocalizations.of(context);
     final c = context.colors;
-    final accent = Theme.of(context).colorScheme.primary;
     return ListenableBuilder(
       listenable: connection,
       builder: (context, _) {
@@ -314,24 +416,17 @@ class _SessionBanner extends StatelessWidget {
                   key: const Key('session-banner'),
                   width: double.infinity,
                   margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                  padding: const EdgeInsets.fromLTRB(14, 6, 4, 6),
-                  decoration: BoxDecoration(
-                    color: accent.withValues(alpha: 0.10),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: accent.withValues(alpha: 0.35)),
-                  ),
+                  padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+                  decoration: BoxDecoration(color: c.soft, borderRadius: BorderRadius.circular(controlRadius)),
                   child: Row(
                     children: [
-                      Icon(connection.reconnecting ? Icons.sync_problem_rounded : (s.mutual ? Icons.verified_user_rounded : Icons.link_rounded), color: accent),
+                      Icon(connection.reconnecting ? Icons.sync_problem_rounded : (s.mutual ? Icons.verified_user_rounded : Icons.link_rounded), color: c.accent),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              l.connectedTo(s.name.isEmpty ? s.ip : s.name),
-                              style: TextStyle(fontWeight: FontWeight.w800, color: c.text),
-                            ),
+                            Text(l.connectedTo(s.name.isEmpty ? s.ip : s.name), style: TextStyle(fontWeight: FontWeight.w800, color: c.text)),
                             Text(connection.reconnecting ? l.reconnecting : s.ip, style: TextStyle(color: c.muted, fontSize: 12)),
                           ],
                         ),
@@ -354,7 +449,7 @@ class _SessionBanner extends StatelessWidget {
   }
 }
 
-/// The circle of "On this device": picks every item of the tab on screen, or unpicks them.
+/// « Tout sélectionner » and its square box: picks every item of the tab on screen, or unpicks them.
 class _SelectAll extends StatelessWidget {
   const _SelectAll();
 
@@ -362,17 +457,16 @@ class _SelectAll extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = AppScope.of(context).state;
     final l = AppLocalizations.of(context);
-    final c = context.colors;
     final tabs = DefaultTabController.of(context);
     return ListenableBuilder(
       listenable: Listenable.merge([tabs, state.selection, state.explorer]),
       builder: (context, _) {
         final picks = state.library.supported ? state.explorer.picksOf(tabs.index) : const <Pick>[];
         final all = state.selection.allOf(picks);
-        return IconButton(
+        return BoxToggle(
           key: const Key('select-all'),
-          tooltip: l.selectAll,
-          icon: Icon(all ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded, color: all ? Theme.of(context).colorScheme.primary : c.muted),
+          label: l.selectAll,
+          on: all,
           onPressed: picks.isEmpty
               ? null
               : () {
@@ -385,7 +479,7 @@ class _SelectAll extends StatelessWidget {
   }
 }
 
-/// The basket (§1.2): how many items, how large; then send, or connect first.
+/// The basket: how many items, how large; to a browser, then send (or connect first).
 class _Basket extends StatelessWidget {
   const _Basket({required this.connected});
 
@@ -414,35 +508,46 @@ class _Basket extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = AppScope.of(context).state;
     final l = AppLocalizations.of(context);
+    final c = context.colors;
     final sel = state.selection;
     return Row(
       key: const Key('basket'),
       children: [
         IconButton(tooltip: l.clearSelection, icon: const Icon(Icons.close_rounded), onPressed: sel.clear),
+        // The count over the size, each on its line (real test of 17 November: « 5.9 / MB »).
         Expanded(
-          child: Text(
-            l.basketLine(sel.count, formatBytes(context, sel.bytes)),
-            key: const Key('basket-line'),
-            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+          child: Semantics(
+            label: l.basketLine(sel.count, formatBytes(context, sel.bytes)),
+            excludeSemantics: true,
+            child: Column(
+              key: const Key('basket-line'),
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(l.itemsCount(sel.count), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, fontFeatures: tabular)),
+                Text(formatBytes(context, sel.bytes), maxLines: 1, style: TextStyle(color: c.muted, fontSize: 13, fontFeatures: tabular)),
+              ],
+            ),
           ),
         ),
         // A guest without medXfer: its browser (J7). Sending to a device with it stays first.
         IconButton.outlined(
           key: const Key('basket-browser'),
           tooltip: l.webShareTitle,
+          style: IconButton.styleFrom(side: BorderSide(color: c.border, width: 2)),
           icon: const Icon(Icons.public_rounded),
           onPressed: () => unawaited(
             offerSelectionToBrowser(context, open: () => unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const WebShareScreen())))),
           ),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 6),
         FilledButton.icon(
           key: const Key('basket-send'),
-          style: FilledButton.styleFrom(minimumSize: const Size(0, 52), shape: const StadiumBorder()),
           onPressed: () =>
               connected ? unawaited(_send(context)) : unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const ConnectScreen()))),
-          icon: Icon(connected ? Icons.send_rounded : Icons.link_rounded),
-          label: Text(connected ? l.sendSelection : l.connect),
+          icon: Icon(connected ? Icons.north_east_rounded : Icons.link_rounded),
+          iconAlignment: connected ? IconAlignment.end : IconAlignment.start,
+          label: Text(connected ? l.sendSelection : l.connect, maxLines: 1),
         ),
       ],
     );

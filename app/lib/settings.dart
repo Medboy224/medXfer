@@ -5,7 +5,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 import 'theme.dart';
 
@@ -58,19 +58,19 @@ class MemorySettingsStore implements SettingsStore {
 }
 
 class AppSettings extends ChangeNotifier {
-  AppSettings({ThemeChoice? theme, Color? accent, this._devMode = false, this._store})
-      : _theme = theme ?? ThemeChoice.system,
+  AppSettings({ThemeChoice? theme, Accent? accent, this._devMode = false, this._store})
+      : _theme = theme ?? ThemeChoice.dark,
         _accent = accent ?? accents.first;
 
   final SettingsStore? _store;
   ThemeChoice _theme;
-  Color _accent;
+  Accent _accent;
   bool _devMode;
   String _receiveDir = '';
   bool _sortByType = true;
 
   ThemeChoice get theme => _theme;
-  Color get accent => _accent;
+  Accent get accent => _accent;
 
   /// The developer mode: off by default, it shows a banner and the developer panel (DEV-13).
   bool get devMode => _devMode;
@@ -93,7 +93,7 @@ class AppSettings extends ChangeNotifier {
     _changed();
   }
 
-  set accent(Color value) {
+  set accent(Accent value) {
     if (value == _accent) return;
     _accent = value;
     _changed();

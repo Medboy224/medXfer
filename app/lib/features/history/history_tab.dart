@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../../app.dart';
 import '../../l10n/app_localizations.dart';
 import '../../theme.dart';
+import '../explorer/explorer_tabs.dart' show bottomRoom;
 import '../../transfer/history.dart';
 import '../../widgets/format.dart';
 
@@ -34,8 +35,9 @@ class HistoryTab extends StatelessWidget {
         final dates = MaterialLocalizations.of(context);
         return ListView.separated(
           key: const Key('history'),
+          padding: EdgeInsets.fromLTRB(12, 8, 12, bottomRoom(context)),
           itemCount: entries.length,
-          separatorBuilder: (_, _) => Divider(height: 1, color: c.border),
+          separatorBuilder: (_, _) => const SizedBox(height: 8),
           itemBuilder: (context, i) {
             final e = entries[i];
             final received = e.direction == Direction.received;
@@ -48,11 +50,18 @@ class HistoryTab extends StatelessWidget {
               Outcome.failed => (l.outcomeFailed, c.danger),
             };
             final canOpen = received && e.folder.isNotEmpty && state.folderOpener.supported && e.outcome != Outcome.rejected;
-            return ListTile(
+            return Material(
+              color: c.surface,
+              borderRadius: BorderRadius.circular(16),
+              clipBehavior: Clip.antiAlias,
+              child: ListTile(
               key: ValueKey('history-$i'),
-              leading: CircleAvatar(
-                backgroundColor: c.chip,
-                child: Icon(received ? Icons.south_west_rounded : Icons.north_east_rounded, color: Theme.of(context).colorScheme.primary),
+              contentPadding: const EdgeInsets.fromLTRB(12, 4, 8, 4),
+              leading: Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(color: c.section, borderRadius: BorderRadius.circular(12)),
+                child: Icon(received ? Icons.south_west_rounded : Icons.north_east_rounded, color: c.accent),
               ),
               title: Text(
                 e.name.isEmpty ? (received ? l.historyReceived(e.device) : l.historySent(e.device)) : e.name,
@@ -80,6 +89,7 @@ class HistoryTab extends StatelessWidget {
                       onPressed: () => state.folderOpener.open(e.folder),
                     )
                   : null,
+            ),
             );
           },
         );

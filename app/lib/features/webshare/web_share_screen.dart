@@ -334,7 +334,7 @@ class _WebShareScreenState extends State<WebShareScreen> {
         s.pinShown,
         key: const Key('web-share-pin'),
         textAlign: TextAlign.center,
-        style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, letterSpacing: 4),
+        style: titleStyle(40, weight: FontWeight.w900, color: c.accent).copyWith(letterSpacing: 2, fontFeatures: tabular),
       ),
       const SizedBox(height: 8),
       if (hotspot != null)
@@ -364,8 +364,8 @@ class _WebShareScreenState extends State<WebShareScreen> {
       // The warning every guest meets: said before it surprises (gate G5).
       Container(
         key: const Key('web-share-warning'),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(border: Border.all(color: c.border), borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(color: c.surface, border: Border.all(color: c.warn, width: 2), borderRadius: BorderRadius.circular(cardRadius)),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -380,7 +380,7 @@ class _WebShareScreenState extends State<WebShareScreen> {
             const SizedBox(height: 6),
             GestureDetector(
               onLongPress: () => unawaited(Clipboard.setData(ClipboardData(text: s.fingerprint))),
-              child: Text(l.webShareFingerprint(s.fingerprint), style: TextStyle(fontSize: 11, color: c.muted, fontFamily: 'monospace')),
+              child: Text(l.webShareFingerprint(s.fingerprint), style: TextStyle(fontSize: 12, color: c.muted, fontFeatures: tabular)),
             ),
           ],
         ),
@@ -389,8 +389,12 @@ class _WebShareScreenState extends State<WebShareScreen> {
         const SizedBox(height: 16),
         Container(
           key: const Key('web-share-upload'),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(color: c.surface, border: Border.all(color: c.border), borderRadius: BorderRadius.circular(12)),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: c.surface,
+            border: Border.all(color: up.accepted ? c.surface : c.accent, width: 2),
+            borderRadius: BorderRadius.circular(cardRadius),
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -402,9 +406,23 @@ class _WebShareScreenState extends State<WebShareScreen> {
               if (!up.accepted)
                 Row(
                   children: [
-                    Expanded(child: OutlinedButton(key: const Key('web-share-refuse'), onPressed: () => unawaited(_ws.answer(false)), child: Text(l.webShareRefuse))),
+                    Expanded(
+                      child: OutlinedButton(
+                        key: const Key('web-share-refuse'),
+                        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                        onPressed: () => unawaited(_ws.answer(false)),
+                        child: Text(l.webShareRefuse),
+                      ),
+                    ),
                     const SizedBox(width: 8),
-                    Expanded(child: FilledButton(key: const Key('web-share-accept'), onPressed: () => unawaited(_ws.answer(true)), child: Text(l.webShareAccept))),
+                    Expanded(
+                      child: FilledButton(
+                        key: const Key('web-share-accept'),
+                        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                        onPressed: () => unawaited(_ws.answer(true)),
+                        child: Text(l.webShareAccept),
+                      ),
+                    ),
                   ],
                 )
               else ...[
@@ -435,7 +453,7 @@ class _WebShareScreenState extends State<WebShareScreen> {
       const SizedBox(height: 16),
       OutlinedButton.icon(
         key: const Key('web-share-stop'),
-        style: OutlinedButton.styleFrom(foregroundColor: c.danger, minimumSize: const Size.fromHeight(52)),
+        style: OutlinedButton.styleFrom(foregroundColor: c.danger, side: BorderSide(color: c.danger, width: 2), minimumSize: const Size.fromHeight(56)),
         onPressed: () => unawaited(_ws.stop()),
         icon: const Icon(Icons.stop_circle_outlined),
         label: Text(l.webShareStop),
@@ -447,23 +465,30 @@ class _WebShareScreenState extends State<WebShareScreen> {
 /// The session running, wherever the user is (real test of 10 November 2026: leaving the screen
 /// must not lose it): one line, its code, a tap back to its screen.
 class WebShareBanner extends StatelessWidget {
-  const WebShareBanner({super.key, required this.onOpen});
+  const WebShareBanner({super.key, required this.onOpen, this.margin = const EdgeInsets.fromLTRB(12, 0, 12, 8)});
 
   final VoidCallback onOpen;
+
+  /// Around the banner: the home screen's gutter, none in the desktop's side menu.
+  final EdgeInsets margin;
 
   @override
   Widget build(BuildContext context) {
     final ws = AppScope.of(context).state.webShare;
     final l = AppLocalizations.of(context);
     final c = context.colors;
-    final accent = Theme.of(context).colorScheme.primary;
+    final accent = c.accent;
     return ListenableBuilder(
       listenable: ws,
       builder: (context, _) {
         final s = ws.session;
         if (s == null) return const SizedBox.shrink();
-        return Material(
-          color: c.chip,
+        return Padding(
+          padding: margin,
+          child: Material(
+          color: c.soft,
+          borderRadius: BorderRadius.circular(controlRadius),
+          clipBehavior: Clip.antiAlias,
           child: InkWell(
             key: const Key('web-share-banner'),
             onTap: onOpen,
@@ -473,7 +498,7 @@ class WebShareBanner extends StatelessWidget {
               child: LayoutBuilder(
                 builder: (context, box) {
                   final title = Text(l.webShareRunning, style: const TextStyle(fontWeight: FontWeight.w700));
-                  final code = Text(l.webShareRunningPin(s.pinShown), style: TextStyle(color: c.muted));
+                  final code = Text(l.webShareRunningPin(s.pinShown), style: const TextStyle(fontWeight: FontWeight.w700, fontFeatures: tabular));
                   return Row(
                     children: [
                       Icon(Icons.public_rounded, size: 20, color: accent),
@@ -490,6 +515,7 @@ class WebShareBanner extends StatelessWidget {
                 },
               ),
             ),
+          ),
           ),
         );
       },

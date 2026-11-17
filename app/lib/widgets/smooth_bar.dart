@@ -15,9 +15,10 @@ class SmoothBar extends StatelessWidget {
   final double minHeight;
   final Color? color;
 
-  /// About the time between two chunks on a slow link: the bar reaches each figure as the
-  /// next one comes.
-  static const glide = Duration(milliseconds: 800);
+  /// The time between two figures of the core (200 ms) and a little more: the bar reaches each
+  /// one as the next comes, never late behind the transfer (real test of 17 November 2026: at
+  /// 800 ms it went on moving once the transfer was over).
+  static const glide = Duration(milliseconds: 250);
 
   @override
   Widget build(BuildContext context) {
@@ -26,7 +27,8 @@ class SmoothBar extends StatelessWidget {
     if (v == null) return LinearProgressIndicator(minHeight: minHeight, borderRadius: radius, color: color);
     return TweenAnimationBuilder<double>(
       tween: Tween(end: v),
-      duration: MediaQuery.of(context).disableAnimations ? Duration.zero : glide,
+      // The end is shown at once: never a bar still moving under « done ».
+      duration: MediaQuery.of(context).disableAnimations || v >= 1 ? Duration.zero : glide,
       curve: Curves.linear,
       builder: (context, shown, _) => LinearProgressIndicator(value: shown, minHeight: minHeight, borderRadius: radius, color: color),
     );

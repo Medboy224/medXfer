@@ -134,6 +134,99 @@ void main() {
     expect(find.textContaining('Reçu de PC du salon'), findsOneWidget);
   });
 
+  testWidgets('V4: the speed in big figures; Annuler asks first, « Continuer » keeps the transfer', (tester) async {
+    final core = FakeCore()
+      ..on('respond_offer', (_) => const FakeAnswer())
+      ..on('cancel', (_) => const FakeAnswer());
+    await _app(tester, core);
+    core.emit(CoreEvent('incoming_offer', data: {
+      'device_name': 'PC du salon',
+      'file_name': 'Photos',
+      'file_size': 3 * 1048576,
+      'total_files': 3,
+      'is_batch': true,
+      'items': [for (var i = 0; i < 3; i++) _q(i, 'Photos/${i + 1}.jpg', 1048576, 'pending')],
+      'free_bytes': 1 << 30,
+      'enough_space': true,
+    }));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('offer-accept')));
+    await tester.pumpAndSettle();
+    core.emit(CoreEvent('transfer_progress', data: {
+      'batch_bytes': 1048576,
+      'batch_total_bytes': 3 * 1048576,
+      'speed_mbps': 38.2,
+      'eta_seconds': 14,
+      'items': [
+        {'index': 0, 'bytes': 1048576, 'size': 1048576},
+      ],
+    }));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('38,2'), findsOneWidget);
+    expect(find.text('Mo/s'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('transfer-cancel')));
+    await tester.pumpAndSettle();
+    expect(find.text('Annuler la réception ?'), findsOneWidget);
+    expect(find.textContaining('fichiers pas encore terminés ne seront pas transférés.'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('transfer-keep')));
+    await tester.pumpAndSettle();
+    expect(core.calls.where((c) => c.action == 'cancel'), isEmpty);
+
+    await tester.tap(find.byKey(const Key('transfer-cancel')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('transfer-cancel-yes')));
+    await tester.pumpAndSettle();
+    expect(core.calls.last.action, 'cancel');
+  });
+
+  testWidgets('real test of 17 November: the bar never goes back, a short silence keeps the speed, the end says the average', (tester) async {
+    final core = FakeCore()..on('respond_offer', (_) => const FakeAnswer());
+    final (_, state) = await _app(tester, core);
+    core.emit(CoreEvent('incoming_offer', data: {
+      'device_name': 'PC du salon',
+      'file_name': 'film.mp4',
+      'file_size': 60 << 20,
+      'total_files': 1,
+      'is_batch': false,
+      'items': [_q(0, 'film.mp4', 60 << 20, 'pending')],
+      'free_bytes': 1 << 34,
+      'enough_space': true,
+    }));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('offer-accept')));
+    await tester.pumpAndSettle();
+    Map<String, Object?> progress(int bytes, double speed) => {
+      'batch_bytes': bytes,
+      'batch_total_bytes': 60 << 20,
+      'speed_mbps': speed,
+      'eta_seconds': 3,
+      'items': [
+        {'index': 0, 'bytes': bytes, 'size': 60 << 20},
+      ],
+    };
+    // The first bytes, before the core's first speed: the figure moves with the bar.
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300)));
+    core.emit(CoreEvent('transfer_progress', data: progress(6 << 20, 0)));
+    await tester.pump();
+    await tester.pump();
+    expect(tester.widget<Text>(find.byKey(const Key('transfer-speed'))).data, isNot('0'));
+    core.emit(CoreEvent('transfer_progress', data: progress(30 << 20, 20)));
+    await tester.pump();
+    core.emit(CoreEvent('transfer_progress', data: progress(24 << 20, 0)));
+    await tester.pump();
+    expect(state.transfers.active!.bytes, 30 << 20, reason: 'the bar went back');
+    expect(state.transfers.active!.speedMBps, 20, reason: 'a short silence is not a stop');
+    expect(find.text('20,0'), findsOneWidget);
+
+    core.emit(CoreEvent('transfer_complete', data: {'items': [_q(0, 'film.mp4', 60 << 20, 'completed')]}));
+    await tester.pumpAndSettle();
+    expect(find.text('en moyenne'), findsOneWidget);
+    expect(find.text('Reçu'), findsOneWidget);
+    expect(find.text('1 fichier · 1 terminé'), findsOneWidget);
+  });
+
   testWidgets('declined: answered no, nothing opened', (tester) async {
     final core = FakeCore()..on('respond_offer', (_) => const FakeAnswer());
     await _app(tester, core);

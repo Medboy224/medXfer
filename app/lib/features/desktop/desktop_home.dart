@@ -159,7 +159,6 @@ class _SideMenu extends StatelessWidget {
     final state = AppScope.of(context).state;
     final l = AppLocalizations.of(context);
     final c = context.colors;
-    final accent = Theme.of(context).colorScheme.primary;
     final labels = {
       DesktopPage.home: l.navHome,
       DesktopPage.history: l.tabHistory,
@@ -167,20 +166,24 @@ class _SideMenu extends StatelessWidget {
       DesktopPage.trusted: l.trustedDevices,
       DesktopPage.settings: l.settings,
     };
+    const icons = {
+      DesktopPage.home: Icons.home_outlined,
+      DesktopPage.history: Icons.history_rounded,
+      DesktopPage.browser: Icons.public_rounded,
+      DesktopPage.trusted: Icons.verified_user_outlined,
+      DesktopPage.settings: Icons.tune_rounded,
+    };
     return Container(
       key: const Key('side-menu'),
       width: 240,
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
-      decoration: BoxDecoration(
-        color: c.surface,
-        border: Border(right: BorderSide(color: c.border)),
-      ),
+      decoration: BoxDecoration(color: c.surface),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(8, 0, 8, 4),
-            child: Text('medXfer', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: -0.4)),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+            child: Text('medXfer', style: titleStyle(26, weight: FontWeight.w900).copyWith(fontStyle: FontStyle.italic)),
           ),
           ListenableBuilder(
             listenable: state,
@@ -193,19 +196,27 @@ class _SideMenu extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: Material(
-                color: p == page ? c.chip : Colors.transparent,
-                borderRadius: BorderRadius.circular(12),
+                color: p == page ? c.strong : Colors.transparent,
+                borderRadius: BorderRadius.circular(controlRadius),
                 child: InkWell(
                   key: ValueKey('nav-${p.name}'),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(controlRadius),
                   onTap: () => onPick(p),
                   child: Container(
-                    constraints: const BoxConstraints(minHeight: 44),
+                    constraints: const BoxConstraints(minHeight: 48),
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     alignment: Alignment.centerLeft,
-                    child: Text(
-                      labels[p]!,
-                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15, color: p == page ? accent : c.text),
+                    child: Row(
+                      children: [
+                        Icon(icons[p], size: 20, color: p == page ? c.onStrong : c.muted),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            labels[p]!,
+                            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: p == page ? c.onStrong : c.muted),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -215,10 +226,7 @@ class _SideMenu extends StatelessWidget {
           // The browser sharing running, whatever the page: a click back to it.
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: WebShareBanner(onOpen: state.webShare.show),
-            ),
+            child: WebShareBanner(onOpen: state.webShare.show, margin: EdgeInsets.zero),
           ),
           const _Status(),
         ],
@@ -249,7 +257,7 @@ class _Status extends StatelessWidget {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: FilledButton.tonal(
                   key: const Key('see-transfer'),
-                  style: FilledButton.styleFrom(minimumSize: const Size(0, 44), shape: const StadiumBorder()),
+                  style: FilledButton.styleFrom(minimumSize: const Size(0, 48), backgroundColor: c.section, foregroundColor: c.text),
                   onPressed: () => unawaited(Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const TransferScreen()))),
                   child: Text(
                     '${a.name} · ${(a.fraction * 100).toStringAsFixed(0)} % · ${formatBytes(context, a.totalBytes)}',
@@ -261,7 +269,7 @@ class _Status extends StatelessWidget {
             if (session != null)
               Row(
                 children: [
-                  Icon(Icons.link_rounded, size: 18, color: c.muted),
+                  Container(width: 10, height: 10, decoration: BoxDecoration(color: c.accent, shape: BoxShape.circle)),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(

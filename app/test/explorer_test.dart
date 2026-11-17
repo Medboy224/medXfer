@@ -11,6 +11,7 @@ import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/library/selection.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/platform/folders.dart';
+import 'package:medxfer/widgets/v4.dart';
 import 'package:medxfer/platform/library.dart';
 import 'package:medxfer/platform/storage.dart';
 import 'package:medxfer/settings.dart';
@@ -109,13 +110,15 @@ void main() {
     expect(find.text('Notes'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('app-org.notes')));
     await tester.pump();
-    expect(find.text('1 élément · 4 Mo'), findsOneWidget);
+    expect(find.text('1 élément'), findsOneWidget);
+    expect(find.text('4 Mo'), findsWidgets);
 
     await tester.tap(find.text('Photos'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('media-2')));
     await tester.pump();
-    expect(find.text('2 éléments · 5 Mo'), findsOneWidget);
+    expect(find.text('2 éléments'), findsOneWidget);
+    expect(find.text('5 Mo'), findsWidgets);
 
     // Not connected: the basket's button connects first.
     expect(find.text('Connecter'), findsWidgets);
@@ -144,7 +147,8 @@ void main() {
     await tester.tap(find.byKey(const Key('select-all')));
     await tester.pump();
     expect(state.selection.count, 3);
-    expect(find.text('3 éléments · 3 Mo'), findsOneWidget);
+    expect(find.text('3 éléments'), findsOneWidget);
+    expect(find.text('3 Mo'), findsWidgets);
     await tester.tap(find.byKey(const Key('select-all')));
     await tester.pump();
     expect(state.selection.isEmpty, isTrue);
@@ -155,7 +159,7 @@ void main() {
     await tester.tap(find.text('Photos'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('media-3')), findsOneWidget);
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Camera'));
+    await tester.tap(find.widgetWithText(ChoicePill, 'Camera'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('media-3')), findsNothing);
     expect(find.byKey(const ValueKey('media-1')), findsOneWidget);

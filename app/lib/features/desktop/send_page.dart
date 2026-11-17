@@ -124,11 +124,10 @@ class _Pick extends StatelessWidget {
     final choose = OutlinedButton.styleFrom(
       minimumSize: const Size(0, 44),
       padding: const EdgeInsets.symmetric(horizontal: 18),
-      shape: const StadiumBorder(),
       backgroundColor: c.background,
       foregroundColor: c.text,
-      side: BorderSide(color: c.border),
-      textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w600),
+      side: BorderSide(color: c.border, width: 2),
+      textStyle: const TextStyle(fontWeight: FontWeight.w600),
     );
     final picks = selection.items.toList();
     final to = session;
@@ -179,7 +178,7 @@ class _Pick extends StatelessWidget {
             color: c.surface,
             clipBehavior: Clip.antiAlias,
             shape: RoundedRectangleBorder(
-              side: BorderSide(color: c.border),
+              side: BorderSide(color: c.border, width: 2),
               borderRadius: BorderRadius.circular(18),
             ),
             child: Column(
@@ -245,8 +244,7 @@ class _Pick extends StatelessWidget {
               key: const Key('send'),
               style: FilledButton.styleFrom(
                 minimumSize: const Size(0, 52),
-                shape: const StadiumBorder(),
-                textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w800, fontSize: 16),
+                          textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
               ),
               onPressed: onSend,
               icon: const Icon(Icons.send_rounded),
@@ -320,10 +318,9 @@ class _ConnectionPanel extends StatelessWidget {
     final secondary = OutlinedButton.styleFrom(
       minimumSize: const Size(0, 44),
       padding: const EdgeInsets.symmetric(horizontal: 14),
-      shape: const StadiumBorder(),
       foregroundColor: c.text,
-      side: BorderSide(color: c.border),
-      textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w600),
+      side: BorderSide(color: c.border, width: 2),
+      textStyle: const TextStyle(fontWeight: FontWeight.w600),
     );
     Widget heading(String text) => Padding(
       padding: const EdgeInsets.fromLTRB(4, 16, 4, 8),
@@ -443,8 +440,7 @@ class _ConnectionPanel extends StatelessWidget {
             key: const Key('hotspot-start'),
             style: FilledButton.styleFrom(
               minimumSize: const Size(0, 44),
-              shape: const StadiumBorder(),
-              textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w700),
+                      textStyle: const TextStyle(fontWeight: FontWeight.w700),
             ),
             onPressed: connection.hotspotBusy
                 ? null
@@ -545,15 +541,13 @@ class _Device extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final accent = Theme.of(context).colorScheme.primary;
     Widget button(String label, VoidCallback? onPressed, {required bool primary}) => FilledButton(
       style: FilledButton.styleFrom(
-        minimumSize: const Size(0, 40),
+        minimumSize: const Size(0, 44),
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        shape: const StadiumBorder(),
-        backgroundColor: primary ? accent : c.chip,
-        foregroundColor: primary ? Colors.white : c.text,
-        textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w700),
+          backgroundColor: primary ? c.strong : c.chip,
+        foregroundColor: primary ? c.onStrong : c.text,
+        textStyle: const TextStyle(fontWeight: FontWeight.w700),
       ),
       onPressed: onPressed,
       child: Text(label),
@@ -562,11 +556,7 @@ class _Device extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 12),
       child: Container(
         padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: c.surface,
-          border: Border.all(color: c.border),
-          borderRadius: BorderRadius.circular(16),
-        ),
+        decoration: BoxDecoration(color: c.surface, borderRadius: BorderRadius.circular(cardRadius)),
         child: Row(
           children: [
             Expanded(
