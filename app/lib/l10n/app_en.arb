@@ -456,5 +456,20 @@
   "today": "Today",
   "yesterday": "Yesterday",
   "noDeviceConnected": "No device connected",
-  "connectedToLabel": "Connected to"
+  "connectedToLabel": "Connected to",
+  "speedUnit": "MB/s",
+  "progressLabel": "Progress",
+  "transferredLabel": "Transferred",
+  "remainingLabel": "Left",
+  "directionSend": "Sending",
+  "directionReceive": "Receiving",
+  "cancelSendTitle": "Cancel the send?",
+  "cancelReceiveTitle": "Cancel the reception?",
+  "cancelUnfinished": "{count, plural, =0{The transfer stops.} =1{1 file not finished yet will not be transferred.} other{{count} files not finished yet will not be transferred.}}",
+  "@cancelUnfinished": {"placeholders": {"count": {"type": "int"}}},
+  "keepTransfer": "Keep going",
+  "cancelSend": "Cancel the send",
+  "cancelReceive": "Cancel the reception",
+  "filesDoneLine": "{count, plural, =1{1 file} other{{count} files}} · {done} done",
+  "@filesDoneLine": {"placeholders": {"count": {"type": "int"}, "done": {"type": "int"}}}
 }

@@ -134,6 +134,53 @@ void main() {
     expect(find.textContaining('Reçu de PC du salon'), findsOneWidget);
   });
 
+  testWidgets('V4: the speed in big figures; Annuler asks first, « Continuer » keeps the transfer', (tester) async {
+    final core = FakeCore()
+      ..on('respond_offer', (_) => const FakeAnswer())
+      ..on('cancel', (_) => const FakeAnswer());
+    await _app(tester, core);
+    core.emit(CoreEvent('incoming_offer', data: {
+      'device_name': 'PC du salon',
+      'file_name': 'Photos',
+      'file_size': 3 * 1048576,
+      'total_files': 3,
+      'is_batch': true,
+      'items': [for (var i = 0; i < 3; i++) _q(i, 'Photos/${i + 1}.jpg', 1048576, 'pending')],
+      'free_bytes': 1 << 30,
+      'enough_space': true,
+    }));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('offer-accept')));
+    await tester.pumpAndSettle();
+    core.emit(CoreEvent('transfer_progress', data: {
+      'batch_bytes': 1048576,
+      'batch_total_bytes': 3 * 1048576,
+      'speed_mbps': 38.2,
+      'eta_seconds': 14,
+      'items': [
+        {'index': 0, 'bytes': 1048576, 'size': 1048576},
+      ],
+    }));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('38,2'), findsOneWidget);
+    expect(find.text('Mo/s'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('transfer-cancel')));
+    await tester.pumpAndSettle();
+    expect(find.text('Annuler la réception ?'), findsOneWidget);
+    expect(find.textContaining('fichiers pas encore terminés ne seront pas transférés.'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('transfer-keep')));
+    await tester.pumpAndSettle();
+    expect(core.calls.where((c) => c.action == 'cancel'), isEmpty);
+
+    await tester.tap(find.byKey(const Key('transfer-cancel')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('transfer-cancel-yes')));
+    await tester.pumpAndSettle();
+    expect(core.calls.last.action, 'cancel');
+  });
+
   testWidgets('declined: answered no, nothing opened', (tester) async {
     final core = FakeCore()..on('respond_offer', (_) => const FakeAnswer());
     await _app(tester, core);
