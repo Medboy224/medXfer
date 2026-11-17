@@ -154,7 +154,7 @@ void main() {
     radio.add(const BleSeen('11:11', -60));
     await tester.pumpAndSettle();
     await _reveal(tester, find.text('medXfer-6e2a'));
-    expect(find.text('Bluetooth · Il affichera un PIN à taper ici'), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const ValueKey('ble-11:11')), matching: find.text('Il affichera un PIN à taper ici')), findsOneWidget);
 
     await tester.tap(find.text('medXfer-6e2a'));
     await tester.pumpAndSettle();
@@ -194,7 +194,7 @@ void main() {
     radio.add(const BleSeen('11:11', -90));
     await tester.pumpAndSettle();
     await _reveal(tester, find.text('medXfer-6e2a'));
-    expect(find.text('Bluetooth · signal faible · Il affichera un PIN à taper ici'), findsOneWidget);
+    expect(find.text('signal faible · Il affichera un PIN à taper ici'), findsOneWidget);
     radio.dropping = true;
     await tester.tap(find.text('medXfer-6e2a'));
     await tester.pumpAndSettle();
