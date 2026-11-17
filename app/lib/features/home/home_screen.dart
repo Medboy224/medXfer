@@ -240,7 +240,10 @@ class _HomeFrameState extends State<_HomeFrame> {
               Expanded(
                 child: NotificationListener<UserScrollNotification>(
                   onNotification: _scrolled,
-                  child: TabBarView(
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: explorerPinching,
+                    builder: (context, pinching, child) => TabBarView(
+                    physics: pinching ? const NeverScrollableScrollPhysics() : null,
                     children: [
                       const HistoryTab(),
                       if (state.library.supported) ...[
@@ -258,6 +261,7 @@ class _HomeFrameState extends State<_HomeFrame> {
                             ),
                           ),
                     ],
+                  ),
                   ),
                 ),
               ),

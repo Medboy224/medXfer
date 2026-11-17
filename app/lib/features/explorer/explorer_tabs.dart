@@ -174,7 +174,8 @@ class _AppsTabState extends State<AppsTab> with AutomaticKeepAliveClientMixin {
                           dimension: 50,
                           child: LibraryImage(cacheKey: 'app:${a.package}', fit: BoxFit.contain, load: (px) => state.library.appIcon(a.package, px)),
                         ),
-                        Positioned(right: -6, top: -6, child: PickBox(on: on, size: 20)),
+                        // Shown once picked only: a grid of empty boxes hid the icons.
+                        if (on) Positioned(right: -6, top: -6, child: PickBox(on: on, size: 20)),
                       ],
                     ),
                     const SizedBox(height: 6),
@@ -252,8 +253,35 @@ class _MediaGrid extends StatefulWidget {
   State<_MediaGrid> createState() => _MediaGridState();
 }
 
-class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMixin {
+/// While two fingers pinch a grid: the tabs do not page under them.
+final explorerPinching = ValueNotifier<bool>(false);
+
+class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   String? _album;
+  final _scroll = ScrollController();
+
+  // The pinch (plan J8, WP-8.1b, real test of 17 November): the grid follows the fingers,
+  // around the point between them; past a step it takes the next number of columns, the tile
+  // under the fingers kept there; scrolling waits while two fingers are down.
+  final _points = <int, Offset>{};
+  double? _startSpread;
+  double _carry = 1;
+  double _scale = 1;
+  Offset _focal = Offset.zero;
+  Size _box = Size.zero;
+  late final AnimationController _settle = AnimationController(vsync: this, duration: const Duration(milliseconds: 220))
+    ..addListener(() => setState(() => _scale = _settleFrom + (1 - _settleFrom) * Curves.easeOutCubic.transform(_settle.value)));
+  double _settleFrom = 1;
+
+  // The layout last shown, to keep the same tile in place when it changes.
+  List<int> _groups = const [];
+  bool _headers = false;
+  int _shownColumns = 0;
+  bool _shownList = false;
+
+  static const _headerHeight = 52.0;
+  static const _rowHeight = 62.0;
+  static const _gap = 2.0;
 
   @override
   bool get wantKeepAlive => true;
@@ -263,6 +291,119 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
     super.initState();
     final explorer = AppScope.of(context, listen: false).state.explorer;
     if (explorer.media(widget.kind).items.isEmpty) unawaited(explorer.more(widget.kind));
+  }
+
+  @override
+  void dispose() {
+    _settle.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// The top of item [index] in a layout: headers, rows of square tiles, or list rows.
+  double _top(int index, int columns, bool asList) {
+    if (asList) return index * _rowHeight;
+    final stride = (_box.width - (columns - 1) * _gap) / columns + _gap;
+    var y = 0.0;
+    var i = index;
+    for (final n in _groups) {
+      if (_headers) y += _headerHeight;
+      if (i < n) return y + (i ~/ columns) * stride;
+      i -= n;
+      y += ((n + columns - 1) ~/ columns) * stride - _gap;
+    }
+    return y;
+  }
+
+  /// The item at height [y] of a layout.
+  int _at(double y, int columns, bool asList) {
+    final count = _groups.fold(0, (a, b) => a + b);
+    if (count == 0) return 0;
+    if (asList) return (y / _rowHeight).floor().clamp(0, count - 1);
+    final stride = (_box.width - (columns - 1) * _gap) / columns + _gap;
+    var top = 0.0;
+    var first = 0;
+    for (final n in _groups) {
+      if (_headers) top += _headerHeight;
+      final height = ((n + columns - 1) ~/ columns) * stride - _gap;
+      if (y < top + height) return (first + ((y - top).clamp(0, height) ~/ stride) * columns).clamp(first, first + n - 1);
+      top += height;
+      first += n;
+    }
+    return count - 1;
+  }
+
+  /// A new layout: the item at [anchor] (from the top of the view) stays at that height.
+  void _keep(int fromColumns, bool fromList, int toColumns, bool toList, double anchor) {
+    if (!_scroll.hasClients || _box.width <= 0) return;
+    final index = _at(_scroll.offset + anchor, fromColumns, fromList);
+    final within = _scroll.offset + anchor - _top(index, fromColumns, fromList);
+    final ratio = toList || fromList ? 0.0 : fromColumns / toColumns;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      final y = _top(index, toColumns, toList) + within * ratio - anchor;
+      _scroll.jumpTo(y.clamp(_scroll.position.minScrollExtent, _scroll.position.maxScrollExtent));
+    });
+  }
+
+  double? _spread() {
+    if (_points.length < 2) return null;
+    final p = _points.values.take(2).toList();
+    return (p[0] - p[1]).distance;
+  }
+
+  Offset _between() {
+    final p = _points.values.take(2).toList();
+    return (p[0] + p[1]) / 2;
+  }
+
+  void _down(PointerDownEvent e, Explorer ex) {
+    _points[e.pointer] = e.localPosition;
+    if (_points.length == 2 && !ex.asList(widget.kind)) {
+      _settle.stop();
+      _startSpread = _spread();
+      _carry = _scale;
+      _focal = _between();
+      explorerPinching.value = true;
+      setState(() {}); // the list stops scrolling
+    }
+  }
+
+  void _move(PointerMoveEvent e, Explorer ex) {
+    if (!_points.containsKey(e.pointer)) return;
+    _points[e.pointer] = e.localPosition;
+    final start = _startSpread, now = _spread();
+    if (start == null || now == null || start <= 0) return;
+    final columns = ex.columns(widget.kind);
+    var scale = now / start * _carry;
+    // Past a step, the next number of columns; the tiles there are larger (or smaller) by
+    // columns / next: the scale shown shrinks (or grows) by as much, so nothing jumps.
+    if (scale > 1.3 && columns > Explorer.minColumns) {
+      _carry *= (columns - 1) / columns;
+      scale *= (columns - 1) / columns;
+      _keep(columns, false, columns - 1, false, _focal.dy);
+      ex.setLayout(widget.kind, columns: columns - 1, asList: false);
+    } else if (scale < 0.77 && columns < Explorer.maxColumns) {
+      _carry *= (columns + 1) / columns;
+      scale *= (columns + 1) / columns;
+      _keep(columns, false, columns + 1, false, _focal.dy);
+      ex.setLayout(widget.kind, columns: columns + 1, asList: false);
+    }
+    setState(() => _scale = scale.clamp(0.6, 1.6).toDouble());
+  }
+
+  void _up(PointerEvent e) {
+    _points.remove(e.pointer);
+    if (_points.length >= 2 || _startSpread == null) return;
+    _startSpread = null;
+    explorerPinching.value = false;
+    // Back to the size of the layout reached, smoothly.
+    _settleFrom = _scale;
+    if (MediaQuery.of(context).disableAnimations) {
+      setState(() => _scale = 1);
+    } else {
+      unawaited(_settle.forward(from: 0));
+    }
   }
 
   @override
@@ -285,6 +426,17 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
         final columns = ex.columns(widget.kind);
         // By day while sorted by date (photos and videos); one block for a name or a size.
         final byDay = ex.order(widget.kind).sort == MediaSort.date;
+        final days = byDay ? _days(items) : [(DateTime(0), items)];
+        // Changed from the menu: the tile at the top of the view stays at the top. (A pinch
+        // keeps its own anchor, under the fingers, before this build.)
+        if (_shownColumns != 0 && (_shownColumns != columns || _shownList != asList) && _startSpread == null) {
+          _keep(_shownColumns, _shownList, columns, asList, 0);
+        }
+        _groups = asList ? [items.length] : [for (final d in days) d.$2.length];
+        _headers = byDay && !asList;
+        _shownColumns = columns;
+        _shownList = asList;
+        final pinching = _points.length >= 2;
         return Column(
           children: [
             if (albums.length > 1)
@@ -309,27 +461,47 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                   if (n.metrics.extentAfter < 1500) unawaited(state.explorer.more(widget.kind));
                   return false;
                 },
-                child: _Pinch(
-                  // Two fingers change the columns (plan J8, WP-8.1b); one finger still scrolls.
-                  onPinch: (more) => ex.setLayout(widget.kind, columns: ex.columns(widget.kind) + (more ? -1 : 1), asList: false),
-                  child: CustomScrollView(
-                    key: ValueKey('media-${widget.kind.name}'),
-                    slivers: [
-                      if (asList)
-                        SliverPadding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          sliver: SliverList.builder(itemCount: items.length, itemBuilder: (context, i) => _MediaRow(kind: widget.kind, entry: items[i])),
-                        )
-                      else if (byDay)
-                        for (final day in _days(items)) ...[
-                          SliverToBoxAdapter(child: _DayHeader(day: day.$1, items: day.$2)),
-                          _grid(day.$2, columns),
-                        ]
-                      else
-                        _grid(items, columns),
-                      SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
-                    ],
-                  ),
+                child: LayoutBuilder(
+                  builder: (context, box) {
+                    _box = box.biggest;
+                    final align = _box.width > 0 && _box.height > 0
+                        ? Alignment(_focal.dx / _box.width * 2 - 1, _focal.dy / _box.height * 2 - 1)
+                        : Alignment.center;
+                    return Listener(
+                      onPointerDown: (e) => _down(e, ex),
+                      onPointerMove: (e) => _move(e, ex),
+                      onPointerUp: _up,
+                      onPointerCancel: _up,
+                      child: ClipRect(
+                        child: Transform.scale(
+                          scale: _scale,
+                          alignment: align,
+                          child: CustomScrollView(
+                            key: ValueKey('media-${widget.kind.name}'),
+                            controller: _scroll,
+                            physics: pinching ? const NeverScrollableScrollPhysics() : null,
+                            slivers: [
+                              if (asList)
+                                SliverPadding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                                  sliver: SliverFixedExtentList.builder(
+                                    itemExtent: _rowHeight,
+                                    itemCount: items.length,
+                                    itemBuilder: (context, i) => _MediaRow(kind: widget.kind, entry: items[i]),
+                                  ),
+                                )
+                              else
+                                for (final day in days) ...[
+                                  if (byDay) SliverToBoxAdapter(child: SizedBox(height: _headerHeight, child: _DayHeader(day: day.$1, items: day.$2))),
+                                  _grid(day.$2, columns),
+                                ],
+                              SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
             ),
@@ -341,7 +513,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   }
 
   Widget _grid(List<MediaEntry> items, int columns) => SliverGrid(
-    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, mainAxisSpacing: 2, crossAxisSpacing: 2),
+    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, mainAxisSpacing: _gap, crossAxisSpacing: _gap),
     delegate: SliverChildBuilderDelegate((context, i) => _MediaTile(kind: widget.kind, entry: items[i], columns: columns), childCount: items.length),
   );
 
@@ -507,59 +679,6 @@ class _MediaRow extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// Two fingers spread or pinched over the grid: [onPinch] (true: spread, larger tiles) once per
-/// step of the gesture. Pointers only: one finger's scrolling is left to the list.
-class _Pinch extends StatefulWidget {
-  const _Pinch({required this.onPinch, required this.child});
-
-  final void Function(bool spread) onPinch;
-  final Widget child;
-
-  @override
-  State<_Pinch> createState() => _PinchState();
-}
-
-class _PinchState extends State<_Pinch> {
-  final _points = <int, Offset>{};
-  double? _start;
-
-  double? _spread() {
-    if (_points.length < 2) return null;
-    final p = _points.values.take(2).toList();
-    return (p[0] - p[1]).distance;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Listener(
-      onPointerDown: (e) {
-        _points[e.pointer] = e.localPosition;
-        _start = _spread();
-      },
-      onPointerMove: (e) {
-        if (!_points.containsKey(e.pointer)) return;
-        _points[e.pointer] = e.localPosition;
-        final now = _spread(), start = _start;
-        if (now == null || start == null || start <= 0) return;
-        final ratio = now / start;
-        if (ratio > 1.35 || ratio < 0.74) {
-          widget.onPinch(ratio > 1);
-          _start = now; // the next step from here
-        }
-      },
-      onPointerUp: (e) {
-        _points.remove(e.pointer);
-        _start = _spread();
-      },
-      onPointerCancel: (e) {
-        _points.remove(e.pointer);
-        _start = _spread();
-      },
-      child: widget.child,
     );
   }
 }

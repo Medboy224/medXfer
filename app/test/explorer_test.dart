@@ -247,6 +247,58 @@ void main() {
         reason: 'the basket stays while something is picked');
   });
 
+  testWidgets('WP-8.1b: two fingers spread the grid to fewer columns, pinch it back; the list does not move meanwhile', (tester) async {
+    final library = _Library(photos: 90);
+    await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    final ex = AppScope.of(tester.element(find.byType(Scaffold).first), listen: false).state.explorer;
+    expect(ex.columns(MediaKind.images), 3);
+    final grid = find.byKey(const ValueKey('media-images'));
+    final center = tester.getCenter(grid);
+    final scroll = tester.state<ScrollableState>(find.descendant(of: grid, matching: find.byType(Scrollable)).first).position;
+    final before = scroll.pixels;
+
+    // Spread: 3 → 2 columns.
+    var a = await tester.startGesture(center - const Offset(40, 0));
+    var b = await tester.startGesture(center + const Offset(40, 0), pointer: 2);
+    await tester.pump();
+    for (var i = 1; i <= 10; i++) {
+      await a.moveTo(center - Offset(40.0 + i * 8, 0));
+      await b.moveTo(center + Offset(40.0 + i * 8, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await a.up();
+    await b.up();
+    await tester.pumpAndSettle();
+    expect(ex.columns(MediaKind.images), 2);
+    expect(scroll.pixels, before, reason: 'the two fingers scrolled the list');
+
+    // Pinch: 2 → 3 → 4 in one gesture.
+    a = await tester.startGesture(center - const Offset(150, 0));
+    b = await tester.startGesture(center + const Offset(150, 0), pointer: 4);
+    await tester.pump();
+    for (var i = 1; i <= 14; i++) {
+      await a.moveTo(center - Offset(150.0 - i * 10, 0));
+      await b.moveTo(center + Offset(150.0 - i * 10, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await a.up();
+    await b.up();
+    await tester.pumpAndSettle();
+    expect(ex.columns(MediaKind.images), greaterThanOrEqualTo(4));
+  });
+
+  testWidgets('WP-8.1b: an app shows its box once picked only', (tester) async {
+    final library = _Library();
+    await _app(tester, library);
+    final notes = find.byKey(const ValueKey('app-org.notes'));
+    expect(find.descendant(of: notes, matching: find.byType(PickBox)), findsNothing);
+    await tester.tap(notes);
+    await tester.pump();
+    expect(find.descendant(of: notes, matching: find.byType(PickBox)), findsOneWidget);
+  });
+
   test('the plan: descriptors without folders, paths with them, never apps with folders', () {
     final s = Selection()
       ..toggle(const Pick(path: '/a.jpg', name: 'a.jpg', size: 1, kind: PickKind.media))
