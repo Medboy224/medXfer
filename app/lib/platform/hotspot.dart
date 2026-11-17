@@ -128,6 +128,13 @@ abstract interface class Hotspot {
   Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band});
   Future<void> leave();
 
+  /// Joins again the network [join] joined, when this device left it after a loss: Windows
+  /// goes back to a network of its own and stays there (real test of 17 November 2026), where
+  /// the session dialed again never finds the other device. Whether this call joined it again:
+  /// false when it was still on it, when the system does it by itself (Android, J6c), or when
+  /// it did not come back.
+  Future<bool> rejoin();
+
   /// The joined network's handle, for the core's sockets (pkg/netbind); 0 for none. It changes
   /// when the network, lost, is joined again (Android, J6c).
   Future<int> joinedNetwork();
@@ -209,6 +216,10 @@ class AndroidHotspot implements Hotspot {
   @override
   Future<void> leave() => channel.invokeMethod<void>('hotspotLeave');
 
+  /// Android joins it again by itself (WifiJoin.kt's request, J6c): its handle changes then.
+  @override
+  Future<bool> rejoin() async => false;
+
   @override
   Future<int> joinedNetwork() async => await channel.invokeMethod<int>('hotspotJoinedNetwork') ?? 0;
 
@@ -252,6 +263,9 @@ class NoHotspot implements Hotspot {
 
   @override
   Future<void> leave() async {}
+
+  @override
+  Future<bool> rejoin() async => false;
 
   @override
   Future<int> joinedNetwork() async => 0;
@@ -364,6 +378,10 @@ class WindowsHotspot implements Hotspot {
   @override
   Future<void> leave() => channel.invokeMethod<void>('leave');
 
+  /// WifiJoin::Rejoin: the network's profile, kept, joined again within 25 s.
+  @override
+  Future<bool> rejoin() async => await channel.invokeMethod<bool>('rejoin') ?? false;
+
   /// The core's sockets follow Windows' routes: the card that joined is the computer's Wi-Fi.
   @override
   Future<int> joinedNetwork() async => 0;
@@ -468,6 +486,9 @@ class LinuxHotspot implements Hotspot {
 
   @override
   Future<void> leave() async {}
+
+  @override
+  Future<bool> rejoin() async => false;
 
   @override
   Future<int> joinedNetwork() async => 0;

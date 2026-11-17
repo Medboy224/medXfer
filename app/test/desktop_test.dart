@@ -133,6 +133,9 @@ class _PcHotspot implements Hotspot {
   Future<void> leave() async {}
 
   @override
+  Future<bool> rejoin() async => false;
+
+  @override
   Future<int> joinedNetwork() async => 0;
 
   @override

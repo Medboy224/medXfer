@@ -217,6 +217,27 @@ std::optional<JoinedNetwork> AddressOf(const GUID& card) {
   return std::nullopt;
 }
 
+// Connects [card] to [profile] by [until]: [ssid] scanned for until Windows lists it, then
+// joined; a failed attempt (Windows gone back to another network) tried again. Whether on it.
+bool ConnectWithin(const Wlan& wlan, const GUID& card, const std::wstring& profile, const std::string& ssid,
+                   std::chrono::steady_clock::time_point until, int& attempts) {
+  using clock = std::chrono::steady_clock;
+  while (wlan.Connected(card) != profile && clock::now() < until) {
+    auto listed = clock::now() + std::chrono::seconds(4);
+    if (!wlan.Visible(card, ssid)) wlan.Scan(card, ssid);
+    while (!wlan.Visible(card, ssid) && clock::now() < listed && clock::now() < until) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    if (!wlan.Connect(card, profile)) break;
+    attempts++;
+    auto attempt = clock::now() + std::chrono::seconds(6);
+    while (wlan.Connected(card) != profile && clock::now() < attempt && clock::now() < until) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+  }
+  return wlan.Connected(card) == profile;
+}
+
 }  // namespace
 
 WifiBandMask OwnWifiBands() {
@@ -262,27 +283,13 @@ winrt::fire_and_forget WifiJoin::Join(std::string ssid, std::string passphrase, 
         // Connected within 20 s, then an address within 15 more. The network may be seconds
         // old: scanned for until Windows lists it, then joined; a failed attempt (Windows
         // gone back to its previous network) is tried again within the 20 s.
-        using clock = std::chrono::steady_clock;
-        auto until = clock::now() + std::chrono::seconds(20);
         int attempts = 0;
-        while (wlan.Connected(card) != profile && clock::now() < until) {
-          auto listed = clock::now() + std::chrono::seconds(4);
-          if (!wlan.Visible(card, ssid)) wlan.Scan(card, ssid);
-          while (!wlan.Visible(card, ssid) && clock::now() < listed && clock::now() < until) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
-          }
-          if (!wlan.Connect(card, profile)) break;
-          attempts++;
-          auto attempt = clock::now() + std::chrono::seconds(6);
-          while (wlan.Connected(card) != profile && clock::now() < attempt && clock::now() < until) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
-          }
-        }
+        ConnectWithin(wlan, card, profile, ssid, std::chrono::steady_clock::now() + std::chrono::seconds(20), attempts);
         std::fprintf(stderr, "wifi: join %s, %d attempt(s)\n", wlan.Connected(card) == profile ? "done" : "failed", attempts);
         if (wlan.Connected(card) != profile) {
           error = "join_failed";
         } else {
-          until = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+          auto until = std::chrono::steady_clock::now() + std::chrono::seconds(15);
           std::optional<JoinedNetwork> got;
           while (!(got = AddressOf(card)) && std::chrono::steady_clock::now() < until) {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -304,10 +311,38 @@ winrt::fire_and_forget WifiJoin::Join(std::string ssid, std::string passphrase, 
   co_await ui;
   if (!error) {
     profile_ = profile;
+    ssid_ = ssid;
     previous_ = previous;
     card_ = card;
   }
   done(error, joined);
+}
+
+winrt::fire_and_forget WifiJoin::Rejoin(std::function<void(bool joined)> done) {
+  winrt::apartment_context ui;
+  const std::wstring profile = profile_;
+  const std::string ssid = ssid_;
+  const GUID card = card_;
+  bool joined = false;
+  if (!profile.empty()) {
+    co_await winrt::resume_background();
+    Wlan wlan;
+    if (wlan.get() && wlan.RadioOn(card)) {
+      using clock = std::chrono::steady_clock;
+      if (wlan.Connected(card) != profile) {
+        int attempts = 0;
+        joined = ConnectWithin(wlan, card, profile, ssid, clock::now() + std::chrono::seconds(15), attempts);
+        if (joined) {
+          auto until = clock::now() + std::chrono::seconds(10);
+          while (!AddressOf(card) && clock::now() < until) std::this_thread::sleep_for(std::chrono::milliseconds(250));
+          joined = AddressOf(card).has_value();
+        }
+        std::fprintf(stderr, "wifi: rejoin %s, %d attempt(s)\n", joined ? "done" : "failed", attempts);
+      }
+    }
+    co_await ui;
+  }
+  done(joined);
 }
 
 void WifiJoin::Leave() {
@@ -319,5 +354,6 @@ void WifiJoin::Leave() {
     if (!previous_.empty() && previous_ != profile_) wlan.Connect(card_, previous_);
   }
   profile_.clear();
+  ssid_.clear();
   previous_.clear();
 }

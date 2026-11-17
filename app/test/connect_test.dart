@@ -68,6 +68,9 @@ class _Hotspot implements Hotspot {
   Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) async => const HotspotInfo();
   @override
   Future<void> leave() async {}
+
+  @override
+  Future<bool> rejoin() async => false;
   @override
   Future<int> joinedNetwork() async => 0;
 
