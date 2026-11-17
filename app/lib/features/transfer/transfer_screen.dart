@@ -102,12 +102,15 @@ class _Header extends StatelessWidget {
       line = a.speedMBps > 0 ? l.speedLine(formatBytes(context, a.speedMBps * 1024 * 1024), formatDuration(context, a.etaSeconds)) : '';
     }
     // The speed in big figures while data flows (V4); a dash otherwise.
-    final flowing = a.stage == Stage.running && !a.paused && a.speedMBps > 0;
+    // Until the core's first speed (it needs a few samples), the one since the start: the
+    // figure moves with the bar from the first bytes (real test of 17 November).
+    final live = a.speedMBps > 0 ? a.speedMBps : (a.sinceStartMBps ?? 0);
+    final flowing = a.stage == Stage.running && !a.paused && live > 0;
     final locale = Localizations.localeOf(context).toLanguageTag();
     String figure(double v) => NumberFormat(v >= 100 ? '0' : '0.0', locale).format(v);
     // Ended: the average of the whole transfer; waiting or paused: 0.
     final average = a.stage == Stage.done && a.outcome == Outcome.completed ? a.averageMBps : null;
-    final speed = flowing ? figure(a.speedMBps) : (average != null ? figure(average) : '0');
+    final speed = flowing ? figure(live) : (average != null ? figure(average) : '0');
     final received = a.direction == Direction.received;
     final stat = TextStyle(fontSize: 19, fontWeight: FontWeight.w800, fontFeatures: tabular, color: c.text);
     final label = TextStyle(fontSize: 13, color: c.muted);

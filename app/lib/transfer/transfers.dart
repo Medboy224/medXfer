@@ -141,6 +141,14 @@ class ActiveTransfer {
   /// When it ended: with [started], its average speed.
   final DateTime? finished;
 
+  /// MB/s since it started, while it runs: what is shown before the core's first speed.
+  double? get sinceStartMBps {
+    final s = started;
+    if (s == null || bytes <= 0) return null;
+    final seconds = DateTime.now().difference(s).inMilliseconds / 1000;
+    return seconds < 0.2 ? null : bytes / 1048576 / seconds;
+  }
+
   /// MB/s over the whole transfer, once ended; null if too short to say.
   double? get averageMBps {
     final s = started, f = finished;

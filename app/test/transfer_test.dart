@@ -206,6 +206,12 @@ void main() {
         {'index': 0, 'bytes': bytes, 'size': 60 << 20},
       ],
     };
+    // The first bytes, before the core's first speed: the figure moves with the bar.
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300)));
+    core.emit(CoreEvent('transfer_progress', data: progress(6 << 20, 0)));
+    await tester.pump();
+    await tester.pump();
+    expect(tester.widget<Text>(find.byKey(const Key('transfer-speed'))).data, isNot('0'));
     core.emit(CoreEvent('transfer_progress', data: progress(30 << 20, 20)));
     await tester.pump();
     core.emit(CoreEvent('transfer_progress', data: progress(24 << 20, 0)));
