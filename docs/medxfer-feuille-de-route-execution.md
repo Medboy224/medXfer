@@ -32,7 +32,7 @@
 | 2b | **J5** Appairage par PIN |
 | 4a | **J6a** Cœur en-processus + mDNS · **J6b** Application MVP |
 | 5 | **J7** Web Share v2 |
-| 6 | **J8** Mesure, optimisation, finitions v1 |
+| 6 | **J8** Refonte, lecteurs, mesure, optimisation, bêta publique |
 | 4b | **J9** macOS et iOS (dépend de la gate G8) |
 
 ### 1.2 Graphe de dépendances
@@ -301,7 +301,7 @@ Bible chapitre 11 : listener séparé, jeton porteur sans cookie (fragment d'URL
 
 **Résultat (15/11/2026) :** le jalon est terminé (PR #274 à #281, #286, et celle du rapport). Un navigateur sans medXfer envoie et reçoit en HTTPS, avec un PIN de 6 chiffres ou le QR ; l'hôte accepte chaque dépôt, jamais sur les données mobiles. 1 Gio à 53 MB/s vers Chrome sur le téléphone, 48 MB/s depuis Edge sur le PC, 26 MB/s depuis Chrome sur le téléphone. **G5 reportée à la bêta**, avec ses testeurs, et la décision D3 (mode HTTP) avec elle. Réserves : l'envoi depuis Chrome sur le téléphone, des finitions de l'écran. Détail dans [j7-report.md](j7-report.md).
 
-### J8 — Mesure, optimisation, finitions v1 · ≈ 3 à 5 jours
+### J8 — Refonte, lecteurs, mesure, optimisation, bêta publique · ≈ 18 à 26 jours (revu le 17/11/2026)
 Plan : [medxfer-plan-j8.md](medxfer-plan-j8.md). Matrice d'appareils réels (§14.3), gate G3, optimisations ciblées d'après le rapport par étape (le point d'accès Wi-Fi Direct à 5 GHz, prévu ici, est avancé en J6d), benchmark nocturne en CI (`DEV-21`), suppression de `devui` si G7 est remplie, ingénierie de livraison (signature, paquets, `SECURITY.md`, documentation d'utilisation, premier `README`). **Critère de sortie :** objectif de 80 % d'iperf3 atteint ou plan écrit ; toutes les exigences ont leur test vert.
 
 **Pare-feu Windows (constat de WP-6.5, 15/10/2026) :** sans règle entrante, un PC Windows trouve les autres mais reste invisible, sans message. L'installateur pose les règles de medXfer (UDP 5353 mDNS, UDP 19998 balise, TCP 18887, le port unique de medXfer : appairage et transferts, #133) sur les profils Privé et Public ; l'application vérifie au lancement qu'elles existent et sinon propose de les ajouter (élévation UAC), avec le message « Ce PC n'est pas visible par les autres appareils ». **Avancé le 2 novembre** (essai réel du 1er novembre : un second PC Windows n'acceptait medXfer que sur son câble, profil Public, son Wi-Fi étant Privé) : l'application lit au lancement, puis toutes les 15 s, les réseaux où le pare-feu la bloque, le dit en tête de la colonne « Connexion » et propose « Autoriser medXfer » (une élévation UAC remplace ses règles entrantes par une seule, tout profil). Reste pour J8 : l'installateur.
@@ -352,7 +352,7 @@ Toutes ces API sont celles du système (aucune dépendance livrée) et passent d
 | Câble Ethernet entre deux PC | 3 à 5 j | ≈ 92 j |
 | J6d (avec le groupe à 5 GHz, avancé de J8) | 10 à 14 j | ≈ 106 j |
 | J7 | 5 à 7 j | ≈ 113 j |
-| J8 | 3 à 5 j | ≈ 118 j |
+| J8 (avec la refonte, les lecteurs et la bêta : revu le 17 novembre) | 18 à 26 j | ≈ 139 j |
 
 Soit environ **24 semaines** en fourchette basse, pour une première version sur Windows, Linux et Android. Ces chiffres sont des hypothèses et non des engagements ; les estimations de ce type dérapent souvent, un tampon de 30 à 50 % est raisonnable (**≈ 6 mois**). La seule vraie mesure sera la vitesse constatée en J1 ; on recalcule alors tout le tableau.
 J9 s'ajoute ensuite et ne figure pas dans ce total.
