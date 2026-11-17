@@ -514,13 +514,20 @@ class _Basket extends StatelessWidget {
       key: const Key('basket'),
       children: [
         IconButton(tooltip: l.clearSelection, icon: const Icon(Icons.close_rounded), onPressed: sel.clear),
+        // The count over the size, each on its line (real test of 17 November: « 5.9 / MB »).
         Expanded(
-          child: Text(
-            // Kept whole on a narrow screen: the dot stays with the count, never alone at the start.
-            l.basketLine(sel.count, formatBytes(context, sel.bytes)).replaceAll(' · ', ' · '),
-            key: const Key('basket-line'),
-            maxLines: 2,
-            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, fontFeatures: tabular),
+          child: Semantics(
+            label: l.basketLine(sel.count, formatBytes(context, sel.bytes)),
+            excludeSemantics: true,
+            child: Column(
+              key: const Key('basket-line'),
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(l.itemsCount(sel.count), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, fontFeatures: tabular)),
+                Text(formatBytes(context, sel.bytes), maxLines: 1, style: TextStyle(color: c.muted, fontSize: 13, fontFeatures: tabular)),
+              ],
+            ),
           ),
         ),
         // A guest without medXfer: its browser (J7). Sending to a device with it stays first.
