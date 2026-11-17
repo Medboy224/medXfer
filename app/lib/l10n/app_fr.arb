@@ -359,5 +359,11 @@
   "webShareAdded": "{count, plural, =1{1 élément ajouté au partage} other{{count} éléments ajoutés au partage}}",
   "webShareOfferedMore": "et {count} autres",
   "webShareRunning": "Partage par navigateur en cours",
-  "webShareRunningPin": "code {pin}"
+  "webShareRunningPin": "code {pin}",
+  "selectDay": "Tout ce jour",
+  "selectDayLabel": "Sélectionner toutes les photos : {day}",
+  "today": "Aujourd'hui",
+  "yesterday": "Hier",
+  "noDeviceConnected": "Aucun appareil connecté",
+  "connectedToLabel": "Connecté à"
 }

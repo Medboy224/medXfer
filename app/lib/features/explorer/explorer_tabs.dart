@@ -8,6 +8,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../../app.dart';
 import '../../l10n/app_localizations.dart';
@@ -15,6 +16,7 @@ import '../../library/explorer.dart';
 import '../../platform/library.dart';
 import '../../theme.dart';
 import '../../widgets/format.dart';
+import '../../widgets/v4.dart';
 
 /// A thumbnail or an icon from the explorer's cache, decoded at its displayed size.
 class LibraryImage extends StatefulWidget {
@@ -82,31 +84,6 @@ class _LibraryImageState extends State<LibraryImage> {
   }
 }
 
-/// The check mark over a picked tile.
-class _Picked extends StatelessWidget {
-  const _Picked({required this.on});
-
-  final bool on;
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = Theme.of(context).colorScheme.primary;
-    return AnimatedOpacity(
-      opacity: on ? 1 : 0,
-      duration: MediaQuery.of(context).disableAnimations ? Duration.zero : const Duration(milliseconds: 120),
-      child: Container(
-        decoration: BoxDecoration(
-          color: accent,
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: 2),
-        ),
-        padding: const EdgeInsets.all(2),
-        child: const Icon(Icons.check_rounded, size: 16, color: Colors.white),
-      ),
-    );
-  }
-}
-
 class _Message extends StatelessWidget {
   const _Message({required this.text, this.action});
 
@@ -164,16 +141,19 @@ class _AppsTabState extends State<AppsTab> with AutomaticKeepAliveClientMixin {
         if (apps.isEmpty) return _Message(text: l.nothingHere);
         return GridView.builder(
           key: const Key('apps-grid'),
-          padding: const EdgeInsets.all(8),
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: 104, mainAxisExtent: 128),
+          padding: EdgeInsets.fromLTRB(6, 4, 6, bottomRoom(context)),
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: 100, mainAxisExtent: 124, mainAxisSpacing: 4),
           itemCount: apps.length,
           itemBuilder: (context, i) {
             final a = apps[i];
             final pick = Explorer.pickApp(a);
             final on = state.selection.contains(pick.path);
-            return InkWell(
+            return Material(
+              color: on ? context.colors.soft : Colors.transparent,
+              borderRadius: BorderRadius.circular(16),
+              child: InkWell(
               key: ValueKey('app-${a.package}'),
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(16),
               onTap: () {
                 state.selection.toggle(pick);
                 // Installed in parts (Play's splits): said when picked, in words.
@@ -184,16 +164,17 @@ class _AppsTabState extends State<AppsTab> with AutomaticKeepAliveClientMixin {
                 }
               },
               child: Padding(
-                padding: const EdgeInsets.all(6),
+                padding: const EdgeInsets.fromLTRB(2, 12, 2, 6),
                 child: Column(
                   children: [
                     Stack(
+                      clipBehavior: Clip.none,
                       children: [
                         SizedBox.square(
-                          dimension: 52,
+                          dimension: 56,
                           child: LibraryImage(cacheKey: 'app:${a.package}', fit: BoxFit.contain, load: (px) => state.library.appIcon(a.package, px)),
                         ),
-                        Positioned(right: -2, top: -2, child: _Picked(on: on)),
+                        Positioned(right: -8, top: -8, child: PickBox(on: on, size: 24)),
                       ],
                     ),
                     const SizedBox(height: 6),
@@ -201,12 +182,13 @@ class _AppsTabState extends State<AppsTab> with AutomaticKeepAliveClientMixin {
                       a.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                     ),
-                    Text(formatBytes(context, a.size), style: TextStyle(color: context.colors.muted, fontSize: 11)),
+                    Text(formatBytes(context, a.size), style: TextStyle(color: context.colors.muted, fontSize: 12)),
                   ],
                 ),
               ),
+            ),
             );
           },
         );
@@ -298,19 +280,20 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
         }
         final albums = <String>{for (final m in list.items) m.album}.where((a) => a.isNotEmpty).toList();
         final items = _album == null ? list.items : list.items.where((m) => m.album == _album).toList();
+        final images = widget.kind == MediaKind.images;
         return Column(
           children: [
             if (albums.length > 1)
               SizedBox(
-                height: 48,
+                height: 56,
                 child: ListView(
                   scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                   children: [
                     for (final a in [null, ...albums])
                       Padding(
                         padding: const EdgeInsets.only(right: 6),
-                        child: ChoiceChip(label: Text(a ?? l.allAlbums), selected: _album == a, onSelected: (_) => setState(() => _album = a)),
+                        child: ChoicePill(label: a ?? l.allAlbums, on: _album == a, onPressed: () => setState(() => _album = a)),
                       ),
                   ],
                 ),
@@ -322,37 +305,27 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                   if (n.metrics.extentAfter < 1500) unawaited(state.explorer.more(widget.kind));
                   return false;
                 },
-                child: GridView.builder(
+                child: CustomScrollView(
                   key: ValueKey('media-${widget.kind.name}'),
-                  padding: const EdgeInsets.all(2),
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: 128, mainAxisSpacing: 2, crossAxisSpacing: 2),
-                  itemCount: items.length,
-                  itemBuilder: (context, i) {
-                    final m = items[i];
-                    final pick = Explorer.pickMedia(m);
-                    final on = state.selection.contains(pick.path);
-                    return GestureDetector(
-                      key: ValueKey('media-${m.id}'),
-                      onTap: () => state.selection.toggle(pick),
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          LibraryImage(cacheKey: '${widget.kind.name}:${m.id}', load: (px) => state.library.thumbnail(widget.kind, m.id, px)),
-                          if (on) ColoredBox(color: Colors.black.withValues(alpha: 0.25)),
-                          if (widget.kind == MediaKind.video)
-                            Positioned(
-                              left: 4,
-                              bottom: 4,
-                              child: Text(
-                                formatDuration(context, m.durationMs ~/ 1000),
-                                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700, shadows: [Shadow(blurRadius: 3)]),
-                              ),
-                            ),
-                          Positioned(right: 4, top: 4, child: _Picked(on: on)),
-                        ],
+                  slivers: [
+                    if (images)
+                      for (final day in _days(items)) ...[
+                        SliverToBoxAdapter(child: _DayHeader(day: day.$1, items: day.$2)),
+                        SliverGrid(
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 3, crossAxisSpacing: 3),
+                          delegate: SliverChildBuilderDelegate((context, i) => _MediaTile(kind: widget.kind, entry: day.$2[i]), childCount: day.$2.length),
+                        ),
+                      ]
+                    else
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+                        sliver: SliverGrid(
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 16, crossAxisSpacing: 10, mainAxisExtent: 156),
+                          delegate: SliverChildBuilderDelegate((context, i) => _VideoTile(entry: items[i]), childCount: items.length),
+                        ),
                       ),
-                    );
-                  },
+                    SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
+                  ],
                 ),
               ),
             ),
@@ -360,6 +333,160 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
           ],
         );
       },
+    );
+  }
+
+  /// The photos by day, newest first: what « Tout ce jour » picks.
+  static List<(DateTime, List<MediaEntry>)> _days(List<MediaEntry> items) {
+    final out = <(DateTime, List<MediaEntry>)>[];
+    for (final m in items) {
+      final t = DateTime.fromMillisecondsSinceEpoch(m.modified * 1000);
+      final day = DateTime(t.year, t.month, t.day);
+      if (out.isEmpty || out.last.$1 != day) out.add((day, <MediaEntry>[]));
+      out.last.$2.add(m);
+    }
+    return out;
+  }
+}
+
+/// A day's name, and « Tout ce jour » with its square box.
+class _DayHeader extends StatelessWidget {
+  const _DayHeader({required this.day, required this.items});
+
+  final DateTime day;
+  final List<MediaEntry> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context).state;
+    final l = AppLocalizations.of(context);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final locale = Localizations.localeOf(context).toLanguageTag();
+    final name = day == today
+        ? l.today
+        : day == today.subtract(const Duration(days: 1))
+        ? l.yesterday
+        : (day.year == today.year ? DateFormat.MMMMd(locale) : DateFormat.yMMMMd(locale)).format(day);
+    final picks = [for (final m in items) Explorer.pickMedia(m)];
+    final all = state.selection.allOf(picks);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 6, 2),
+      child: Row(
+        children: [
+          Expanded(child: Text(name, style: titleStyle(15))),
+          BoxToggle(
+            label: l.selectDay,
+            semanticLabel: l.selectDayLabel(name),
+            on: all,
+            small: true,
+            onPressed: () => state.selection.toggleAll(picks),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A photo: all of it picks; the square box and a thick edge say it is picked.
+class _MediaTile extends StatelessWidget {
+  const _MediaTile({required this.kind, required this.entry});
+
+  final MediaKind kind;
+  final MediaEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context).state;
+    final c = context.colors;
+    final m = entry;
+    final pick = Explorer.pickMedia(m);
+    final on = state.selection.contains(pick.path);
+    return Semantics(
+      button: true,
+      toggled: on,
+      label: m.name,
+      child: GestureDetector(
+        key: ValueKey('media-${m.id}'),
+        onTap: () => state.selection.toggle(pick),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            LibraryImage(cacheKey: '${kind.name}:${m.id}', load: (px) => state.library.thumbnail(kind, m.id, px)),
+            if (on) DecoratedBox(decoration: BoxDecoration(border: Border.all(color: c.strong, width: 4))),
+            Positioned(right: 8, top: 8, child: PickBox(on: on, onImage: true)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A video: its picture with the duration, its name and size under it.
+class _VideoTile extends StatelessWidget {
+  const _VideoTile({required this.entry});
+
+  final MediaEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = AppScope.of(context).state;
+    final c = context.colors;
+    final m = entry;
+    final pick = Explorer.pickMedia(m);
+    final on = state.selection.contains(pick.path);
+    return Semantics(
+      button: true,
+      toggled: on,
+      child: GestureDetector(
+        key: ValueKey('media-${m.id}'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () => state.selection.toggle(pick),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              height: 108,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(controlRadius),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    LibraryImage(cacheKey: 'video:${m.id}', load: (px) => state.library.thumbnail(MediaKind.video, m.id, px)),
+                    if (on)
+                      DecoratedBox(
+                        decoration: BoxDecoration(border: Border.all(color: c.strong, width: 4), borderRadius: BorderRadius.circular(controlRadius)),
+                      ),
+                    Positioned(
+                      left: 8,
+                      bottom: 8,
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(6, 3, 8, 3),
+                        decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.72), borderRadius: BorderRadius.circular(8)),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.play_arrow_rounded, size: 14, color: Colors.white),
+                            const SizedBox(width: 2),
+                            Text(
+                              formatDuration(context, m.durationMs ~/ 1000),
+                              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700, fontFeatures: tabular),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Positioned(right: 8, top: 8, child: PickBox(on: on, onImage: true)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            Text(formatBytes(context, m.size), style: TextStyle(fontSize: 13, color: c.muted, fontFeatures: tabular)),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -410,24 +537,58 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
           },
           child: ListView.builder(
             key: const Key('music-list'),
+            padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
             itemCount: list.items.length,
-            itemExtent: 64,
+            itemExtent: 70,
             itemBuilder: (context, i) {
               final m = list.items[i];
               final pick = Explorer.pickMedia(m);
-              return CheckboxListTile(
-                key: ValueKey('music-${m.id}'),
-                value: state.selection.contains(pick.path),
-                onChanged: (_) => state.selection.toggle(pick),
-                secondary: CircleAvatar(
-                  backgroundColor: c.chip,
-                  child: Icon(Icons.music_note_rounded, color: Theme.of(context).colorScheme.primary),
-                ),
-                title: Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text(
-                  [if (m.album.isNotEmpty) m.album, formatDuration(context, m.durationMs ~/ 1000), formatBytes(context, m.size)].join(' · '),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              final on = state.selection.contains(pick.path);
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Material(
+                  color: on ? c.soft : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                  child: InkWell(
+                    key: ValueKey('music-${m.id}'),
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () => state.selection.toggle(pick),
+                    child: Semantics(
+                      toggled: on,
+                      child: Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 48,
+                              height: 48,
+                              decoration: BoxDecoration(color: c.section, borderRadius: BorderRadius.circular(12)),
+                              child: Icon(Icons.music_note_rounded, color: c.accent),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                                  Text(
+                                    [if (m.album.isNotEmpty) m.album, formatDuration(context, m.durationMs ~/ 1000), formatBytes(context, m.size)].join(' · '),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontSize: 13, color: c.muted, fontFeatures: tabular),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            PickBox(on: on),
+                            const SizedBox(width: 4),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               );
             },
@@ -554,19 +715,19 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
         return Column(
           children: [
             SizedBox(
-              height: 48,
+              height: 56,
               child: ListView(
                 scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                 children: [
                   for (final e in labels.entries)
                     Padding(
                       padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
+                      child: ChoicePill(
                         key: ValueKey('cat-${e.key?.name ?? 'folders'}'),
-                        label: Text(e.value),
-                        selected: cat == e.key,
-                        onSelected: (_) => ex.showCategory(e.key),
+                        label: e.value,
+                        on: cat == e.key,
+                        onPressed: () => ex.showCategory(e.key),
                       ),
                     ),
                 ],
@@ -609,8 +770,9 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
               ? _Message(text: ex.dirError ?? l.nothingHere)
               : ListView.builder(
                   key: ValueKey('files-list:${ex.dir}'), // a new folder opens at its top
+                  padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
                   itemCount: entries.length,
-                  itemExtent: 64,
+                  itemExtent: 66,
                   itemBuilder: (context, i) => _FileRow(entry: entries[i], onOpen: () => unawaited(ex.open(entries[i].path))),
                 ),
         ),
@@ -631,8 +793,9 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
       },
       child: ListView.builder(
         key: ValueKey('files-${cat.name}'),
+        padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
         itemCount: list.items.length,
-        itemExtent: 64,
+        itemExtent: 66,
         itemBuilder: (context, i) => _FileRow(entry: list.items[i], showFolder: true),
       ),
     );
@@ -670,34 +833,70 @@ class _FileRow extends StatelessWidget {
       sub = [formatBytes(context, e.size), if (where.isNotEmpty) where].join(' · ');
     }
     final thumbed = !e.dir && _thumbed.contains(_ext(e.name));
-    final icon = Icon(_iconOf(e), size: 32, color: e.dir ? Theme.of(context).colorScheme.primary : c.muted);
-    return ListTile(
-      key: ValueKey('file-${e.name}'),
-      leading: SizedBox.square(
-        dimension: 44,
-        child: thumbed
-            ? ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: LibraryImage(
-                  cacheKey: 'file:${e.path}',
-                  load: (px) => state.library.fileThumbnail(e.path, px),
-                  placeholder: Center(child: icon),
+    final icon = Icon(_iconOf(e), size: 32, color: e.dir ? c.accent : c.muted);
+    final on = picked != null;
+    // A folder opens; a file is picked. The box, apart, picks a folder whole (no ambiguity).
+    final open = e.dir && onOpen != null;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Material(
+        color: on ? c.soft : Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        child: Row(
+          children: [
+            Expanded(
+              child: InkWell(
+                key: ValueKey('file-${e.name}'),
+                borderRadius: BorderRadius.circular(16),
+                onTap: open ? onOpen : toggle,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 0, 4, 0),
+                  child: Row(
+                    children: [
+                      SizedBox.square(
+                        dimension: 44,
+                        child: thumbed
+                            ? ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: LibraryImage(cacheKey: 'file:${e.path}', load: (px) => state.library.fileThumbnail(e.path, px), placeholder: Center(child: icon)),
+                              )
+                            : icon,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                            if (sub != null)
+                              Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c.muted, fontSize: 13, fontFeatures: tabular)),
+                          ],
+                        ),
+                      ),
+                      if (open) Icon(Icons.chevron_right_rounded, color: c.muted),
+                    ],
+                  ),
                 ),
-              )
-            : icon,
-      ),
-      title: Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: sub == null
-          ? null
-          : Text(
-              sub,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: c.muted, fontSize: 12),
+              ),
             ),
-      trailing: Checkbox(value: picked != null, onChanged: (_) => toggle()),
-      // A folder opens; a file is picked. The box picks a folder whole.
-      onTap: e.dir && onOpen != null ? onOpen : toggle,
+            Semantics(
+              button: true,
+              toggled: on,
+              label: e.name,
+              excludeSemantics: true,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: toggle,
+                child: SizedBox.square(dimension: 56, child: Center(child: PickBox(on: on))),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
+
+/// The room the floating bar of the home screen takes at the bottom of a list.
+double bottomRoom(BuildContext context) => MediaQuery.paddingOf(context).bottom + 16;

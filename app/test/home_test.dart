@@ -48,7 +48,7 @@ Future<(FakeCore, AppState)> _app(WidgetTester tester, {Locale locale = const Lo
 }
 
 void main() {
-  testWidgets('the home screen: tabs, Connect, the core ready under its name', (tester) async {
+  testWidgets('the home screen: tabs, Connect; the core ready, its line gone (V4)', (tester) async {
     final (core, state) = await _app(tester);
     expect(state.status, CoreStatus.ready);
     for (final tab in ['Historique', 'Apps', 'Photos', 'Vidéos', 'Musique', 'Fichiers']) {
@@ -56,7 +56,7 @@ void main() {
     }
     expect(find.text('Connecter'), findsOneWidget);
     expect(find.text('Sur cet appareil'), findsOneWidget);
-    expect(find.text('Prêt · Galaxy A57'), findsOneWidget);
+    expect(find.byKey(const Key('core-line')), findsNothing);
     expect(core.calls.map((c) => c.action), ['get_status']);
   });
 

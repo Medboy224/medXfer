@@ -11,6 +11,7 @@ import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/library/selection.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/platform/folders.dart';
+import 'package:medxfer/widgets/v4.dart';
 import 'package:medxfer/platform/library.dart';
 import 'package:medxfer/platform/storage.dart';
 import 'package:medxfer/settings.dart';
@@ -155,7 +156,7 @@ void main() {
     await tester.tap(find.text('Photos'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('media-3')), findsOneWidget);
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Camera'));
+    await tester.tap(find.widgetWithText(ChoicePill, 'Camera'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('media-3')), findsNothing);
     expect(find.byKey(const ValueKey('media-1')), findsOneWidget);

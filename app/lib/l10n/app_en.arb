@@ -449,5 +449,12 @@
   "@webShareOfferedMore": {"placeholders": {"count": {"type": "int"}}},
   "webShareRunning": "Browser sharing running",
   "webShareRunningPin": "code {pin}",
-  "@webShareRunningPin": {"placeholders": {"pin": {"type": "String"}}}
+  "@webShareRunningPin": {"placeholders": {"pin": {"type": "String"}}},
+  "selectDay": "All this day",
+  "selectDayLabel": "Select all the photos: {day}",
+  "@selectDayLabel": {"placeholders": {"day": {"type": "String"}}},
+  "today": "Today",
+  "yesterday": "Yesterday",
+  "noDeviceConnected": "No device connected",
+  "connectedToLabel": "Connected to"
 }
