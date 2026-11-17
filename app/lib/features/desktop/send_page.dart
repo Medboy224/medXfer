@@ -128,7 +128,7 @@ class _Pick extends StatelessWidget {
       backgroundColor: c.background,
       foregroundColor: c.text,
       side: BorderSide(color: c.border),
-      textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w600),
+      textStyle: const TextStyle(fontWeight: FontWeight.w600),
     );
     final picks = selection.items.toList();
     final to = session;
@@ -246,7 +246,7 @@ class _Pick extends StatelessWidget {
               style: FilledButton.styleFrom(
                 minimumSize: const Size(0, 52),
                 shape: const StadiumBorder(),
-                textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w800, fontSize: 16),
+                textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
               ),
               onPressed: onSend,
               icon: const Icon(Icons.send_rounded),
@@ -323,7 +323,7 @@ class _ConnectionPanel extends StatelessWidget {
       shape: const StadiumBorder(),
       foregroundColor: c.text,
       side: BorderSide(color: c.border),
-      textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w600),
+      textStyle: const TextStyle(fontWeight: FontWeight.w600),
     );
     Widget heading(String text) => Padding(
       padding: const EdgeInsets.fromLTRB(4, 16, 4, 8),
@@ -444,7 +444,7 @@ class _ConnectionPanel extends StatelessWidget {
             style: FilledButton.styleFrom(
               minimumSize: const Size(0, 44),
               shape: const StadiumBorder(),
-              textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w700),
+              textStyle: const TextStyle(fontWeight: FontWeight.w700),
             ),
             onPressed: connection.hotspotBusy
                 ? null
@@ -553,7 +553,7 @@ class _Device extends StatelessWidget {
         shape: const StadiumBorder(),
         backgroundColor: primary ? accent : c.chip,
         foregroundColor: primary ? Colors.white : c.text,
-        textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w700),
+        textStyle: const TextStyle(fontWeight: FontWeight.w700),
       ),
       onPressed: onPressed,
       child: Text(label),

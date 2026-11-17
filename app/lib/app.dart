@@ -78,7 +78,7 @@ class _MedxferAppState extends State<MedxferApp> {
       child: ListenableBuilder(
         listenable: settings,
         builder: (context, _) {
-          final dark = settings.theme == ThemeChoice.black ? MedxferColors.black : MedxferColors.dark;
+          final dark = settings.theme == ThemeChoice.black ? Palette.black : Palette.dark;
           final mode = switch (settings.theme) {
             ThemeChoice.system => ThemeMode.system,
             ThemeChoice.light => ThemeMode.light,
@@ -87,8 +87,8 @@ class _MedxferAppState extends State<MedxferApp> {
           return MaterialApp(
             onGenerateTitle: (context) => AppLocalizations.of(context).appTitle,
             debugShowCheckedModeBanner: false,
-            theme: buildTheme(MedxferColors.light, settings.accent, Brightness.light),
-            darkTheme: buildTheme(dark, settings.accent, Brightness.dark),
+            theme: buildTheme(Palette.light, settings.accent),
+            darkTheme: buildTheme(dark, settings.accent),
             themeMode: mode,
             localizationsDelegates: const [
               AppLocalizations.delegate,

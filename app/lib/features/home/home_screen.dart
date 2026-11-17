@@ -218,7 +218,7 @@ class HomeScreen extends StatelessWidget {
                       minimumSize: const Size(0, 52),
                       padding: const EdgeInsets.symmetric(horizontal: 28),
                       shape: const StadiumBorder(),
-                      textStyle: const TextStyle(fontFamily: 'Figtree', fontWeight: FontWeight.w800, fontSize: 16),
+                      textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
                     ),
                     onPressed: () => _open(context, const ConnectScreen()),
                     icon: const Icon(Icons.link_rounded),

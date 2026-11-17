@@ -29,7 +29,9 @@ flutter:
   uses-material-design: true
   generate: true
   fonts:
-    # Figtree, SIL Open Font License 1.1 (assets/fonts/OFL.txt): the app's own type (J15).
-    - family: Figtree
+    # Archivo, SIL Open Font License 1.1 (assets/fonts/OFL.txt): the type of V4 (plan J8, WP-8.1).
+    # Variable font, subset to Latin, axes limited to weight 300-900 and width 100-125
+    # (fontTools subset and instancer); italic is drawn by the engine.
+    - family: Archivo
       fonts:
-        - asset: assets/fonts/Figtree.ttf
+        - asset: assets/fonts/Archivo.ttf

@@ -101,7 +101,7 @@ void main() {
     final settings = AppSettings(theme: ThemeChoice.black, accent: accents[2]);
     await _app(tester, settings: settings);
     final ctx = tester.element(find.byType(Scaffold));
-    expect(Theme.of(ctx).colorScheme.primary, accents[2]);
+    expect(Theme.of(ctx).colorScheme.primary, accents[2].bright);
     expect(Theme.of(ctx).scaffoldBackgroundColor, MedxferColors.black.background);
     settings.theme = ThemeChoice.light;
     await tester.pumpAndSettle();

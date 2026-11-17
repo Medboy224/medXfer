@@ -71,7 +71,7 @@ void main() {
       await File('${dir.path}/settings.json').writeAsString('{"theme": "neon", "accent": 9, "dev_mode": "yes"}');
       final s = AppSettings(store: FileSettingsStore(() async => dir.path));
       await s.load();
-      expect((s.theme, s.accent, s.devMode), (ThemeChoice.system, accents.first, false));
+      expect((s.theme, s.accent, s.devMode), (ThemeChoice.dark, accents.first, false));
       await File('${dir.path}/settings.json').writeAsString('{not json');
       await s.load();
       expect(s.devMode, isFalse);

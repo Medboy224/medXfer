@@ -60,8 +60,8 @@ class SettingsScreen extends StatelessWidget {
                       onTap: () => settings.accent = a,
                       child: CircleAvatar(
                         radius: 20,
-                        backgroundColor: a,
-                        child: a == settings.accent ? const Icon(Icons.check_rounded, color: Colors.white) : null,
+                        backgroundColor: a.bright,
+                        child: a == settings.accent ? const Icon(Icons.check_rounded, color: Color(0xFF0D0F0E)) : null,
                       ),
                     ),
                 ],
