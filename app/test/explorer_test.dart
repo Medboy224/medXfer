@@ -289,6 +289,63 @@ void main() {
     expect(ex.columns(MediaKind.images), greaterThanOrEqualTo(4));
   });
 
+  testWidgets('real test of 17 November: after a step, the photo under the fingers is the same; at 2 columns the view does not zoom', (tester) async {
+    final library = _Library(photos: 90);
+    await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    final grid = find.byKey(const ValueKey('media-images')).first;
+    await tester.drag(grid, const Offset(0, -600));
+    await tester.pumpAndSettle();
+    final focal = tester.getCenter(grid) + const Offset(0, 80);
+    // The photo under the point between the fingers (hit-testing, as a finger would).
+    String under() {
+      final hits = tester.hitTestOnBinding(focal).path.map((e) => e.target).toList();
+      for (final key in tester.allWidgets.whereType<GestureDetector>().map((w) => w.key).whereType<ValueKey<String>>()) {
+        final el = find.byKey(key).evaluate();
+        if (el.isEmpty) continue;
+        final box = el.first.renderObject;
+        if (key.value.startsWith('media-') && hits.contains(box)) return key.value;
+      }
+      return '';
+    }
+    final before = under();
+    expect(before, isNotEmpty);
+    Future<void> spread(double from, double to) async {
+      final a = await tester.startGesture(focal - Offset(from, 0));
+      final b = await tester.startGesture(focal + Offset(from, 0), pointer: 7);
+      await tester.pump();
+      for (var i = 1; i <= 12; i++) {
+        final d = from + (to - from) * i / 12;
+        await a.moveTo(focal - Offset(d, 0));
+        await b.moveTo(focal + Offset(d, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await a.up();
+      await b.up();
+      await tester.pumpAndSettle();
+    }
+    await spread(60, 100); // 3 → 2: past 1.5 times
+    final ex = AppScope.of(tester.element(find.byType(Scaffold).first), listen: false).state.explorer;
+    expect(ex.columns(MediaKind.images), 2);
+    // A column count changes where a photo sits across; its height stays under the fingers.
+    final after = tester.getRect(find.byKey(ValueKey(before)).first);
+    expect((after.center.dy - focal.dy).abs(), lessThan(after.height * 0.75), reason: 'the photo left the fingers: $after, focal $focal');
+
+    // At 2 columns, spreading more: no zoom of the view.
+    final a = await tester.startGesture(focal - const Offset(60, 0));
+    final b = await tester.startGesture(focal + const Offset(60, 0), pointer: 9);
+    await tester.pump();
+    await a.moveTo(focal - const Offset(110, 0));
+    await b.moveTo(focal + const Offset(110, 0));
+    await tester.pump();
+    final scales = tester.widgetList<Transform>(find.descendant(of: find.byType(ClipRect), matching: find.byType(Transform))).map((t) => t.transform.getMaxScaleOnAxis());
+    expect(scales.every((x) => (x - 1).abs() < 1e-6), isTrue, reason: 'the view zoomed past the last step: $scales');
+    await a.up();
+    await b.up();
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('WP-8.1b: an app shows its box once picked only', (tester) async {
     final library = _Library();
     await _app(tester, library);

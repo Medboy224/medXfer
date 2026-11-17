@@ -259,7 +259,7 @@ final explorerPinching = ValueNotifier<bool>(false);
 
 class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   String? _album;
-  final _scroll = ScrollController();
+  ScrollController _scroll = ScrollController();
 
   // The pinch (plan J8, WP-8.1b, real test of 17 November): the grid follows the fingers,
   // around the point between them; past a step it takes the next number of columns, the tile
@@ -333,20 +333,27 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
     if (old != null) WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
     if (t == null || !_scroll.hasClients) return;
     final c = _shownColumns;
-    final index = _at(_scroll.offset + _focal.dy, c, false);
+    final index = _at(_scroll.offset + _focal.dy, c, false, x: _focal.dx);
     final within = _scroll.offset + _focal.dy - _top(index, c, false);
     _targetOffset = (_top(index, t, false) + within * c / t - _focal.dy).clamp(0.0, double.infinity).toDouble();
     _targetScroll = ScrollController(initialScrollOffset: _targetOffset);
   }
 
-  /// The layout faded in becomes the one shown.
+  /// The layout faded in becomes the one shown, as it is: already built and placed under the
+  /// fingers, it is neither rebuilt nor moved (real test of 17 November: rebuilt then moved a
+  /// frame later, the tiles drifted step after step). Its number of columns counts at once: the
+  /// next move of the fingers starts from it, never twice from the old one.
   void _commit(Explorer ex, int t) {
-    final offset = _targetOffset;
+    final next = _targetScroll;
+    if (next != null) {
+      final old = _scroll;
+      _scroll = next;
+      WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+    }
+    _targetScroll = null;
+    _target = null;
+    _shownColumns = t;
     ex.setLayout(widget.kind, columns: t, asList: false);
-    _prepare(null);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) _scroll.jumpTo(offset.clamp(_scroll.position.minScrollExtent, _scroll.position.maxScrollExtent));
-    });
   }
 
   void _settled() {
@@ -374,8 +381,8 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
     return y;
   }
 
-  /// The item at height [y] of a layout.
-  int _at(double y, int columns, bool asList) {
+  /// The item at height [y] of a layout, and at [x] across (the column under the fingers).
+  int _at(double y, int columns, bool asList, {double x = 0}) {
     final count = _groups.fold(0, (a, b) => a + b);
     if (count == 0) return 0;
     if (asList) return (y / _rowHeight).floor().clamp(0, count - 1);
@@ -385,7 +392,8 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
     for (final n in _groups) {
       if (_headers) top += _headerHeight;
       final height = ((n + columns - 1) ~/ columns) * stride - _gap;
-      if (y < top + height) return (first + ((y - top).clamp(0, height) ~/ stride) * columns).clamp(first, first + n - 1);
+      final column = (x / stride).floor().clamp(0, columns - 1);
+      if (y < top + height) return (first + ((y - top).clamp(0, height) ~/ stride) * columns + column).clamp(first, first + n - 1);
       top += height;
       first += n;
     }
@@ -445,7 +453,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
       rebuild = true;
     }
     if (t == null) {
-      scale = scale.clamp(0.87, 1.15).toDouble(); // a little give at the ends
+      scale = 1; // at 2 or 5 columns, nothing further: the view itself never zooms
     } else if ((t < c && scale >= c / t) || (t > c && scale <= c / t)) {
       // The next grid reached: it becomes the current one, the gesture goes on from there.
       _commit(ex, t);
@@ -559,9 +567,12 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                     );
                     final next = _target, nextScroll = _targetScroll;
                     // Built once per layout: the zoom below only scales and fades them.
-                    final current = view(_scroll, columns, ValueKey('media-${widget.kind.name}'), frozen: pinching || next != null);
+                    final current = IgnorePointer(
+                      ignoring: false,
+                      child: view(_scroll, columns, ValueKey('media-${widget.kind.name}'), frozen: pinching || next != null),
+                    );
                     final upcoming = next != null && nextScroll != null
-                        ? IgnorePointer(child: view(nextScroll, next, ValueKey('media-${widget.kind.name}-next'), frozen: true))
+                        ? IgnorePointer(child: view(nextScroll, next, ValueKey('media-${widget.kind.name}'), frozen: true))
                         : null;
                     return Listener(
                       onPointerDown: (e) => _down(e, ex),
@@ -576,9 +587,16 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                             return Stack(
                               fit: StackFit.expand,
                               children: [
-                                Opacity(opacity: 1 - fade, child: Transform.scale(scale: scale, alignment: align, child: current)),
-                                if (upcoming != null && fade > 0)
-                                  Opacity(opacity: fade, child: Transform.scale(scale: scale / (columns / next!), alignment: align, child: upcoming)),
+                                KeyedSubtree(
+                                  key: ValueKey('layer-$columns'),
+                                  child: Opacity(opacity: 1 - fade, child: Transform.scale(scale: scale, alignment: align, child: current)),
+                                ),
+                                // Built as soon as it is the target, faded in from 0: ready when reached.
+                                if (upcoming != null)
+                                  KeyedSubtree(
+                                    key: ValueKey('layer-$next'),
+                                    child: Opacity(opacity: fade, child: Transform.scale(scale: scale / (columns / next!), alignment: align, child: upcoming)),
+                                  ),
                               ],
                             );
                           },
