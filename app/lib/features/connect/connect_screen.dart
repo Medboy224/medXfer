@@ -488,7 +488,8 @@ class _Nearby extends StatelessWidget {
             icon: d.trusted ? Icons.verified_user_rounded : Icons.smartphone_rounded,
             name: d.name,
             chip: PathChip(icon: Icons.bluetooth_rounded, label: l.pathBluetooth),
-            line: bleDetail(l, ble, d),
+            // The card's label already says « Bluetooth » (real test of 17 November).
+            line: bleDetail(l, ble, d, withPath: false),
             end: bleTouching(ble, d) ? spinner() : connectPill,
           ),
         Align(

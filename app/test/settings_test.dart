@@ -58,6 +58,8 @@ void main() {
     // A desktop: no sorting by type.
     expect(find.byKey(const Key('sort-by-type')), findsNothing);
 
+    await tester.ensureVisible(find.byKey(const Key('receive-choose')));
+    await tester.pumpAndSettle();
     await tester.runAsync(() async {
       await tester.tap(find.byKey(const Key('receive-choose')));
       await Future<void>.delayed(const Duration(milliseconds: 200)); // the write test, on disk
@@ -73,5 +75,45 @@ void main() {
     await tester.pumpAndSettle();
     expect(settings.receiveDir, '');
     expect(find.text('Par défaut : /home/awa/Downloads/medXfer'), findsOneWidget);
+  });
+
+  testWidgets('WP-8.1b: this device renamed: given to the core now, kept for the next start', (tester) async {
+    final settings = AppSettings(store: MemorySettingsStore());
+    final core = FakeCore()
+      ..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Samsung SM-A576B'})]))
+      ..on('set_config', (_) => const FakeAnswer());
+    final state = AppState(core: core, folders: _Folders(), history: MemoryHistoryStore(), settings: settings);
+    tester.platformDispatcher.localesTestValue = [const Locale('fr')];
+    addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+    await tester.pumpWidget(MedxferApp(state: state, settings: settings));
+    await state.start();
+    await tester.pumpAndSettle();
+    expect(core.config!.deviceName, '', reason: 'none chosen yet: the core names it');
+
+    await tester.tap(find.byKey(const Key('home-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Réglages'));
+    await tester.pumpAndSettle();
+    expect(find.text('Samsung SM-A576B'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('device-rename')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('device-name-field')), '   ');
+    await tester.pump();
+    expect(find.text('Un nom est nécessaire'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('device-name-field')), 'Téléphone de Awa');
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('device-name-save')));
+    await tester.pumpAndSettle();
+    expect(core.calls.last.action, 'set_config');
+    expect(core.calls.last.payload, {'device_name': 'Téléphone de Awa'});
+    expect(find.text('Téléphone de Awa'), findsOneWidget);
+    expect(find.text('Nom enregistré.'), findsOneWidget);
+    expect(settings.deviceName, 'Téléphone de Awa');
+
+    // The next start gives it to the core.
+    final next = FakeCore()..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Téléphone de Awa'})]));
+    final again = AppState(core: next, folders: _Folders(), history: MemoryHistoryStore(), settings: settings);
+    await again.start();
+    expect(next.config!.deviceName, 'Téléphone de Awa');
   });
 }

@@ -143,7 +143,10 @@ class MainActivity : FlutterActivity() {
                     // The explorer by categories (WP-B.9).
                     "libApps" -> library.apps { v, e -> reply(result, v, e) }
                     "libAppIcon" -> library.appIcon(call.argument<String>("package") ?: "", call.argument<Int>("size") ?: 96) { v, e -> reply(result, v, e) }
-                    "libMedia" -> library.media(call.argument<String>("kind") ?: "images", call.argument<Int>("offset") ?: 0, call.argument<Int>("limit") ?: 200) { v, e -> reply(result, v, e) }
+                    "libMedia" -> library.media(
+                        call.argument<String>("kind") ?: "images", call.argument<Int>("offset") ?: 0, call.argument<Int>("limit") ?: 200,
+                        call.argument<String>("sort") ?: "date", call.argument<Boolean>("descending") ?: true, call.argument<String>("search") ?: "",
+                    ) { v, e -> reply(result, v, e) }
                     "libThumbnail" -> library.thumbnail(call.argument<String>("kind") ?: "images", (call.argument<Number>("id") ?: 0).toLong(), call.argument<Int>("size") ?: 256) { v, e -> reply(result, v, e) }
                     "libFileThumb" -> library.fileThumbnail(call.argument<String>("path") ?: "", call.argument<Int>("size") ?: 128) { v, e -> reply(result, v, e) }
                     "libDirSize" -> library.dirSize(call.argument<String>("path") ?: "") { v, e -> reply(result, v, e) }

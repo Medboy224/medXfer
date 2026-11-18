@@ -68,6 +68,7 @@ class AppSettings extends ChangeNotifier {
   bool _devMode;
   String _receiveDir = '';
   bool _sortByType = true;
+  String _deviceName = '';
 
   ThemeChoice get theme => _theme;
   Accent get accent => _accent;
@@ -84,6 +85,7 @@ class AppSettings extends ChangeNotifier {
     if (m['dev_mode'] is bool) _devMode = m['dev_mode'] as bool;
     if (m['receive_dir'] is String) _receiveDir = m['receive_dir'] as String;
     if (m['sort_by_type'] is bool) _sortByType = m['sort_by_type'] as bool;
+    if (m['device_name'] is String) _deviceName = m['device_name'] as String;
     notifyListeners();
   }
 
@@ -123,6 +125,16 @@ class AppSettings extends ChangeNotifier {
     _changed();
   }
 
+  /// The name the user gave this device (plan J8, WP-8.1b); empty: the core's default, the
+  /// machine's name or the phone's maker and model.
+  String get deviceName => _deviceName;
+
+  set deviceName(String value) {
+    if (value == _deviceName) return;
+    _deviceName = value;
+    _changed();
+  }
+
   /// The saves, one after the other: two at once would write the same file.
   Future<void> _saving = Future.value();
 
@@ -139,6 +151,7 @@ class AppSettings extends ChangeNotifier {
       'dev_mode': _devMode,
       'receive_dir': _receiveDir,
       'sort_by_type': _sortByType,
+      'device_name': _deviceName,
     };
     // Not saved: still applied until the app closes.
     _saving = _saving.then((_) => store.save(values)).catchError((Object _) {});

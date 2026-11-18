@@ -85,8 +85,12 @@ class FakeCore implements Core {
   @override
   Stream<CoreEvent> get events => _events.stream;
 
+  /// The configuration the app started the core with: the tests read it.
+  CoreConfig? config;
+
   @override
   Future<CoreStart> start(CoreConfig config) async {
+    this.config ??= config;
     if (_started) return const CoreStart(ok: true, alreadyStarted: true, schema: coreSchema);
     _started = true;
     scheduleMicrotask(() => _onStart.forEach(_events.add));

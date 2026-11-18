@@ -26,7 +26,8 @@ List<BleDevice> bleOnly(BleLink link, Connection connection) {
 
 /// What the row of [d] says: where the exchange stands when it is the one touched, else the path
 /// and whether it asks for a PIN.
-String bleDetail(AppLocalizations l, BleLink link, BleDevice d) {
+/// [withPath]: « Bluetooth » first, where no label says it already (the desktop's list).
+String bleDetail(AppLocalizations l, BleLink link, BleDevice d, {bool withPath = true}) {
   if (link.target == d) {
     final stage = switch (link.stage) {
       BleStage.asking => l.bleStageAsking,
@@ -38,7 +39,7 @@ String bleDetail(AppLocalizations l, BleLink link, BleDevice d) {
     };
     if (stage != null) return stage;
   }
-  return [l.pathBluetooth, if (d.weak) l.bleWeak, d.trusted ? l.nearbyTrusted : l.nearbyAsksPin].join(' · ');
+  return [if (withPath) l.pathBluetooth, if (d.weak) l.bleWeak, d.trusted ? l.nearbyTrusted : l.nearbyAsksPin].join(' · ');
 }
 
 /// One exchange at a time.
