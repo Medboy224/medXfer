@@ -95,6 +95,7 @@
   "noticeHotspotRefused": "Windows refused to create a network on this computer's Wi-Fi card: the card or its driver most likely does not allow it. Create the hotspot on the phone, then join it from this computer. Updating the Wi-Fi driver may also fix it.",
   "noticeHotspotLost": "This device's network stopped: its Wi-Fi was turned off or joined another network.",
   "noticeHotspotSlowed": "This phone just joined a Wi-Fi network: its own network is about 3 times slower. Disconnect that Wi-Fi for full speed.",
+  "noticeHotspotOtherWifi": "This phone is also connected to a Wi-Fi network: the transfer will be about 3 times slower. Disconnect that Wi-Fi for full speed.",
   "hotspotWifiOffTitle": "This device's Wi-Fi is off",
   "hotspotWifiOffBody": "medXfer's network needs it. Turn it on: the network will come back by itself, with a new QR code.",
   "noticeJoinFailed": "Could not join the Wi-Fi \"{ssid}\".",

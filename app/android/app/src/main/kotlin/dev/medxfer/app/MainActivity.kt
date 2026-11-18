@@ -59,6 +59,7 @@ class MainActivity : FlutterActivity() {
                     if (err != null) result.error("ble", err, null) else result.success(answer)
                 }
                 "disconnect" -> { ble.disconnect(call.argument<String>("device") ?: ""); result.success(null) }
+                "release" -> { ble.release(call.argument<String>("device") ?: ""); result.success(null) }
                 else -> result.notImplemented()
             }
         }
@@ -317,6 +318,8 @@ class MainActivity : FlutterActivity() {
             "ble-serve" -> bleProbe.serve(intent.getIntExtra("seconds", 60), intent.getIntExtra("bytes", 200), log)
             "ble-scan" -> bleProbe.scan(intent.getIntExtra("seconds", 15), log)
             "ble-exchange" -> bleProbe.exchange(intent.getStringExtra("addr"), intent.getIntExtra("bytes", 200), log)
+            "ble-callee" -> bleProbe.callee(intent.getIntExtra("seconds", 120), log)
+            "ble-holder" -> bleProbe.holder(intent.getIntExtra("seconds", 90), log)
             "ble-stop" -> { bleProbe.stop(); log(null, null) }
         }
     }

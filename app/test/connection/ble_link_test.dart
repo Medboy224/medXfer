@@ -64,6 +64,10 @@ class _Radio implements Ble {
 
   @override
   Future<void> disconnect(String device) async => disconnected.add(device);
+
+  final released = <String>[];
+  @override
+  Future<void> release(String device) async => released.add(device);
   @override
   Future<WifiBands> wifiBands() async => bands;
 }
@@ -101,12 +105,15 @@ class _Hotspot implements Hotspot {
 
   @override
   Future<void> leave() async {}
+
+  @override
+  Future<bool> rejoin() async => false;
   @override
   Future<int> joinedNetwork() async => 0;
   @override
   Future<bool> openWifiPanel({bool always = false}) async => true;
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
   @override
   Future<bool> alive() async => true;
   @override
@@ -133,6 +140,7 @@ void main() {
   late Connection connection;
   late BleLink link;
   setUpAll(() {
+    BleLink.holdsHeardWithin = Duration.zero; // the tests' devices say at once whether they hold
     BleLink.recognizeJitter = Duration.zero;
     BleLink.touchRetryAfter = Duration.zero;
   });
@@ -151,6 +159,128 @@ void main() {
   });
 
   Iterable<Map<String, Object?>> steps(String action) => core.calls.where((c) => c.action == action).map((c) => c.payload);
+
+  group('J8: a phone keeps its link with a computer', () {
+    late bool waits;
+    setUp(() => waits = BleLink.waitsForHolds);
+    tearDown(() => BleLink.waitsForHolds = waits);
+
+    test('the computer: a phone that holds is never connected to; its link recognized at once, then listed', () async {
+      BleLink.waitsForHolds = true;
+      _client(core, {
+        'recognize': {'suffix': '6e2a', 'trusted': false},
+      });
+      await link.start();
+      radio.add(const BleSeen('46:90', -55, holds: true)); // its advertisement: it will connect
+      await _settle();
+      expect(steps('ble_client'), isEmpty, reason: 'its requests, unanswered 20 to 50 s when paired (17 November)');
+      radio.add(const BleHeld('BluetoothLE#…-71:90', held: true)); // its link, another address
+      await _settle();
+      final hello = steps('ble_client').where((p) => p['step'] == 'hello').single;
+      expect(hello['conn'], 'BluetoothLE#…-71:90');
+      expect(link.devices.map((d) => (d.device, d.name)), [('BluetoothLE#…-71:90', 'medXfer-6e2a')]);
+      expect(radio.disconnected, isEmpty);
+      // Its advertisement, the old way's address, is still never connected to.
+      radio.add(const BleSeen('46:90', -55, holds: true));
+      await _settle();
+      expect(steps('ble_client').where((p) => p['step'] == 'hello'), hasLength(1));
+      // Its link gone: off the list.
+      radio.add(const BleHeld('BluetoothLE#…-71:90', held: false));
+      await _settle();
+      expect(link.devices, isEmpty);
+    });
+
+    test('the computer: a device is not connected to before its scan response could say it holds', () async {
+      BleLink.waitsForHolds = true;
+      final heard = BleLink.holdsHeardWithin;
+      BleLink.holdsHeardWithin = const Duration(milliseconds: 80);
+      addTearDown(() => BleLink.holdsHeardWithin = heard);
+      _client(core, {
+        'recognize': {'suffix': '6e2a', 'trusted': false},
+      });
+      await link.start();
+      radio.add(const BleSeen('46:90', -55)); // the advertisement
+      await _settle();
+      radio.add(const BleSeen('46:90', -55, holds: true)); // its scan response, a moment after
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await _settle();
+      expect(steps('ble_client'), isEmpty);
+      // Another computer, which does not hold: recognized once the moment passed.
+      radio.add(const BleSeen('55:dd', -60));
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await _settle();
+      expect(steps('ble_client').where((p) => p['step'] == 'hello').single['conn'], '55:dd');
+    });
+
+    test('the computer: the advertisement of a phone whose link came is left alone, without spinning', () async {
+      BleLink.waitsForHolds = true;
+      _client(core, {
+        'recognize': {'suffix': '6e2a', 'trusted': false},
+      });
+      await link.start();
+      radio.add(const BleSeen('46:90', -55, holds: true));
+      await _settle();
+      radio.add(const BleHeld('conn-1', held: true));
+      await _settle();
+      final calls = core.calls.length;
+      // Its advertisement keeps coming; the computer stays still (it froze, 18 November).
+      for (var i = 0; i < 5; i++) {
+        radio.add(const BleSeen('46:90', -55, holds: true));
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(core.calls.length, calls);
+      expect(steps('ble_client').where((p) => p['conn'] == '46:90'), isEmpty);
+    });
+
+    test('the computer: a phone that says it holds but whose link never comes is recognized the old way', () async {
+      BleLink.waitsForHolds = true;
+      final within = BleLink.holdWithin;
+      BleLink.holdWithin = const Duration(milliseconds: 60);
+      addTearDown(() => BleLink.holdWithin = within);
+      _client(core, {
+        'recognize': {'suffix': '6e2a', 'trusted': false},
+      });
+      await link.start();
+      radio.add(const BleSeen('46:90', -55, holds: true));
+      await _settle();
+      expect(steps('ble_client'), isEmpty);
+      // Waited for up to 2 s: a shared CI machine is slow (#293).
+      for (var i = 0; i < 100 && steps('ble_client').isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(steps('ble_client').where((p) => p['step'] == 'hello').single['conn'], '46:90');
+    });
+
+    test('the phone: the computer it recognized stays connected, held, and is never forgotten for silence', () async {
+      BleLink.waitsForHolds = false;
+      final old = BleLink.forgetAfter;
+      BleLink.forgetAfter = const Duration(milliseconds: 50);
+      addTearDown(() => BleLink.forgetAfter = old);
+      _client(core, {
+        'recognize': {'suffix': '4f2a', 'trusted': false},
+      });
+      await link.start();
+      radio.add(const BleSeen('BC:A8', -50));
+      await _settle();
+      expect(radio.released, ['BC:A8']);
+      radio.add(const BleHeld('BC:A8', held: true)); // subscribed to its calls
+      await Future<void>.delayed(const Duration(milliseconds: 1200)); // past forgetAfter, unreported
+      expect(link.devices.map((d) => d.name), ['medXfer-4f2a']);
+      radio.add(const BleHeld('BC:A8', held: false));
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      expect(link.devices, isEmpty);
+    });
+
+    test('the phone: the computer calls over the held link; it is answered as any device that connects', () async {
+      BleLink.waitsForHolds = false;
+      core.on('ble_server', (_) => _reply('ble_server', {'conn': 'held:BC:A8', 'data': _data}));
+      await link.start();
+      radio.add(BleMessage('held:BC:A8', Uint8List.fromList([1, 2])));
+      await _settle();
+      expect(steps('ble_server').single['conn'], 'held:BC:A8');
+      expect(radio.replies['held:BC:A8'], isNotNull);
+    });
+  });
 
   test('BLE-12: no permission, Bluetooth off: said; turned on, it runs', () async {
     radio.allowed = false;
@@ -237,7 +367,8 @@ void main() {
     radio.add(const BleSeen('22:22', -50));
     await _settle();
     expect(link.devices.map((d) => d.device), ['22:22']);
-    expect(radio.disconnected, ['11:11', '22:22', '11:11']); // each recognition closes its connection, the old address too
+    expect(radio.released, ['11:11', '22:22']); // each recognition done with its connection (J8: a held one stays)
+    expect(radio.disconnected, ['11:11']); // the old address closed
   });
 
   test('a device of mutual trust: its network joined at 5 GHz, then the session by P3', () async {
@@ -412,6 +543,28 @@ void main() {
     expect(steps('ble_client').where((p) => p['step'] == 'hello' && p['conn'] == 'old'), hasLength(1));
   });
 
+  test('a recognition with no answer from a device still advertising is tried again soon', () async {
+    final within = BleLink.recognizeWithin;
+    final soon = BleLink.retrySoonAfter;
+    BleLink.recognizeWithin = const Duration(milliseconds: 50);
+    BleLink.retrySoonAfter = const [Duration(milliseconds: 40), Duration(milliseconds: 80)];
+    addTearDown(() {
+      BleLink.recognizeWithin = within;
+      BleLink.retrySoonAfter = soon;
+    });
+    _client(core, {
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+    });
+    await link.start();
+    radio.hang.add('11:11');
+    radio.add(const BleSeen('11:11', -62));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    radio.add(const BleSeen('11:11', -62)); // its advertisements go on (every 2 s on Windows)
+    await Future<void>.delayed(const Duration(milliseconds: 90)); // given up at 50 ms, tried at 90
+    await _settle();
+    expect(steps('ble_client').where((p) => p['step'] == 'hello' && p['conn'] == '11:11'), hasLength(2));
+  });
+
   test('BLE-09: a network created for BLE that nobody joins is stopped after bleUnjoinedFor', () async {
     final old = Connection.bleUnjoinedFor;
     Connection.bleUnjoinedFor = const Duration(milliseconds: 60);
@@ -502,7 +655,8 @@ void main() {
     radio.drops = 2; // the first try's hello, the second's trusted request
     await link.connect(pc);
     expect(steps('ble_client').where((p) => p['step'] == 'hello'), hasLength(4)); // the recognition, then 3 tries
-    expect(radio.disconnected.where((d) => d == '33:33'), hasLength(3)); // the recognition's, then each try dropped
+    expect(radio.released, ['33:33']); // the recognition's
+    expect(radio.disconnected.where((d) => d == '33:33'), hasLength(2)); // each try dropped
     expect(link.stage, BleStage.idle);
     expect(steps('pair').single, {'ip': '192.168.49.1', 'port': 18887});
     expect(link.lastTimings, contains('retry timeout'));

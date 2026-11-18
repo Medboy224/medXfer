@@ -112,15 +112,22 @@ class WifiDirectGroup(context: Context) {
     }
 
     /**
-     * Whether this device's Wi-Fi is connected to a network as well: its single radio then
-     * switches between the two channels, and the group slows to a crawl (215 ms of ping, 5 to
-     * 7 MB/s, in WP-C.0 of the J6c plan). Android 16 lists the group itself as a Wi-Fi network
-     * (p2p-wlan0-0, real test of 2 November 2026): Wi-Fi Direct interfaces are left out.
+     * The frequency (MHz) of the network this device's Wi-Fi is connected to as well; 0 for
+     * none, 1 for one whose frequency is not known. Its single radio then switches between the
+     * two channels, and the group slows to a crawl (215 ms of ping, 5 to 7 MB/s, in WP-C.0 of
+     * the J6c plan; 12 MB/s against 35 on 17 November 2026). Android 16 lists the group itself
+     * as a Wi-Fi network (p2p-wlan0-0, real test of 2 November 2026): Wi-Fi Direct interfaces
+     * are left out. The frequency only: the network's name needs the location permission.
      */
-    @Suppress("DEPRECATION") // allNetworks: a callback would only say the same, later
-    fun otherWifi(): Boolean = cm.allNetworks.any {
-        cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
-            cm.getLinkProperties(it)?.interfaceName?.startsWith("p2p") != true
+    @Suppress("DEPRECATION") // allNetworks, connectionInfo: a callback would only say the same, later
+    fun otherWifi(): Int {
+        val on = cm.allNetworks.any {
+            cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
+                cm.getLinkProperties(it)?.interfaceName?.startsWith("p2p") != true
+        }
+        if (!on) return 0
+        val mhz = wifi.connectionInfo?.frequency ?: 0
+        return if (mhz > 1) mhz else 1
     }
 
     @SuppressLint("MissingPermission")

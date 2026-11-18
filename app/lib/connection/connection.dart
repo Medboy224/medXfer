@@ -258,9 +258,12 @@ class HotspotLost extends ConnectionNotice {
 
 /// This device's Wi-Fi joined another network during a session: its own network slows down
 /// (54 → 19 MB/s in the real test of 2 November 2026), and the access point's screen, which
-/// says so, is closed by then.
+/// says so, is closed by then. [already]: it was on it when the session opened, the network
+/// made through BLE, whose path never shows that screen (12 MB/s against 35, real tests of
+/// 17 November 2026).
 class HotspotSlowed extends ConnectionNotice {
-  const HotspotSlowed();
+  const HotspotSlowed({this.already = false});
+  final bool already;
 }
 
 /// The other device's access point could not be joined (refused by the user, not found).
@@ -308,6 +311,12 @@ class Connection extends ChangeNotifier {
   /// as long as the core dials it again (redialFor, J6c). Then left.
   static Duration rejoinFor = const Duration(minutes: 10);
 
+  /// While the session is lost, how often this device checks it is still on the joined network,
+  /// and joins it again if not ([Hotspot.rejoin]).
+  static Duration rejoinEvery = const Duration(seconds: 10);
+  Timer? _rejoinTimer;
+  bool _rejoining = false;
+
   /// A network created for a device met by BLE that nobody joined is stopped after this long
   /// (BLE-09): it runs only for that device.
   static Duration bleUnjoinedFor = const Duration(minutes: 2);
@@ -325,6 +334,8 @@ class Connection extends ChangeNotifier {
   bool _cannotCreate = false;
   Timer? _hotspotGiveUp; // this device's network kept after its session was lost
   bool _hotspotOtherWifi = false;
+  int _otherWifiMhz = 0; // its frequency, for the reports (pushNetwork)
+  int _joinedMhz = 0; // the frequency of the network joined, when the system says it
 
   /// This device's network is wanted, but its Wi-Fi is off: it comes once it is on (#219).
   bool get hotspotWifiOff => _hotspotWifiOff;
@@ -538,7 +549,19 @@ class Connection extends ChangeNotifier {
     await _call('set_network_info', {
       'interfaces': [for (final i in interfaces) i.toJson()],
       if (joined != 0) 'network': joined,
+      'link': ?_link(),
     });
+  }
+
+  /// The Wi-Fi a transfer goes through, for its report: the network this device created or
+  /// joined, its frequency, and the other network it is on as well. No name, no address.
+  Map<String, Object>? _link() {
+    final mine = _myHotspot;
+    if (mine != null) {
+      return {'network': 'created', 'frequency_mhz': mine.frequency, 'other_wifi_mhz': _otherWifiMhz};
+    }
+    if (_joined != null) return {'network': 'joined', 'frequency_mhz': _joinedMhz};
+    return null;
   }
 
   /// Creates this device's access point, then a QR code and PIN that carry it. Wanted until
@@ -570,8 +593,10 @@ class Connection extends ChangeNotifier {
       final clock = Stopwatch()..start();
       _myHotspot = await hotspot.start(fiveGhz: !_hotspotLowBand);
       _cannotCreate = false;
-      debugPrint('hotspot: started, ${_myHotspot!.band?.name ?? 'band unknown'}, ${clock.elapsedMilliseconds} ms');
-      _hotspotOtherWifi = await hotspot.otherWifi();
+      _otherWifiMhz = await hotspot.otherWifi();
+      _hotspotOtherWifi = _otherWifiMhz > 0;
+      debugPrint('hotspot: started, ${_myHotspot!.band?.name ?? 'band unknown'}, ${clock.elapsedMilliseconds} ms, '
+          '${_myHotspot!.frequency} MHz, other Wi-Fi ${_otherWifiMhz == 0 ? 'none' : '$_otherWifiMhz MHz'}');
       _hotspotWatch = Timer.periodic(hotspotCheck, (_) => unawaited(_checkHotspot()));
       await pushNetwork();
       if (_codeOpen) await showCode();
@@ -599,6 +624,7 @@ class Connection extends ChangeNotifier {
     _hotspotWifiOff = false;
     _hotspotLowBand = false;
     _hotspotOtherWifi = false;
+    _otherWifiMhz = 0;
     _hotspotRetry?.cancel();
     _hotspotRetry = null;
     await _dropHotspot();
@@ -627,7 +653,12 @@ class Connection extends ChangeNotifier {
   }
 
   Future<void> _readOtherWifi() async {
-    final other = _myHotspot != null && await hotspot.otherWifi();
+    final mhz = _myHotspot != null ? await hotspot.otherWifi() : 0;
+    if (mhz == _otherWifiMhz) return;
+    _otherWifiMhz = mhz;
+    final other = mhz > 0;
+    debugPrint('hotspot: other Wi-Fi ${other ? '$mhz MHz' : 'none'}');
+    unawaited(pushNetwork()); // the reports say it
     if (other == _hotspotOtherWifi) return;
     _hotspotOtherWifi = other;
     if (other && _session != null) _notices.add(const HotspotSlowed());
@@ -719,7 +750,7 @@ class Connection extends ChangeNotifier {
           _notices.add(const HotspotFailed(permission: true));
           return;
         }
-        await hotspot.join(n.ssid, n.passphrase, security: n.security, band: n.band);
+        _joinedMhz = (await hotspot.join(n.ssid, n.passphrase, security: n.security, band: n.band)).frequency;
         _joined = n;
         await pushNetwork();
       } on PlatformException catch (e) {
@@ -748,11 +779,38 @@ class Connection extends ChangeNotifier {
   Future<void> leaveJoined() async {
     _giveUp?.cancel();
     _giveUp = null;
+    _rejoinTimer?.cancel();
+    _rejoinTimer = null;
     if (_joined == null) return;
     _joined = null;
     notifyListeners();
     await hotspot.leave();
     await pushNetwork();
+  }
+
+  /// The session lost while on a joined network: this device back on it at once, then every
+  /// [rejoinEvery] until the session is back or the network left. On 17 November 2026 a cut of
+  /// 80 ms sent the computer to its usual network for good: the phone's, a metre away, was
+  /// never joined again, and the session dialed again in vain.
+  void _keepJoined() {
+    if (_joined == null || !hotspot.canJoin) return;
+    unawaited(_rejoin());
+    _rejoinTimer ??= Timer.periodic(rejoinEvery, (_) => unawaited(_rejoin()));
+  }
+
+  Future<void> _rejoin() async {
+    if (_rejoining || _joined == null) return;
+    _rejoining = true;
+    try {
+      if (await hotspot.rejoin() && _joined != null) {
+        debugPrint('hotspot: joined again');
+        await pushNetwork();
+      }
+    } on PlatformException catch (e) {
+      debugPrint('hotspot: rejoin failed ${e.code}');
+    } finally {
+      _rejoining = false;
+    }
   }
 
   /// A new QR code and PIN; the previous ones stop working.
@@ -854,7 +912,7 @@ class Connection extends ChangeNotifier {
         _notices.add(const HotspotFailed(permission: true));
         return false;
       }
-      await hotspot.join(n.ssid, n.passphrase, security: n.security, band: n.band);
+      _joinedMhz = (await hotspot.join(n.ssid, n.passphrase, security: n.security, band: n.band)).frequency;
       _joined = n;
       debugPrint('hotspot: joined, ${n.band?.name ?? 'band unknown'}');
       await pushNetwork();
@@ -972,6 +1030,8 @@ class Connection extends ChangeNotifier {
       case 'paired':
         _bleUnjoined?.cancel();
         _bleUnjoined = null;
+        _rejoinTimer?.cancel();
+        _rejoinTimer = null;
         final ip = (m['ip'] as String?) ?? '';
         final name = (m['device_name'] as String?) ?? '';
         final before = _session;
@@ -986,7 +1046,13 @@ class Connection extends ChangeNotifier {
         _reconnecting = false;
         _pinNeeded = null;
         _askedPin = null;
-        if (before == null) _notices.add(Paired(_session!.name));
+        if (before == null) {
+          _notices.add(Paired(_session!.name));
+          // On another Wi-Fi as well since its network was made: said now, the transfer to
+          // come about 3 times slower; the access point's screen, which says it too, is not
+          // on the path through BLE.
+          if (_myHotspot != null && _hotspotOtherWifi) _notices.add(const HotspotSlowed(already: true));
+        }
       case 'pair_failed':
         final refused = _refusedUntil;
         if (refused != null && DateTime.now().isBefore(refused)) {
@@ -996,6 +1062,7 @@ class Connection extends ChangeNotifier {
         _notices.add(const PairFailed());
       case 'reconnecting':
         _reconnecting = true;
+        _keepJoined();
       case 'disconnected':
         _lastEndTimedOut = m['reason'] == 'connection timed out';
         if (_session != null) {
@@ -1027,6 +1094,7 @@ class Connection extends ChangeNotifier {
             _giveUp = Timer(rejoinFor, () {
               if (_session == null) unawaited(leaveJoined());
             });
+            _keepJoined();
           } else {
             unawaited(leaveJoined());
           }
@@ -1110,6 +1178,7 @@ class Connection extends ChangeNotifier {
     _connectingLimit?.cancel();
     _scanLimit?.cancel();
     _giveUp?.cancel();
+    _rejoinTimer?.cancel();
     _hotspotGiveUp?.cancel();
     _bleUnjoined?.cancel();
     _hotspotWatch?.cancel();

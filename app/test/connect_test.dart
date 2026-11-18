@@ -68,6 +68,9 @@ class _Hotspot implements Hotspot {
   Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band}) async => const HotspotInfo();
   @override
   Future<void> leave() async {}
+
+  @override
+  Future<bool> rejoin() async => false;
   @override
   Future<int> joinedNetwork() async => 0;
 
@@ -78,7 +81,7 @@ class _Hotspot implements Hotspot {
   Future<bool> alive() async => true;
 
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
 
   @override
   Future<bool> wifiOn() async => true;
@@ -117,7 +120,7 @@ class _GroupHotspot extends _Hotspot {
   }
 
   @override
-  Future<bool> otherWifi() async => other;
+  Future<int> otherWifi() async => other ? 2412 : 0;
 
   @override
   Future<bool> openWifiPanel({bool always = false}) async {

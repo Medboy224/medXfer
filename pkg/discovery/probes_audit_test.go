@@ -42,7 +42,8 @@ func TestProbesComeBackAtOnce(t *testing.T) {
 		}
 		defer cancel()
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	// 5 s: a shared CI machine took longer than 2 s once (#291), with no fault of the code.
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		c, err := net.DialTimeout("tcp4", addr, time.Second)
 		if err == nil {

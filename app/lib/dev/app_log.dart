@@ -28,13 +28,23 @@ class AppLog {
   String get text => _lines.isEmpty ? '' : '${_lines.join('\n')}\n';
 
   /// Every debugPrint goes to [instance] too, but the core's own log lines, which its journal
-  /// keeps already. The first line says the system.
-  static void install() {
+  /// keeps already. The first line says the system. [stamped]: each line printed starts with
+  /// the local time, to the millisecond: a desktop's output has none, where Android's logcat
+  /// has its own (the computer's, redirected to a file, could not be set beside its Wi-Fi's on
+  /// 17 November).
+  static void install({bool? stamped}) {
     instance.add('app: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}');
+    final stamp = stamped ?? !Platform.isAndroid;
     final print = debugPrint;
     debugPrint = (String? message, {int? wrapWidth}) {
       if (message != null && !message.startsWith('core log: ')) instance.add(message);
-      print(message, wrapWidth: wrapWidth);
+      print(stamp && message != null ? '${clock(DateTime.now())} $message' : message, wrapWidth: wrapWidth);
     };
+  }
+
+  /// [t] as 14:03:07.042.
+  static String clock(DateTime t) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(t.hour)}:${two(t.minute)}:${two(t.second)}.${t.millisecond.toString().padLeft(3, '0')}';
   }
 }

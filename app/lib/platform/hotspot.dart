@@ -50,6 +50,7 @@ class HotspotInfo {
     this.addressHeldBy,
     this.sharingAddress,
     this.band,
+    this.frequency = 0,
     this.wifiOff = false,
   });
 
@@ -60,6 +61,7 @@ class HotspotInfo {
         address: m['address'] as String?,
         interfaces: [for (final i in (m['interfaces'] as List?) ?? const []) '$i'],
         band: WifiBand.of((m['frequency'] as num?)?.toInt() ?? 0),
+        frequency: (m['frequency'] as num?)?.toInt() ?? 0,
         wifiOff: wifiOff,
       );
 
@@ -69,6 +71,9 @@ class HotspotInfo {
 
   /// The band obtained; null when the system does not say (Android's local hotspot, Windows).
   final WifiBand? band;
+
+  /// Its frequency in MHz, for the transfer reports; 0 when the system does not say.
+  final int frequency;
 
   /// Name and passphrase, chosen by Android: secrets of the network, never logged.
   final String? ssid;
@@ -128,6 +133,13 @@ abstract interface class Hotspot {
   Future<HotspotInfo> join(String ssid, String passphrase, {int security = 1, WifiBand? band});
   Future<void> leave();
 
+  /// Joins again the network [join] joined, when this device left it after a loss: Windows
+  /// goes back to a network of its own and stays there (real test of 17 November 2026), where
+  /// the session dialed again never finds the other device. Whether this call joined it again:
+  /// false when it was still on it, when the system does it by itself (Android, J6c), or when
+  /// it did not come back.
+  Future<bool> rejoin();
+
   /// The joined network's handle, for the core's sockets (pkg/netbind); 0 for none. It changes
   /// when the network, lost, is joined again (Android, J6c).
   Future<int> joinedNetwork();
@@ -140,8 +152,10 @@ abstract interface class Hotspot {
 
   /// Whether this device's Wi-Fi is connected to another network while the access point runs,
   /// which slows the access point to a crawl: Android's Wi-Fi Direct group, whose radio then
-  /// switches between the two channels (215 ms of ping, WP-C.0 of the J6c plan).
-  Future<bool> otherWifi();
+  /// switches between the two channels (215 ms of ping, WP-C.0 of the J6c plan; about 3 times
+  /// slower, real tests of 17 November 2026). That network's frequency in MHz; 0 for none, 1
+  /// for one whose frequency is not known.
+  Future<int> otherWifi();
 
   /// Whether the Wi-Fi [start] needs is on: a desktop's network needs it (#219); Android's local
   /// hotspot starts with Wi-Fi off.
@@ -209,6 +223,10 @@ class AndroidHotspot implements Hotspot {
   @override
   Future<void> leave() => channel.invokeMethod<void>('hotspotLeave');
 
+  /// Android joins it again by itself (WifiJoin.kt's request, J6c): its handle changes then.
+  @override
+  Future<bool> rejoin() async => false;
+
   @override
   Future<int> joinedNetwork() async => await channel.invokeMethod<int>('hotspotJoinedNetwork') ?? 0;
 
@@ -216,7 +234,7 @@ class AndroidHotspot implements Hotspot {
   Future<bool> openWifiPanel({bool always = false}) async => await channel.invokeMethod<bool>('openWifiPanel', {'always': always}) ?? false;
 
   @override
-  Future<bool> otherWifi() async => _group && (await channel.invokeMethod<bool>('otherWifi') ?? false);
+  Future<int> otherWifi() async => _group ? await channel.invokeMethod<int>('otherWifi') ?? 0 : 0;
 
   @override
   Future<bool> alive() async => await channel.invokeMethod<bool>(_group ? 'groupAlive' : 'hotspotAlive') ?? false;
@@ -254,13 +272,16 @@ class NoHotspot implements Hotspot {
   Future<void> leave() async {}
 
   @override
+  Future<bool> rejoin() async => false;
+
+  @override
   Future<int> joinedNetwork() async => 0;
 
   @override
   Future<bool> openWifiPanel({bool always = false}) async => false;
 
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
 
   @override
   Future<bool> alive() async => false;
@@ -364,6 +385,10 @@ class WindowsHotspot implements Hotspot {
   @override
   Future<void> leave() => channel.invokeMethod<void>('leave');
 
+  /// WifiJoin::Rejoin: the network's profile, kept, joined again within 25 s.
+  @override
+  Future<bool> rejoin() async => await channel.invokeMethod<bool>('rejoin') ?? false;
+
   /// The core's sockets follow Windows' routes: the card that joined is the computer's Wi-Fi.
   @override
   Future<int> joinedNetwork() async => 0;
@@ -374,7 +399,7 @@ class WindowsHotspot implements Hotspot {
 
   /// The group is a second, virtual interface beside the computer's Wi-Fi (WP-C.1).
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
 
   @override
   Future<bool> alive() async => await channel.invokeMethod<bool>('alive') ?? false;
@@ -470,6 +495,9 @@ class LinuxHotspot implements Hotspot {
   Future<void> leave() async {}
 
   @override
+  Future<bool> rejoin() async => false;
+
+  @override
   Future<int> joinedNetwork() async => 0;
 
   @override
@@ -477,7 +505,7 @@ class LinuxHotspot implements Hotspot {
 
   /// The card is the network's only: the Wi-Fi it was on is left ([leavesWifi]).
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
 
   /// The connection still active: NetworkManager gives the Wi-Fi device back to another network
   /// the user picks, ending it.

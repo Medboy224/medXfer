@@ -3,8 +3,11 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
+#include <set>
 
 #include <winrt/Windows.Devices.Radios.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -22,6 +25,11 @@ namespace {
 // Bible §6.6, BLE-02: medXfer's service and its one characteristic (as in Ble.kt).
 const guid kService{0xc46b12c3, 0x1dee, 0x482d, {0xa4, 0x90, 0xb1, 0x85, 0x21, 0x23, 0x12, 0xfb}};
 const guid kMessage{0xc46b12c4, 0x1dee, 0x482d, {0xa4, 0x90, 0xb1, 0x85, 0x21, 0x23, 0x12, 0xfb}};
+// The call characteristic (J8): a phone that holds its link with this computer subscribes to it.
+const guid kCall{0xc46b12c5, 0x1dee, 0x482d, {0xa4, 0x90, 0xb1, 0x85, 0x21, 0x23, 0x12, 0xfb}};
+// The service's UUID as it goes over the air (little-endian), in a service data section.
+constexpr std::array<uint8_t, 16> kServiceLe{0xfb, 0x12, 0x23, 0x21, 0x85, 0xb1, 0x90, 0xa4, 0x2d, 0x48, 0xee, 0x1d, 0xc3, 0x12, 0x6b, 0xc4};
+constexpr uint8_t kHolds = 2;  // a phone's scan response: it connects to the computers it finds (Ble.kt)
 constexpr size_t kMaxMessage = 512;                      // BLE-03
 constexpr uint8_t kBleVersion = 1;                        // its messages' first byte (bible §6.6)
 constexpr auto kAnswerWithin = std::chrono::seconds(25);  // BLE-11: under the 30 s of a GATT transaction
@@ -73,6 +81,15 @@ Windows::Foundation::IAsyncOperation<Radio> BluetoothRadio() {
 }
 
 }  // namespace
+
+// A phone's link kept with this computer (J8), by which this one calls it.
+struct Ble::Held {
+  GattSubscribedClient client{nullptr};
+  std::vector<uint8_t> outgoing;  // this computer's message, which the phone reads
+  std::vector<uint8_t> writing;   // the phone's answer, in pieces
+  Ble::Answer done;               // the call under way
+  uint64_t number = 0;            // its number, for its time limit
+};
 
 // A read that came before the core's answer: answered by Reply, or failed after kAnswerWithin.
 struct Ble::Read {
@@ -207,6 +224,28 @@ fire_and_forget Ble::Start(bool advertise, bool scan, Done done) {
               EmitOnUi("advertise_failed", {{V("code"), flutter::EncodableValue(static_cast<int32_t>(e.Error()))}});
             }
           });
+          // The call characteristic: read and written by the phone that holds its link, and
+          // notified by this computer to call it (J8).
+          GattLocalCharacteristicParameters c;
+          c.CharacteristicProperties(GattCharacteristicProperties::Write | GattCharacteristicProperties::Read |
+                                     GattCharacteristicProperties::Notify);
+          c.WriteProtectionLevel(GattProtectionLevel::Plain);
+          c.ReadProtectionLevel(GattProtectionLevel::Plain);
+          auto callMade = co_await provider.Service().CreateCharacteristicAsync(kCall, c);
+          co_await ui;
+          if (!*alive) co_return;
+          if (callMade.Error() == BluetoothError::Success) {
+            call_ = callMade.Characteristic();
+            call_.WriteRequested([this, alive](auto&&, GattWriteRequestedEventArgs const& args) {
+              if (*alive) OnCallWrite(args);
+            });
+            call_.ReadRequested([this, alive](auto&&, GattReadRequestedEventArgs const& args) {
+              if (*alive) OnCallRead(args);
+            });
+            call_.SubscribedClientsChanged([this, alive](auto&&, auto&&) {
+              if (*alive) OnSubscribers();
+            });
+          }
           provider.StartAdvertising(AdvertisingParameters());
           provider_ = provider;
           advertising_ = true;
@@ -216,9 +255,21 @@ fire_and_forget Ble::Start(bool advertise, bool scan, Done done) {
     if (!error && scan && !watcher_) {
       BluetoothLEAdvertisementWatcher watcher;
       watcher.ScanningMode(BluetoothLEScanningMode::Active);
-      watcher.AdvertisementFilter().Advertisement().ServiceUuids().Append(kService);
+      // Not filtered by Windows: a phone's scan response, which says it holds (J8), carries the
+      // service in its data, not in a list of UUIDs.
       watcher.Received([this, alive](auto&&, BluetoothLEAdvertisementReceivedEventArgs const& a) {
-        if (*alive) OnSeen(a.BluetoothAddress(), a.RawSignalStrengthInDBm());
+        if (!*alive) return;
+        bool ours = false, holds = false;
+        auto adv = a.Advertisement();
+        for (auto const& u : adv.ServiceUuids()) ours = ours || u == kService;
+        for (auto const& section : adv.DataSections()) {
+          if (section.DataType() != 0x21 || section.Data().Length() < kServiceLe.size()) continue;
+          auto b = ToBytes(section.Data());
+          if (!std::equal(kServiceLe.begin(), kServiceLe.end(), b.begin())) continue;
+          ours = true;
+          holds = holds || (b.size() > kServiceLe.size() && b[kServiceLe.size()] == kHolds);
+        }
+        if (ours) OnSeen(a.BluetoothAddress(), a.RawSignalStrengthInDBm(), static_cast<int>(a.BluetoothAddressType()), holds);
       });
       watcher.Stopped([this, alive](auto&&, BluetoothLEAdvertisementWatcherStoppedEventArgs const& e) {
         if (*alive && e.Error() != BluetoothError::Success) {
@@ -267,6 +318,14 @@ void Ble::Stop() {
   }
   served_.clear();
   seen_at_.clear();
+  address_type_.clear();
+  holds_.clear();
+  std::vector<Answer> failed;
+  for (auto& [conn, h] : held_) {
+    if (h->done) failed.push_back(std::move(h->done));
+  }
+  held_.clear();
+  for (auto& f : failed) AnswerOnUi(std::move(f), "stopped", {});
   for (auto& [device, c] : clients_) c->Close();
   clients_.clear();
 }
@@ -278,16 +337,201 @@ fire_and_forget Ble::EmitOnUi(std::string event, flutter::EncodableMap args) {
   if (*alive) emit_(event, std::move(args));
 }
 
-fire_and_forget Ble::OnSeen(uint64_t address, int16_t rssi) {
+fire_and_forget Ble::OnSeen(uint64_t address, int16_t rssi, int type, bool holds) {
+  bool said;
   {
     std::lock_guard<std::mutex> lock(mu_);
+    address_type_[address] = type;
+    auto& known = holds_[address];
+    bool news = holds && !known;  // said at once: this computer waits for that phone's link
+    known = known || holds;
+    said = known;
     auto now = NowMs();
     auto it = seen_at_.find(address);
-    if (it != seen_at_.end() && now - it->second < kSeenEveryMs) co_return;
+    if (!news && it != seen_at_.end() && now - it->second < kSeenEveryMs) co_return;
     seen_at_[address] = now;
   }
-  EmitOnUi("seen", {{V("device"), V(Address(address))}, {V("rssi"), flutter::EncodableValue(static_cast<int32_t>(rssi))}});
+  EmitOnUi("seen", {{V("device"), V(Address(address))},
+                    {V("rssi"), flutter::EncodableValue(static_cast<int32_t>(rssi))},
+                    {V("holds"), flutter::EncodableValue(said)}});
   co_return;
+}
+
+fire_and_forget Ble::AnswerOnUi(Answer done, std::optional<std::string> error, std::vector<uint8_t> answer) {
+  if (!ui_ || !done) co_return;
+  auto alive = alive_;
+  co_await *ui_;
+  if (*alive) done(error, std::move(answer));
+}
+
+// A phone's link gone; mu_ held. Its call under way fails.
+void Ble::DropHeldLocked(const std::string& conn, std::vector<Answer>& failed, bool& dropped) {
+  auto it = held_.find(conn);
+  dropped = it != held_.end();
+  if (!dropped) return;
+  if (it->second->done) failed.push_back(std::move(it->second->done));
+  held_.erase(it);
+}
+
+// The phones subscribed to the call characteristic, their link up: each one new is a held link,
+// said to Dart; one gone, its link released. Run at each change, and at each message a phone
+// writes: a paired phone's subscription is kept by Windows from one link to the next, and its
+// new link changes nothing Windows would tell (real test of 18 November 2026).
+void Ble::OnSubscribers() {
+  std::vector<std::pair<std::string, bool>> changes;
+  std::vector<Answer> failed;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!call_) return;
+    std::set<std::string> now;
+    for (auto const& c : call_.SubscribedClients()) {
+      GattSession session = c.Session();
+      if (session.SessionStatus() != GattSessionStatus::Active) continue;
+      auto conn = to_string(session.DeviceId().Id());
+      now.insert(conn);
+      if (held_.count(conn)) continue;
+      auto h = std::make_shared<Held>();
+      h->client = c;
+      held_[conn] = h;
+      ServedLocked(session);  // its closing said
+      changes.emplace_back(conn, true);
+    }
+    std::vector<std::string> gone;
+    for (auto& [conn, h] : held_) {
+      if (!now.count(conn)) gone.push_back(conn);
+    }
+    for (auto& conn : gone) {
+      bool dropped = false;
+      DropHeldLocked(conn, failed, dropped);
+      if (dropped) changes.emplace_back(conn, false);
+    }
+  }
+  for (auto& [conn, on] : changes) {
+    std::fprintf(stderr, "ble: %s %s\n", on ? "held" : "released", conn.c_str());
+    EmitOnUi("held", {{V("conn"), V(conn)}, {V("held"), flutter::EncodableValue(on)}});
+  }
+  for (auto& f : failed) AnswerOnUi(std::move(f), "closed", {});
+}
+
+// Calls the phone over its link: [message] is what it reads next on the call characteristic,
+// its answer what it writes there; the notification tells it to.
+fire_and_forget Ble::Call(std::shared_ptr<Held> h, std::vector<uint8_t> message, Answer done) {
+  auto alive = alive_;
+  uint64_t number;
+  GattSubscribedClient client{nullptr};
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    // A call left unanswered (its notification sent before the phone listened, real test of
+    // 18 November 2026) gives way to this one, rather than hold it for kAnswerWithin.
+    if (h->done) AnswerOnUi(std::move(h->done), "superseded", {});
+    h->outgoing = std::move(message);
+    h->writing.clear();
+    h->done = std::move(done);
+    number = ++h->number;
+    client = h->client;
+  }
+  bool notified = false;
+  try {
+    DataWriter signal;
+    signal.WriteByte(kBleVersion);
+    auto result = co_await call_.NotifyValueAsync(signal.DetachBuffer(), client);
+    notified = result.Status() == GattCommunicationStatus::Success;
+  } catch (...) {
+  }
+  if (!*alive) co_return;
+  if (!notified) {
+    Answer failed;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      if (h->number == number) failed = std::move(h->done);
+    }
+    AnswerOnUi(std::move(failed), "notify_failed", {});
+    co_return;
+  }
+  co_await resume_after(kAnswerWithin);
+  if (!*alive) co_return;
+  Answer late;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (h->number == number && h->done) late = std::move(h->done);
+  }
+  AnswerOnUi(std::move(late), "timeout", {});
+}
+
+// The phone writes its answer to this computer's call, in pieces for a long write.
+fire_and_forget Ble::OnCallWrite(GattWriteRequestedEventArgs args) {
+  auto deferral = args.GetDeferral();
+  auto alive = alive_;
+  auto request = co_await args.GetRequestAsync();
+  if (!*alive || !request) {
+    deferral.Complete();
+    co_return;
+  }
+  auto conn = to_string(args.Session().DeviceId().Id());
+  auto value = ToBytes(request.Value());
+  bool ok = false;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = held_.find(conn);
+    if (it != held_.end() && it->second->done) {
+      auto& h = *it->second;
+      if (request.Offset() == 0) h.writing.clear();
+      ok = request.Offset() == h.writing.size() && h.writing.size() + value.size() <= kMaxMessage;
+      if (ok) h.writing.insert(h.writing.end(), value.begin(), value.end());
+    }
+  }
+  try {
+    if (!ok) {
+      request.RespondWithProtocolError(GattProtocolError::InvalidOffset());
+    } else if (request.Option() == GattWriteOption::WriteWithResponse) {
+      request.Respond();
+    }
+  } catch (...) {
+  }
+  deferral.Complete();
+}
+
+// The phone reads the call characteristic: this computer's message; once it wrote its answer,
+// the read that marks the end of it, which completes the call.
+fire_and_forget Ble::OnCallRead(GattReadRequestedEventArgs args) {
+  auto deferral = args.GetDeferral();
+  auto alive = alive_;
+  auto request = co_await args.GetRequestAsync();
+  if (!*alive || !request) {
+    deferral.Complete();
+    co_return;
+  }
+  auto conn = to_string(args.Session().DeviceId().Id());
+  std::vector<uint8_t> value;
+  Answer finished;
+  std::vector<uint8_t> answer;
+  bool known = false;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = held_.find(conn);
+    if (it != held_.end()) {
+      known = true;
+      auto& h = *it->second;
+      if (request.Offset() == 0 && !h.writing.empty()) {
+        finished = std::move(h.done);
+        answer = std::move(h.writing);
+        h.writing.clear();
+        h.outgoing.clear();
+      } else {
+        value = h.outgoing;
+      }
+    }
+  }
+  try {
+    if (!known) {
+      request.RespondWithProtocolError(GattProtocolError::UnlikelyError());
+    } else {
+      request.RespondWithValue(ToBuffer(value, request.Offset()));
+    }
+  } catch (...) {
+  }
+  deferral.Complete();
+  AnswerOnUi(std::move(finished), std::nullopt, std::move(answer));
 }
 
 // The state of the device connected by session; mu_ held. Its going is said ("closed").
@@ -311,6 +555,14 @@ Ble::Served& Ble::ServedLocked(GattSession const& session) {
         }
         served_.erase(it);
       }
+      std::vector<Answer> failed;
+      bool dropped = false;
+      {
+        std::lock_guard<std::mutex> lock(mu_);
+        DropHeldLocked(conn, failed, dropped);
+      }
+      if (dropped) EmitOnUi("held", {{V("conn"), V(conn)}, {V("held"), flutter::EncodableValue(false)}});
+      for (auto& f : failed) AnswerOnUi(std::move(f), "closed", {});
       EmitOnUi("closed", {{V("conn"), V(conn)}});
     });
   }
@@ -353,6 +605,7 @@ fire_and_forget Ble::OnWrite(GattWriteRequestedEventArgs args) {
   } catch (...) {
   }
   deferral.Complete();
+  OnSubscribers();
 }
 
 // A read: the core's answer when it is there; else the message written goes to the core, and the
@@ -365,6 +618,7 @@ fire_and_forget Ble::OnRead(GattReadRequestedEventArgs args) {
     deferral.Complete();
     co_return;
   }
+  OnSubscribers();  // its subscription, made after its message (Ble.kt), seen by now
   auto conn = to_string(args.Session().DeviceId().Id());
   auto read = std::make_shared<Read>();
   read->request = request;
@@ -427,6 +681,17 @@ void Ble::Reply(const std::string& conn, std::vector<uint8_t> data) {
 fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, Answer done) {
   apartment_context ui;
   auto alive = alive_;
+  // A phone's held link (J8): called, never connected to.
+  std::shared_ptr<Held> held;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = held_.find(device);
+    if (it != held_.end()) held = it->second;
+  }
+  if (held) {
+    Call(held, std::move(message), std::move(done));
+    co_return;
+  }
   std::shared_ptr<Client> c;
   {
     std::lock_guard<std::mutex> lock(mu_);
@@ -451,13 +716,32 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
     return true;
   };
   GattCharacteristic ch{nullptr};
+  const uint64_t address = std::stoull(device, nullptr, 16);
+  int type = -1;  // not seen: Windows guesses
   {
     std::lock_guard<std::mutex> lock(mu_);
     ch = c->characteristic;
+    auto t = address_type_.find(address);
+    if (t != address_type_.end()) type = t->second;
   }
+  // Each step's time, said on stderr when this exchange connects: on 17 November 2026 the
+  // computer's recognitions of the phone hung 6 s, four in a row, then one took 0.9 s.
+  const int64_t began = NowMs();
+  int64_t mark = began;
+  std::string steps;
+  auto lap = [&](const char* name) {
+    auto now = NowMs();
+    steps += std::string(" ") + name + " " + std::to_string(now - mark);
+    mark = now;
+  };
+  bool connecting = !ch;
   try {
     if (!ch) {
-      BluetoothLEDevice dev = co_await BluetoothLEDevice::FromBluetoothAddressAsync(std::stoull(device, nullptr, 16));
+      // As advertised: without its type, Windows takes the address for a public one unless it
+      // still knows it, and a phone's is random.
+      BluetoothLEDevice dev = type >= 0 ? co_await BluetoothLEDevice::FromBluetoothAddressAsync(address, static_cast<BluetoothAddressType>(type))
+                                        : co_await BluetoothLEDevice::FromBluetoothAddressAsync(address);
+      lap("device");
       if (!dev) {
         error = "not_found";
       } else if (!keep([&](Client& k) { k.device = dev; })) {
@@ -466,6 +750,7 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
       } else {
         step = "session";
         GattSession session = co_await GattSession::FromDeviceIdAsync(dev.BluetoothDeviceId());
+        lap("session");
         if (!keep([&](Client& k) { k.session = session; })) {
           session.Close();
           throw hresult_error(RO_E_CLOSED);
@@ -477,7 +762,9 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
         // 3 November 2026).
         step = "services";
         auto all = co_await dev.GetGattServicesAsync(BluetoothCacheMode::Uncached);
+        lap("services");
         auto services = co_await dev.GetGattServicesForUuidAsync(kService, BluetoothCacheMode::Uncached);
+        lap("service");
         if (services.Status() != GattCommunicationStatus::Success || services.Services().Size() == 0) {
           error = "no_service:" + std::to_string(static_cast<int>(all.Status())) + "/" +
                   std::to_string(all.Status() == GattCommunicationStatus::Success ? all.Services().Size() : 0) + "/" +
@@ -485,6 +772,7 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
         } else {
           step = "characteristic";
           auto found = co_await services.Services().GetAt(0).GetCharacteristicsForUuidAsync(kMessage, BluetoothCacheMode::Uncached);
+          lap("characteristic");
           if (found.Status() != GattCommunicationStatus::Success || found.Characteristics().Size() == 0) {
             error = "no_characteristic:" + std::to_string(static_cast<int>(found.Status()));
           } else {
@@ -521,6 +809,13 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
     std::lock_guard<std::mutex> lock(mu_);
     if (error) c->Close();  // the next exchange connects again
     c->busy = false;
+  }
+  if (connecting) {
+    lap("exchange");
+    std::fprintf(stderr, "ble: connect %s (%s address)%s, %lld ms%s%s\n", device.c_str(),
+                 type == 1 ? "random" : type == 0 ? "public" : "unknown", steps.c_str(), static_cast<long long>(NowMs() - began),
+                 error ? ", " : "", error ? error->c_str() : "");
+    fflush(stderr);
   }
   co_await ui;
   if (*alive) done(error, std::move(answer));

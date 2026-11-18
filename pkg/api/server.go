@@ -111,8 +111,9 @@ type DaemonServer struct {
 
 	trackerMu         sync.Mutex
 	activeTracker     *TransferSessionTracker
-	trackerID         string // the transfer of activeTracker
-	closedTrackerID   string // the transfer whose measures were closed last (trackerFor)
+	link              *diag.Link // the Wi-Fi the app said last (set_network_info), for the reports
+	trackerID         string     // the transfer of activeTracker
+	closedTrackerID   string     // the transfer whose measures were closed last (trackerFor)
 	lastSummaryReport *TransferSummaryReport
 }
 
@@ -889,8 +890,23 @@ func (s *DaemonServer) StartTransferTracker(name string, totalFiles int, totalBy
 	s.trackerMu.Lock()
 	defer s.trackerMu.Unlock()
 	tracker := NewTransferSessionTracker(name, totalFiles, totalBytes)
+	tracker.SetLink(s.link)
 	s.activeTracker = tracker
 	return tracker
+}
+
+// setLink records the Wi-Fi the app says, for the transfer under way and the next ones; nil
+// when the app says none.
+func (s *DaemonServer) setLink(l *diag.Link) {
+	s.trackerMu.Lock()
+	defer s.trackerMu.Unlock()
+	if l != nil && !l.Valid() {
+		l = nil
+	}
+	s.link = l
+	if s.activeTracker != nil {
+		s.activeTracker.SetLink(l)
+	}
 }
 
 // RecordTransferSample records a live progress measurement of transfer id.
@@ -912,6 +928,7 @@ func (s *DaemonServer) trackerFor(id, name string, totalFiles int, totalBytes in
 	}
 	if s.activeTracker == nil {
 		s.activeTracker = NewTransferSessionTracker(name, totalFiles, totalBytes)
+		s.activeTracker.SetLink(s.link)
 		s.trackerID = id
 	}
 	return s.activeTracker

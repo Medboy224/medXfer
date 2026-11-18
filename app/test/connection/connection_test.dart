@@ -67,6 +67,9 @@ class _FakeHotspot implements Hotspot {
 
   /// A radio at 2.4 GHz only, as the TECNO BF6's (WP-D.4).
   bool only24 = false;
+
+  /// Answers of [rejoin], one per call, then false: whether it joined again (Windows).
+  final rejoins = <bool>[];
   final log = <String>[];
 
   @override
@@ -107,6 +110,12 @@ class _FakeHotspot implements Hotspot {
   Future<void> leave() async => log.add('leave');
 
   @override
+  Future<bool> rejoin() async {
+    log.add('rejoin');
+    return rejoins.isEmpty ? false : rejoins.removeAt(0);
+  }
+
+  @override
   Future<int> joinedNetwork() async => 643355824141;
 
   @override
@@ -120,7 +129,7 @@ class _FakeHotspot implements Hotspot {
   Future<bool> alive() async => true;
 
   @override
-  Future<bool> otherWifi() async => other;
+  Future<int> otherWifi() async => other ? 2412 : 0;
 
   @override
   Future<bool> wifiOn() async => true;
@@ -181,6 +190,9 @@ class _DesktopHotspot implements Hotspot {
   Future<void> leave() async => log.add('leave');
 
   @override
+  Future<bool> rejoin() async => false;
+
+  @override
   Future<int> joinedNetwork() async => 0;
 
   @override
@@ -193,7 +205,7 @@ class _DesktopHotspot implements Hotspot {
   Future<bool> alive() async => running;
 
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
 
   @override
   Future<bool> wifiOn() async => wifi;
@@ -843,6 +855,41 @@ void main() {
     expect(c.myHotspot, isNull);
   });
 
+  test('J8: on another Wi-Fi when the session opens: said at once; the core told, for the reports', () async {
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_show', (_) => const FakeAnswer());
+    final h = _FakeHotspot()..other = true; // the TECNO's, 2.4 GHz (real tests of 17 November)
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    addTearDown(c.dispose);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.networkForBle(fiveGhz: true); // the path through BLE: no access point's screen
+    final link = core.calls.where((x) => x.action == 'set_network_info').last.payload['link'];
+    expect(link, {'network': 'created', 'frequency_mhz': 0, 'other_wifi_mhz': 2412});
+    c.take(const CoreEvent('paired', data: {'ip': '10.46.56.91', 'device_name': 'Naruto'}));
+    await _settle();
+    expect(notices.whereType<HotspotSlowed>().single.already, isTrue);
+    // The same session again (pair_accept's second paired): not said twice.
+    c.take(const CoreEvent('paired', data: {'ip': '10.46.56.91', 'device_name': 'Naruto'}));
+    await _settle();
+    expect(notices.whereType<HotspotSlowed>(), hasLength(1));
+  });
+
+  test('J8: alone on its network, nothing said; the link has no other Wi-Fi', () async {
+    final core = _core()..on('set_network_info', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    addTearDown(c.dispose);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.networkForBle(fiveGhz: true);
+    expect(core.calls.where((x) => x.action == 'set_network_info').last.payload['link'], {'network': 'created', 'frequency_mhz': 0, 'other_wifi_mhz': 0});
+    c.take(const CoreEvent('paired', data: {'ip': '10.46.56.91', 'device_name': 'Naruto'}));
+    await _settle();
+    expect(notices.whereType<HotspotSlowed>(), isEmpty);
+  });
+
   test('WP-D.4: the phone joins another Wi-Fi during a session: said once, gone once it leaves', () async {
     final old = Connection.hotspotCheck;
     Connection.hotspotCheck = const Duration(milliseconds: 20);
@@ -912,6 +959,46 @@ void main() {
     await _settle();
     expect(h.log.last, 'leave');
     expect(c.joining, isFalse);
+  });
+
+  test('a session lost on a joined network: joined again at once, then until the session is back', () async {
+    final old = Connection.rejoinEvery;
+    Connection.rejoinEvery = const Duration(milliseconds: 20);
+    addTearDown(() => Connection.rejoinEvery = old);
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_uri', (_) => const FakeAnswer());
+    final h = _FakeHotspot()..rejoins.add(true);
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    await c.pairLink(PairLink.parse('medxfer://v1/pair?fp=AAAA&a=169.254.121.148&p=18887&s=x&exp=$_expires&ws=DIRECT-ND-medXfer&wp=K7XQ2MPRT9ZD&wt=1')!);
+    c.take(const CoreEvent('paired', data: {'ip': '169.254.121.148', 'device_name': 'PC'}));
+    final given = core.calls.where((x) => x.action == 'set_network_info').length;
+    c.take(const CoreEvent('reconnecting', data: {}));
+    await _settle();
+    expect(h.log.where((x) => x == 'rejoin'), hasLength(1), reason: 'at once');
+    expect(core.calls.where((x) => x.action == 'set_network_info').length, given + 1, reason: 'joined again: the core told');
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+    expect(h.log.where((x) => x == 'rejoin').length, greaterThan(1), reason: 'checked again while lost');
+    // Back: no more checks.
+    c.take(const CoreEvent('paired', data: {'ip': '169.254.121.148', 'device_name': 'PC'}));
+    final checks = h.log.where((x) => x == 'rejoin').length;
+    await Future<void>.delayed(const Duration(milliseconds: 70));
+    expect(h.log.where((x) => x == 'rejoin'), hasLength(checks));
+    expect(h.log, isNot(contains('leave')));
+  });
+
+  test('a disconnect asked for leaves the joined network without joining it again', () async {
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_uri', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    await c.pairLink(PairLink.parse('medxfer://v1/pair?fp=AAAA&a=169.254.121.148&p=18887&s=x&exp=$_expires&ws=DIRECT-ND-medXfer&wp=K7XQ2MPRT9ZD&wt=1')!);
+    c.take(const CoreEvent('paired', data: {'ip': '169.254.121.148', 'device_name': 'PC'}));
+    c.take(const CoreEvent('disconnected', data: {'reason': 'peer requested disconnect'}));
+    await _settle();
+    expect(h.log, isNot(contains('rejoin')));
+    expect(h.log.last, 'leave');
   });
 
   test('J6c: a network joined that does not come back is left after rejoinFor', () async {

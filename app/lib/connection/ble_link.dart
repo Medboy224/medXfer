@@ -12,6 +12,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -27,9 +28,18 @@ import 'pair_link.dart';
 class BleDevice {
   BleDevice(this.device);
 
-  /// Its BLE address, which the system changes now and then.
+  /// Its BLE address, which the system changes now and then; on a computer, a phone's held link
+  /// ([BleHeld]).
   final String device;
   int rssi = 0;
+
+  /// The link the phone keeps with a computer (J8): neither forgotten for want of reports nor
+  /// closed after an exchange.
+  bool held = false;
+
+  /// A phone that connects to the computers it finds ([BleSeen.holds]).
+  bool holds = false;
+  final DateTime firstSeen = DateTime.now();
 
   /// When the radio last said it advertises: a device silent for [BleLink.forgetAfter] is gone.
   DateTime seenAt = DateTime.now();
@@ -101,18 +111,32 @@ class BleLink extends ChangeNotifier {
   static int touchTries = 3;
   static Duration touchRetryAfter = const Duration(milliseconds: 600);
 
-  /// A recognition takes 1 to 2 s; one longer is given up, the device tried again later. A
-  /// recognition waits for the one before it: an old address of a phone, no longer advertised,
-  /// held the computer's list 26 s (real test of 7 November).
-  static Duration recognizeWithin = const Duration(seconds: 8);
+  /// A recognition takes 1 to 5 s (real test of 17 November: 1.1 to 4.9 s); one longer is
+  /// given up, the device tried again later. A recognition waits for the one before it: an old
+  /// address of a phone, no longer advertised, held the computer's list 26 s (real test of
+  /// 7 November).
+  static Duration recognizeWithin = const Duration(seconds: 6);
   static Duration retryAfter = const Duration(seconds: 5);
 
   /// A recognition the radio dropped (Android's error 133, at the edge of reach) is tried again
   /// sooner: after these, in turn, then [retryAfter]. Through two walls, three tries 5 s apart
   /// kept the computer out of the phone's list 22 s (real test of 8 November). One that got no
-  /// answer at all, an old address most often, waits [retryAfter] at once.
+  /// answer at all waits [retryAfter] at once when the device was not seen meanwhile, an old
+  /// address most often; seen, it still advertises, and is tried again soon too: three such
+  /// tries, 8 s each and 5 s apart, kept the phone out of the computer's list 42 s (real test
+  /// of 17 November).
   static List<Duration> retrySoonAfter = const [Duration(seconds: 1), Duration(seconds: 2)];
   Timer? _nextTry;
+
+  /// This device waits for the phones' links rather than connect to them (J8): a computer. A
+  /// phone paired with it left its requests unanswered 20 to 50 s; over the phone's link, its
+  /// calls were answered in 60 to 180 ms (probe of 18 November 2026). A phone's advertisement
+  /// whose link never comes is recognized the old way after [holdWithin].
+  static bool waitsForHolds = !Platform.isAndroid;
+  static Duration holdWithin = const Duration(seconds: 8);
+  static Duration holdsHeardWithin = const Duration(milliseconds: 600);
+  static const _minWait = Duration(milliseconds: 50);
+  DateTime _heldAt = DateTime(0); // the last link a phone kept with this device
 
   /// While another device talks to this one (it recognizes it, or touched it), this one does not
   /// start its own recognitions: two at once over one link, one of them hung (7 November).
@@ -258,23 +282,50 @@ class BleLink extends ChangeNotifier {
 
   void _take(BleEvent e) {
     switch (e) {
-      case BleSeen(:final device, :final rssi):
+      case BleSeen(:final device, :final rssi, :final holds):
         // A report that comes after the stop: the radio delivers its last ones.
         if (!_running) return;
         final d =
             _devices.putIfAbsent(device, () {
-                debugPrint('ble: seen $device, $rssi dBm');
+                debugPrint('ble: seen $device, $rssi dBm${holds ? ', holds' : ''}');
                 return BleDevice(device);
               })
               ..rssi = rssi
               ..seenAt = DateTime.now();
+        if (holds && !d.holds) debugPrint('ble: $device holds');
+        d.holds = d.holds || holds;
         if (!d.recognized) _recognizeNext();
         notifyListeners();
+      case BleHeld(:final conn, :final held):
+        if (!_running) return;
+        final known = _devices[conn];
+        if (!held) {
+          if (known == null) return;
+          debugPrint('ble: $conn released');
+          known.held = false;
+          // A computer: the phone's link was its only way to it.
+          if (waitsForHolds) _devices.remove(conn);
+          notifyListeners();
+          return;
+        }
+        if (known != null) {
+          // A phone: its link with this computer kept.
+          known.held = true;
+          debugPrint('ble: holding $conn');
+          return;
+        }
+        // A computer: a phone keeps its link with it, and is recognized over it at once.
+        _heldAt = DateTime.now();
+        final d = BleDevice(conn)..held = true;
+        _devices[conn] = d;
+        debugPrint('ble: $conn held');
+        if (_recognizing.add(conn)) unawaited(_recognize(d, jitter: false));
       case final BleMessage m:
         // The platform keeps its service between starts: stopped, this device answers nothing
         // (DISC-05), as when it advertised nothing.
         if (!_running) return;
         _servedAt = DateTime.now();
+        debugPrint('ble: served ${m.conn}, ${m.data.length} bytes');
         unawaited(_serve(m));
       case BleClosed(:final conn):
         _servedTrusted.remove(conn);
@@ -320,12 +371,36 @@ class BleLink extends ChangeNotifier {
     }
     final waiting = [
       for (final d in _devices.values)
-        if (!d.recognized && !now.isBefore(d.retryAt)) d,
+        if (!d.recognized && !now.isBefore(d.retryAt) && !_waitsForLink(d, now)) d,
     ]..sort((a, b) => b.seenAt.compareTo(a.seenAt));
     if (waiting.isEmpty) return _tryLater(now);
     final d = waiting.first;
     _recognizing.add(d.device);
     unawaited(_recognize(d));
+  }
+
+  /// A phone that connects to this computer: its link awaited, not connected to (J8). One whose
+  /// link came after it was seen is that phone, recognized over it; none in [holdWithin], it
+  /// is recognized the old way.
+  bool _waitsForLink(BleDevice d, DateTime now) {
+    if (!waitsForHolds || d.held) return false;
+    if (!d.holds) {
+      // Its scan response, which says whether it holds, comes a moment after its advertisement.
+      final heard = d.firstSeen.add(holdsHeardWithin);
+      if (!now.isBefore(heard)) return false;
+      if (d.retryAt.isBefore(heard)) d.retryAt = heard;
+      return true;
+    }
+    if (_heldAt.isAfter(d.firstSeen)) {
+      // Looked at again later, not at once: its time past, the scheduler spun, the computer's
+      // app frozen (real test of 18 November 2026).
+      if (!d.retryAt.isAfter(now)) d.retryAt = now.add(holdWithin);
+      return true;
+    }
+    final until = d.firstSeen.add(holdWithin);
+    if (!now.isBefore(until)) return false;
+    if (d.retryAt.isBefore(until)) d.retryAt = until; // tried then, if still unrecognized
+    return true;
   }
 
   /// A device that failed is tried again at its time, without waiting for the radio's next
@@ -338,7 +413,9 @@ class BleLink extends ChangeNotifier {
     if (later.isEmpty) return;
     final at = later.reduce((a, b) => a.isBefore(b) ? a : b);
     _nextTry?.cancel();
-    _nextTry = Timer(at.difference(now), _recognizeNext);
+    // Never at once: a device whose time is past but that waits is not a reason to spin.
+    final wait = at.difference(now);
+    _nextTry = Timer(wait < _minWait ? _minWait : wait, _recognizeNext);
   }
 
   /// The devices the radio stopped reporting leave the list: gone, or under a new address.
@@ -346,7 +423,7 @@ class BleLink extends ChangeNotifier {
     final now = DateTime.now();
     final gone = [
       for (final d in _devices.values)
-        if (d != _target && now.difference(d.seenAt) > (d.weak ? forgetWeakAfter : forgetAfter)) d,
+        if (d != _target && !d.held && now.difference(d.seenAt) > (d.weak ? forgetWeakAfter : forgetAfter)) d,
     ];
     if (gone.isEmpty) return;
     for (final d in gone) {
@@ -417,13 +494,15 @@ class BleLink extends ChangeNotifier {
 
   /// Recognizes a device newly seen: its generic name, and whether it is of mutual trust. The
   /// same device under a new address replaces the old one.
-  Future<void> _recognize(BleDevice d) async {
+  Future<void> _recognize(BleDevice d, {bool jitter = true}) async {
     final clock = Stopwatch()..start();
+    final started = DateTime.now();
     String? failed;
     try {
-      // Not at the same moment as the other device, which may be recognizing this one.
-      final jitter = recognizeJitter.inMilliseconds;
-      if (jitter > 0) await Future<void>.delayed(Duration(milliseconds: _random.nextInt(jitter)));
+      // Not at the same moment as the other device, which may be recognizing this one; over a
+      // phone's held link, that one is done.
+      final ms = jitter ? recognizeJitter.inMilliseconds : 0;
+      if (ms > 0) await Future<void>.delayed(Duration(milliseconds: _random.nextInt(ms)));
       final hello = await _step('ble_client', {'conn': d.device, 'step': 'hello'});
       final answer = await _send(d.device, hello?['data'], within: recognizeWithin);
       final peer = answer == null ? null : await _step('ble_client', {'conn': d.device, 'step': 'recognize', 'data': base64Encode(answer)});
@@ -437,9 +516,9 @@ class BleLink extends ChangeNotifier {
         ..fingerprint = peer['fingerprint'] as String?;
       debugPrint('ble: ${d.device} is ${d.name}, ${clock.elapsedMilliseconds} ms');
       // Its connection closed: kept open, the other's recognition of this device hung over it
-      // (7 November). Touching it connects again.
-      unawaited(ble.disconnect(d.device));
-      for (final old in _devices.values.where((o) => o != d && o.suffix == d.suffix).toList()) {
+      // (7 November). Touching it connects again. A computer's, which this phone holds, stays.
+      unawaited(ble.release(d.device));
+      for (final old in _devices.values.where((o) => o != d && o.suffix == d.suffix && !o.held).toList()) {
         _devices.remove(old.device);
         unawaited(ble.disconnect(old.device));
       }
@@ -453,9 +532,12 @@ class BleLink extends ChangeNotifier {
       unawaited(ble.disconnect(d.device));
     } finally {
       if (failed != null) {
-        debugPrint('ble: ${d.device} not recognized ($failed), ${clock.elapsedMilliseconds} ms');
-        final soon = failed != 'timeout' && failed != 'refused' && d.failures < retrySoonAfter.length;
-        d.retryAt = DateTime.now().add(soon ? retrySoonAfter[d.failures] : retryAfter);
+        final now = DateTime.now();
+        final advertising = d.seenAt.isAfter(started);
+        debugPrint('ble: ${d.device} not recognized ($failed), ${clock.elapsedMilliseconds} ms, '
+            'last seen ${now.difference(d.seenAt).inMilliseconds} ms ago');
+        final soon = failed != 'refused' && (failed != 'timeout' || advertising) && d.failures < retrySoonAfter.length;
+        d.retryAt = now.add(soon ? retrySoonAfter[d.failures] : retryAfter);
         d.failures++;
       }
       _recognizing.remove(d.device);
