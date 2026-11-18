@@ -125,6 +125,30 @@ Chaque piste n'est engagée que si WP-8.4 la désigne, et finit par sa mesure av
 
 Si G3 reste sous 80 % après ces lots, la décision QUIC de la bible (registre du §3) est rouverte, avec ses chiffres.
 
+### WP-8.4a — La détection Bluetooth avec un PC appairé · M (fait le 18 novembre)
+
+Constat des essais réels du 17 novembre : un téléphone **appairé au PC en Bluetooth** ignore les requêtes du PC pendant 20 à 50 s à chaque nouveau lien, le temps qu'Android explore lui-même les services du PC. Le PC mettait 20 à 60 s à afficher le téléphone ; dissociés, 1,3 à 3,5 s. Appairé d'un seul côté, le téléphone demandait un appairage à chaque détection.
+
+Pistes mesurées par la sonde (`scripts/ble-probe`, `BleProbe.kt`) et écartées :
+- préciser à Windows le type d'adresse du téléphone : sans effet ;
+- faire attendre le téléphone avant sa propre reconnaissance : sans effet ;
+- appeler le téléphone par un jeton dans l'annonce du PC : la carte Intel du PC ne diffuse aucune seconde annonce tant qu'un service GATT existe ;
+- rattacher par adresse : l'adresse de connexion d'un téléphone Android n'est pas celle de son annonce ;
+- le suffixe dans l'annonce : refusé (BLE-02).
+
+Retenu (`BLE-13`) : **le téléphone se connecte et garde le lien**, le PC l'appelle par notification.
+
+| Mesure | Résultat |
+|---|---|
+| Sonde, appel → réponse du téléphone | 60 à 183 ms appairés, 48 à 222 ms non appairés (8 sur 8) |
+| Essai réel, A57 appairé : le PC affiche le téléphone | 0,9 / 2,3 / 1,6 / 1,1 s (4 sur 4) |
+| Toucher depuis le PC → session | 5,9 s (téléphone en 2,4 GHz, Wi-Fi coupé) |
+| Toucher depuis le téléphone → session | 3,6 s (2,4 GHz), 4,2 s (5 GHz, 45,8 Mo/s ensuite) |
+
+Le temps qui reste est celui du Wi-Fi : création du réseau par le téléphone (1,7 à 2,3 s) et connexion du PC (2 à 3,3 s), à traiter en WP-8.5.
+
+Autre constat des mêmes essais : un téléphone resté connecté à un Wi-Fi à 2,4 GHz divise la vitesse par trois environ (#292) ; un téléphone au Wi-Fi coupé crée un réseau à 2,4 GHz (environ 9 Mo/s).
+
 ### WP-8.6 — Le benchmark nocturne · S
 
 - `DEV-21` : chaque nuit, `bench ladder` en boucle locale sur un exécuteur Linux ; un recul de plus de 15 % d'une marche R2 à R3 fait échouer la tâche.

@@ -69,6 +69,9 @@ class _Radio implements Ble {
 
   @override
   Future<void> disconnect(String device) async {}
+
+  @override
+  Future<void> release(String device) async {}
   @override
   Future<WifiBands> wifiBands() async => (create: 3, join: 3);
 }
@@ -128,6 +131,7 @@ Future<void> _reveal(WidgetTester tester, Finder finder) async {
 
 void main() {
   setUpAll(() {
+    BleLink.holdsHeardWithin = Duration.zero; // the devices say at once whether they hold (J8)
     BleLink.recognizeJitter = Duration.zero;
     BleLink.touchRetryAfter = Duration.zero;
   });
