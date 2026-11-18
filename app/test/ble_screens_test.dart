@@ -131,6 +131,7 @@ Future<void> _reveal(WidgetTester tester, Finder finder) async {
 
 void main() {
   setUpAll(() {
+    BleLink.holdsHeardWithin = Duration.zero; // the devices say at once whether they hold (J8)
     BleLink.recognizeJitter = Duration.zero;
     BleLink.touchRetryAfter = Duration.zero;
   });
