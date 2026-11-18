@@ -244,8 +244,10 @@ void main() {
       radio.add(const BleSeen('46:90', -55, holds: true));
       await _settle();
       expect(steps('ble_client'), isEmpty);
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      await _settle();
+      // Waited for up to 2 s: a shared CI machine is slow (#293).
+      for (var i = 0; i < 100 && steps('ble_client').isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
       expect(steps('ble_client').where((p) => p['step'] == 'hello').single['conn'], '46:90');
     });
 
