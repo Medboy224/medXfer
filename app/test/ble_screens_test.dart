@@ -69,6 +69,9 @@ class _Radio implements Ble {
 
   @override
   Future<void> disconnect(String device) async {}
+
+  @override
+  Future<void> release(String device) async {}
   @override
   Future<WifiBands> wifiBands() async => (create: 3, join: 3);
 }

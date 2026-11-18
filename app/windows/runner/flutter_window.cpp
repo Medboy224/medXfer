@@ -241,7 +241,7 @@ bool FlutterWindow::OnCreate() {
           reply->Success(flutter::EncodableValue(std::move(answer)));
         }
       });
-    } else if (m == "disconnect") {
+    } else if (m == "disconnect" || m == "release") {  // this computer holds no link: release closes too
       ble_->Disconnect(text("device"));
       reply->Success();
     } else if (m == "bands") {

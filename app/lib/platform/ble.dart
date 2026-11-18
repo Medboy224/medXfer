@@ -18,9 +18,23 @@ sealed class BleEvent {
 /// A device that advertises medXfer's service. Its address changes now and then (privacy): the
 /// recognition (ble_client hello) says who it is.
 class BleSeen extends BleEvent {
-  const BleSeen(this.device, this.rssi);
+  const BleSeen(this.device, this.rssi, {this.holds = false});
   final String device;
   final int rssi;
+
+  /// It says it connects to the computers it finds (a phone's scan response, J8): a computer
+  /// waits for its link ([BleHeld]) rather than connect to it.
+  final bool holds;
+}
+
+/// A link kept between a phone and a computer while both look for devices (J8): made by the
+/// phone, which subscribed to the computer's calls ([held] true), or gone. On the computer,
+/// [conn] names the phone's link, by which it reaches the phone ([Ble.exchange]); on the phone,
+/// the computer's address.
+class BleHeld extends BleEvent {
+  const BleHeld(this.conn, {required this.held});
+  final String conn;
+  final bool held;
 }
 
 /// A device connected to this one wrote a whole message: the core answers it (ble_server), and
@@ -78,6 +92,9 @@ abstract interface class Ble {
   Future<Uint8List> exchange(String device, Uint8List message);
   Future<void> disconnect(String device);
 
+  /// Done with [device] for now: its link closes, unless the phone holds it (a computer's, J8).
+  Future<void> release(String device);
+
   Future<WifiBands> wifiBands();
 }
 
@@ -89,7 +106,8 @@ class ChannelBle implements Ble {
       if (call.method != 'event') return;
       final m = Map<Object?, Object?>.from(call.arguments as Map);
       final e = switch (m['event']) {
-        'seen' => BleSeen('${m['device']}', (m['rssi'] as num?)?.toInt() ?? 0),
+        'seen' => BleSeen('${m['device']}', (m['rssi'] as num?)?.toInt() ?? 0, holds: m['holds'] == true),
+        'held' => BleHeld('${m['conn']}', held: m['held'] == true),
         'message' => BleMessage('${m['conn']}', m['data'] as Uint8List),
         'closed' => BleClosed('${m['conn']}'),
         'advertise_failed' => BleFailed('advertise', (m['code'] as num?)?.toInt() ?? 0),
@@ -138,6 +156,9 @@ class ChannelBle implements Ble {
   Future<void> disconnect(String device) => channel.invokeMethod<void>('disconnect', {'device': device});
 
   @override
+  Future<void> release(String device) => channel.invokeMethod<void>('release', {'device': device});
+
+  @override
   Future<WifiBands> wifiBands() async {
     final m = await channel.invokeMapMethod<String, Object?>('bands') ?? const {};
     return (create: (m['create'] as num?)?.toInt() ?? 0, join: (m['join'] as num?)?.toInt() ?? 0);
@@ -180,6 +201,9 @@ class NoBle implements Ble {
 
   @override
   Future<void> disconnect(String device) async {}
+
+  @override
+  Future<void> release(String device) async {}
 
   @override
   Future<WifiBands> wifiBands() async => (create: 0, join: 0);

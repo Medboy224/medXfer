@@ -37,6 +37,13 @@ import java.util.UUID
 // carries a message to one of them (GATT client: a write, then a read of the answer). The core
 // makes and reads every message: this class only carries bytes. System APIs only (D5).
 //
+// A computer is never left to connect to this phone (J8): paired with it in Bluetooth, Android
+// leaves the computer's requests unanswered 20 to 50 s (real tests of 17 November 2026). This
+// phone connects to it and keeps the link while both look for devices ("held"), subscribed to
+// its call characteristic: the computer calls by a notification, this phone reads its message,
+// and writes the core's answer back, then reads once more to mark the end. Over that link the
+// computer reaches this phone as "held:" and its address, the conn of an exchange it started.
+//
 // Everything runs on the main thread: the Bluetooth callbacks are posted to it.
 @SuppressLint("MissingPermission") // asked by the app before start (BLE-12)
 class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Unit) {
@@ -130,9 +137,13 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
             s.addService(BluetoothGattService(SERVICE, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply { addCharacteristic(message) })
             server = s
         }
-        // The UUID alone (BLE-02): no name, no service data; the address is the system's random one.
+        // The UUID alone (BLE-02): no name; the address is the system's random one. In the scan
+        // response, one byte, the same on every phone: this device connects to the computers it
+        // finds (HOLDS), which then wait for it rather than connect to it (J8).
         val data = AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false)
             .addServiceUuid(ParcelUuid(SERVICE)).build()
+        val response = AdvertiseData.Builder().setIncludeDeviceName(false).setIncludeTxPowerLevel(false)
+            .addServiceData(ParcelUuid(SERVICE), byteArrayOf(HOLDS)).build()
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
@@ -140,7 +151,7 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
         val cb = object : AdvertiseCallback() {
             override fun onStartFailure(errorCode: Int) = main.post { emit("advertise_failed", mapOf("code" to errorCode)) }.let { }
         }
-        advertiser.startAdvertising(settings, data, cb)
+        advertiser.startAdvertising(settings, data, response, cb)
         advertising = cb
         return null
     }
@@ -169,8 +180,9 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
         emit("seen", mapOf("device" to address, "rssi" to r.rssi))
     }
 
-    /** The answer [conn] reads next; a read already waiting gets it now. */
+    /** The answer [conn] reads next; a read already waiting gets it now. A held link's goes back to its computer. */
     fun reply(conn: String, data: ByteArray) {
+        if (conn.startsWith(HELD)) return clients[conn.removePrefix(HELD)]?.answerCall(data) ?: Unit
         replies[conn] = data
         val device = clientsOf[conn] ?: return
         for ((request, offset) in parked.remove(conn) ?: return) answerRead(device, request, offset, data)
@@ -258,50 +270,132 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
         clients.remove(address)?.close("disconnected")
     }
 
-    // One GATT connection to another device's service: one exchange at a time.
+    /** Done with [address] for now: its link closes, unless it is held (a computer's, J8). */
+    fun release(address: String) {
+        val c = clients[address] ?: return
+        if (!c.held) disconnect(address)
+    }
+
+    // One GATT connection to another device's service. Its operations, one at a time as Android
+    // wants them, in a queue: this device's exchange (a write, then a read of the answer) and,
+    // on a held link, the computer's calls.
     private inner class Client(val address: String) : BluetoothGattCallback() {
         private var gatt: BluetoothGatt? = null
-        private var characteristic: BluetoothGattCharacteristic? = null
-        private var pending: ByteArray? = null
+        private var message: BluetoothGattCharacteristic? = null
+        private var call: BluetoothGattCharacteristic? = null
+        private var ready = false // services discovered
+        var held = false // subscribed to a computer's calls
         private var done: ((ByteArray?, String?) -> Unit)? = null
         private var timeout: Runnable? = null
 
-        fun send(message: ByteArray, cb: (ByteArray?, String?) -> Unit) {
+        // An operation: started on the link (false: refused at once), then ended by its callback
+        // with the value read and the status.
+        private inner class Op(val start: (BluetoothGatt) -> Boolean, val end: (ByteArray?, Int) -> Unit)
+        private val ops = ArrayDeque<Op>()
+        private var running: Op? = null
+
+        private fun enqueue(op: Op) {
+            ops.addLast(op)
+            next()
+        }
+
+        private fun next() {
+            if (running != null || !ready) return
+            val g = gatt ?: return
+            val op = ops.removeFirstOrNull() ?: return
+            running = op
+            if (!op.start(g)) {
+                running = null
+                op.end(null, -1)
+                next()
+            }
+        }
+
+        private fun complete(value: ByteArray?, status: Int) {
+            val op = running ?: return
+            running = null
+            op.end(value, status)
+            next()
+        }
+
+        fun send(m: ByteArray, cb: (ByteArray?, String?) -> Unit) {
             if (done != null) return cb(null, "busy")
-            pending = message
             done = cb
             val t = Runnable { close("timeout") }
             timeout = t
             main.postDelayed(t, ANSWER_WITHIN)
-            if (characteristic != null) return write()
+            // No MTU asked: it cost 3.3 to 3.7 s towards Windows (WP-D.0). A message longer than
+            // the default MTU goes as a long write, in pieces, and the answer as a long read.
+            enqueue(Op({ g -> write(g, message, m) }) { _, status ->
+                if (status != BluetoothGatt.GATT_SUCCESS) return@Op finish(null, if (status == -1) "write_failed" else "write_status:$status")
+                enqueue(Op({ g -> message?.let { g.readCharacteristic(it) } ?: false }) { value, st ->
+                    if (st != BluetoothGatt.GATT_SUCCESS) finish(null, if (st == -1) "read_failed" else "read_status:$st") else finish(value ?: ByteArray(0), null)
+                })
+            })
             if (gatt == null) {
                 val device = manager!!.adapter.getRemoteDevice(address)
                 gatt = device.connectGatt(app, false, this, BluetoothDevice.TRANSPORT_LE)
             }
         }
 
-        private fun write() {
-            val g = gatt ?: return
-            val c = characteristic ?: return
-            val message = pending ?: return
-            // No MTU asked: it cost 3.3 to 3.7 s towards Windows (WP-D.0). A message longer than
-            // the default MTU goes as a long write, in pieces, and the answer as a long read.
-            val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                g.writeCharacteristic(c, message, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothGatt.GATT_SUCCESS
+        // The computer's call: its message read, given to the core as a message of "held:" and
+        // its address; the core's answer comes back by answerCall.
+        private fun called() {
+            enqueue(Op({ g -> call?.let { g.readCharacteristic(it) } ?: false }) { value, status ->
+                if (status != BluetoothGatt.GATT_SUCCESS || value == null || value.isEmpty()) return@Op
+                emit("message", mapOf("conn" to HELD + address, "data" to value))
+            })
+        }
+
+        /** The core's answer to the computer's call, then a read that marks its end. */
+        fun answerCall(data: ByteArray) {
+            enqueue(Op({ g -> write(g, call, data) }) { _, status ->
+                if (status == BluetoothGatt.GATT_SUCCESS) enqueue(Op({ g -> call?.let { g.readCharacteristic(it) } ?: false }) { _, _ -> })
+            })
+        }
+
+        private fun write(g: BluetoothGatt, c: BluetoothGattCharacteristic?, value: ByteArray): Boolean {
+            c ?: return false
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                g.writeCharacteristic(c, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothGatt.GATT_SUCCESS
             } else {
                 @Suppress("DEPRECATION")
-                c.value = message
+                c.value = value
                 c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                 @Suppress("DEPRECATION")
                 g.writeCharacteristic(c)
             }
-            if (!ok) finish(null, "write_failed")
+        }
+
+        // Subscribed to the computer's calls: the link is kept, the computer told by its own
+        // Bluetooth, and Dart by "held".
+        private fun hold() {
+            val c = call ?: return
+            enqueue(Op({ g ->
+                val cccd = c.getDescriptor(CCCD) ?: return@Op false
+                if (!g.setCharacteristicNotification(c, true)) return@Op false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    g.writeDescriptor(cccd, android.bluetooth.BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothGatt.GATT_SUCCESS
+                } else {
+                    @Suppress("DEPRECATION")
+                    cccd.value = android.bluetooth.BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    @Suppress("DEPRECATION")
+                    g.writeDescriptor(cccd)
+                }
+            }) { _, status ->
+                if (status != BluetoothGatt.GATT_SUCCESS || gatt == null) return@Op
+                held = true
+                emit("held", mapOf("conn" to address, "held" to true))
+                // A call made before this phone listened: its notification lost, its message
+                // still there to read (a paired computer sees the subscription before it is made,
+                // real test of 18 November 2026).
+                called()
+            })
         }
 
         private fun finish(answer: ByteArray?, error: String?) {
             timeout?.let { main.removeCallbacks(it) }
             timeout = null
-            pending = null
             val cb = done
             done = null
             cb?.invoke(answer, error)
@@ -309,12 +403,21 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
 
         fun close(why: String) {
             finish(null, why)
+            ops.clear()
+            running = null
             gatt?.let {
                 it.disconnect()
                 it.close()
             }
             gatt = null
-            characteristic = null
+            message = null
+            call = null
+            ready = false
+            if (held) {
+                held = false
+                emit("held", mapOf("conn" to address, "held" to false))
+                emit("closed", mapOf("conn" to HELD + address))
+            }
             if (clients[address] === this) clients.remove(address)
         }
 
@@ -329,27 +432,39 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
         }.let { }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) = main.post {
-            characteristic = g.getService(SERVICE)?.getCharacteristic(MESSAGE)
-            if (characteristic == null) close("no_service") else write()
+            val service = g.getService(SERVICE)
+            message = service?.getCharacteristic(MESSAGE)
+            call = service?.getCharacteristic(CALL)
+            if (message == null) return@post close("no_service")
+            ready = true
+            next() // this device's exchange first
+            hold() // a computer's: kept, subscribed
         }.let { }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) = main.post {
-            if (status != BluetoothGatt.GATT_SUCCESS) return@post finish(null, "write_status:$status")
-            if (!g.readCharacteristic(c)) finish(null, "read_failed")
+            complete(null, status)
         }.let { }
 
         override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray, status: Int) =
-            main.post { read(value, status) }.let { }
+            main.post { complete(value, status) }.let { }
 
         @Deprecated("Android 12 and earlier")
         @Suppress("DEPRECATION")
         override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
             val value = c.value ?: ByteArray(0)
-            main.post { read(value, status) }
+            main.post { complete(value, status) }
         }
 
-        private fun read(value: ByteArray, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) finish(null, "read_status:$status") else finish(value, null)
+        override fun onDescriptorWrite(g: BluetoothGatt, d: android.bluetooth.BluetoothGattDescriptor, status: Int) =
+            main.post { complete(null, status) }.let { }
+
+        override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) =
+            main.post { if (c.uuid == CALL) called() }.let { }
+
+        @Deprecated("Android 12 and earlier")
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
+            main.post { if (c.uuid == CALL) called() }
         }
     }
 
@@ -357,6 +472,12 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
         // Bible §6.6, BLE-02: medXfer's service and its one characteristic.
         val SERVICE: UUID = UUID.fromString("c46b12c3-1dee-482d-a490-b185212312fb")
         val MESSAGE: UUID = UUID.fromString("c46b12c4-1dee-482d-a490-b185212312fb")
+        // A computer's call characteristic (J8): its notification calls this phone, which reads
+        // the computer's message there and writes its answer back.
+        val CALL: UUID = UUID.fromString("c46b12c5-1dee-482d-a490-b185212312fb")
+        private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        private const val HELD = "held:"
+        private const val HOLDS: Byte = 2 // the scan response's byte: this device connects to computers
         private const val MAX_MESSAGE = 512 // BLE-03
         private const val ANSWER_WITHIN = 25_000L // BLE-11: under the 30 s of a GATT transaction
         private const val SEEN_EVERY = 2_000L
