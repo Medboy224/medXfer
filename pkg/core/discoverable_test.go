@@ -65,6 +65,10 @@ func TestSetNetworkInfoAction(t *testing.T) {
 	if statusOf(t, joined); netbind.Network() != 643355824141 {
 		t.Fatalf("network %d, want the one joined", netbind.Network())
 	}
+	// J8: the Wi-Fi of the network created, for the reports.
+	linked := c.Call(api.RequestMessage{Action: "set_network_info",
+		Payload: json.RawMessage(`{"interfaces":[{"name":"p2p-wlan0-0","index":51,"addrs":["192.168.49.1/24"]}],"link":{"network":"created","frequency_mhz":5220,"other_wifi_mhz":2412}}`)})
+	statusOf(t, linked)
 	// WP-C.2: a desktop whose own network stopped gives the enumeration back to the core.
 	back := c.Call(api.RequestMessage{Action: "set_network_info", Payload: json.RawMessage(`{"enumerate":true}`)})
 	if st := statusOf(t, back); st["local_ip"] == "192.168.1.20" {

@@ -24,6 +24,29 @@ type ReportOptions struct {
 	IncludeNames bool // adds the transfer (file or folder) name
 }
 
+// Link is the Wi-Fi a transfer went through, as the app saw it: the network medXfer created or
+// joined, its frequency, and the other network this device was on as well, if any. One radio
+// on two networks shares its time between them: about 3 times slower (real tests of
+// 17 November 2026, 12 MB/s against 35). No network name, no address (DEV-05).
+type Link struct {
+	Network      string `json:"network"`                  // LinkCreated or LinkJoined
+	FrequencyMHz int    `json:"frequency_mhz,omitempty"`  // 0: not known
+	OtherWifiMHz int    `json:"other_wifi_mhz,omitempty"` // 0: none; 1: one, at a frequency not known
+}
+
+// What Link.Network says.
+const (
+	LinkCreated = "created"
+	LinkJoined  = "joined"
+)
+
+// Valid is whether l says something the app can say: an unknown network kind or an impossible
+// frequency is not reported.
+func (l Link) Valid() bool {
+	return (l.Network == LinkCreated || l.Network == LinkJoined) &&
+		l.FrequencyMHz >= 0 && l.FrequencyMHz < 8000 && l.OtherWifiMHz >= 0 && l.OtherWifiMHz < 8000
+}
+
 // PhaseSample tracks performance in quartiles (e.g. 0-25%, 25-50%, 50-75%, 75-100%)
 type PhaseSample struct {
 	Phase          string  `json:"phase"`
@@ -59,10 +82,12 @@ type Report struct {
 	PhaseSamples      []PhaseSample `json:"phase_samples"`
 	// Stages are the per-chunk measures of this device's side (DEV-03), and Bottleneck the
 	// limiting one (DEV-04). Absent from version 1 reports.
-	Stages          map[string]StageStats `json:"stages,omitempty"`
-	Bottleneck      *Bottleneck           `json:"bottleneck,omitempty"`
-	DiagnosisText   string                `json:"diagnosis_text"`
-	FormattedReport string                `json:"formatted_report"` // FormatText of this report, for the dashboard
+	Stages     map[string]StageStats `json:"stages,omitempty"`
+	Bottleneck *Bottleneck           `json:"bottleneck,omitempty"`
+	// Link is the Wi-Fi of the transfer, when the app said it (Android).
+	Link            *Link  `json:"link,omitempty"`
+	DiagnosisText   string `json:"diagnosis_text"`
+	FormattedReport string `json:"formatted_report"` // FormatText of this report, for the dashboard
 }
 
 // How a transfer ended (Report.Outcome).
@@ -96,6 +121,13 @@ func FormatText(r *Report) string {
 		sb.WriteString(fmt.Sprintf("Limiting stage: %s (%s confidence)\n", r.Bottleneck.Stage, r.Bottleneck.Confidence))
 		sb.WriteString(FormatStages(r.Stages))
 	}
+	if l := r.Link; l != nil {
+		sb.WriteString(fmt.Sprintf("Wi-Fi: network %s, %s", l.Network, mhz(l.FrequencyMHz)))
+		if l.OtherWifiMHz > 0 {
+			sb.WriteString(fmt.Sprintf(" | also on another Wi-Fi, %s", mhz(l.OtherWifiMHz)))
+		}
+		sb.WriteString("\n")
+	}
 	sb.WriteString("Quartile Breakdown:\n")
 	for _, ps := range r.PhaseSamples {
 		sb.WriteString(fmt.Sprintf("  - %s: %5.1f MB/s | Disk: %5.1f ms | Net: %5.1f ms [%s]\n",
@@ -105,6 +137,14 @@ func FormatText(r *Report) string {
 	sb.WriteString(fmt.Sprintf("medXfer %s · %s/%s · %s\n", r.AppVersion, r.OS, r.Arch, r.GeneratedAt.Local().Format("2006-01-02 15:04:05")))
 	sb.WriteString("============================================================")
 	return sb.String()
+}
+
+// mhz is a frequency as the report says it.
+func mhz(f int) string {
+	if f <= 1 {
+		return "frequency unknown"
+	}
+	return fmt.Sprintf("%d MHz", f)
 }
 
 func newReportHeader() Report {

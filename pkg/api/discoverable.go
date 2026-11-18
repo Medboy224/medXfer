@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/diag"
 	"github.com/Medboy224/medXfer/pkg/discovery"
 	"github.com/Medboy224/medXfer/pkg/netbind"
 	"github.com/Medboy224/medXfer/pkg/pairing"
@@ -75,10 +76,12 @@ func (s *DaemonServer) handleSetDiscoverable(rs Responder, req RequestMessage) {
 // (WP-C.2 of the J6c plan) had given only that network's interface.
 // Network is, on Android, the handle of the network the app joined (a QR code's, not the default
 // one): the core's sockets go through it (netbind); 0 for the default network.
+// Link is the Wi-Fi of the network created or joined, for the transfer reports; absent: none.
 type SetNetworkInfoPayload struct {
 	Interfaces []discovery.NetworkInterface `json:"interfaces"`
 	Enumerate  bool                         `json:"enumerate,omitempty"`
 	Network    uint64                       `json:"network,omitempty"`
+	Link       *diag.Link                   `json:"link,omitempty"`
 }
 
 func (s *DaemonServer) handleSetNetworkInfo(rs Responder, req RequestMessage) {
@@ -92,6 +95,7 @@ func (s *DaemonServer) handleSetNetworkInfo(rs Responder, req RequestMessage) {
 		return
 	}
 	netbind.SetNetwork(p.Network)
+	s.setLink(p.Link)
 	if s.Discoverable() { // announce the new address, from the new interface
 		s.SetDiscoverable(false)
 		s.SetDiscoverable(true)

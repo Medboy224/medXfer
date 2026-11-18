@@ -148,7 +148,7 @@ class _PcHotspot implements Hotspot {
   Future<bool> alive() async => true;
 
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
 
   @override
   Future<bool> wifiOn() async => wifi;

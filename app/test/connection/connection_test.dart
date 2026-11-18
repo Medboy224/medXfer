@@ -129,7 +129,7 @@ class _FakeHotspot implements Hotspot {
   Future<bool> alive() async => true;
 
   @override
-  Future<bool> otherWifi() async => other;
+  Future<int> otherWifi() async => other ? 2412 : 0;
 
   @override
   Future<bool> wifiOn() async => true;
@@ -205,7 +205,7 @@ class _DesktopHotspot implements Hotspot {
   Future<bool> alive() async => running;
 
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
 
   @override
   Future<bool> wifiOn() async => wifi;
@@ -853,6 +853,41 @@ void main() {
     expect(notices.whereType<HotspotLost>(), hasLength(1));
     expect(h.log, ['start', 'stop']);
     expect(c.myHotspot, isNull);
+  });
+
+  test('J8: on another Wi-Fi when the session opens: said at once; the core told, for the reports', () async {
+    final core = _core()
+      ..on('set_network_info', (_) => const FakeAnswer())
+      ..on('pair_show', (_) => const FakeAnswer());
+    final h = _FakeHotspot()..other = true; // the TECNO's, 2.4 GHz (real tests of 17 November)
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    addTearDown(c.dispose);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.networkForBle(fiveGhz: true); // the path through BLE: no access point's screen
+    final link = core.calls.where((x) => x.action == 'set_network_info').last.payload['link'];
+    expect(link, {'network': 'created', 'frequency_mhz': 0, 'other_wifi_mhz': 2412});
+    c.take(const CoreEvent('paired', data: {'ip': '10.46.56.91', 'device_name': 'Naruto'}));
+    await _settle();
+    expect(notices.whereType<HotspotSlowed>().single.already, isTrue);
+    // The same session again (pair_accept's second paired): not said twice.
+    c.take(const CoreEvent('paired', data: {'ip': '10.46.56.91', 'device_name': 'Naruto'}));
+    await _settle();
+    expect(notices.whereType<HotspotSlowed>(), hasLength(1));
+  });
+
+  test('J8: alone on its network, nothing said; the link has no other Wi-Fi', () async {
+    final core = _core()..on('set_network_info', (_) => const FakeAnswer());
+    final h = _FakeHotspot();
+    final c = Connection(core, network: _AndroidNetwork(), hotspot: h);
+    addTearDown(c.dispose);
+    final notices = <ConnectionNotice>[];
+    c.notices.listen(notices.add);
+    await c.networkForBle(fiveGhz: true);
+    expect(core.calls.where((x) => x.action == 'set_network_info').last.payload['link'], {'network': 'created', 'frequency_mhz': 0, 'other_wifi_mhz': 0});
+    c.take(const CoreEvent('paired', data: {'ip': '10.46.56.91', 'device_name': 'Naruto'}));
+    await _settle();
+    expect(notices.whereType<HotspotSlowed>(), isEmpty);
   });
 
   test('WP-D.4: the phone joins another Wi-Fi during a session: said once, gone once it leaves', () async {

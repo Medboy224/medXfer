@@ -117,3 +117,32 @@ func TestFailedTransferReport(t *testing.T) {
 		t.Fatalf("a completed transfer: done %d, text %q", r.DoneBytes, FormatText(r))
 	}
 }
+
+// The Wi-Fi of the transfer in its report: the network, its frequency, and another Wi-Fi this
+// device was on as well, which stays once seen (real tests of 17 November 2026).
+func TestReportSaysTheLink(t *testing.T) {
+	tr := NewTransferSessionTracker("a.bin", 1, 4096)
+	if r := tr.GenerateReport(ReportOptions{}); r.Link != nil || strings.Contains(r.FormattedReport, "Wi-Fi:") {
+		t.Fatalf("no link said, yet reported: %+v", r.Link)
+	}
+	tr.SetLink(&Link{Network: LinkCreated, FrequencyMHz: 5220, OtherWifiMHz: 2412})
+	tr.SetLink(&Link{Network: LinkCreated, FrequencyMHz: 5220}) // the other Wi-Fi left
+	tr.SetLink(&Link{Network: "mine", FrequencyMHz: 5220})      // not one the app says: ignored
+	r := tr.GenerateReport(ReportOptions{})
+	if r.Link == nil || *r.Link != (Link{Network: LinkCreated, FrequencyMHz: 5220, OtherWifiMHz: 2412}) {
+		t.Fatalf("link %+v; want the network at 5220 MHz, another Wi-Fi at 2412 kept", r.Link)
+	}
+	if !strings.Contains(r.FormattedReport, "Wi-Fi: network created, 5220 MHz | also on another Wi-Fi, 2412 MHz") {
+		t.Fatalf("text:\n%s", r.FormattedReport)
+	}
+	if !strings.Contains(r.DiagnosisText, "another Wi-Fi") {
+		t.Fatalf("diagnosis %q does not say the other Wi-Fi", r.DiagnosisText)
+	}
+
+	alone := NewTransferSessionTracker("a.bin", 1, 4096)
+	alone.SetLink(&Link{Network: LinkJoined, FrequencyMHz: 5805})
+	r = alone.GenerateReport(ReportOptions{})
+	if !strings.Contains(r.FormattedReport, "Wi-Fi: network joined, 5805 MHz\n") || strings.Contains(r.DiagnosisText, "another Wi-Fi") {
+		t.Fatalf("alone on its network:\n%s", r.FormattedReport)
+	}
+}

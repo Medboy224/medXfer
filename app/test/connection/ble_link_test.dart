@@ -109,7 +109,7 @@ class _Hotspot implements Hotspot {
   @override
   Future<bool> openWifiPanel({bool always = false}) async => true;
   @override
-  Future<bool> otherWifi() async => false;
+  Future<int> otherWifi() async => 0;
   @override
   Future<bool> alive() async => true;
   @override

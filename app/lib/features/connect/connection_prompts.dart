@@ -92,7 +92,7 @@ class _ConnectionPromptsState extends State<ConnectionPrompts> {
       HotspotFailed(code: 'refused' || 'not_started' || 'no_interface') => l.noticeHotspotRefused,
       HotspotFailed(:final reason) => l.noticeHotspotFailed(reason),
       HotspotLost() => l.noticeHotspotLost,
-      HotspotSlowed() => l.noticeHotspotSlowed,
+      HotspotSlowed(:final already) => already ? l.noticeHotspotOtherWifi : l.noticeHotspotSlowed,
       JoinFailed(:final ssid) => l.noticeJoinFailed(ssid),
       JoinBandMissing(:final band) => l.noticeJoinBandMissing(switch (band) { WifiBand.ghz24 => l.band24, WifiBand.ghz5 => l.band5, WifiBand.ghz6 => l.band6 }),
       KeyChanged() || WifiOff() => '',
