@@ -92,14 +92,19 @@ class Explorer extends ChangeNotifier {
   static const minColumns = 2;
   static const maxColumns = 5;
 
-  void setLayout(MediaKind k, {int? columns, bool? asList}) {
+  /// [quiet]: kept without a word to the listeners, during a pinch: each step rebuilt every tab
+  /// in the middle of the gesture (real test of 18 November 2026); said once it is over.
+  void setLayout(MediaKind k, {int? columns, bool? asList, bool quiet = false}) {
     final c = (columns ?? _columns[k]!).clamp(minColumns, maxColumns);
     final l = asList ?? _asList[k]!;
     if (c == _columns[k] && l == _asList[k]) return;
     _columns[k] = c;
     _asList[k] = l;
-    notifyListeners();
+    if (!quiet) notifyListeners();
   }
+
+  /// Says the layouts changed quietly ([setLayout]) to the listeners.
+  void layoutSettled() => notifyListeners();
   bool? get mediaAllowed => _mediaAllowed;
   String get dir => _dir ?? library.storageRoot;
   List<FileEntry>? get entries => _entries;

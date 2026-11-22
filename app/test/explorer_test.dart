@@ -1,5 +1,6 @@
 // The explorer by categories (WP-B.9) on a fake library: tabs, picking across tabs, the
 // basket, select all, and how the selection goes to the core.
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:medxfer/app.dart';
 import 'package:medxfer/app_state.dart';
 import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
+import 'package:medxfer/features/explorer/gallery_toolbar.dart';
 import 'package:medxfer/library/selection.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/platform/folders.dart';
@@ -230,15 +232,25 @@ void main() {
     await _app(tester, library);
     await tester.tap(find.text('Photos'));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('home-menu')), findsOneWidget);
+    // How much of the top line shows: it folds with the finger, then ends its move (22 November).
+    expect(find.byType(GalleryToolbar), findsOneWidget);
+    double shown() => tester.widget<SizeTransition>(find.ancestor(of: find.byKey(const Key('home-menu')), matching: find.byType(SizeTransition)).first).sizeFactor.value;
+    expect(shown(), 1);
     final grid = find.byKey(const ValueKey('media-images'));
+    await tester.drag(grid, const Offset(0, -40));
+    await tester.pumpAndSettle();
+    expect(shown() == 0 || shown() == 1, isTrue, reason: 'the finger lifted, it ends its move: ${shown()}');
     await tester.drag(grid, const Offset(0, -200));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('home-menu')), findsNothing, reason: 'the top line stays when scrolling down');
+    expect(shown(), 0, reason: 'the top line stays when scrolling down');
     expect(tester.widget<IgnorePointer>(find.ancestor(of: find.byKey(const Key('bottom-bar')), matching: find.byType(IgnorePointer)).first).ignoring, isTrue);
-    await tester.drag(grid, const Offset(0, 120));
+    // Down a little: the list scrolls back, the bars wait (more room without them).
+    await tester.drag(grid, const Offset(0, 60));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('home-menu')), findsOneWidget);
+    expect(shown(), 0, reason: 'the bars came back at a short move down');
+    await tester.drag(grid, const Offset(0, 400));
+    await tester.pumpAndSettle();
+    expect(shown(), 1);
 
     await tester.tap(find.byKey(const ValueKey('media-1')));
     await tester.drag(grid, const Offset(0, -200));
@@ -297,10 +309,9 @@ void main() {
     final grid = find.byKey(const ValueKey('media-images')).first;
     await tester.drag(grid, const Offset(0, -600));
     await tester.pumpAndSettle();
-    final focal = tester.getCenter(grid) + const Offset(0, 80);
-    // The photo under the point between the fingers (hit-testing, as a finger would).
-    String under() {
-      final hits = tester.hitTestOnBinding(focal).path.map((e) => e.target).toList();
+    // The photo under a point (hit-testing, as a finger would).
+    String underAt(Offset at) {
+      final hits = tester.hitTestOnBinding(at).path.map((e) => e.target).toList();
       for (final key in tester.allWidgets.whereType<GestureDetector>().map((w) => w.key).whereType<ValueKey<String>>()) {
         final el = find.byKey(key).evaluate();
         if (el.isEmpty) continue;
@@ -309,6 +320,12 @@ void main() {
       }
       return '';
     }
+    // The point between the fingers: on a photo, not on a day's name or a gap.
+    var focal = tester.getCenter(grid);
+    for (var dy = 0.0; dy < 200 && underAt(focal).isEmpty; dy += 10) {
+      focal = tester.getCenter(grid) + Offset(0, dy);
+    }
+    String under() => underAt(focal);
     final before = under();
     expect(before, isNotEmpty);
     Future<void> spread(double from, double to) async {
@@ -332,47 +349,100 @@ void main() {
     final after = tester.getRect(find.byKey(ValueKey(before)).first);
     expect((after.center.dy - focal.dy).abs(), lessThan(after.height * 0.75), reason: 'the photo left the fingers: $after, focal $focal');
 
-    // At 2 columns, spreading more: no zoom of the view.
+    // At 2 columns, spreading more: nothing further, the same photo under the fingers.
     final a = await tester.startGesture(focal - const Offset(60, 0));
     final b = await tester.startGesture(focal + const Offset(60, 0), pointer: 9);
     await tester.pump();
     await a.moveTo(focal - const Offset(110, 0));
     await b.moveTo(focal + const Offset(110, 0));
     await tester.pump();
-    final scales = tester.widgetList<Transform>(find.descendant(of: find.byType(ClipRect), matching: find.byType(Transform))).map((t) => t.transform.getMaxScaleOnAxis());
-    expect(scales.every((x) => (x - 1).abs() < 1e-6), isTrue, reason: 'the view zoomed past the last step: $scales');
     await a.up();
     await b.up();
     await tester.pumpAndSettle();
+    expect(ex.columns(MediaKind.images), 2);
+    final still = tester.getRect(find.byKey(ValueKey(before)).first);
+    expect(still, after, reason: 'the view moved past the last step');
   });
 
-  testWidgets('real test of 17 November: half way through a pinch, each photo is between its two places, the one under the fingers at their height', (tester) async {
+  testWidgets('video of 18 November: what is over the photos fades while a pinch runs, then comes back', (tester) async {
     final library = _Library(photos: 90);
     await _app(tester, library);
     await tester.tap(find.text('Photos'));
     await tester.pumpAndSettle();
     final grid = find.byKey(const ValueKey('media-images')).first;
-    await tester.drag(grid, const Offset(0, -500));
-    await tester.pumpAndSettle();
-    final focal = tester.getCenter(grid);
-    final a = await tester.startGesture(focal - const Offset(60, 0));
-    final b = await tester.startGesture(focal + const Offset(60, 0), pointer: 11);
+    final center = tester.getCenter(grid);
+    // The fade nearest to each box: the decor's, not a page's.
+    double boxes() => find.descendant(of: grid, matching: find.byType(PickBox)).evaluate().map((e) {
+      var opacity = 1.0;
+      e.visitAncestorElements((a) {
+        if (a.widget is! FadeTransition) return true;
+        opacity = (a.widget as FadeTransition).opacity.value;
+        return false;
+      });
+      return opacity;
+    }).reduce(math.max);
+    expect(boxes(), 1);
+    final a = await tester.startGesture(center - const Offset(60, 0));
+    final b = await tester.startGesture(center + const Offset(60, 0), pointer: 21);
     await tester.pump();
-    // 3 → 2 columns: tiles 1.5 times larger; half way in a log scale: about 1.22.
-    for (var i = 1; i <= 6; i++) {
-      await a.moveTo(focal - Offset(60 + i * 2.2, 0));
-      await b.moveTo(focal + Offset(60 + i * 2.2, 0));
-      await tester.pump(const Duration(milliseconds: 16));
-    }
-    final morph = find.byWidgetPredicate((w) => w is Positioned && w.key is ValueKey<String> && (w.key! as ValueKey<String>).value.startsWith('morph-') && !(w.key! as ValueKey<String>).value.startsWith('morph-day'));
-    expect(morph, findsWidgets, reason: 'no photo in transit');
-    // The photo whose square holds the point between the fingers.
-    final rects = tester.widgetList<Positioned>(morph).map((p) => tester.getRect(find.byWidget(p))).toList();
-    expect(rects.any((r) => r.contains(focal) || (r.center.dy - focal.dy).abs() < r.height), isTrue);
+    await a.moveTo(center - const Offset(70, 0));
+    await b.moveTo(center + const Offset(70, 0));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(boxes(), 0, reason: 'the boxes stay over the zooming grids');
     await a.up();
     await b.up();
     await tester.pumpAndSettle();
-    expect(morph, findsNothing, reason: 'the layer stays once the gesture is over');
+    expect(boxes(), 1);
+  });
+
+  testWidgets('real test of 22 November: a pinch chained to the last one, before it ended, still works', (tester) async {
+    final library = _Library(photos: 90);
+    await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    final ex = AppScope.of(tester.element(find.byType(Scaffold).first), listen: false).state.explorer;
+    final center = tester.getCenter(find.byKey(const ValueKey('media-images')).first);
+    Future<void> pinch(double from, double to, int pointer) async {
+      final a = await tester.startGesture(center - Offset(from, 0), pointer: pointer);
+      final b = await tester.startGesture(center + Offset(from, 0), pointer: pointer + 1);
+      await tester.pump();
+      for (var i = 1; i <= 12; i++) {
+        final d = from + (to - from) * i / 12;
+        await a.moveTo(center - Offset(d, 0));
+        await b.moveTo(center + Offset(d, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await a.up();
+      await b.up();
+    }
+    await pinch(60, 160, 30); // 3 → 2
+    await tester.pump(const Duration(milliseconds: 60)); // still settling
+    await pinch(160, 100, 40); // at once, back: 2 → 3
+    await tester.pumpAndSettle();
+    expect(ex.columns(MediaKind.images), 3);
+    expect(find.byKey(const ValueKey('pinch-painting')), findsNothing, reason: 'the painting stayed over the grid');
+  });
+
+  testWidgets('real test of 22 November: a second finger while one scrolls is no pinch; the scroll goes on', (tester) async {
+    final library = _Library(photos: 90);
+    await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    final grid = find.byKey(const ValueKey('media-images')).first;
+    final center = tester.getCenter(grid);
+    final a = await tester.startGesture(center + const Offset(0, 100), pointer: 50);
+    for (var i = 1; i <= 5; i++) {
+      await a.moveTo(center + Offset(0, 100 - i * 20.0)); // scrolling
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    final b = await tester.startGesture(center + const Offset(80, 0), pointer: 51); // the palm
+    await tester.pump();
+    await b.moveTo(center + const Offset(160, 0));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('pinch-painting')), findsNothing);
+    await a.up();
+    await b.up();
+    await tester.pumpAndSettle();
   });
 
   testWidgets('WP-8.1b: an app shows its box once picked only', (tester) async {
