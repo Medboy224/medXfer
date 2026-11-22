@@ -455,6 +455,52 @@ void main() {
     expect(find.descendant(of: notes, matching: find.byType(PickBox)), findsOneWidget);
   });
 
+  testWidgets('real test of 22 November: a photo touched shows its box picked, and again unpicked', (tester) async {
+    final (_, state) = await _app(tester, _Library());
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    bool on() => tester.widget<PickBox>(find.descendant(of: find.byKey(const ValueKey('media-2')), matching: find.byType(PickBox))).on;
+    expect(on(), isFalse);
+    await tester.tap(find.byKey(const ValueKey('media-2')));
+    await tester.pump();
+    expect(state.selection.count, 1);
+    expect(on(), isTrue);
+    await tester.tap(find.byKey(const ValueKey('media-2')));
+    await tester.pump();
+    expect(on(), isFalse);
+  });
+
+  testWidgets('22 November: the basket opens what is picked in every tab; one taken out, then all', (tester) async {
+    final (_, state) = await _app(tester, _Library());
+    await tester.tap(find.byKey(const ValueKey('app-org.notes')));
+    await tester.pump();
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('media-1')));
+    await tester.tap(find.byKey(const ValueKey('media-3')));
+    await tester.pump();
+    expect(state.selection.count, 3);
+
+    await tester.tap(find.byKey(const Key('basket-open')));
+    await tester.pumpAndSettle();
+    expect(find.text('Ta sélection'), findsOneWidget);
+    expect(find.byKey(const ValueKey('selection-/data/app/org.notes/base.apk')), findsOneWidget, reason: 'picked in another tab');
+    expect(find.byKey(const ValueKey('selection-/storage/emulated/0/DCIM/Camera/IMG_1.jpg')), findsOneWidget);
+    expect(find.text('Apps · 1'), findsOneWidget);
+    expect(find.text('Photos · 2'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('selection-remove-/data/app/org.notes/base.apk')));
+    await tester.pumpAndSettle();
+    expect(state.selection.count, 2);
+    expect(find.byKey(const ValueKey('selection-/data/app/org.notes/base.apk')), findsNothing);
+    expect(find.byKey(const Key('selection-sheet-line')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('selection-clear')));
+    await tester.pumpAndSettle();
+    expect(state.selection.isEmpty, isTrue);
+    expect(find.text('Ta sélection'), findsNothing, reason: 'nothing left: the sheet goes');
+  });
+
   test('the plan: descriptors without folders, paths with them, never apps with folders', () {
     final s = Selection()
       ..toggle(const Pick(path: '/a.jpg', name: 'a.jpg', size: 1, kind: PickKind.media))

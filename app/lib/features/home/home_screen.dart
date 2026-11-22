@@ -25,6 +25,7 @@ import '../connect/dialogs.dart';
 import '../dev/dev_panel.dart';
 import '../explorer/explorer_tabs.dart';
 import '../explorer/gallery_toolbar.dart';
+import '../explorer/selection_sheet.dart';
 import '../history/history_tab.dart';
 import '../settings/settings_screen.dart';
 import '../transfer/transfer_screen.dart';
@@ -682,19 +683,37 @@ class _Basket extends StatelessWidget {
       key: const Key('basket'),
       children: [
         IconButton(tooltip: l.clearSelection, icon: const Icon(Icons.close_rounded), onPressed: sel.clear),
-        // The count over the size, each on its line (real test of 17 November: « 5.9 / MB »).
+        // The count over the size, each on its line (real test of 17 November: « 5.9 / MB »);
+        // touched, what is picked across every tab, to see and take out (22 November).
         Expanded(
           child: Semantics(
             label: l.basketLine(sel.count, formatBytes(context, sel.bytes)),
+            hint: l.selectionTitle,
+            button: true,
             excludeSemantics: true,
-            child: Column(
+            child: InkWell(
+              key: const Key('basket-open'),
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => unawaited(showSelectionSheet(context)),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Column(
               key: const Key('basket-line'),
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(l.itemsCount(sel.count), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14, fontFeatures: tabular)),
                 Text(formatBytes(context, sel.bytes), maxLines: 1, style: TextStyle(color: c.muted, fontSize: 12, fontFeatures: tabular)),
-              ],
+                      ],
+                    ),
+                    ),
+                    Icon(Icons.expand_less_rounded, size: 20, color: c.muted),
+                  ],
+                ),
+              ),
             ),
           ),
         ),

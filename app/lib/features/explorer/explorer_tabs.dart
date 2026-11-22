@@ -987,8 +987,12 @@ class _DayHeader extends StatelessWidget {
   final DateTime day;
   final List<MediaEntry> items;
 
+  // It listens to the selection itself: the grid around it is kept as it is while its photos do
+  // not change, and a pick no longer showed (real test of 22 November 2026).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(listenable: AppScope.of(context).state.selection, builder: (context, _) => _build(context));
+
+  Widget _build(BuildContext context) {
     final state = AppScope.of(context).state;
     final l = AppLocalizations.of(context);
     final name = _dayName(context, day);
@@ -1022,8 +1026,12 @@ class _MediaTile extends StatelessWidget {
   final MediaEntry entry;
   final int columns;
 
+  // It listens to the selection itself: the grid around it is kept as it is while its photos do
+  // not change, and a pick no longer showed (real test of 22 November 2026).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(listenable: AppScope.of(context).state.selection, builder: (context, _) => _build(context));
+
+  Widget _build(BuildContext context) {
     final state = AppScope.of(context).state;
     final c = context.colors;
     final m = entry;
@@ -1071,8 +1079,12 @@ class _MediaRow extends StatelessWidget {
   final MediaKind kind;
   final MediaEntry entry;
 
+  // It listens to the selection itself: the grid around it is kept as it is while its photos do
+  // not change, and a pick no longer showed (real test of 22 November 2026).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(listenable: AppScope.of(context).state.selection, builder: (context, _) => _build(context));
+
+  Widget _build(BuildContext context) {
     final state = AppScope.of(context).state;
     final c = context.colors;
     final m = entry;

@@ -201,6 +201,8 @@
   "@basketLine": {"placeholders": {"count": {"type": "int"}, "size": {"type": "String"}}},
   "sendSelection": "Send",
   "clearSelection": "Clear the selection",
+  "selectionTitle": "Your selection",
+  "removeFromSelection": "Remove from the selection",
   "mediaHint": "To show your photos, videos and music here, allow medXfer to read them.",
   "mediaAllow": "Allow",
   "filesHint": "To browse the phone's folders, Android asks for the access to all files. You can also pick files with the system's picker.",

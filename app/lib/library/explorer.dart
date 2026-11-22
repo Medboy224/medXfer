@@ -283,7 +283,8 @@ class Explorer extends ChangeNotifier {
     _ => const [],
   };
 
-  static Pick pickApp(AppEntry a) => Pick(path: a.path, name: '${a.label}.apk', size: a.size, kind: PickKind.app);
-  static Pick pickMedia(MediaEntry m) => Pick(path: m.path, name: m.name, size: m.size, kind: PickKind.media);
-  static Pick pickFile(FileEntry e) => Pick(path: e.path, name: e.name, size: e.size, kind: e.dir ? PickKind.folder : PickKind.file);
+  static Pick pickApp(AppEntry a) => Pick(path: a.path, name: '${a.label}.apk', size: a.size, kind: PickKind.app, thumb: 'app:${a.package}');
+  static Pick pickMedia(MediaEntry m) => Pick(path: m.path, name: m.name, size: m.size, kind: PickKind.media, thumb: '${m.kind.name}:${m.id}');
+  static Pick pickFile(FileEntry e) =>
+      Pick(path: e.path, name: e.name, size: e.size, kind: e.dir ? PickKind.folder : PickKind.file, thumb: e.dir ? null : 'file:${e.path}');
 }
