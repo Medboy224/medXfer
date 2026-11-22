@@ -35,10 +35,13 @@ class _Storage extends NoReceiveStorage {
 
 /// A phone with two apps, three photos, a song, and a folder.
 class _Library implements Library {
-  _Library({this.photos = 3});
+  _Library({this.photos = 3, this.long = false});
 
   /// How many photos the phone holds.
   final int photos;
+
+  /// With a document and a photo under a very long name.
+  final bool long;
   bool allowed = true;
   final opened = <List<({String path, String name})>>[];
 
@@ -65,7 +68,7 @@ class _Library implements Library {
       : switch (kind) {
           MediaKind.images => [
             for (var i = 1; i <= photos; i++)
-              MediaEntry(id: i, kind: kind, name: 'IMG_$i.jpg', path: '/storage/emulated/0/DCIM/Camera/IMG_$i.jpg', size: 1 << 20, album: i < 3 ? 'Camera' : 'WhatsApp'),
+              MediaEntry(id: i, kind: kind, name: long && i == 3 ? _longName : 'IMG_$i.jpg', path: '/storage/emulated/0/DCIM/Camera/IMG_$i.jpg', size: 1 << 20, album: i < 3 ? 'Camera' : 'WhatsApp'),
           ],
           MediaKind.audio => [
             const MediaEntry(id: 9, kind: MediaKind.audio, name: 'chanson.mp3', path: '/storage/emulated/0/Music/chanson.mp3', size: 5 << 20, album: 'Album', durationMs: 200000),
@@ -90,7 +93,10 @@ class _Library implements Library {
   Future<List<FileEntry>> files(FileCategory category, {int offset = 0, int limit = 200}) async => offset > 0
       ? const []
       : switch (category) {
-          FileCategory.documents => const [FileEntry(name: 'rapport.pdf', path: '/storage/emulated/0/Documents/rapport.pdf', dir: false, size: 2 << 20)],
+          FileCategory.documents => [
+            const FileEntry(name: 'rapport.pdf', path: '/storage/emulated/0/Documents/rapport.pdf', dir: false, size: 2 << 20),
+            if (long) const FileEntry(name: _longName, path: '/storage/emulated/0/Documents/$_longName', dir: false, size: 2 << 20),
+          ],
           _ => const [],
         };
   @override
@@ -99,6 +105,8 @@ class _Library implements Library {
     return [for (var i = 0; i < files.length; i++) OpenFile(fd: 100 + i, name: files[i].name)];
   }
 }
+
+const _longName = '6A41A353-7F9F-4A54-A1A1-FCAxngxhkdykduodoudoudiyydyis7soydyosyidyodyodoysyisoyaitsoysiysiysoysyoskysyis6iskys6o.png';
 
 Future<(FakeCore, AppState)> _app(WidgetTester tester, _Library library) async {
   final core = FakeCore()..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy'})]));
@@ -499,6 +507,36 @@ void main() {
     await tester.pumpAndSettle();
     expect(state.selection.isEmpty, isTrue);
     expect(find.text('Ta sélection'), findsNothing, reason: 'nothing left: the sheet goes');
+  });
+
+  testWidgets('real test of 22 November: a long name shows in full, its row as tall as it needs', (tester) async {
+    final (_, state) = await _app(tester, _Library(long: true));
+    await tester.ensureVisible(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Documents'));
+    await tester.pumpAndSettle();
+    final short = tester.getSize(find.byKey(const ValueKey('file-rapport.pdf'))).height;
+    final long = tester.getSize(find.byKey(const ValueKey('file-$_longName'))).height;
+    expect(find.text(_longName), findsOneWidget);
+    expect(long, greaterThan(short + 30), reason: 'on several lines, not cut');
+
+    // Photos as a list: the same, and the rows below in their place.
+    await tester.ensureVisible(find.text('Photos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    state.explorer.setLayout(MediaKind.images, asList: true);
+    await tester.pumpAndSettle();
+    final rows = [for (final id in [1, 2, 3]) tester.getRect(find.byKey(ValueKey('media-$id')))];
+    final longRow = rows.firstWhere((r) => r.height > rows.map((r) => r.height).reduce(math.min) + 30, orElse: () => Rect.zero);
+    expect(longRow, isNot(Rect.zero), reason: 'the long name makes its row taller');
+    expect(find.text(_longName), findsOneWidget);
+    final sorted = [...rows]..sort((a, b) => a.top.compareTo(b.top));
+    for (var i = 1; i < sorted.length; i++) {
+      expect(sorted[i].top, greaterThanOrEqualTo(sorted[i - 1].bottom - 0.5), reason: 'no row over another');
+    }
   });
 
   test('the plan: descriptors without folders, paths with them, never apps with folders', () {

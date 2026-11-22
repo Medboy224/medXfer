@@ -147,7 +147,7 @@ class _PickRow extends StatelessWidget {
               : Image.memory(bytes, fit: pick.kind == PickKind.app ? BoxFit.contain : BoxFit.cover, cacheWidth: 132, gaplessPlayback: true),
         ),
       ),
-      title: Text(pick.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      title: Text(pick.name), // in full, on as many lines as it needs
       subtitle: pick.kind == PickKind.folder ? null : Text(formatBytes(context, pick.size), style: const TextStyle(fontFeatures: tabular)),
       trailing: IconButton(
         key: ValueKey('selection-remove-${pick.path}'),

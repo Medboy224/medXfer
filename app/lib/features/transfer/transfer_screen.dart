@@ -273,9 +273,7 @@ class _ItemRow extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          item.path,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                          item.path, // in full, on as many lines as it needs
                           style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14, decoration: skipped ? TextDecoration.lineThrough : null),
                         ),
                       ),

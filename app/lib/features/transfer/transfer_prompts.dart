@@ -177,8 +177,6 @@ class _OfferDialogState extends State<_OfferDialog> {
         children: [
           Text(
             o.name,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
           ),
           const SizedBox(height: 2),
@@ -192,8 +190,6 @@ class _OfferDialogState extends State<_OfferDialog> {
             for (final i in o.items.take(shown))
               Text(
                 '• ${i.path}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: c.muted, fontSize: 13),
               ),
             if (o.items.length > shown) Text(l.andMore(o.items.length - shown), style: TextStyle(color: c.muted, fontSize: 13)),

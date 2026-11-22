@@ -137,7 +137,7 @@ class _WebShareScreenState extends State<WebShareScreen> {
         children: [
           Icon(folder ? Icons.folder_outlined : Icons.insert_drive_file_outlined, size: 18, color: c.muted),
           const SizedBox(width: 8),
-          Expanded(child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis)),
+          Expanded(child: Text(name)), // in full, on as many lines as it needs
           if (detail != null) Text(detail, style: TextStyle(color: c.muted, fontSize: 13)),
           IconButton(tooltip: l.removeOne, icon: Icon(Icons.close_rounded, size: 18, color: c.muted), onPressed: onRemove),
         ],

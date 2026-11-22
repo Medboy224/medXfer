@@ -374,7 +374,8 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   bool _shownList = false;
 
   static const _headerHeight = 52.0;
-  static const _rowHeight = 62.0;
+  static const _rowHeight = 70.0; // a row with its 56 px thumbnail (real test of 22 November 2026: larger icons)
+  final _rows = _RowHeights(); // the list layout's rows, a long name in full
   static const _gap = 2.0;
 
   @override
@@ -511,7 +512,10 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
 
   /// The top of item [index] in a layout: headers, rows of square tiles, or list rows.
   double _top(int index, int columns, bool asList) {
-    if (asList) return index * _rowHeight;
+    if (asList) {
+      final tops = _rows.tops;
+      return index < tops.length ? tops[index] : index * _rowHeight;
+    }
     final stride = (_box.width - (columns - 1) * _gap) / columns + _gap;
     var y = 0.0;
     var i = index;
@@ -528,7 +532,20 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   int _at(double y, int columns, bool asList, {double x = 0}) {
     final count = _groups.fold(0, (a, b) => a + b);
     if (count == 0) return 0;
-    if (asList) return (y / _rowHeight).floor().clamp(0, count - 1);
+    if (asList) {
+      final tops = _rows.tops;
+      if (tops.length < 2) return (y / _rowHeight).floor().clamp(0, count - 1);
+      var lo = 0, hi = tops.length - 2; // the last row whose top is at or above y
+      while (lo < hi) {
+        final mid = (lo + hi + 1) ~/ 2;
+        if (tops[mid] <= y) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      return lo.clamp(0, count - 1);
+    }
     final stride = (_box.width - (columns - 1) * _gap) / columns + _gap;
     var top = 0.0;
     var first = 0;
@@ -747,6 +764,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                 child: LayoutBuilder(
                   builder: (context, box) {
                     _box = box.biggest;
+                    if (asList) _rows.measure(context, items, box.maxWidth - 16);
                     Widget view(ScrollController controller, int cols, Key key) => CustomScrollView(
                       key: key,
                       controller: controller,
@@ -755,8 +773,8 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                         if (asList)
                           SliverPadding(
                             padding: const EdgeInsets.symmetric(horizontal: 8),
-                            sliver: SliverFixedExtentList.builder(
-                              itemExtent: _rowHeight,
+                            sliver: SliverVariedExtentList.builder(
+                              itemExtentBuilder: (i, _) => _rows.extent(i) ?? _rowHeight,
                               itemCount: items.length,
                               itemBuilder: (context, i) => _MediaRow(kind: widget.kind, entry: items[i]),
                             ),
@@ -770,7 +788,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                       ],
                     );
                     // The same widget while nothing it shows changed: not rebuilt.
-                    final shows = (list.items, _album, asList, byDay, ex.order(widget.kind), box.biggest, _scroll, columns);
+                    final shows = (list.items, _album, asList, byDay, ex.order(widget.kind), box.biggest, _scroll, columns, MediaQuery.textScalerOf(context));
                     final hit = _view;
                     // A new scroll (the grid a pinch settled on) is a new grid: an old one kept its
                     // offset, not the one under the fingers.
@@ -1079,6 +1097,16 @@ class _MediaRow extends StatelessWidget {
   final MediaKind kind;
   final MediaEntry entry;
 
+  static const nameStyle = TextStyle(fontSize: 14, fontWeight: FontWeight.w700);
+  static const detailStyle = TextStyle(fontSize: 12, fontFeatures: tabular);
+
+  /// Across a row, all but the name: the list's padding (16), the row's (12), the thumbnail and
+  /// its gap (66), the box and its gaps (34).
+  static const besideName = 128.0;
+
+  /// A row's height for the height of its name and details.
+  static double heightFor(double text) => math.max(56.0, text).ceilToDouble() + 12 + 2;
+
   // It listens to the selection itself: the grid around it is kept as it is while its photos do
   // not change, and a pick no longer showed (real test of 22 November 2026).
   @override
@@ -1110,21 +1138,22 @@ class _MediaRow extends StatelessWidget {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(10),
                     child: SizedBox.square(
-                      dimension: 48,
+                      dimension: 56,
                       child: LibraryImage(cacheKey: '${kind.name}:${m.id}', load: (px) => state.library.thumbnail(kind, m.id, px)),
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                        Text(m.name, style: nameStyle), // in full, on as many lines as it needs
                         Text(
                           [date, if (kind == MediaKind.video) formatDuration(context, m.durationMs ~/ 1000), formatBytes(context, m.size)].join(' · '),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 12, color: c.muted, fontFeatures: tabular),
+                          style: detailStyle.copyWith(color: c.muted),
                         ),
                       ],
                     ),
@@ -1190,7 +1219,6 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
             key: const Key('music-list'),
             padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
             itemCount: list.items.length,
-            itemExtent: 60,
             itemBuilder: (context, i) {
               final m = list.items[i];
               final pick = Explorer.pickMedia(m);
@@ -1211,10 +1239,10 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
                         child: Row(
                           children: [
                             Container(
-                              width: 42,
-                              height: 42,
+                              width: 56,
+                              height: 56,
                               decoration: BoxDecoration(color: c.section, borderRadius: BorderRadius.circular(10)),
-                              child: Icon(Icons.music_note_rounded, color: c.accent),
+                              child: Icon(Icons.music_note_rounded, size: 30, color: c.accent),
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -1222,7 +1250,7 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                                  Text(m.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                                   Text(
                                     [if (m.album.isNotEmpty) m.album, formatDuration(context, m.durationMs ~/ 1000), formatBytes(context, m.size)].join(' · '),
                                     maxLines: 1,
@@ -1423,7 +1451,6 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
                   key: ValueKey('files-list:${ex.dir}'), // a new folder opens at its top
                   padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
                   itemCount: entries.length,
-                  itemExtent: 58,
                   itemBuilder: (context, i) => _FileRow(entry: entries[i], onOpen: () => unawaited(ex.open(entries[i].path))),
                 ),
         ),
@@ -1446,7 +1473,6 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
         key: ValueKey('files-${cat.name}'),
         padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
         itemCount: list.items.length,
-        itemExtent: 58,
         itemBuilder: (context, i) => _FileRow(entry: list.items[i], showFolder: true),
       ),
     );
@@ -1484,7 +1510,7 @@ class _FileRow extends StatelessWidget {
       sub = [formatBytes(context, e.size), if (where.isNotEmpty) where].join(' · ');
     }
     final thumbed = !e.dir && _thumbed.contains(_ext(e.name));
-    final icon = Icon(_iconOf(e), size: 32, color: e.dir ? c.accent : c.muted);
+    final icon = Icon(_iconOf(e), size: 44, color: e.dir ? c.accent : c.muted);
     final on = picked != null;
     // A folder opens; a file is picked. The box, apart, picks a folder whole (no ambiguity).
     final open = e.dir && onOpen != null;
@@ -1501,11 +1527,11 @@ class _FileRow extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
                 onTap: open ? onOpen : toggle,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 0, 4, 0),
+                  padding: const EdgeInsets.fromLTRB(8, 6, 4, 6),
                   child: Row(
                     children: [
                       SizedBox.square(
-                        dimension: 44,
+                        dimension: 56,
                         child: thumbed
                             ? ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
@@ -1519,7 +1545,7 @@ class _FileRow extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                            Text(e.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                             if (sub != null)
                               Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c.muted, fontSize: 12, fontFeatures: tabular)),
                           ],
@@ -1546,6 +1572,47 @@ class _FileRow extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// The list layout's rows each have their height: a long name shows in full, on as many lines as
+/// it needs (real test of 22 November 2026). Measured once per name, width and text size, so the
+/// list knows every row's top without building it (a jump, a layout change, keep their place).
+class _RowHeights {
+  Object? _key;
+  final _byId = <int, double>{};
+  List<double> tops = const [0];
+
+  /// The height of row [i], once measured.
+  double? extent(int i) => i + 1 < tops.length ? tops[i + 1] - tops[i] : null;
+
+  void measure(BuildContext context, List<MediaEntry> items, double width) {
+    final scaler = MediaQuery.textScalerOf(context);
+    final base = DefaultTextStyle.of(context).style;
+    final direction = Directionality.of(context);
+    final key = (width, scaler, base, direction);
+    if (key != _key) {
+      _key = key;
+      _byId.clear();
+    }
+    final nameWidth = math.max(40.0, width - _MediaRow.besideName + 16);
+    final detail = TextPainter(text: TextSpan(text: '0', style: base.merge(_MediaRow.detailStyle)), textDirection: direction, textScaler: scaler, maxLines: 1)
+      ..layout();
+    final detailHeight = detail.height;
+    detail.dispose();
+    final nameStyle = base.merge(_MediaRow.nameStyle);
+    final out = List<double>.filled(items.length + 1, 0);
+    for (var i = 0; i < items.length; i++) {
+      final m = items[i];
+      final h = _byId[m.id] ??= () {
+        final name = TextPainter(text: TextSpan(text: m.name, style: nameStyle), textDirection: direction, textScaler: scaler)..layout(maxWidth: nameWidth);
+        final h = _MediaRow.heightFor(name.height + detailHeight);
+        name.dispose();
+        return h;
+      }();
+      out[i + 1] = out[i] + h;
+    }
+    tops = out;
   }
 }
 
