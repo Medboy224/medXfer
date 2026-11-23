@@ -171,11 +171,11 @@ class _LibraryImageState extends State<LibraryImage> {
         final px = widget.decodePx ?? shown;
         _fetchSharp(shown);
         final sharp = _sharp;
-        if (sharp != null) return Image(image: sharp, fit: widget.fit, gaplessPlayback: true, filterQuality: FilterQuality.medium);
+        if (sharp != null) return Image(image: sharp, fit: widget.fit, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
         _fetch(px);
         final bytes = _bytes;
         if (bytes == null) return widget.placeholder ?? ColoredBox(color: context.colors.chip);
-        return Image.memory(bytes, fit: widget.fit, cacheWidth: px, gaplessPlayback: true, filterQuality: FilterQuality.medium);
+        return Image.memory(bytes, fit: widget.fit, cacheWidth: px, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
       },
     );
   }
@@ -421,7 +421,7 @@ class _Decor extends StatelessWidget {
 
 class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMixin, TickerProviderStateMixin {
   String? _album;
-  ScrollController _scroll = ScrollController();
+  final ScrollController _scroll = ScrollController();
 
   // The pinch (plan J8, WP-8.1b, real test of 17 November): the grid follows the fingers,
   // around the point between them; past a step it takes the next number of columns, the tile
@@ -471,6 +471,11 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   bool _headers = false;
   int _shownColumns = 0;
   bool _shownList = false;
+
+  // The same photo, the same tile: at a pinch's end, those still on screen are kept whole, not
+  // built again; only what sizes by the columns is ([_TileColumns]). The frame of a pinch's end
+  // built ~170 tiles in 25 to 72 ms (measured on the A57, 23 November 2026).
+  final _tiles = Expando<Widget>('tiles');
 
   static const _headerHeight = 52.0;
   static const _rowHeight = 70.0; // a row with its 56 px thumbnail (real test of 22 November 2026: larger icons)
@@ -567,28 +572,39 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   }
 
   /// The gesture settled at [_shownColumns]: the real grid built there, behind the painted one,
-  /// which goes a frame after; then the other screens are told, once.
+  /// which goes a frame after.
+  ///
+  /// The same grid, its tiles kept: those of the photos still on screen are updated, only the
+  /// others made. Built anew, the frame took 78 to 138 ms, 36 to 115 tiles at ~1.5 ms each; the
+  /// other screens, told the next frame, 16 to 63 ms more, for nothing: the layout's menu, the
+  /// only other to read it, is not open during a pinch (measured on the A57, 23 November 2026).
   void _endPinch(Explorer ex) {
     final pinch = _pinchN.value;
     if (pinch == null) return;
     final ending = ++_ending;
     final c = _shownColumns;
     final changed = c != pinch.built;
+    final target = pinch.offsets[c] ?? 0;
     if (changed) {
-      final old = _scroll;
-      _scroll = ScrollController(initialScrollOffset: pinch.offsets[c] ?? 0);
       pinch.built = c;
       ex.setLayout(widget.kind, columns: c, asList: false, quiet: true);
+      if (_scroll.hasClients) {
+        // What the scroll does on its own first ends: the fingers lifted while sliding, it went
+        // on toward the end of the list (real test of 23 November 2026), under the painting
+        // then in sight. Then the offset of the new layout, without a scroll to it: the layout
+        // of this very frame, under the painting, places the grid there.
+        final position = _scroll.position;
+        position.jumpTo(position.pixels);
+        position.correctPixels(target);
+      }
       setState(() {});
-      WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
     } else if (_scroll.hasClients) {
-      _scroll.jumpTo(pinch.offsets[c]!); // two fingers may have scrolled it, under the painting
+      _scroll.jumpTo(target); // two fingers may have scrolled it, under the painting
     }
     // Two frames, each asked for: nothing else may move on screen to bring them.
     final binding = WidgetsBinding.instance;
     binding.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (changed) ex.layoutSettled();
       binding.addPostFrameCallback((_) {
         // Two fingers down again meanwhile: the painting stays for the new pinch.
         if (!mounted || _pinchN.value != pinch || ending != _ending) return;
@@ -827,15 +843,19 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
         // By day while sorted by date (photos and videos); one block for a name or a size.
         final byDay = ex.order(widget.kind).sort == MediaSort.date;
         final days = byDay ? _days(items) : [(DateTime(0), items)];
-        // Changed from the menu: the tile at the top of the view stays at the top. (A pinch
-        // keeps its own anchor, under the fingers, before this build.)
-        if (_shownColumns != 0 && (_shownColumns != columns || _shownList != asList) && _startSpread == null) {
+        // Changed from the menu: the tile at the top of the view stays at the top. A pinch keeps
+        // its own anchor, under the fingers, and its own level: a build while it is painted (a
+        // page loaded, a pick) leaves both (23 November 2026: it moved the list, the grid kept).
+        final pinching = _pinchN.value != null;
+        if (!pinching && _shownColumns != 0 && (_shownColumns != columns || _shownList != asList) && _startSpread == null) {
           _keep(_shownColumns, _shownList, columns, asList, 0);
         }
         _groups = asList ? [items.length] : [for (final d in days) d.$2.length];
         _headers = byDay && !asList;
-        _shownColumns = columns;
-        _shownList = asList;
+        if (!pinching) {
+          _shownColumns = columns;
+          _shownList = asList;
+        }
         return Column(
           children: [
             if (albums.length > 1)
@@ -864,7 +884,9 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                   builder: (context, box) {
                     _box = box.biggest;
                     if (asList) _rows.measure(context, items, box.maxWidth - 16);
-                    Widget view(ScrollController controller, int cols, Key key) => CustomScrollView(
+                    Widget view(ScrollController controller, int cols, Key key) => _TileColumns(
+                      columns: cols,
+                      child: CustomScrollView(
                       key: key,
                       controller: controller,
                       physics: const _PinchablePhysics(),
@@ -885,15 +907,12 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                           ],
                         SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
                       ],
+                    ),
                     );
                     // The same widget while nothing it shows changed: not rebuilt.
-                    final shows = (list.items, items.length, _album, asList, byDay, ex.order(widget.kind), box.biggest, _scroll, columns, MediaQuery.textScalerOf(context));
+                    final shows = (list.items, items.length, _album, asList, byDay, ex.order(widget.kind), box.biggest, columns, MediaQuery.textScalerOf(context));
                     final hit = _view;
-                    // A new scroll (the grid a pinch settled on) is a new grid: an old one kept its
-                    // offset, not the one under the fingers.
-                    final grid = hit != null && hit.$1 == shows
-                        ? hit.$2
-                        : KeyedSubtree(key: ObjectKey(_scroll), child: view(_scroll, columns, ValueKey('media-${widget.kind.name}')));
+                    final grid = hit != null && hit.$1 == shows ? hit.$2 : view(_scroll, columns, ValueKey('media-${widget.kind.name}'));
                     _view = (shows, grid);
                     return _DecorScope(
                       shown: _decor,
@@ -938,7 +957,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
 
   Widget _grid(List<MediaEntry> items, int columns) => SliverGrid(
     gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, mainAxisSpacing: _gap, crossAxisSpacing: _gap),
-    delegate: SliverChildBuilderDelegate((context, i) => _MediaTile(kind: widget.kind, entry: items[i], columns: columns), childCount: items.length),
+    delegate: SliverChildBuilderDelegate((context, i) => _tiles[items[i]] ??= _MediaTile(kind: widget.kind, entry: items[i]), childCount: items.length),
   );
 
   /// The media by day, in the order shown: what « Tout ce jour » picks.
@@ -1135,13 +1154,35 @@ class _DayHeader extends StatelessWidget {
   }
 }
 
+/// The grid's number of columns, for what a tile sizes by it (its box, edge, duration): those
+/// only are built again when it changes, not the tiles.
+class _TileColumns extends InheritedWidget {
+  const _TileColumns({required this.columns, required super.child});
+
+  final int columns;
+
+  static int of(BuildContext context) => context.dependOnInheritedWidgetOfExactType<_TileColumns>()?.columns ?? 3;
+
+  @override
+  bool updateShouldNotify(_TileColumns old) => old.columns != columns;
+}
+
+/// What a tile sizes by the number of columns.
+class _ByColumns extends StatelessWidget {
+  const _ByColumns(this.build_);
+
+  final Widget Function(int columns) build_;
+
+  @override
+  Widget build(BuildContext context) => build_(_TileColumns.of(context));
+}
+
 /// A photo: all of it picks; the square box and a thick edge say it is picked.
 class _MediaTile extends StatelessWidget {
-  const _MediaTile({required this.kind, required this.entry, this.columns = 3});
+  const _MediaTile({required this.kind, required this.entry});
 
   final MediaKind kind;
   final MediaEntry entry;
-  final int columns;
 
   // It listens to the selection itself: the grid around it is kept as it is while its photos do
   // not change, and a pick no longer showed (real test of 22 November 2026).
@@ -1154,10 +1195,14 @@ class _MediaTile extends StatelessWidget {
     final m = entry;
     final pick = Explorer.pickMedia(m);
     final on = state.selection.contains(pick.path);
+    // One node for the accessibility: its name, picked or not, and the tap (its badges and image
+    // said nothing more, and cost a node each at every pinch's end).
     return Semantics(
       button: true,
       toggled: on,
       label: m.name,
+      excludeSemantics: true,
+      onTap: () => state.selection.toggle(pick),
       child: GestureDetector(
         key: ValueKey('media-${m.id}'),
         onTap: () => state.selection.toggle(pick),
@@ -1171,7 +1216,7 @@ class _MediaTile extends StatelessWidget {
               sharp: (px) => state.library.sharpThumbnail(m, px),
               sharpPx: sharpDecodePx(context),
             ),
-            if (on) DecoratedBox(decoration: BoxDecoration(border: Border.all(color: c.strong, width: columns >= 5 ? 2 : 3))),
+            if (on) _ByColumns((columns) => DecoratedBox(decoration: BoxDecoration(border: Border.all(color: c.strong, width: columns >= 5 ? 2 : 3)))),
             if (kind == MediaKind.video)
               Positioned(
                 left: 4,
@@ -1180,14 +1225,16 @@ class _MediaTile extends StatelessWidget {
                   child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                   decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.72), borderRadius: BorderRadius.circular(6)),
-                  child: Text(
-                    formatDuration(context, m.durationMs ~/ 1000),
-                    style: TextStyle(color: Colors.white, fontSize: columns >= 4 ? 10 : 11, fontWeight: FontWeight.w700, fontFeatures: tabular),
+                  child: _ByColumns(
+                    (columns) => Text(
+                      formatDuration(context, m.durationMs ~/ 1000),
+                      style: TextStyle(color: Colors.white, fontSize: columns >= 4 ? 10 : 11, fontWeight: FontWeight.w700, fontFeatures: tabular),
                     ),
+                  ),
                   ),
                 ),
               ),
-            Positioned(right: 5, top: 5, child: _Decor(child: PickBox(on: on, onImage: true, size: columns >= 5 ? 18 : 22))),
+            Positioned(right: 5, top: 5, child: _Decor(child: _ByColumns((columns) => PickBox(on: on, onImage: true, size: columns >= 5 ? 18 : 22)))),
           ],
         ),
       ),

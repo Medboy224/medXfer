@@ -325,11 +325,11 @@ void main() {
       await b.moveTo(center + Offset(40.0 + i * 8, 0));
       await tester.pump(const Duration(milliseconds: 16));
     }
+    expect(scroll.pixels, before, reason: 'the two fingers scrolled the list');
     await a.up();
     await b.up();
     await tester.pumpAndSettle();
     expect(ex.columns(MediaKind.images), 2);
-    expect(scroll.pixels, before, reason: 'the two fingers scrolled the list');
 
     // Pinch: 2 → 3 → 4 in one gesture.
     a = await tester.startGesture(center - const Offset(150, 0));
@@ -656,6 +656,43 @@ void main() {
     await tester.pumpAndSettle();
     await tester.pump(const Duration(milliseconds: 300));
     expect(library.sharpAsked, isEmpty, reason: "at 5 columns, Android's thumbnail is large enough");
+  });
+
+  testWidgets('real test of 23 November: fingers sliding while they pinch do not fling the list once lifted', (tester) async {
+    final library = _Library(photos: 300);
+    await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    final ex = AppScope.of(tester.element(find.byType(Scaffold).first), listen: false).state.explorer;
+    final grid = find.byKey(const ValueKey('media-images'));
+    final scroll = tester.state<ScrollableState>(find.descendant(of: grid, matching: find.byType(Scrollable)).first).position;
+    scroll.jumpTo(600);
+    await tester.pumpAndSettle();
+    final center = tester.getCenter(grid);
+
+    // Spread 3 → 2, both fingers going down fast meanwhile, lifted while moving.
+    final a = await tester.startGesture(center - const Offset(40, 0), pointer: 11);
+    final b = await tester.startGesture(center + const Offset(40, 0), pointer: 12);
+    await tester.pump();
+    for (var i = 1; i <= 10; i++) {
+      final at = Duration(milliseconds: 16 * i);
+      await a.moveTo(center + Offset(-40.0 - i * 8, i * 25.0), timeStamp: at);
+      await b.moveTo(center + Offset(40.0 + i * 8, i * 25.0), timeStamp: at);
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await a.up(timeStamp: const Duration(milliseconds: 170));
+    await b.up(timeStamp: const Duration(milliseconds: 170));
+    await tester.pumpAndSettle();
+    expect(ex.columns(MediaKind.images), 2);
+    final settled = scroll.pixels;
+    expect(settled, lessThan(scroll.maxScrollExtent), reason: 'flung to the end');
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(scroll.pixels, settled, reason: 'still moving on its own');
+    // The photo under the fingers when they came down, still there (600 px into 3 columns).
+    final stride3 = (392.7 - 2 * 2) / 3 + 2;
+    final under = (((600 + (center.dy - tester.getTopLeft(grid).dy)) ~/ stride3) * 3 + 1);
+    expect(find.byKey(ValueKey('media-${under + 1}')), findsOneWidget);
   });
 
   test('the plan: descriptors without folders, paths with them, never apps with folders', () {
