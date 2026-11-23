@@ -12,6 +12,8 @@ import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/features/explorer/gallery_toolbar.dart';
 import 'package:medxfer/library/selection.dart';
+import 'package:medxfer/media/media_player.dart';
+import 'package:medxfer/platform/open_with.dart';
 import 'package:medxfer/platform/app_exit.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/platform/folders.dart';
@@ -37,7 +39,10 @@ class _Storage extends NoReceiveStorage {
 
 /// A phone with two apps, three photos, a song, and a folder.
 class _Library implements Library {
-  _Library({this.photos = 3, this.long = false, this.sizes = const []});
+  _Library({this.photos = 3, this.long = false, this.sizes = const [], this.videos = 0, this.songs = 1});
+
+  /// How many videos and songs the phone holds.
+  final int videos, songs;
 
   /// The photos' sizes (width, height), from the first; unknown beyond.
   final List<(int, int)> sizes;
@@ -91,8 +96,13 @@ class _Library implements Library {
           ],
           MediaKind.audio => [
             const MediaEntry(id: 9, kind: MediaKind.audio, name: 'chanson.mp3', path: '/storage/emulated/0/Music/chanson.mp3', size: 5 << 20, album: 'Album', durationMs: 200000),
+            for (var i = 2; i <= songs; i++)
+              MediaEntry(id: 9 + i, kind: MediaKind.audio, name: 'chanson-$i.mp3', path: '/storage/emulated/0/Music/chanson-$i.mp3', size: 5 << 20, durationMs: 180000),
           ],
-          MediaKind.video => const [],
+          MediaKind.video => [
+            for (var i = 1; i <= videos; i++)
+              MediaEntry(id: 100 + i, kind: MediaKind.video, name: 'film-$i.mp4', path: '/storage/emulated/0/DCIM/film-$i.mp4', size: 50 << 20, durationMs: 60000, width: 1920, height: 1080),
+          ],
         };
   @override
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size) async => null;
@@ -164,9 +174,127 @@ _Exits _watchExits() {
   return exits;
 }
 
-Future<(FakeCore, AppState)> _app(WidgetTester tester, _Library library) async {
+/// A player that remembers what it was asked; [fail] makes every one refuse its media.
+class _FakePlayer extends MediaPlayer {
+  _FakePlayer(this.fail);
+
+  final String? fail;
+  final opened = <int>[];
+  bool _ready = false, _playing = false, _finished = false;
+  double _volume = 1;
+  Duration _position = Duration.zero;
+
+  /// Plays it to its end.
+  void finish() {
+    _finished = true;
+    _playing = false;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> open(MediaEntry m) async {
+    opened.add(m.id);
+    _ready = fail == null;
+    _playing = false;
+    _finished = false;
+    notifyListeners();
+  }
+
+  @override
+  bool get ready => _ready;
+  @override
+  bool get playing => _playing;
+  @override
+  bool get finished => _finished;
+  @override
+  Duration get position => _position;
+  @override
+  Duration get duration => const Duration(minutes: 1);
+  @override
+  double get volume => _volume;
+  @override
+  double get aspect => 16 / 9;
+  @override
+  String? get error => fail;
+  @override
+  Future<void> play() async {
+    _playing = true;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> pause() async {
+    _playing = false;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> seek(Duration to) async {
+    _position = to;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> setVolume(double volume) async {
+    _volume = volume;
+    notifyListeners();
+  }
+
+  @override
+  Widget view() => const ColoredBox(color: Colors.blue);
+}
+
+class _FakePlayers implements MediaPlayers {
+  _FakePlayers({this.fail});
+
+  final String? fail;
+  final made = <_FakePlayer>[];
+
+  @override
+  bool get supported => true;
+
+  @override
+  MediaPlayer create() => _FakePlayer(fail)..also(made.add);
+}
+
+extension<T> on T {
+  T also(void Function(T) f) {
+    f(this);
+    return this;
+  }
+}
+
+class _FakeOpenWith implements OpenWith {
+  final opened = <int>[];
+
+  @override
+  bool get supported => true;
+
+  @override
+  Future<bool> open(MediaEntry m) async {
+    opened.add(m.id);
+    return true;
+  }
+
+  final shared = <int>[];
+  @override
+  Future<bool> share(MediaEntry m) async {
+    shared.add(m.id);
+    return true;
+  }
+}
+
+Future<(FakeCore, AppState)> _app(WidgetTester tester, _Library library, {MediaPlayers players = const NoMediaPlayers(), OpenWith openWith = const NoOpenWith()}) async {
   final core = FakeCore()..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy'})]));
-  final state = AppState(core: core, folders: const _TestFolders(), library: library, storage: const _Storage(), history: MemoryHistoryStore());
+  final state = AppState(
+    core: core,
+    folders: const _TestFolders(),
+    library: library,
+    storage: const _Storage(),
+    history: MemoryHistoryStore(),
+    players: players,
+    openWith: openWith,
+  );
   tester.platformDispatcher.localesTestValue = [const Locale('fr')];
   addTearDown(tester.platformDispatcher.clearLocalesTestValue);
   tester.view.physicalSize = const Size(1080, 2400);
@@ -734,6 +862,110 @@ void main() {
     expect(tile(2).height, tile(4).height);
     expect(tile(2).width / tile(2).height, closeTo(9 / 16, 0.02));
     expect(tile(4).right, closeTo(grid.right, 0.5));
+  });
+
+  testWidgets('WP-8.2: ⤢ opens a photo in full; « Sélectionner » there is the grid\'s selection; the next one by the arrow', (tester) async {
+    final (_, state) = await _app(tester, _Library());
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-1')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('image-pages')), findsOneWidget);
+    expect(find.text('IMG_1.jpg'), findsOneWidget);
+    expect(state.selection.isEmpty, isTrue, reason: '⤢ opens, it does not pick');
+
+    await tester.tap(find.byKey(const Key('media-select')));
+    await tester.pump();
+    expect(state.selection.contains('/storage/emulated/0/DCIM/Camera/IMG_1.jpg'), isTrue);
+    expect(find.textContaining('Sélectionné'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('image-next')));
+    await tester.pumpAndSettle();
+    expect(find.text('IMG_2.jpg'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('player-close')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('image-pages')), findsNothing);
+    bool on(int id) => tester.widget<PickBox>(find.descendant(of: find.byKey(ValueKey('media-$id')), matching: find.byType(PickBox))).on;
+    expect(on(1), isTrue, reason: 'picked in the viewer, picked in the grid');
+  });
+
+  testWidgets('23 November: the strip under the photo goes to the one touched; « Infos » shows its details; « Partager »', (tester) async {
+    final openWith = _FakeOpenWith();
+    await _app(tester, _Library(photos: 6), openWith: openWith);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-1')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('image-strip')), findsOneWidget);
+    expect(find.byKey(const Key('image-info')), findsNothing, reason: 'hidden until asked, as in the gallery');
+
+    await tester.tap(find.byKey(const ValueKey('strip-3')));
+    await tester.pumpAndSettle();
+    expect(find.text('IMG_3.jpg'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('image-info-toggle')));
+    await tester.pump();
+    expect(find.byKey(const Key('image-info')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('image-share')));
+    await tester.pump();
+    expect(openWith.shared, [3]);
+  });
+
+  testWidgets('WP-8.2: a video plays from ⤢; pause, the next one; a format not read says so, with another app', (tester) async {
+    final players = _FakePlayers();
+    await _app(tester, _Library(videos: 3), players: players);
+    await tester.ensureVisible(find.text('Vidéos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Vidéos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-101')));
+    await tester.pumpAndSettle();
+    final p = players.made.single;
+    expect(p.opened, [101]);
+    expect(p.playing, isTrue, reason: 'it plays once open');
+    await tester.tap(find.byKey(const Key('player-play')));
+    await tester.pump();
+    expect(p.playing, isFalse);
+    await tester.tap(find.byKey(const Key('player-next')));
+    await tester.pumpAndSettle();
+    expect(p.opened, [101, 102]);
+    expect(find.text('film-2.mp4'), findsOneWidget);
+  });
+
+  testWidgets('WP-8.2: a video the phone does not read: said, and « Ouvrir avec une autre application »', (tester) async {
+    final openWith = _FakeOpenWith();
+    await _app(tester, _Library(videos: 1), players: _FakePlayers(fail: 'unsupported codec'), openWith: openWith);
+    await tester.ensureVisible(find.text('Vidéos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Vidéos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-101')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('cannot-play')), findsOneWidget);
+    expect(find.text('Ce téléphone ne lit pas ce format'), findsOneWidget);
+    await tester.tap(find.text('Ouvrir avec une autre application'));
+    await tester.pump();
+    expect(openWith.opened, [101]);
+  });
+
+  testWidgets('WP-8.2: ▶ plays a song; at its end, the next one', (tester) async {
+    final players = _FakePlayers();
+    await _app(tester, _Library(songs: 2), players: players);
+    await tester.ensureVisible(find.text('Musique'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Musique'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-9')));
+    await tester.pumpAndSettle();
+    final p = players.made.single;
+    expect(p.opened, [9]);
+    expect(p.playing, isTrue);
+    p.finish();
+    await tester.pumpAndSettle();
+    expect(p.opened, [9, 11]);
+    expect(find.text('chanson-2.mp3'), findsWidgets);
   });
 
   test('the plan: descriptors without folders, paths with them, never apps with folders', () {

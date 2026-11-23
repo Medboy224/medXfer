@@ -10,11 +10,13 @@ import 'dart:ui' as ui;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:intl/intl.dart';
 
 import '../../app.dart';
 import '../../l10n/app_localizations.dart';
 import '../../library/explorer.dart';
+import '../viewer/open_media.dart';
 import 'grid_layout.dart';
 import '../../platform/library.dart';
 import '../../theme.dart';
@@ -1326,14 +1328,16 @@ class _MediaTile extends StatelessWidget {
     final m = entry;
     final pick = Explorer.pickMedia(m);
     final on = state.selection.contains(pick.path);
-    // One node for the accessibility: its name, picked or not, and the tap (its badges and image
-    // said nothing more, and cost a node each at every pinch's end).
+    final l = AppLocalizations.of(context);
+    // One node for the accessibility: its name, picked or not, the tap, and « Ouvrir » (its
+    // badges and image said nothing more, and cost a node each at every pinch's end).
     return Semantics(
       button: true,
       toggled: on,
       label: m.name,
       excludeSemantics: true,
       onTap: () => state.selection.toggle(pick),
+      customSemanticsActions: {CustomSemanticsAction(label: l.openThis(m.name)): () => _openFromExplorer(context, m)},
       child: GestureDetector(
         key: ValueKey('media-${m.id}'),
         onTap: () => state.selection.toggle(pick),
@@ -1378,6 +1382,14 @@ class _MediaTile extends StatelessWidget {
                 ),
               ),
             Positioned(right: 5, top: 5, child: _Decor(child: _ByColumns((columns) => PickBox(on: on, onImage: true, size: columns >= 5 ? 18 : 22)))),
+            // ⤢ opens it, touching it elsewhere picks it: no doubt which (D9, mockup 19).
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: _Decor(
+                child: _OpenButton(key: ValueKey('open-${m.id}'), label: l.openThis(m.name), onImage: true, onOpen: () => _openFromExplorer(context, m)),
+              ),
+            ),
           ],
         ),
         ),
@@ -1397,8 +1409,8 @@ class _MediaRow extends StatelessWidget {
   static const detailStyle = TextStyle(fontSize: 12, fontFeatures: tabular);
 
   /// Across a row, all but the name: the list's padding (16), the row's (12), the thumbnail and
-  /// its gap (66), the box and its gaps (34).
-  static const besideName = 128.0;
+  /// its gap (66), the box, its gap and ⤢ (74).
+  static const besideName = 168.0; // with ⤢ at the end (44 px), WP-8.2
 
   /// A row's height for the height of its name and details.
   static double heightFor(double text) => math.max(56.0, text).ceilToDouble() + 12 + 2;
@@ -1456,7 +1468,7 @@ class _MediaRow extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   PickBox(on: on, size: 22),
-                  const SizedBox(width: 4),
+                  _OpenButton(key: ValueKey('open-${m.id}'), label: AppLocalizations.of(context).openThis(m.name), onOpen: () => _openFromExplorer(context, m)),
                 ],
               ),
             ),
@@ -1534,12 +1546,7 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
                         padding: const EdgeInsets.all(8),
                         child: Row(
                           children: [
-                            Container(
-                              width: 56,
-                              height: 56,
-                              decoration: BoxDecoration(color: c.section, borderRadius: BorderRadius.circular(10)),
-                              child: Icon(Icons.music_note_rounded, size: 30, color: c.accent),
-                            ),
+                            PickBox(on: on, size: 22),
                             const SizedBox(width: 12),
                             Expanded(
                               child: Column(
@@ -1556,9 +1563,12 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
                                 ],
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            PickBox(on: on, size: 22),
-                            const SizedBox(width: 4),
+                            _OpenButton(
+                              key: ValueKey('open-${m.id}'),
+                              label: l.listenThis(m.name),
+                              icon: Icons.play_arrow_rounded,
+                              onOpen: () => _openFromExplorer(context, m),
+                            ),
                           ],
                         ),
                       ),
@@ -1909,6 +1919,53 @@ class _RowHeights {
       out[i + 1] = out[i] + h;
     }
     tops = out;
+  }
+}
+
+/// Opens the player of [m], among the media of its kind as the explorer holds them.
+void _openFromExplorer(BuildContext context, MediaEntry m) {
+  final items = AppScope.of(context, listen: false).state.explorer.media(m.kind).items;
+  var i = items.indexWhere((x) => identical(x, m));
+  if (i < 0) i = items.indexWhere((x) => x.id == m.id);
+  if (i >= 0) unawaited(openMedia(context, List.of(items), i));
+}
+
+/// ⤢ (▶ for a song): opens the player; 44 px to touch, a 30 px round on a picture.
+class _OpenButton extends StatelessWidget {
+  const _OpenButton({super.key, required this.label, required this.onOpen, this.icon = Icons.open_in_full_rounded, this.onImage = false});
+
+  final String label;
+  final VoidCallback onOpen;
+  final IconData icon;
+
+  /// Over a photo: white on a dark round, readable on any picture.
+  final bool onImage;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Semantics(
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onOpen,
+        child: SizedBox.square(
+          dimension: 44,
+          child: Center(
+            child: Container(
+              width: onImage ? 30 : 36,
+              height: onImage ? 30 : 36,
+              decoration: onImage
+                  ? BoxDecoration(color: Colors.black.withValues(alpha: 0.55), shape: BoxShape.circle, border: Border.all(color: Colors.white.withValues(alpha: 0.85), width: 1.5))
+                  : BoxDecoration(color: c.surface, shape: BoxShape.circle),
+              child: Icon(icon, size: onImage ? 16 : 20, color: onImage ? Colors.white : c.accent),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

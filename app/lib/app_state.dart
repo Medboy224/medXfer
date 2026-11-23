@@ -3,6 +3,8 @@
 /// Plain ChangeNotifier (decision J4: no state library).
 library;
 
+import 'media/media_player.dart';
+import 'platform/open_with.dart';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -53,6 +55,8 @@ class AppState extends ChangeNotifier {
     this.storage = const NoReceiveStorage(),
     Background background = const NoBackground(),
     this.library = const NoLibrary(),
+    this.players = const NoMediaPlayers(),
+    this.openWith = const NoOpenWith(),
     HistoryStore? history,
     AppSettings? settings,
     this.desktop = false,
@@ -166,6 +170,10 @@ class AppState extends ChangeNotifier {
       files: others.isEmpty ? const <OpenFile>[] : await library.open(others),
     );
   }
+
+  /// The players of videos and songs (WP-8.2, D8), and another app for what they do not read.
+  final MediaPlayers players;
+  final OpenWith openWith;
 
   /// Files and folders chosen on a desktop; the received folder opened.
   final FilePicker filePicker;

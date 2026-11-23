@@ -48,8 +48,13 @@ class Explorer extends ChangeNotifier {
 
   static const pageSize = 300;
 
-  /// Thumbnails and icons kept, the most recent ones (about 30 MB at ~100 KB each).
-  static const cacheSize = 300;
+  /// Thumbnails and icons kept, the most recent ones: at most [cacheSize] of them and
+  /// [cacheBytes] in all. Android's thumbnails weigh 20 to 60 KB, the sharp ones 100 to 200 KB:
+  /// bounded by their count only (300), the viewer's strip found its thumbnails gone (23
+  /// November 2026).
+  static const cacheSize = 2000;
+  static const cacheBytes = 64 << 20;
+  int _bytes = 0;
 
   /// Images loading at once. The rest wait, the last asked first: after a fling, the tiles on
   /// screen come before those scrolled past, which are dropped once gone ([forget]).
@@ -270,9 +275,13 @@ class Explorer extends ChangeNotifier {
           .load()
           .then((bytes) {
             if (bytes != null) {
+              final old = _images.remove(job.key);
+              if (old != null) _bytes -= old.length;
               _images[job.key] = bytes;
-              while (_images.length > cacheSize) {
-                _images.remove(_images.keys.first);
+              _bytes += bytes.length;
+              while (_images.length > cacheSize || (_bytes > cacheBytes && _images.length > 1)) {
+                final first = _images.keys.first;
+                _bytes -= _images.remove(first)!.length;
               }
             }
             return bytes;

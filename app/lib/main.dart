@@ -1,3 +1,5 @@
+import 'media/video_player_adapter.dart';
+import 'platform/open_with.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -45,6 +47,8 @@ Future<void> main() async {
     storage: systemReceiveStorage(),
     background: systemBackground(),
     library: systemLibrary(),
+    players: systemMediaPlayers(),
+    openWith: systemOpenWith(),
     desktop: Platform.isWindows || Platform.isLinux || Platform.isMacOS,
   );
   state.start();

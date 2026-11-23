@@ -1,6 +1,7 @@
 package dev.medxfer.app
 
 import android.app.Activity
+import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -9,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.ImageDecoder
 import android.graphics.Matrix
+import android.graphics.Point
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.pdf.PdfRenderer
 import android.media.ThumbnailUtils
@@ -198,8 +200,20 @@ class Library(private val activity: Activity) {
     /** A media's thumbnail as JPEG, decoded at the size shown (UI-1). */
     fun thumbnail(kind: String, id: Long, size: Int, done: (ByteArray?, String?) -> Unit) = later({
         val uri = ContentUris.withAppendedId(collection(kind), id)
-        jpeg(activity.contentResolver.loadThumbnail(uri, Size(size, size), null))
+        keptThumbnail(uri, size) ?: jpeg(activity.contentResolver.loadThumbnail(uri, Size(size, size), null))
     }, done)
+
+    /**
+     * Android's own thumbnail as MediaStore keeps it, its bytes read whole: neither decoded nor
+     * encoded again here (about 10 ms each, and a long swipe through the photos showed black
+     * thumbnails, real test of 23 November 2026). Null when Android gives none that way.
+     */
+    private fun keptThumbnail(uri: Uri, size: Int): ByteArray? = try {
+        val opts = android.os.Bundle().apply { putParcelable(ContentResolver.EXTRA_SIZE, Point(size, size)) }
+        activity.contentResolver.openTypedAssetFile(uri, "image/*", opts, null)?.use { afd -> afd.createInputStream().use { it.readBytes() } }
+    } catch (e: Exception) {
+        null
+    }
 
     // Quality 90: a few tens of kilobytes. Android's thumbnails stop at about 270 px on their
     // short side, whatever is asked (measured on the A57, 23 November 2026): see sharpThumbnail.

@@ -85,6 +85,32 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                     "openFolder" -> result.success(storage.openFolder(call.argument<String>("path") ?: ""))
+                    // « Ouvrir avec une autre application » (WP-8.2): the chooser, the file read
+                    // through its content:// address, the permission to read it given with it.
+                    // Partager (WP-8.2): the system's share sheet, the file given by its content:// address.
+                    "shareMedia" -> {
+                        val send = Intent(Intent.ACTION_SEND)
+                            .setType(call.argument<String>("mime") ?: "*/*")
+                            .putExtra(Intent.EXTRA_STREAM, android.net.Uri.parse(call.argument<String>("uri") ?: ""))
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        result.success(try {
+                            startActivity(Intent.createChooser(send, null))
+                            true
+                        } catch (e: Exception) {
+                            false
+                        })
+                    }
+                    "openWith" -> {
+                        val view = Intent(Intent.ACTION_VIEW)
+                            .setDataAndType(android.net.Uri.parse(call.argument<String>("uri") ?: ""), call.argument<String>("mime") ?: "*/*")
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        result.success(try {
+                            startActivity(Intent.createChooser(view, null))
+                            true
+                        } catch (e: Exception) {
+                            false
+                        })
+                    }
                     // The interfaces the core cannot list by itself (DISC-10), the multicast lock (DISC-03).
                     "networkInterfaces" -> result.success(network.interfaces())
                     "multicast" -> { network.multicast(call.argument<Boolean>("on") == true); result.success(null) }
