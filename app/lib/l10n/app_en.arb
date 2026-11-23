@@ -508,6 +508,7 @@
   "layoutColumns": "{count} col.",
   "@layoutColumns": {"placeholders": {"count": {"type": "int"}}},
   "layoutList": "List",
+  "layoutMosaic": "Mosaic",
   "pinchHint": "In the grid, pinch with two fingers: spread to enlarge (fewer columns), pinch in to shrink (more columns).",
   "noResults": "No result for “{query}”",
   "@noResults": {"placeholders": {"query": {"type": "String"}}},

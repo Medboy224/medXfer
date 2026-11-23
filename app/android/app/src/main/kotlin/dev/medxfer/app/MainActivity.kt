@@ -161,10 +161,14 @@ class MainActivity : FlutterActivity() {
                         call.argument<String>("sort") ?: "date", call.argument<Boolean>("descending") ?: true, call.argument<String>("search") ?: "",
                     ) { v, e -> reply(result, v, e) }
                     "libThumbnail" -> library.thumbnail(call.argument<String>("kind") ?: "images", (call.argument<Number>("id") ?: 0).toLong(), call.argument<Int>("size") ?: 256) { v, e -> reply(result, v, e) }
-                    "libPrepareSharp" -> { library.prepareSharp(call.argument<Int>("size") ?: 0, call.argument<Boolean>("on") == true); result.success(null) }
+                    "libPrepareSharp" -> {
+                        library.prepareSharp(call.argument<Int>("height") ?: 0, call.argument<Int>("width") ?: 0, call.argument<Boolean>("on") == true)
+                        result.success(null)
+                    }
                     "libSharpThumbnail" -> library.sharpThumbnail(
-                        call.argument<String>("kind") ?: "images", (call.argument<Number>("id") ?: 0).toLong(), call.argument<Int>("size") ?: 256,
-                        (call.argument<Number>("modified") ?: 0).toLong(),
+                        call.argument<String>("kind") ?: "images", (call.argument<Number>("id") ?: 0).toLong(),
+                        call.argument<Int>("height") ?: 256, call.argument<Int>("width") ?: 256,
+                        (call.argument<Number>("modified") ?: 0).toLong(), call.argument<Boolean>("keptOnly") == true,
                     ) { v, e -> reply(result, v, e) }
                     "libFileThumb" -> library.fileThumbnail(call.argument<String>("path") ?: "", call.argument<Int>("size") ?: 128) { v, e -> reply(result, v, e) }
                     "libDirSize" -> library.dirSize(call.argument<String>("path") ?: "") { v, e -> reply(result, v, e) }

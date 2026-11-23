@@ -233,7 +233,7 @@ class _HomeFrameState extends State<_HomeFrame> with SingleTickerProviderStateMi
   // The sharp thumbnails made ahead (23 November 2026), while the app is on screen, allowed to
   // read the media, and no transfer runs: the transfer keeps every core it can.
   bool _away = false;
-  int _sharpPx = 0;
+  ({int height, int width})? _sharpSize;
   bool? _preparing;
   AppState? _watched;
 
@@ -241,16 +241,17 @@ class _HomeFrameState extends State<_HomeFrame> with SingleTickerProviderStateMi
     final state = _watched;
     if (state == null || !mounted) return;
     final a = state.transfers.active;
-    final on = !_away && _sharpPx > 0 && state.library.supported && state.explorer.mediaAllowed == true && (a == null || a.stage == Stage.done);
+    final size = _sharpSize;
+    final on = !_away && size != null && state.library.supported && state.explorer.mediaAllowed == true && (a == null || a.stage == Stage.done);
     if (on == _preparing) return;
     _preparing = on;
-    unawaited(state.library.prepareSharp(_sharpPx, on: on).catchError((Object _) {}));
+    unawaited(state.library.prepareSharp(height: size?.height ?? 0, width: size?.width ?? 0, on: on).catchError((Object _) {}));
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _sharpPx = sharpDecodePx(context);
+    _sharpSize = sharpSize(context);
     final state = AppScope.of(context, listen: false).state;
     if (!identical(state, _watched)) {
       _watched?.transfers.removeListener(_prepare);
