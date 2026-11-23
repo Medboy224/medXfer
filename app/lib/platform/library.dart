@@ -3,9 +3,11 @@
 /// false and the tabs say so.
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:typed_data';
+
+import 'package:flutter/services.dart';
 
 import 'file_picker.dart';
 import 'folders.dart' show platformChannel;
@@ -139,6 +141,9 @@ abstract interface class Library {
 
   /// The files of a category: documents, ebooks, apks, archives, large.
   Future<List<FileEntry>> files(FileCategory category, {int offset = 0, int limit = 200});
+
+  /// The device's content changed: a photo taken, a file added or deleted.
+  Stream<void> get changes;
 }
 
 /// The classes of the Files tab, beside the folders.
@@ -175,6 +180,8 @@ class NoLibrary implements Library {
   Future<int> dirSize(String path) => Isolate.run(() => _walk(path));
   @override
   Future<List<FileEntry>> files(FileCategory category, {int offset = 0, int limit = 200}) async => const [];
+  @override
+  Stream<void> get changes => const Stream.empty();
 }
 
 /// The bytes of the files under [root]; a folder that cannot be read counts for nothing, the
@@ -200,6 +207,17 @@ int _walk(String root) {
 
 class AndroidLibrary implements Library {
   const AndroidLibrary();
+
+  static const _events = MethodChannel('dev.medxfer.app/library');
+  static final StreamController<void> _changes = StreamController<void>.broadcast(
+    onListen: () => _events.setMethodCallHandler((call) async {
+      if (call.method == 'changed') _changes.add(null);
+    }),
+  );
+
+  /// Library.kt watches MediaStore and calls changed, once things settle.
+  @override
+  Stream<void> get changes => _changes.stream;
 
   @override
   bool get supported => true;

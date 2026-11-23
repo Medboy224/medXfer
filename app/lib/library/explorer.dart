@@ -4,6 +4,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -35,9 +36,15 @@ class _Load {
 }
 
 class Explorer extends ChangeNotifier {
-  Explorer(this.library);
+  Explorer(this.library) {
+    _changes = library.changes.listen((_) => unawaited(refresh()));
+  }
 
   final Library library;
+  StreamSubscription<void>? _changes;
+  bool _disposed = false;
+  bool _refreshing = false;
+  bool _again = false;
 
   static const pageSize = 300;
 
@@ -271,6 +278,109 @@ class Explorer extends ChangeNotifier {
             _pump();
           });
     }
+  }
+
+  /// The device's content changed (a photo taken, a file added, an app installed), or the app
+  /// comes back to the screen: what was loaded is read again, and replaced only where it
+  /// differs; the scroll stays (real test of 22 November 2026: a screenshot showed only once the
+  /// app restarted). Asked again while it reads, it reads once more after.
+  Future<void> refresh() async {
+    if (_refreshing) {
+      _again = true;
+      return;
+    }
+    _refreshing = true;
+    try {
+      do {
+        _again = false;
+        var changed = false;
+        for (final k in MediaKind.values) {
+          changed = await _reloadMedia(k) || changed;
+        }
+        for (final c in FileCategory.values) {
+          changed = await _reloadFiles(c) || changed;
+        }
+        changed = await _reloadDir() || changed;
+        changed = await _reloadApps() || changed;
+        if (changed && !_disposed) notifyListeners();
+      } while (_again && !_disposed);
+    } on Object catch (e) {
+      if (kDebugMode) debugPrint('explorer: refresh failed: $e');
+    } finally {
+      _refreshing = false;
+    }
+  }
+
+  static bool _same<T>(List<T> a, List<T> b, bool Function(T, T) equal) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!equal(a[i], b[i])) return false;
+    }
+    return true;
+  }
+
+  /// A kind of media as far as it was loaded; a kind never shown loads when it is.
+  Future<bool> _reloadMedia(MediaKind k) async {
+    final m = _media[k]!;
+    if ((m.items.isEmpty && !m.done) || m.loading || m.error != null || _disposed) return false;
+    final want = math.max(m.items.length, pageSize);
+    final items = await library.media(k, limit: want, order: _orders[k]!);
+    // Another order, or a page, meanwhile: that list reads the device as it is.
+    if (!identical(_media[k], m) || m.loading) return false;
+    if (_same(items, m.items, (a, b) => a.id == b.id && a.name == b.name && a.size == b.size && a.modified == b.modified)) return false;
+    _media[k] = MediaList()
+      ..items.addAll(items)
+      ..done = items.length < want;
+    return true;
+  }
+
+  static bool _sameFile(FileEntry a, FileEntry b) => a.path == b.path && a.name == b.name && a.size == b.size && a.dir == b.dir;
+
+  Future<bool> _reloadFiles(FileCategory c) async {
+    final f = _files[c]!;
+    if ((f.items.isEmpty && !f.done) || f.loading || f.error != null || _disposed) return false;
+    final want = math.max(f.items.length, pageSize);
+    final items = await library.files(c, limit: want);
+    if (!identical(_files[c], f) || f.loading) return false;
+    if (_same(items, f.items, _sameFile)) return false;
+    _files[c] = FileList()
+      ..items.addAll(items)
+      ..done = items.length < want;
+    return true;
+  }
+
+  /// The folder open in Files.
+  Future<bool> _reloadDir() async {
+    final before = _entries;
+    if (before == null || _dirError != null || _disposed) return false;
+    final dir = this.dir;
+    final entries = await library.listDir(dir);
+    if (dir != this.dir || !identical(_entries, before)) return false; // another folder opened meanwhile
+    if (_same(entries, before, _sameFile)) return false;
+    _entries = entries;
+    return true;
+  }
+
+  Future<bool> _reloadApps() async {
+    final before = _apps;
+    if (before == null || _appsLoading || _disposed) return false;
+    final apps = await library.apps();
+    if (!identical(_apps, before)) return false;
+    if (_same(apps, before, (a, b) => a.package == b.package && a.label == b.label && a.size == b.size)) return false;
+    _apps = apps;
+    return true;
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    unawaited(_changes?.cancel());
+    super.dispose();
   }
 
   /// The picks of a tab's items, for "select all": 1 Apps, 2 Photos, 3 Videos, 4 Music, 5 Files.

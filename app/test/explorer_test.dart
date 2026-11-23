@@ -1,5 +1,6 @@
 // The explorer by categories (WP-B.9) on a fake library: tabs, picking across tabs, the
 // basket, select all, and how the selection goes to the core.
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -11,6 +12,7 @@ import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/features/explorer/gallery_toolbar.dart';
 import 'package:medxfer/library/selection.dart';
+import 'package:medxfer/platform/app_exit.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/platform/folders.dart';
 import 'package:medxfer/widgets/v4.dart';
@@ -38,7 +40,12 @@ class _Library implements Library {
   _Library({this.photos = 3, this.long = false});
 
   /// How many photos the phone holds.
-  final int photos;
+  int photos;
+
+  /// Says the device's content changed, as Library.kt does.
+  final changed = StreamController<void>.broadcast();
+  @override
+  Stream<void> get changes => changed.stream;
 
   /// With a document and a photo under a very long name.
   final bool long;
@@ -84,7 +91,9 @@ class _Library implements Library {
   @override
   String get storageRoot => '/storage/emulated/0';
   @override
-  Future<List<FileEntry>> listDir(String path) async => const [];
+  Future<List<FileEntry>> listDir(String path) async => path == storageRoot
+      ? const [FileEntry(name: 'DCIM', path: '/storage/emulated/0/DCIM', dir: true, size: 0)]
+      : const [];
   @override
   Future<Uint8List?> fileThumbnail(String path, int px) async => null;
   @override
@@ -107,6 +116,22 @@ class _Library implements Library {
 }
 
 const _longName = '6A41A353-7F9F-4A54-A1A1-FCAxngxhkdykduodoudoudiyydyis7soydyosyidyodyodoysyisoyaitsoysiysiysoysyoskysyis6iskys6o.png';
+
+/// How the app left, by the back button.
+class _Exits implements AppExit {
+  final calls = <String>[];
+  @override
+  Future<void> toBack() async => calls.add('toBack');
+  @override
+  Future<void> quit() async => calls.add('quit');
+}
+
+_Exits _watchExits() {
+  final exits = _Exits();
+  appExit = exits;
+  addTearDown(() => appExit = const SystemExit());
+  return exits;
+}
 
 Future<(FakeCore, AppState)> _app(WidgetTester tester, _Library library) async {
   final core = FakeCore()..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy'})]));
@@ -537,6 +562,67 @@ void main() {
     for (var i = 1; i < sorted.length; i++) {
       expect(sorted[i].top, greaterThanOrEqualTo(sorted[i - 1].bottom - 0.5), reason: 'no row over another');
     }
+  });
+
+  testWidgets('real test of 22 November: a photo taken while the app runs shows, without restarting it', (tester) async {
+    final library = _Library();
+    await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('media-4')), findsNothing);
+    library.photos = 4;
+    library.changed.add(null);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('media-4')), findsOneWidget);
+  });
+
+  testWidgets('real test of 22 November: back in a folder goes up; at the top, it asks before quitting', (tester) async {
+    final exits = _watchExits();
+    final (_, state) = await _app(tester, _Library());
+    await tester.ensureVisible(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('file-DCIM')));
+    await tester.pumpAndSettle();
+    expect(state.explorer.dir, '/storage/emulated/0/DCIM');
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(state.explorer.dir, '/storage/emulated/0', reason: 'up a folder, the app still there');
+    expect(find.byKey(const Key('exit-dialog')), findsNothing);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Quitter medXfer ?'), findsOneWidget);
+    expect(find.byKey(const Key('exit-keep')), findsNothing, reason: 'nothing runs: nothing to keep');
+    await tester.tap(find.text('Annuler'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('exit-dialog')), findsNothing);
+    expect(exits.calls, isEmpty);
+  });
+
+  testWidgets('22 November: connected, back says so; kept in the background, or all stopped', (tester) async {
+    final exits = _watchExits();
+    final (core, state) = await _app(tester, _Library());
+    core.on('disconnect', (_) => const FakeAnswer());
+    core.emit(const CoreEvent('paired', data: {'ip': '192.168.1.30', 'device_name': 'PC'}));
+    await tester.pumpAndSettle();
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('exit-running')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('exit-keep')));
+    await tester.pumpAndSettle();
+    expect(exits.calls, ['toBack']);
+    expect(state.connection.session, isNotNull, reason: 'kept');
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('exit-quit')));
+    await tester.pumpAndSettle();
+    expect(core.calls.map((c) => c.action), contains('disconnect'));
+    expect(exits.calls, ['toBack', 'quit']);
   });
 
   test('the plan: descriptors without folders, paths with them, never apps with folders', () {

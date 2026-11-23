@@ -12,6 +12,7 @@ import '../../app.dart';
 import '../../app_state.dart';
 import '../../l10n/app_localizations.dart';
 import '../../library/selection.dart';
+import '../../platform/app_exit.dart';
 import '../../platform/file_picker.dart' as fp;
 import '../../platform/library.dart';
 import '../../theme.dart';
@@ -162,6 +163,9 @@ class HomeScreen extends StatelessWidget {
 /// The home screen's frame (plan J8, WP-8.1b): scrolling down folds the top line and the
 /// toolbar away and hides the bar, for the content; scrolling up brings them back. The bar stays
 /// while something is picked or a transfer runs.
+/// What the back button leads to, once asked.
+enum _Exit { toBack, quit }
+
 class _HomeFrame extends StatefulWidget {
   const _HomeFrame();
 
@@ -212,10 +216,109 @@ class _HomeFrameState extends State<_HomeFrame> with SingleTickerProviderStateMi
   final _topKey = GlobalKey();
   bool _dragging = false;
 
+  // Back on the screen: what the device holds may have changed meanwhile (a photo taken in
+  // another app, a file downloaded); the explorer reads it again (22 November 2026).
+  late final _life = AppLifecycleListener(onResume: () => unawaited(AppScope.of(context, listen: false).state.explorer.refresh()));
+
   @override
   void initState() {
     super.initState();
     _frame = this;
+    _life; // listening from now
+  }
+
+  /// Android's back on the home screen (real test of 22 November 2026: in a folder of Files, it
+  /// closed the app). In Files it goes up a folder, or from a category back to the folders;
+  /// otherwise it asks before leaving.
+  Future<void> _back() async {
+    final state = AppScope.of(context, listen: false).state;
+    final ex = state.explorer;
+    if (DefaultTabController.of(context).index == 5 && state.library.supported) {
+      if (ex.category != null) {
+        ex.showCategory(null);
+        return;
+      }
+      final parent = ex.parent;
+      if (parent != null && ex.entries != null) {
+        unawaited(ex.open(parent));
+        return;
+      }
+    }
+    await _askExit(state);
+  }
+
+  /// Quit, or keep in the background what runs: said plainly, the back button left the
+  /// session open without a word (real test of 22 November 2026).
+  Future<void> _askExit(AppState state) async {
+    final running = state.keeper.running;
+    final choice = await showDialog<_Exit>(
+      context: context,
+      builder: (context) {
+        final l = AppLocalizations.of(context);
+        final c = context.colors;
+        if (running == null) {
+          return AlertDialog(
+            key: const Key('exit-dialog'),
+            title: Text(l.exitTitle),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: Text(l.cancel)),
+              FilledButton(key: const Key('exit-quit'), onPressed: () => Navigator.pop(context, _Exit.quit), child: Text(l.exitQuit)),
+            ],
+          );
+        }
+        return AlertDialog(
+          key: const Key('exit-dialog'),
+          title: Text(l.exitTitle),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(running.title, key: const Key('exit-running'), style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+              if (running.text.isNotEmpty) Text(running.text, style: TextStyle(color: c.muted, fontSize: 13)),
+              const SizedBox(height: 16),
+              FilledButton(
+                key: const Key('exit-keep'),
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                onPressed: () => Navigator.pop(context, _Exit.toBack),
+                child: Text(l.exitKeep),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 4, 4, 12),
+                child: Text(l.exitKeepHint, style: TextStyle(color: c.muted, fontSize: 12)),
+              ),
+              OutlinedButton(
+                key: const Key('exit-quit'),
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48), foregroundColor: c.danger, side: BorderSide(color: c.danger)),
+                onPressed: () => Navigator.pop(context, _Exit.quit),
+                child: Text(l.exitQuitAll),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+                child: Text(l.exitQuitAllHint, style: TextStyle(color: c.muted, fontSize: 12)),
+              ),
+            ],
+          ),
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: Text(l.cancel))],
+        );
+      },
+    );
+    switch (choice) {
+      case _Exit.toBack:
+        await appExit.toBack();
+      case _Exit.quit:
+        // The other device hears it end, rather than a session gone silent; then all stops.
+        if (state.connection.session != null) {
+          try {
+            await state.connection.disconnect().timeout(const Duration(seconds: 2));
+          } on Object catch (_) {
+            // Gone already, or no answer: the core stops all the same.
+          }
+        }
+        await state.shutdown(wait: const Duration(seconds: 2));
+        await appExit.quit();
+      case null:
+        break;
+    }
   }
 
   /// The bottom bar: hidden past 70 % of the fold, back under 30 %: a fold near half way does
@@ -254,6 +357,7 @@ class _HomeFrameState extends State<_HomeFrame> with SingleTickerProviderStateMi
   @override
   void dispose() {
     if (_frame == this) _frame = null;
+    _life.dispose();
     _fold.dispose();
     super.dispose();
   }
@@ -333,7 +437,12 @@ class _HomeFrameState extends State<_HomeFrame> with SingleTickerProviderStateMi
       (l.tabFiles, Icons.folder_outlined),
     ];
     final motion = MediaQuery.of(context).disableAnimations ? Duration.zero : const Duration(milliseconds: 200);
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) unawaited(_back());
+      },
+      child: Scaffold(
       // The bar floats: the grids run under it (their bottom padding leaves room).
       extendBody: true,
       body: SafeArea(
@@ -439,6 +548,7 @@ class _HomeFrameState extends State<_HomeFrame> with SingleTickerProviderStateMi
           );
         },
       ),
+    ),
     );
   }
 }

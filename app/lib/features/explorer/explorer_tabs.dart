@@ -788,7 +788,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                       ],
                     );
                     // The same widget while nothing it shows changed: not rebuilt.
-                    final shows = (list.items, _album, asList, byDay, ex.order(widget.kind), box.biggest, _scroll, columns, MediaQuery.textScalerOf(context));
+                    final shows = (list.items, items.length, _album, asList, byDay, ex.order(widget.kind), box.biggest, _scroll, columns, MediaQuery.textScalerOf(context));
                     final hit = _view;
                     // A new scroll (the grid a pinch settled on) is a new grid: an old one kept its
                     // offset, not the one under the fingers.

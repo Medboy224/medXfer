@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ContentUris
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
@@ -11,6 +12,8 @@ import android.graphics.pdf.PdfRenderer
 import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.util.Size
@@ -34,6 +37,38 @@ class Library(private val activity: Activity) {
             }
             activity.runOnUiThread { done(value, error) }
         }
+    }
+
+    private var observer: ContentObserver? = null
+
+    /**
+     * The device's content changed (a photo taken, a file added, one deleted): [changed] tells
+     * Dart, which reads its lists again (real test of 22 November 2026: a screenshot showed only
+     * once the app restarted). Changes in a row (a file written, then indexed) make one call,
+     * 1 s after the last.
+     */
+    fun watch(changed: () -> Unit) {
+        if (observer != null) return
+        val handler = Handler(Looper.getMainLooper())
+        val fire = Runnable { changed() }
+        val o = object : ContentObserver(handler) {
+            override fun onChange(selfChange: Boolean) {
+                handler.removeCallbacks(fire)
+                handler.postDelayed(fire, 1000)
+            }
+        }
+        for (uri in listOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, MediaStore.Files.getContentUri("external"),
+        )) {
+            activity.contentResolver.registerContentObserver(uri, true, o)
+        }
+        observer = o
+    }
+
+    fun unwatch() {
+        observer?.let { activity.contentResolver.unregisterContentObserver(it) }
+        observer = null
     }
 
     /** The apps of the home screen (a <queries> on the launcher intent, no QUERY_ALL_PACKAGES). */
