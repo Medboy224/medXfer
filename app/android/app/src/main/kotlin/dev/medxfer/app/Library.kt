@@ -143,6 +143,8 @@ class Library(private val activity: Activity) {
             MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, album,
         )
         if (kind != "images") columns.add(MediaStore.MediaColumns.DURATION)
+        // The proportions, for the mosaic (23 November 2026); turned by the orientation.
+        if (kind != "audio") columns.addAll(listOf(MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT, MediaStore.MediaColumns.ORIENTATION))
         val by = when (sort) {
             "name" -> MediaStore.MediaColumns.DISPLAY_NAME
             "size" -> MediaStore.MediaColumns.SIZE
@@ -169,7 +171,14 @@ class Library(private val activity: Activity) {
         }
         val out = mutableListOf<Map<String, Any?>>()
         activity.contentResolver.query(uri, columns.toTypedArray(), args, null)?.use { c ->
+            val wi = c.getColumnIndex(MediaStore.MediaColumns.WIDTH)
+            val hi = c.getColumnIndex(MediaStore.MediaColumns.HEIGHT)
+            val oi = c.getColumnIndex(MediaStore.MediaColumns.ORIENTATION)
+            val di = c.getColumnIndex(MediaStore.MediaColumns.DURATION)
             while (c.moveToNext()) {
+                val w = if (wi >= 0) c.getInt(wi) else 0
+                val h = if (hi >= 0) c.getInt(hi) else 0
+                val turned = oi >= 0 && (c.getInt(oi) == 90 || c.getInt(oi) == 270)
                 out.add(mapOf(
                     "id" to c.getLong(0),
                     "name" to (c.getString(1) ?: ""),
@@ -177,7 +186,9 @@ class Library(private val activity: Activity) {
                     "size" to c.getLong(3),
                     "modified" to c.getLong(4),
                     "album" to (c.getString(5) ?: ""),
-                    "duration" to if (columns.size > 6) c.getLong(6) else 0L,
+                    "duration" to if (di >= 0) c.getLong(di) else 0L,
+                    "width" to if (turned) h else w,
+                    "height" to if (turned) w else h,
                 ))
             }
         }
@@ -198,52 +209,98 @@ class Library(private val activity: Activity) {
     }
 
     /**
-     * A tile's square at the size asked, read from the file itself (23 November 2026): Android's
-     * thumbnails stop at about 270 px on their short side (236 at the least), which a grid of 3
-     * columns or fewer stretched, blurred. Measured on the A57: about 115-130 ms for a camera's
-     * photo (the decoding itself; BitmapFactory is no quicker, the EXIF thumbnail is 512x236),
-     * 20-25 ms for a screenshot, 20-220 ms for a video's frame. So each is made once: kept in the
-     * app's cache folder ([sharpDir], at most [sharpMaxBytes]), read again in a few ms, made
-     * anew when the photo changes ([modified] in its name).
+     * A tile's image, read from the file itself (23 November 2026): Android's thumbnails stop at
+     * about 270 px on their short side (236 at the least), which a grid of 3 columns or fewer
+     * stretched, blurred. In its own proportions (cropped beyond 1:2 and 3:1, as the mosaic shows
+     * it), [height] px tall, less for a wide one that [width] limits: what a mosaic row shows; 3
+     * columns show a square of it. Android's own when it is large enough. Measured on the A57:
+     * about 115-130 ms for a camera's photo (the decoding itself; BitmapFactory is no quicker,
+     * the EXIF thumbnail is 512x236), 20-25 ms for a screenshot, 20-220 ms for a video's frame.
+     * So each is made once: kept in the app's cache folder ([sharpDir], at most
+     * [sharpMaxBytes]), read again in a few ms, made anew when the photo changes ([modified] in
+     * its name).
      */
-    fun sharpThumbnail(kind: String, id: Long, size: Int, modified: Long, done: (ByteArray?, String?) -> Unit) = later({
+    fun sharpThumbnail(kind: String, id: Long, height: Int, width: Int, modified: Long, keptOnly: Boolean, done: (ByteArray?, String?) -> Unit) = later({
         demand.incrementAndGet() // the preparation waits meanwhile
         try {
-            val file = sharpFile(kind, id, modified, size)
+            val file = sharpFile(kind, id, modified, height, width)
             if (file.isFile) {
                 file.setLastModified(System.currentTimeMillis()) // the least recently seen go first
                 file.readBytes()
+            } else if (keptOnly) {
+                null // not made yet: the screen asks for it to be made once the tile is still
             } else {
-                makeSharp(kind, id, size).also { keep(file, it) }
+                makeSharp(kind, id, height, width).also { keep(file, it) }
             }
         } finally {
             demand.decrementAndGet()
         }
     }, done)
 
-    private fun sharpFile(kind: String, id: Long, modified: Long, size: Int) = File(sharpDir, "$kind-$id-$modified-$size.jpg")
+    private fun sharpFile(kind: String, id: Long, modified: Long, height: Int, width: Int) = File(sharpDir, "$kind-$id-$modified-${height}x$width.jpg")
 
-    private fun makeSharp(kind: String, id: Long, size: Int): ByteArray {
+    private fun makeSharp(kind: String, id: Long, height: Int, width: Int): ByteArray {
         val uri = ContentUris.withAppendedId(collection(kind), id)
         // Android's own, while it may be large enough: once seen too small 8 times, not asked.
-        val quick = if (systemSeen.get() < 8 || systemSide.get() >= size) {
-            activity.contentResolver.loadThumbnail(uri, Size(size, size), null).also {
+        val quick = if (systemSeen.get() < 8 || systemSide.get() >= height) {
+            activity.contentResolver.loadThumbnail(uri, Size(width, width), null).also {
                 systemSeen.incrementAndGet()
                 systemSide.accumulateAndGet(minOf(it.width, it.height)) { a, b -> maxOf(a, b) }
             }
         } else {
             null
         }
-        val full = if (quick != null && minOf(quick.width, quick.height) >= size) {
+        val full = if (quick != null && cropHeight(quick.width, quick.height) >= needed(quick.width, quick.height, height, width) * 0.98) {
             quick
         } else {
             try {
-                if (kind == "video") videoFrame(uri, size) else decodeAt(uri, size)
+                if (kind == "video") videoFrame(uri, width) else decodeFor(uri, height, width)
             } catch (e: Exception) {
                 null
-            } ?: quick ?: activity.contentResolver.loadThumbnail(uri, Size(size, size), null)
+            } ?: quick ?: activity.contentResolver.loadThumbnail(uri, Size(width, width), null)
         }
-        return jpeg(square(full, size))
+        return jpeg(fit(full, height, width))
+    }
+
+    /** Width over height, within what the mosaic shows (GridLayout's minAspect, maxAspect). */
+    private fun shown(w: Int, h: Int) = (w.toDouble() / h).coerceIn(0.5, 3.0)
+
+    /** The height an image of w×h needs: [height], less for a wide one that [width] limits. */
+    private fun needed(w: Int, h: Int, height: Int, width: Int) = minOf(height.toDouble(), width / shown(w, h))
+
+    /** The height of the part of a w×h image shown, cropped to [shown]. */
+    private fun cropHeight(w: Int, h: Int): Double {
+        val a = w.toDouble() / h
+        return if (a < shown(w, h)) w / shown(w, h) else h.toDouble()
+    }
+
+    /** The image of [uri], decoded at the size [fit] needs (never above its own); EXIF turns. */
+    private fun decodeFor(uri: Uri, height: Int, width: Int): Bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(activity.contentResolver, uri)) { decoder, info, _ ->
+        val w = info.size.width
+        val h = info.size.height
+        val scale = minOf(1.0, needed(w, h, height, width) / cropHeight(w, h))
+        decoder.setTargetSize(maxOf(1, Math.round(w * scale).toInt()), maxOf(1, Math.round(h * scale).toInt()))
+        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+    }
+
+    /** A video's frame, within [width] px each way, as large as the video has it. */
+    private fun videoFrame(uri: Uri, width: Int): Bitmap? {
+        val path = activity.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        } ?: return null
+        return ThumbnailUtils.createVideoThumbnail(File(path), Size(width, width), null)
+    }
+
+    /** [b] cropped at its centre to the proportions shown, then to the height needed. */
+    private fun fit(b: Bitmap, height: Int, width: Int): Bitmap {
+        val a = b.width.toDouble() / b.height
+        val s = shown(b.width, b.height)
+        val cw = if (a > s) Math.round(b.height * s).toInt() else b.width
+        val ch = if (a < s) Math.round(b.width / s).toInt() else b.height
+        val out = minOf(needed(b.width, b.height, height, width), ch.toDouble())
+        val k = (out / ch).toFloat()
+        val m = Matrix().apply { setScale(k, k) }
+        return Bitmap.createBitmap(b, (b.width - cw) / 2, (b.height - ch) / 2, cw, ch, m, true)
     }
 
     private val systemSeen = java.util.concurrent.atomic.AtomicInteger(0)
@@ -264,15 +321,15 @@ class Library(private val activity: Activity) {
     }
     private val prepareRun = java.util.concurrent.atomic.AtomicInteger(0)
 
-    fun prepareSharp(size: Int, on: Boolean) {
+    fun prepareSharp(height: Int, width: Int, on: Boolean) {
         val run = prepareRun.incrementAndGet()
-        if (on) preparer.execute { prepare(size, run) }
+        if (on) preparer.execute { prepare(height, width, run) }
     }
 
-    private fun prepare(size: Int, run: Int) {
+    private fun prepare(height: Int, width: Int, run: Int) {
         if (run != prepareRun.get()) return
         // Another size: a screen of another width, or an older choice.
-        sharpDir.listFiles()?.forEach { if (!it.name.endsWith("-$size.jpg")) it.delete() }
+        sharpDir.listFiles()?.forEach { if (!it.name.endsWith("-${height}x$width.jpg")) it.delete() }
         var total = sharpDir.listFiles()?.sumOf { it.length() } ?: 0L
         val args = android.os.Bundle().apply {
             putStringArray(android.content.ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(MediaStore.MediaColumns.DATE_MODIFIED))
@@ -285,11 +342,11 @@ class Library(private val activity: Activity) {
                     // The disk's room: the rest is made when seen, the least seen going.
                     if (total > sharpMaxBytes * 7 / 10) break@loop
                     val id = c.getLong(0)
-                    val file = sharpFile(kind, id, c.getLong(1), size)
+                    val file = sharpFile(kind, id, c.getLong(1), height, width)
                     if (file.isFile) continue
                     while (demand.get() > 0 && run == prepareRun.get()) Thread.sleep(20)
                     try {
-                        val bytes = makeSharp(kind, id, size)
+                        val bytes = makeSharp(kind, id, height, width)
                         keep(file, bytes)
                         total += bytes.size
                     } catch (e: Exception) {
@@ -317,31 +374,6 @@ class Library(private val activity: Activity) {
             total -= f.length()
             f.delete()
         }
-    }
-
-    /** The image of [uri], decoded at [size] on its short side (never above its own); EXIF turns. */
-    private fun decodeAt(uri: Uri, size: Int): Bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(activity.contentResolver, uri)) { decoder, info, _ ->
-        val w = info.size.width
-        val h = info.size.height
-        val scale = minOf(1.0, size.toDouble() / minOf(w, h))
-        decoder.setTargetSize(maxOf(1, Math.round(w * scale).toInt()), maxOf(1, Math.round(h * scale).toInt()))
-        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-    }
-
-    /** A video's frame, at least [size] on its short side when the video has it. */
-    private fun videoFrame(uri: Uri, size: Int): Bitmap? {
-        val path = activity.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { c ->
-            if (c.moveToFirst()) c.getString(0) else null
-        } ?: return null
-        return ThumbnailUtils.createVideoThumbnail(File(path), Size(size * 2, size * 2), null)
-    }
-
-    /** The centred square of [b], [size] px a side at most. */
-    private fun square(b: Bitmap, size: Int): Bitmap {
-        val side = minOf(b.width, b.height)
-        val out = minOf(size, side)
-        val m = Matrix().apply { setScale(out.toFloat() / side, out.toFloat() / side) }
-        return Bitmap.createBitmap(b, (b.width - side) / 2, (b.height - side) / 2, side, side, m, true)
     }
 
     /** A file's thumbnail by its kind: image, video, PDF (first page), APK (its icon); else null. */
@@ -452,8 +484,8 @@ class Library(private val activity: Activity) {
     }
 
     companion object {
-        /** The sharp thumbnails kept on the disk: some 2,500 tiles. */
-        const val sharpMaxBytes = 200L * 1024 * 1024
+        /** The sharp thumbnails kept on the disk: some 2,000 photos at a mosaic row's height. */
+        const val sharpMaxBytes = 300L * 1024 * 1024
 
         private val IMAGES = setOf("jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "avif")
         private val VIDEOS = setOf("mp4", "mkv", "mov", "avi", "webm", "3gp", "m4v", "ts", "wmv")

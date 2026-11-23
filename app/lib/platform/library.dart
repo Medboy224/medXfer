@@ -67,6 +67,8 @@ class MediaEntry {
     this.album = '',
     this.modified = 0,
     this.durationMs = 0,
+    this.width = 0,
+    this.height = 0,
   });
 
   factory MediaEntry.fromMap(MediaKind kind, Map<Object?, Object?> m) => MediaEntry(
@@ -78,6 +80,8 @@ class MediaEntry {
     album: '${m['album'] ?? ''}',
     modified: (m['modified'] as num?)?.toInt() ?? 0,
     durationMs: (m['duration'] as num?)?.toInt() ?? 0,
+    width: (m['width'] as num?)?.toInt() ?? 0,
+    height: (m['height'] as num?)?.toInt() ?? 0,
   );
 
   final int id;
@@ -92,6 +96,12 @@ class MediaEntry {
   /// Seconds since 1970.
   final int modified;
   final int durationMs;
+
+  /// As shown, turned already; 0 when unknown.
+  final int width, height;
+
+  /// Width over height; 0 when unknown (the mosaic shows a square).
+  double get aspect => width > 0 && height > 0 ? width / height : 0;
 }
 
 class FileEntry {
@@ -122,12 +132,14 @@ abstract interface class Library {
   Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200, MediaOrder order = const MediaOrder()});
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size);
 
-  /// A tile's square at [size] px, read from the file itself: sharp where [thumbnail] stops
-  /// short (about 270 px on Android), slower the first time (then kept). Null when there is none.
-  Future<Uint8List?> sharpThumbnail(MediaEntry m, int size);
+  /// A tile's image, [height] px tall (less for a wide one, at most [width] px wide), in its
+  /// own proportions, read from the file itself: sharp where [thumbnail] stops short (about
+  /// 270 px on Android), slower the first time (then kept). Null when there is none, or, with
+  /// [keptOnly], when it was not made yet (then nothing is made).
+  Future<Uint8List?> sharpThumbnail(MediaEntry m, {required int height, required int width, bool keptOnly = false});
 
   /// Makes the sharp thumbnails ahead, in the background, newest first ([on]), or stops.
-  Future<void> prepareSharp(int size, {required bool on});
+  Future<void> prepareSharp({required int height, required int width, required bool on});
 
   /// Whether photos, videos and music can be read; [askMedia] asks Android.
   Future<bool> mediaAllowed();
@@ -170,9 +182,9 @@ class NoLibrary implements Library {
   @override
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size) async => null;
   @override
-  Future<Uint8List?> sharpThumbnail(MediaEntry m, int size) async => null;
+  Future<Uint8List?> sharpThumbnail(MediaEntry m, {required int height, required int width, bool keptOnly = false}) async => null;
   @override
-  Future<void> prepareSharp(int size, {required bool on}) async {}
+  Future<void> prepareSharp({required int height, required int width, required bool on}) async {}
   @override
   Future<bool> mediaAllowed() async => false;
   @override
@@ -261,11 +273,14 @@ class AndroidLibrary implements Library {
       platformChannel.invokeMethod<Uint8List>('libThumbnail', {'kind': kind.name, 'id': id, 'size': size});
 
   @override
-  Future<Uint8List?> sharpThumbnail(MediaEntry m, int size) =>
-      platformChannel.invokeMethod<Uint8List>('libSharpThumbnail', {'kind': m.kind.name, 'id': m.id, 'size': size, 'modified': m.modified});
+  Future<Uint8List?> sharpThumbnail(MediaEntry m, {required int height, required int width, bool keptOnly = false}) => platformChannel.invokeMethod<Uint8List>(
+    'libSharpThumbnail',
+    {'kind': m.kind.name, 'id': m.id, 'height': height, 'width': width, 'modified': m.modified, 'keptOnly': keptOnly},
+  );
 
   @override
-  Future<void> prepareSharp(int size, {required bool on}) => platformChannel.invokeMethod<void>('libPrepareSharp', {'size': size, 'on': on});
+  Future<void> prepareSharp({required int height, required int width, required bool on}) =>
+      platformChannel.invokeMethod<void>('libPrepareSharp', {'height': height, 'width': width, 'on': on});
 
   @override
   Future<bool> mediaAllowed() async => await platformChannel.invokeMethod<bool>('mediaAllowed') ?? false;

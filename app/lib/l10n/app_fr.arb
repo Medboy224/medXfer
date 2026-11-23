@@ -413,6 +413,7 @@
   "orderSmallest": "Petit d'abord",
   "layoutColumns": "{count} col.",
   "layoutList": "Liste",
+  "layoutMosaic": "Mosaïque",
   "pinchHint": "Dans la grille, pincez avec deux doigts : écarter agrandit (moins de colonnes), resserrer réduit (plus de colonnes).",
   "noResults": "Aucun résultat pour « {query} »",
   "closeSearch": "Fermer la recherche",

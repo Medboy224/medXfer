@@ -283,7 +283,7 @@ class _LayoutSheet extends StatelessWidget {
                   showSelectedIcon: false,
                   segments: [
                     for (var n = Explorer.minColumns; n <= Explorer.maxColumns; n++)
-                      ButtonSegment(value: n, label: Text(l.layoutColumns(n), key: ValueKey('layout-$n'))),
+                      ButtonSegment(value: n, label: Text(n == Explorer.minColumns ? l.layoutMosaic : l.layoutColumns(n), key: ValueKey('layout-$n'))),
                     ButtonSegment(value: 0, label: Text(l.layoutList, key: const Key('layout-list'))),
                   ],
                   selected: {current},

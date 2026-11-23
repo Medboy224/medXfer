@@ -37,7 +37,10 @@ class _Storage extends NoReceiveStorage {
 
 /// A phone with two apps, three photos, a song, and a folder.
 class _Library implements Library {
-  _Library({this.photos = 3, this.long = false});
+  _Library({this.photos = 3, this.long = false, this.sizes = const []});
+
+  /// The photos' sizes (width, height), from the first; unknown beyond.
+  final List<(int, int)> sizes;
 
   /// How many photos the phone holds.
   int photos;
@@ -75,7 +78,16 @@ class _Library implements Library {
       : switch (kind) {
           MediaKind.images => [
             for (var i = 1; i <= photos; i++)
-              MediaEntry(id: i, kind: kind, name: long && i == 3 ? _longName : 'IMG_$i.jpg', path: '/storage/emulated/0/DCIM/Camera/IMG_$i.jpg', size: 1 << 20, album: i < 3 ? 'Camera' : 'WhatsApp'),
+              MediaEntry(
+                id: i,
+                kind: kind,
+                name: long && i == 3 ? _longName : 'IMG_$i.jpg',
+                path: '/storage/emulated/0/DCIM/Camera/IMG_$i.jpg',
+                size: 1 << 20,
+                album: i < 3 ? 'Camera' : 'WhatsApp',
+                width: i <= sizes.length ? sizes[i - 1].$1 : 0,
+                height: i <= sizes.length ? sizes[i - 1].$2 : 0,
+              ),
           ],
           MediaKind.audio => [
             const MediaEntry(id: 9, kind: MediaKind.audio, name: 'chanson.mp3', path: '/storage/emulated/0/Music/chanson.mp3', size: 5 << 20, album: 'Album', durationMs: 200000),
@@ -87,13 +99,20 @@ class _Library implements Library {
 
   /// The sharp images asked: (id, px).
   final sharpAsked = <(int, int)>[];
-  /// The preparations asked: (px, on).
-  final prepared = <(int, bool)>[];
+
+  /// The sharp images asked only if made already: ids.
+  final keptAsked = <int>[];
+  /// The preparations asked: (height, width, on).
+  final prepared = <(int, int, bool)>[];
   @override
-  Future<void> prepareSharp(int size, {required bool on}) async => prepared.add((size, on));
+  Future<void> prepareSharp({required int height, required int width, required bool on}) async => prepared.add((height, width, on));
   @override
-  Future<Uint8List?> sharpThumbnail(MediaEntry m, int size) async {
-    sharpAsked.add((m.id, size));
+  Future<Uint8List?> sharpThumbnail(MediaEntry m, {required int height, required int width, bool keptOnly = false}) async {
+    if (keptOnly) {
+      keptAsked.add(m.id);
+      return null; // none made yet
+    }
+    sharpAsked.add((m.id, height));
     return null;
   }
   @override
@@ -641,15 +660,19 @@ void main() {
     final library = _Library();
     final (_, state) = await _app(tester, library);
     await tester.tap(find.text('Photos'));
+    // The tiles, as soon as they are there.
+    for (var i = 0; i < 60 && find.byKey(const ValueKey('media-3')).evaluate().isEmpty; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
-    expect(library.sharpAsked, isEmpty, reason: 'not before it has stayed still');
+    expect(library.keptAsked.toSet(), {1, 2, 3}, reason: 'one made already would come at once');
+    expect(library.sharpAsked, isEmpty, reason: 'none made before the tile has stayed still');
     await tester.pumpAndSettle(const Duration(milliseconds: 100));
     await tester.pump(const Duration(milliseconds: 300));
     // 3 columns over 1080 px: a tile of about 359 px, more than Android's 270.
     expect(library.sharpAsked.map((a) => a.$1).toSet(), {1, 2, 3});
-    expect(library.sharpAsked.map((a) => a.$2).toSet(), {537}, reason: 'one size, a tile of 2 columns');
-    expect(library.prepared.last, (537, true), reason: 'made ahead, the app on screen and no transfer');
+    expect(library.sharpAsked.map((a) => a.$2).toSet(), {864}, reason: 'one size, the tallest mosaic row (0.8 × 1080 px)');
+    expect(library.prepared.last, (864, 1080, true), reason: 'made ahead, the app on screen and no transfer');
 
     library.sharpAsked.clear();
     state.explorer.setLayout(MediaKind.images, columns: 5);
@@ -690,9 +713,27 @@ void main() {
     await tester.pumpAndSettle();
     expect(scroll.pixels, settled, reason: 'still moving on its own');
     // The photo under the fingers when they came down, still there (600 px into 3 columns).
-    final stride3 = (392.7 - 2 * 2) / 3 + 2;
+    final stride3 = (392.7 - 2 * 0.75) / 3 + 0.75;
     final under = (((600 + (center.dy - tester.getTopLeft(grid).dy)) ~/ stride3) * 3 + 1);
     expect(find.byKey(ValueKey('media-${under + 1}')), findsOneWidget);
+  });
+
+  testWidgets('23 November: the mosaic shows each photo in its proportions, rows as wide as the screen', (tester) async {
+    // A landscape photo, then three tall ones (9:16).
+    final library = _Library(photos: 4, sizes: const [(1920, 1080), (1080, 1920), (1080, 1920), (1080, 1920)]);
+    final (_, state) = await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    state.explorer.setLayout(MediaKind.images, columns: 2);
+    await tester.pumpAndSettle();
+    final grid = tester.getRect(find.byKey(const ValueKey('media-images')));
+    Rect tile(int id) => tester.getRect(find.byKey(ValueKey('media-$id')));
+    expect(tile(1).width, closeTo(grid.width, 0.5), reason: 'the landscape photo fills its row alone');
+    expect(tile(1).width / tile(1).height, closeTo(16 / 9, 0.02));
+    expect(tile(2).top, tile(3).top, reason: 'the tall ones share a row');
+    expect(tile(2).height, tile(4).height);
+    expect(tile(2).width / tile(2).height, closeTo(9 / 16, 0.02));
+    expect(tile(4).right, closeTo(grid.right, 0.5));
   });
 
   test('the plan: descriptors without folders, paths with them, never apps with folders', () {
