@@ -209,9 +209,7 @@ class _Pick extends StatelessWidget {
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
-                            p.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                            p.name, // in full, on as many lines as it needs
                             style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                           ),
                         ),

@@ -14,7 +14,7 @@ enum PickKind { app, media, file, folder }
 
 @immutable
 class Pick {
-  const Pick({required this.path, required this.name, required this.size, required this.kind});
+  const Pick({required this.path, required this.name, required this.size, required this.kind, this.thumb});
 
   final String path;
 
@@ -24,6 +24,9 @@ class Pick {
   /// 0 for a folder: its size is known once the core walks it.
   final int size;
   final PickKind kind;
+
+  /// Its thumbnail in the explorer's cache, when it has one: shown in the selection's sheet.
+  final String? thumb;
 }
 
 /// How a selection goes to the core.

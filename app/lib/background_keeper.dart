@@ -52,6 +52,9 @@ class BackgroundKeeper {
   /// The notification at most once a second: a transfer's progress comes ten times as often.
   static const minInterval = Duration(seconds: 1);
 
+  /// What runs now, as the notification says it; null when nothing does.
+  Notice? get running => wanted();
+
   /// What should run now, or null.
   @visibleForTesting
   Notice? wanted() {

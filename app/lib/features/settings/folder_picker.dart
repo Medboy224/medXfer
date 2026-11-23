@@ -88,7 +88,7 @@ class _FolderPickerState extends State<FolderPicker> {
                     itemCount: folders.length,
                     itemBuilder: (context, i) => ListTile(
                       leading: Icon(Icons.folder_rounded, color: Theme.of(context).colorScheme.primary),
-                      title: Text(folders[i].name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      title: Text(folders[i].name),
                       onTap: () => unawaited(_open(folders[i].path)),
                     ),
                   ),

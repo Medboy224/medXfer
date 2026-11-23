@@ -65,8 +65,6 @@ class HistoryTab extends StatelessWidget {
               ),
               title: Text(
                 e.name.isEmpty ? (received ? l.historyReceived(e.device) : l.historySent(e.device)) : e.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
               // The outcome in the subtitle: the longest one does not fit beside a phone's tile.

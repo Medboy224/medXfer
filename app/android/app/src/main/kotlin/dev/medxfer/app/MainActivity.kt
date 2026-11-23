@@ -39,6 +39,9 @@ class MainActivity : FlutterActivity() {
         this.channel = channel
         // A network came, went or changed: the core gets the interfaces again (DISC-10).
         network.watch { runOnUiThread { channel.invokeMethod("networkChanged", null) } }
+        // The device's content changed: the explorer reads its lists again (22 November 2026).
+        val libraryChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.medxfer.app/library")
+        library.watch { libraryChannel.invokeMethod("changed", null) }
         // The path by BLE (bible §6.6, WP-D.3): the radio here, the messages in the core.
         val bleChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.medxfer.app/ble")
         this.bleChannel = bleChannel
@@ -93,6 +96,16 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                     "releaseService" -> { MedxferService.release(this); result.success(null) }
+                    // Back on the home screen (22 November 2026): to the background, all kept;
+                    // or quit, all stopped, the process with it (the core runs in it, and kept
+                    // the session open once the screen had gone).
+                    "toBack" -> { moveTaskToBack(true); result.success(null) }
+                    "quit" -> {
+                        result.success(null)
+                        MedxferService.release(this)
+                        finishAndRemoveTask()
+                        Handler(Looper.getMainLooper()).postDelayed({ android.os.Process.killProcess(android.os.Process.myPid()) }, 400)
+                    }
                     "notificationPermission" -> ask(Manifest.permission.POST_NOTIFICATIONS) { result.success(it) }
                     "hotspotStart" -> hotspot.start { info, err ->
                         if (err != null) result.error("hotspot", err, null) else result.success(info)
@@ -143,8 +156,16 @@ class MainActivity : FlutterActivity() {
                     // The explorer by categories (WP-B.9).
                     "libApps" -> library.apps { v, e -> reply(result, v, e) }
                     "libAppIcon" -> library.appIcon(call.argument<String>("package") ?: "", call.argument<Int>("size") ?: 96) { v, e -> reply(result, v, e) }
-                    "libMedia" -> library.media(call.argument<String>("kind") ?: "images", call.argument<Int>("offset") ?: 0, call.argument<Int>("limit") ?: 200) { v, e -> reply(result, v, e) }
+                    "libMedia" -> library.media(
+                        call.argument<String>("kind") ?: "images", call.argument<Int>("offset") ?: 0, call.argument<Int>("limit") ?: 200,
+                        call.argument<String>("sort") ?: "date", call.argument<Boolean>("descending") ?: true, call.argument<String>("search") ?: "",
+                    ) { v, e -> reply(result, v, e) }
                     "libThumbnail" -> library.thumbnail(call.argument<String>("kind") ?: "images", (call.argument<Number>("id") ?: 0).toLong(), call.argument<Int>("size") ?: 256) { v, e -> reply(result, v, e) }
+                    "libPrepareSharp" -> { library.prepareSharp(call.argument<Int>("size") ?: 0, call.argument<Boolean>("on") == true); result.success(null) }
+                    "libSharpThumbnail" -> library.sharpThumbnail(
+                        call.argument<String>("kind") ?: "images", (call.argument<Number>("id") ?: 0).toLong(), call.argument<Int>("size") ?: 256,
+                        (call.argument<Number>("modified") ?: 0).toLong(),
+                    ) { v, e -> reply(result, v, e) }
                     "libFileThumb" -> library.fileThumbnail(call.argument<String>("path") ?: "", call.argument<Int>("size") ?: 128) { v, e -> reply(result, v, e) }
                     "libDirSize" -> library.dirSize(call.argument<String>("path") ?: "") { v, e -> reply(result, v, e) }
                     "libFiles" -> library.files(call.argument<String>("category") ?: "documents", call.argument<Int>("offset") ?: 0, call.argument<Int>("limit") ?: 200) { v, e -> reply(result, v, e) }
@@ -277,6 +298,11 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingProbe = intent
+    }
+
+    override fun onDestroy() {
+        library.unwatch()
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {

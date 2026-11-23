@@ -4,6 +4,8 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'dart:typed_data';
 
@@ -20,7 +22,7 @@ import '../../widgets/v4.dart';
 
 /// A thumbnail or an icon from the explorer's cache, decoded at its displayed size.
 class LibraryImage extends StatefulWidget {
-  const LibraryImage({super.key, required this.cacheKey, required this.load, this.fit = BoxFit.cover, this.placeholder});
+  const LibraryImage({super.key, required this.cacheKey, required this.load, this.fit = BoxFit.cover, this.placeholder, this.decodePx, this.sharp, this.sharpPx = 0});
 
   final String cacheKey;
 
@@ -31,6 +33,26 @@ class LibraryImage extends StatefulWidget {
   /// Shown until the image comes, and instead of it if there is none: a plain tile otherwise.
   final Widget? placeholder;
 
+  /// The size it is loaded and decoded at, in pixels, rather than its own: the photos' grids,
+  /// one size for all their numbers of columns, so that a pinch decodes nothing (decoded again
+  /// at each grid's size, the tiles of the next grid stuttered the gesture, 18 November 2026).
+  final int? decodePx;
+
+  /// A sharper image at the size shown, asked once the tile is settled on screen, shown in place
+  /// of the first once it comes: the platform's thumbnails stop short of a large tile (about
+  /// 270 px on Android, measured on 23 November 2026).
+  final Future<Uint8List?> Function(int px)? sharp;
+
+  /// The one size of the sharp images ([sharpDecodePx]), loaded and decoded at it for any number
+  /// of columns: made once on the platform, decoded once here, the same after a pinch.
+  final int sharpPx;
+
+  /// From this size shown, in pixels, the platform's thumbnail is too small.
+  static const sharpFrom = 300;
+
+  /// How long a tile stays on screen, still, before its sharp image is asked.
+  static const sharpAfter = Duration(milliseconds: 60);
+
   @override
   State<LibraryImage> createState() => _LibraryImageState();
 }
@@ -39,6 +61,12 @@ class _LibraryImageState extends State<LibraryImage> {
   Uint8List? _bytes;
   String? _asked;
   late Explorer _explorer;
+  ImageProvider? _sharp; // decoded: shown in place of the first image
+  String? _sharpKey; // asked, or about to be
+  Timer? _sharpTimer;
+  bool _sharpPending = false;
+  ImageStream? _sharpStream;
+  ImageStreamListener? _sharpListener;
 
   @override
   void didChangeDependencies() {
@@ -62,10 +90,75 @@ class _LibraryImageState extends State<LibraryImage> {
     });
   }
 
+  /// The sharp image of a tile [shown] px wide, from the cache, else asked once the tile has
+  /// stayed still on screen for [LibraryImage.sharpAfter]; shown once decoded, so that the first
+  /// stays until then, without a frame of placeholder.
+  void _fetchSharp(int shown) {
+    final sharp = widget.sharp;
+    final px = widget.sharpPx;
+    if (sharp == null || px <= 0 || shown < LibraryImage.sharpFrom) return;
+    final key = '${widget.cacheKey}@sharp';
+    if (_sharpKey == key) return;
+    _sharpKey = key;
+    _sharpTimer?.cancel();
+    final cached = _explorer.cached(key);
+    if (cached != null) {
+      _decodeSharp(key, cached, px);
+      return;
+    }
+    void ask() {
+      if (!mounted || _sharpKey != key) return;
+      // Still flinging: later.
+      if (Scrollable.recommendDeferredLoadingForContext(context)) {
+        _sharpTimer = Timer(LibraryImage.sharpAfter, ask);
+        return;
+      }
+      _sharpPending = true;
+      _explorer.image(key, () => sharp(px), low: true).then((bytes) {
+        if (_sharpKey == key) _sharpPending = false;
+        if (mounted && _sharpKey == key && bytes != null) {
+          _decodeSharp(key, bytes, px);
+        }
+      });
+    }
+
+    _sharpTimer = Timer(LibraryImage.sharpAfter, ask);
+  }
+
+  /// Decodes [bytes] at [px]; at once when already decoded (after a pinch), else in its time.
+  void _decodeSharp(String key, Uint8List bytes, int px) {
+    final provider = ResizeImage(MemoryImage(bytes), width: px);
+    _dropSharpStream();
+    final stream = provider.resolve(createLocalImageConfiguration(context));
+    var building = true;
+    final listener = ImageStreamListener((_, _) {
+      if (!mounted || _sharpKey != key || _sharp == provider) return;
+      if (building) {
+        _sharp = provider; // decoded already: this very build shows it
+      } else {
+        setState(() => _sharp = provider);
+      }
+    });
+    stream.addListener(listener);
+    building = false;
+    _sharpStream = stream;
+    _sharpListener = listener;
+  }
+
+  void _dropSharpStream() {
+    final l = _sharpListener;
+    if (l != null) _sharpStream?.removeListener(l);
+    _sharpStream = null;
+    _sharpListener = null;
+  }
+
   @override
   void dispose() {
     // Scrolled away before its turn: not loaded at all.
     if (_bytes == null && _asked != null) _explorer.forget(_asked!);
+    _sharpTimer?.cancel();
+    _dropSharpStream();
+    if (_sharpPending && _sharpKey != null) _explorer.forget(_sharpKey!);
     super.dispose();
   }
 
@@ -74,11 +167,15 @@ class _LibraryImageState extends State<LibraryImage> {
     return LayoutBuilder(
       builder: (context, box) {
         final dpr = MediaQuery.devicePixelRatioOf(context);
-        final px = (box.biggest.shortestSide * dpr).round().clamp(32, 1024);
+        final shown = (box.biggest.shortestSide * dpr).round().clamp(32, 1024);
+        final px = widget.decodePx ?? shown;
+        _fetchSharp(shown);
+        final sharp = _sharp;
+        if (sharp != null) return Image(image: sharp, fit: widget.fit, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
         _fetch(px);
         final bytes = _bytes;
         if (bytes == null) return widget.placeholder ?? ColoredBox(color: context.colors.chip);
-        return Image.memory(bytes, fit: widget.fit, cacheWidth: px, gaplessPlayback: true, filterQuality: FilterQuality.medium);
+        return Image.memory(bytes, fit: widget.fit, cacheWidth: px, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
       },
     );
   }
@@ -171,10 +268,11 @@ class _AppsTabState extends State<AppsTab> with AutomaticKeepAliveClientMixin {
                       clipBehavior: Clip.none,
                       children: [
                         SizedBox.square(
-                          dimension: 56,
+                          dimension: 50,
                           child: LibraryImage(cacheKey: 'app:${a.package}', fit: BoxFit.contain, load: (px) => state.library.appIcon(a.package, px)),
                         ),
-                        Positioned(right: -8, top: -8, child: PickBox(on: on, size: 24)),
+                        // Shown once picked only: a grid of empty boxes hid the icons.
+                        if (on) Positioned(right: -6, top: -6, child: PickBox(on: on, size: 20)),
                       ],
                     ),
                     const SizedBox(height: 6),
@@ -182,9 +280,9 @@ class _AppsTabState extends State<AppsTab> with AutomaticKeepAliveClientMixin {
                       a.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                     ),
-                    Text(formatBytes(context, a.size), style: TextStyle(color: context.colors.muted, fontSize: 12)),
+                    Text(formatBytes(context, a.size), style: TextStyle(color: context.colors.muted, fontSize: 11)),
                   ],
                 ),
               ),
@@ -252,8 +350,137 @@ class _MediaGrid extends StatefulWidget {
   State<_MediaGrid> createState() => _MediaGridState();
 }
 
-class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMixin {
+/// The size the photos' grids decode their thumbnails at, whatever their number of columns:
+/// the tile of the fewest square columns (3), sharp there, and shared by all.
+/// The one size of the sharp images: a tile of 2 columns, the largest; 3 columns show it smaller
+/// (23 November 2026: one size made, kept and decoded, rather than one per number of columns).
+int sharpDecodePx(BuildContext context) {
+  // The short side: turned sideways, the screen keeps its size (23 November 2026: made again at
+  // 1167 px, then again at 537 once turned back).
+  final width = MediaQuery.sizeOf(context).shortestSide;
+  return ((width - 2) / 2 * MediaQuery.devicePixelRatioOf(context)).round().clamp(32, 1440);
+}
+
+int gridDecodePx(BuildContext context) {
+  final width = MediaQuery.sizeOf(context).width;
+  return ((width - 2 * 2) / 3 * MediaQuery.devicePixelRatioOf(context)).round().clamp(32, 1024);
+}
+
+/// A grid's scrolling, still while two fingers pinch it ([explorerPinching]): the pinch is
+/// painted over it, and its scroll moving under the fingers folded the top bar (real test of
+/// 22 November 2026). Read at each move: nothing is rebuilt when the pinch starts.
+class _PinchablePhysics extends ScrollPhysics {
+  const _PinchablePhysics({super.parent});
+
+  @override
+  _PinchablePhysics applyTo(ScrollPhysics? ancestor) => _PinchablePhysics(parent: buildParent(ancestor));
+
+  @override
+  double applyPhysicsToUserOffset(ScrollMetrics position, double offset) =>
+      explorerPinching.value ? 0 : super.applyPhysicsToUserOffset(position, offset);
+
+  @override
+  Simulation? createBallisticSimulation(ScrollMetrics position, double velocity) =>
+      explorerPinching.value ? null : super.createBallisticSimulation(position, velocity);
+}
+
+/// While two fingers pinch a grid: the tabs do not page under them.
+final explorerPinching = ValueNotifier<bool>(false);
+
+/// From the start of a pinch to the end of its settling, what is drawn over the photos (the
+/// videos' durations, the boxes, the days' names) fades away, then back, as in a phone's
+/// gallery (video of the Galaxy A57's, 18 November 2026: the grids zoom bare). One animation for
+/// all of it, given down the grid: painted at each frame, nothing rebuilt (one animation per
+/// box and per duration, in four grids, stuttered the gesture).
+class _DecorScope extends InheritedWidget {
+  const _DecorScope({required this.shown, required super.child});
+
+  final Animation<double> shown;
+
+  static Animation<double> of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_DecorScope>()?.shown ?? kAlwaysCompleteAnimation;
+
+  @override
+  bool updateShouldNotify(_DecorScope old) => old.shown != shown;
+}
+
+/// What is drawn over the photos: faded out while a pinch runs ([_DecorScope]), to [dim] rather
+/// than to nothing for what must stay readable.
+class _Decor extends StatelessWidget {
+  const _Decor({required this.child, this.dim = 0});
+
+  final Widget child;
+  final double dim;
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = _DecorScope.of(context);
+    return FadeTransition(opacity: dim == 0 ? shown : Tween<double>(begin: dim, end: 1).animate(shown), child: child);
+  }
+}
+
+class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMixin, TickerProviderStateMixin {
   String? _album;
+  final ScrollController _scroll = ScrollController();
+
+  // The pinch (plan J8, WP-8.1b, real test of 17 November): the grid follows the fingers,
+  // around the point between them; past a step it takes the next number of columns, the tile
+  // under the fingers kept there; scrolling waits while two fingers are down.
+  final _points = <int, Offset>{};
+  final _pressedAt = <int, Offset>{}; // where each finger came down: a scroll under way is no pinch
+  final _heardAt = <int, Duration>{}; // each finger's last event: one silent too long was lost
+  double? _startSpread;
+  double _carry = 0; // levels already moved when the fingers came down: + fewer columns
+  final _scaleN = ValueNotifier<double>(1);
+  double get _scale => _scaleN.value;
+  set _scale(double v) => _scaleN.value = v;
+  Offset _focal = Offset.zero;
+  Size _box = Size.zero;
+  late final AnimationController _settle = AnimationController(vsync: this, duration: const Duration(milliseconds: 240))
+    ..addListener(() => _scale = _settleFrom + (_settleGoal - _settleFrom) * Curves.easeOutCubic.transform(_settle.value))
+    ..addStatusListener((status) {
+      if (status == AnimationStatus.completed) _settled();
+    });
+  double _settleFrom = 1;
+  double _settleGoal = 1;
+
+  // What is over the photos: 1 shown, 0 gone during a pinch ([_DecorScope]).
+  late final AnimationController _decor = AnimationController(
+    vsync: this,
+    value: 1,
+    duration: const Duration(milliseconds: 200),
+    reverseDuration: const Duration(milliseconds: 150),
+  );
+
+  // As in a phone's gallery (its video, 18 November): between two numbers of columns, the next
+  // grid fades in over the current one, both at the scale of the fingers and the tile under them
+  // at the same place. While the fingers are down, the grids are painted, not built: one surface
+  // draws the thumbnails already decoded at their places in each grid ([_PinchPainter]); the
+  // real grid is built once, behind it, when the gesture is over. Built during the gesture, the
+  // grids took 50 ms each and the photos jumped (18 November 2026).
+  int? _target;
+  final _pinchN = ValueNotifier<_Pinch?>(null);
+  final _painted = ChangeNotifier(); // a thumbnail decoded meanwhile: painted again
+  int _ending = 0; // the end of a pinch under way; a new pinch changes it, which cancels that end
+
+  // The real grid given again as the same widget while nothing it shows changed: not rebuilt.
+  (Object, Widget)? _view;
+
+  // The layout last shown, to keep the same tile in place when it changes.
+  List<int> _groups = const [];
+  bool _headers = false;
+  int _shownColumns = 0;
+  bool _shownList = false;
+
+  // The same photo, the same tile: at a pinch's end, those still on screen are kept whole, not
+  // built again; only what sizes by the columns is ([_TileColumns]). The frame of a pinch's end
+  // built ~170 tiles in 25 to 72 ms (measured on the A57, 23 November 2026).
+  final _tiles = Expando<Widget>('tiles');
+
+  static const _headerHeight = 52.0;
+  static const _rowHeight = 70.0; // a row with its 56 px thumbnail (real test of 22 November 2026: larger icons)
+  final _rows = _RowHeights(); // the list layout's rows, a long name in full
+  static const _gap = 2.0;
 
   @override
   bool get wantKeepAlive => true;
@@ -263,6 +490,336 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
     super.initState();
     final explorer = AppScope.of(context, listen: false).state.explorer;
     if (explorer.media(widget.kind).items.isEmpty) unawaited(explorer.more(widget.kind));
+  }
+
+  @override
+  void dispose() {
+    _settle.dispose();
+    _decor.dispose();
+    _scaleN.dispose();
+    _scroll.dispose();
+    _pinchN.value?.release();
+    _pinchN.dispose();
+    _painted.dispose();
+    super.dispose();
+  }
+
+  /// How far the fade toward [_target] is: 0 at the current size, 1 at the target's.
+  double get _progress {
+    final t = _target;
+    if (t == null) return 0;
+    final k = _shownColumns / t;
+    if (k > 1 ? _scale <= 1 : _scale >= 1) return 0;
+    return (math.log(_scale) / math.log(k)).clamp(0.0, 1.0).toDouble();
+  }
+
+  /// The painted pinch: every number of columns placed under the fingers (each one's scroll
+  /// puts the tile under them at the same place), and the thumbnails it may show, already
+  /// decoded at the grids' size ([gridDecodePx]): taken from the image cache, none decoded.
+  _Pinch? _startPinch(BuildContext context, List<MediaEntry> items, List<(DateTime, List<MediaEntry>)> days) {
+    if (!_scroll.hasClients || _box.isEmpty) return null;
+    final state = AppScope.of(context, listen: false).state;
+    final c = _shownColumns;
+    final index = _at(_scroll.offset + _focal.dy, c, false, x: _focal.dx);
+    final within = _scroll.offset + _focal.dy - _top(index, c, false);
+    final offsets = <int, double>{c: _scroll.offset};
+    for (var t = Explorer.minColumns; t <= Explorer.maxColumns; t++) {
+      if (t != c) offsets[t] = (_top(index, t, false) + within * c / t - _focal.dy).clamp(0.0, double.infinity).toDouble();
+    }
+    // The items each grid may show: its screen, and as much again, the zoom revealing more.
+    final h = _box.height;
+    final wanted = <int>{};
+    for (final e in offsets.entries) {
+      final from = _at(math.max(0, e.value - h * 0.6), e.key, false);
+      final to = math.min(items.length - 1, _at(e.value + h * 1.6, e.key, false) + e.key);
+      for (var i = from; i <= to; i++) {
+        wanted.add(i);
+      }
+    }
+    final px = gridDecodePx(context);
+    final config = createLocalImageConfiguration(context);
+    final colors = context.colors;
+    final pinch = _Pinch(
+      columns: c,
+      offsets: offsets,
+      groups: _groups,
+      headers: _headers,
+      box: _box,
+      focal: _focal,
+      background: colors.background,
+      chip: colors.chip,
+      strong: colors.strong,
+      days: [
+        for (final d in days)
+          TextPainter(text: TextSpan(text: _dayName(context, d.$1), style: titleStyle(14).copyWith(color: colors.text.withValues(alpha: 0.35))), textDirection: Directionality.of(context))..layout(),
+      ],
+    );
+    for (final i in wanted) {
+      final m = items[i];
+      if (state.selection.contains(Explorer.pickMedia(m).path)) pinch.picked.add(i);
+      final bytes = state.explorer.cached('${widget.kind.name}:${m.id}');
+      if (bytes == null) continue;
+      // The same image as the grid's tile (LibraryImage: Image.memory at cacheWidth px).
+      final stream = ResizeImage(MemoryImage(bytes), width: px).resolve(config);
+      final listener = ImageStreamListener((info, sync) {
+        pinch.images[i] = info.image;
+        if (!sync) _painted.notifyListeners(); // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+      });
+      stream.addListener(listener);
+      pinch.streams.add((stream, listener));
+    }
+    return pinch;
+  }
+
+  /// The gesture settled at [_shownColumns]: the real grid built there, behind the painted one,
+  /// which goes a frame after.
+  ///
+  /// The same grid, its tiles kept: those of the photos still on screen are updated, only the
+  /// others made. Built anew, the frame took 78 to 138 ms, 36 to 115 tiles at ~1.5 ms each; the
+  /// other screens, told the next frame, 16 to 63 ms more, for nothing: the layout's menu, the
+  /// only other to read it, is not open during a pinch (measured on the A57, 23 November 2026).
+  void _endPinch(Explorer ex) {
+    final pinch = _pinchN.value;
+    if (pinch == null) return;
+    final ending = ++_ending;
+    final c = _shownColumns;
+    final changed = c != pinch.built;
+    final target = pinch.offsets[c] ?? 0;
+    if (changed) {
+      pinch.built = c;
+      ex.setLayout(widget.kind, columns: c, asList: false, quiet: true);
+      if (_scroll.hasClients) {
+        // What the scroll does on its own first ends: the fingers lifted while sliding, it went
+        // on toward the end of the list (real test of 23 November 2026), under the painting
+        // then in sight. Then the offset of the new layout, without a scroll to it: the layout
+        // of this very frame, under the painting, places the grid there.
+        final position = _scroll.position;
+        position.jumpTo(position.pixels);
+        position.correctPixels(target);
+      }
+      setState(() {});
+    } else if (_scroll.hasClients) {
+      _scroll.jumpTo(target); // two fingers may have scrolled it, under the painting
+    }
+    // Two frames, each asked for: nothing else may move on screen to bring them.
+    final binding = WidgetsBinding.instance;
+    binding.addPostFrameCallback((_) {
+      if (!mounted) return;
+      binding.addPostFrameCallback((_) {
+        // Two fingers down again meanwhile: the painting stays for the new pinch.
+        if (!mounted || _pinchN.value != pinch || ending != _ending) return;
+        _pinchN.value = null;
+        pinch.release();
+        unawaited(_decor.forward()); // what is over the photos comes back
+      });
+      binding.scheduleFrame();
+    });
+    binding.scheduleFrame();
+  }
+
+  void _settled() {
+    final t = _target;
+    if (t != null && _settleGoal != 1) _shownColumns = t;
+    _target = null;
+    _scale = 1;
+    _endPinch(AppScope.of(context, listen: false).state.explorer);
+  }
+
+  /// The top of item [index] in a layout: headers, rows of square tiles, or list rows.
+  double _top(int index, int columns, bool asList) {
+    if (asList) {
+      final tops = _rows.tops;
+      return index < tops.length ? tops[index] : index * _rowHeight;
+    }
+    final stride = (_box.width - (columns - 1) * _gap) / columns + _gap;
+    var y = 0.0;
+    var i = index;
+    for (final n in _groups) {
+      if (_headers) y += _headerHeight;
+      if (i < n) return y + (i ~/ columns) * stride;
+      i -= n;
+      y += ((n + columns - 1) ~/ columns) * stride - _gap;
+    }
+    return y;
+  }
+
+  /// The item at height [y] of a layout, and at [x] across (the column under the fingers).
+  int _at(double y, int columns, bool asList, {double x = 0}) {
+    final count = _groups.fold(0, (a, b) => a + b);
+    if (count == 0) return 0;
+    if (asList) {
+      final tops = _rows.tops;
+      if (tops.length < 2) return (y / _rowHeight).floor().clamp(0, count - 1);
+      var lo = 0, hi = tops.length - 2; // the last row whose top is at or above y
+      while (lo < hi) {
+        final mid = (lo + hi + 1) ~/ 2;
+        if (tops[mid] <= y) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      return lo.clamp(0, count - 1);
+    }
+    final stride = (_box.width - (columns - 1) * _gap) / columns + _gap;
+    var top = 0.0;
+    var first = 0;
+    for (final n in _groups) {
+      if (_headers) top += _headerHeight;
+      final height = ((n + columns - 1) ~/ columns) * stride - _gap;
+      final column = (x / stride).floor().clamp(0, columns - 1);
+      if (y < top + height) return (first + ((y - top).clamp(0, height) ~/ stride) * columns + column).clamp(first, first + n - 1);
+      top += height;
+      first += n;
+    }
+    return count - 1;
+  }
+
+  /// A new layout: the item at [anchor] (from the top of the view) stays at that height.
+  void _keep(int fromColumns, bool fromList, int toColumns, bool toList, double anchor) {
+    if (!_scroll.hasClients || _box.width <= 0) return;
+    final index = _at(_scroll.offset + anchor, fromColumns, fromList);
+    final within = _scroll.offset + anchor - _top(index, fromColumns, fromList);
+    final ratio = toList || fromList ? 0.0 : fromColumns / toColumns;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      final y = _top(index, toColumns, toList) + within * ratio - anchor;
+      _scroll.jumpTo(y.clamp(_scroll.position.minScrollExtent, _scroll.position.maxScrollExtent));
+    });
+  }
+
+  double? _spread() {
+    if (_points.length < 2) return null;
+    final p = _points.values.take(2).toList();
+    return (p[0] - p[1]).distance;
+  }
+
+  Offset _between() {
+    final p = _points.values.take(2).toList();
+    return (p[0] + p[1]) / 2;
+  }
+
+  /// Where the pinch stands, in levels from the grid shown: + toward fewer columns.
+  double get _position {
+    final t = _target;
+    if (t == null) return 0;
+    return t < _shownColumns ? _progress : -_progress;
+  }
+
+  void _down(PointerDownEvent e, Explorer ex, List<MediaEntry> items, List<(DateTime, List<MediaEntry>)> days) {
+    // A finger whose lifting never came (silent more than 1.5 s, no pinch under way) is no
+    // longer counted: with it, a real pinch had three fingers and was taken for a scroll (real
+    // test of 22 November 2026).
+    if (_startSpread == null) {
+      final lost = [
+        for (final p in _points.keys)
+          if (e.timeStamp - (_heardAt[p] ?? e.timeStamp) > const Duration(milliseconds: 1500)) p,
+      ];
+      for (final p in lost) {
+        _points.remove(p);
+        _pressedAt.remove(p);
+        _heardAt.remove(p);
+      }
+      if (lost.isNotEmpty) debugPrint('pinch: ${lost.length} lost finger(s) dropped');
+    }
+    _points[e.pointer] = e.localPosition;
+    _pressedAt[e.pointer] = e.localPosition;
+    _heardAt[e.pointer] = e.timeStamp;
+    if (_points.length != 2) {
+      if (_points.length > 2) debugPrint('pinch: ${_points.length} fingers down');
+      return;
+    }
+    // The first finger already scrolling: a second one (another finger, the palm) is no pinch,
+    // the scroll goes on (real test of 22 November 2026).
+    final first = _points.keys.firstWhere((p) => p != e.pointer);
+    if ((_points[first]! - _pressedAt[first]!).distance > scrollingAfter && _startSpread == null) {
+      debugPrint('pinch: a scroll under way, not a pinch');
+      return;
+    }
+    if (!ex.asList(widget.kind) && _pinchN.value == null) {
+      _settle.stop();
+      _startSpread = _spread();
+      _carry = 0;
+      _scale = 1;
+      _target = null;
+      _focal = _between();
+      final pinch = _startPinch(context, items, days);
+      if (pinch == null) return;
+      explorerPinching.value = true;
+      _decor.value = 0; // covered by the painting: gone at once
+      _pinchN.value = pinch; // the painting over the real grid; nothing else built
+    } else if (_pinchN.value != null) {
+      // Fingers down again while it settles or ends, a quarter of a second: the gesture goes on
+      // from where it is, on the same painting, whose end is cancelled (chained pinches did
+      // nothing, the painting taken away under the fingers, real test of 22 November 2026).
+      _ending++;
+      _settle.stop();
+      _startSpread = _spread();
+      _carry = _position;
+      explorerPinching.value = true;
+    }
+  }
+
+  /// How far a finger moves before a second one is no longer a pinch but a touch on a scroll.
+  static const scrollingAfter = 60.0;
+
+  /// The fingers' gesture in levels: every step between two numbers of columns asks for the same
+  /// spread, the fingers' distance (plus [_zoomMargin]) changing by [_levelRatio]. Followed as a
+  /// zoom of the grid, the steps toward fewer columns came faster than the others, and a small
+  /// pinch went two levels (real tests of 22 November 2026).
+  static const _levelRatio = 1.5;
+  static const _zoomMargin = 80.0; // pixels added to both spreads: close fingers are not twitchy
+  static double _levelsOf(double start, double now) => math.log((now + _zoomMargin) / (start + _zoomMargin)) / math.log(_levelRatio);
+
+  void _move(PointerMoveEvent e, Explorer ex) {
+    if (!_points.containsKey(e.pointer)) return;
+    _points[e.pointer] = e.localPosition;
+    _heardAt[e.pointer] = e.timeStamp;
+    final start = _startSpread, now = _spread();
+    if (start == null || now == null || start <= 0 || _pinchN.value == null) return;
+    var c = _shownColumns;
+    var pos = _carry + _levelsOf(start, now);
+    // Each whole level passed: that grid becomes the current one, the gesture goes on from it.
+    while (pos >= 1 && c - 1 >= Explorer.minColumns) {
+      c--;
+      pos -= 1;
+      _carry -= 1;
+    }
+    while (pos <= -1 && c + 1 <= Explorer.maxColumns) {
+      c++;
+      pos += 1;
+      _carry += 1;
+    }
+    _shownColumns = c;
+    final t = pos > 0 ? c - 1 : (pos < 0 ? c + 1 : null);
+    if (t == null || t < Explorer.minColumns || t > Explorer.maxColumns) {
+      _target = null;
+      _scale = 1; // at 2 or 5 columns, nothing further: the view itself never zooms
+      return;
+    }
+    _target = t;
+    _scale = math.pow(c / t, pos.abs()).toDouble(); // the painting follows; nothing is built
+  }
+
+  void _up(PointerEvent e) {
+    _points.remove(e.pointer);
+    _pressedAt.remove(e.pointer);
+    _heardAt.remove(e.pointer);
+    // The list stays still until every finger of the pinch is up: the one left down scrolled
+    // it, and folded the top bar (real test of 22 November 2026).
+    if (_points.isEmpty) explorerPinching.value = false;
+    if (_points.length >= 2 || _startSpread == null) return;
+    _startSpread = null;
+    // Past half the fade, on to the next grid; else back to the current one.
+    final t = _target;
+    _settleFrom = _scale;
+    _settleGoal = t != null && _progress >= 0.5 ? _shownColumns / t : 1;
+    if (MediaQuery.of(context).disableAnimations) {
+      _scale = _settleGoal;
+      _settled();
+    } else {
+      unawaited(_settle.forward(from: 0));
+    }
   }
 
   @override
@@ -280,7 +837,25 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
         }
         final albums = <String>{for (final m in list.items) m.album}.where((a) => a.isNotEmpty).toList();
         final items = _album == null ? list.items : list.items.where((m) => m.album == _album).toList();
-        final images = widget.kind == MediaKind.images;
+        final ex = state.explorer;
+        final asList = ex.asList(widget.kind);
+        final columns = ex.columns(widget.kind);
+        // By day while sorted by date (photos and videos); one block for a name or a size.
+        final byDay = ex.order(widget.kind).sort == MediaSort.date;
+        final days = byDay ? _days(items) : [(DateTime(0), items)];
+        // Changed from the menu: the tile at the top of the view stays at the top. A pinch keeps
+        // its own anchor, under the fingers, and its own level: a build while it is painted (a
+        // page loaded, a pick) leaves both (23 November 2026: it moved the list, the grid kept).
+        final pinching = _pinchN.value != null;
+        if (!pinching && _shownColumns != 0 && (_shownColumns != columns || _shownList != asList) && _startSpread == null) {
+          _keep(_shownColumns, _shownList, columns, asList, 0);
+        }
+        _groups = asList ? [items.length] : [for (final d in days) d.$2.length];
+        _headers = byDay && !asList;
+        if (!pinching) {
+          _shownColumns = columns;
+          _shownList = asList;
+        }
         return Column(
           children: [
             if (albums.length > 1)
@@ -305,27 +880,71 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                   if (n.metrics.extentAfter < 1500) unawaited(state.explorer.more(widget.kind));
                   return false;
                 },
-                child: CustomScrollView(
-                  key: ValueKey('media-${widget.kind.name}'),
-                  slivers: [
-                    if (images)
-                      for (final day in _days(items)) ...[
-                        SliverToBoxAdapter(child: _DayHeader(day: day.$1, items: day.$2)),
-                        SliverGrid(
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 3, crossAxisSpacing: 3),
-                          delegate: SliverChildBuilderDelegate((context, i) => _MediaTile(kind: widget.kind, entry: day.$2[i]), childCount: day.$2.length),
-                        ),
-                      ]
-                    else
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
-                        sliver: SliverGrid(
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 16, crossAxisSpacing: 10, mainAxisExtent: 156),
-                          delegate: SliverChildBuilderDelegate((context, i) => _VideoTile(entry: items[i]), childCount: items.length),
+                child: LayoutBuilder(
+                  builder: (context, box) {
+                    _box = box.biggest;
+                    if (asList) _rows.measure(context, items, box.maxWidth - 16);
+                    Widget view(ScrollController controller, int cols, Key key) => _TileColumns(
+                      columns: cols,
+                      child: CustomScrollView(
+                      key: key,
+                      controller: controller,
+                      physics: const _PinchablePhysics(),
+                      slivers: [
+                        if (asList)
+                          SliverPadding(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            sliver: SliverVariedExtentList.builder(
+                              itemExtentBuilder: (i, _) => _rows.extent(i) ?? _rowHeight,
+                              itemCount: items.length,
+                              itemBuilder: (context, i) => _MediaRow(kind: widget.kind, entry: items[i]),
+                            ),
+                          )
+                        else
+                          for (final day in days) ...[
+                            if (byDay) SliverToBoxAdapter(child: SizedBox(height: _headerHeight, child: _DayHeader(day: day.$1, items: day.$2))),
+                            _grid(day.$2, cols),
+                          ],
+                        SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
+                      ],
+                    ),
+                    );
+                    // The same widget while nothing it shows changed: not rebuilt.
+                    final shows = (list.items, items.length, _album, asList, byDay, ex.order(widget.kind), box.biggest, columns, MediaQuery.textScalerOf(context));
+                    final hit = _view;
+                    final grid = hit != null && hit.$1 == shows ? hit.$2 : view(_scroll, columns, ValueKey('media-${widget.kind.name}'));
+                    _view = (shows, grid);
+                    return _DecorScope(
+                      shown: _decor,
+                      child: Listener(
+                        onPointerDown: (e) => _down(e, ex, items, days),
+                        onPointerMove: (e) => _move(e, ex),
+                        onPointerUp: _up,
+                        onPointerCancel: _up,
+                        child: ClipRect(
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              grid,
+                              // While two fingers pinch: the grids painted over the real one.
+                              ValueListenableBuilder<_Pinch?>(
+                                valueListenable: _pinchN,
+                                builder: (context, pinch, _) => pinch == null
+                                    ? const SizedBox.shrink()
+                                    : IgnorePointer(
+                                        child: CustomPaint(
+                                          key: const ValueKey('pinch-painting'),
+                                          size: Size.infinite,
+                                          painter: _PinchPainter(pinch, this),
+                                        ),
+                                      ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
-                  ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -336,7 +955,12 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
     );
   }
 
-  /// The photos by day, newest first: what « Tout ce jour » picks.
+  Widget _grid(List<MediaEntry> items, int columns) => SliverGrid(
+    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, mainAxisSpacing: _gap, crossAxisSpacing: _gap),
+    delegate: SliverChildBuilderDelegate((context, i) => _tiles[items[i]] ??= _MediaTile(kind: widget.kind, entry: items[i]), childCount: items.length),
+  );
+
+  /// The media by day, in the order shown: what « Tout ce jour » picks.
   static List<(DateTime, List<MediaEntry>)> _days(List<MediaEntry> items) {
     final out = <(DateTime, List<MediaEntry>)>[];
     for (final m in items) {
@@ -349,6 +973,149 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   }
 }
 
+/// A day as its header names it: today, yesterday, or its date.
+String _dayName(BuildContext context, DateTime day) {
+  final l = AppLocalizations.of(context);
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final locale = Localizations.localeOf(context).toLanguageTag();
+  return day == today
+      ? l.today
+      : day == today.subtract(const Duration(days: 1))
+      ? l.yesterday
+      : (day.year == today.year ? DateFormat.MMMMd(locale) : DateFormat.yMMMMd(locale)).format(day);
+}
+
+/// What a pinch paints, fixed when two fingers come down: each number of columns' scroll
+/// offset (the tile under the fingers at the same place in all), the layout's groups, the
+/// thumbnails as decoded images, the days' names, the photos picked.
+class _Pinch {
+  _Pinch({
+    required this.columns,
+    required this.offsets,
+    required this.groups,
+    required this.headers,
+    required this.box,
+    required this.focal,
+    required this.background,
+    required this.chip,
+    required this.strong,
+    required this.days,
+  });
+
+  final int columns; // the grid shown when it began
+  late int built = columns; // the real grid's, behind the painting
+  final Map<int, double> offsets;
+  final List<int> groups;
+  final bool headers;
+  final Size box;
+  final Offset focal;
+  final Color background, chip, strong;
+  final List<TextPainter> days;
+  final images = <int, ui.Image>{};
+  final picked = <int>{};
+  final streams = <(ImageStream, ImageStreamListener)>[];
+
+  /// The images let go: the cache keeps them for the grid.
+  void release() {
+    for (final (stream, listener) in streams) {
+      stream.removeListener(listener);
+    }
+    streams.clear();
+    for (final d in days) {
+      d.dispose();
+    }
+  }
+}
+
+/// Paints a pinch at each frame (a phone's gallery, its video of 18 November): the grid shown,
+/// zoomed by the fingers around the point between them, fading out as the next one, at the
+/// scale that keeps the same photo there, fades in. Thumbnails drawn as images, cropped to
+/// squares; nothing is built.
+class _PinchPainter extends CustomPainter {
+  _PinchPainter(this.pinch, this.grid) : super(repaint: Listenable.merge([grid._scaleN, grid._painted]));
+
+  final _Pinch pinch;
+  final _MediaGridState grid;
+
+  static const _gap = 2.0, _header = 52.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(Offset.zero & size, Paint()..color = pinch.background);
+    final c = grid._shownColumns, t = grid._target, s = grid._scale;
+    final fade = grid._progress;
+    _level(canvas, size, c, s, 1 - fade, labels: fade < 0.5);
+    if (t != null && fade > 0) _level(canvas, size, t, s / (c / t), fade, labels: fade >= 0.5);
+  }
+
+  void _level(Canvas canvas, Size size, int n, double s, double alpha, {required bool labels}) {
+    if (alpha <= 0.002) return;
+    final off = pinch.offsets[n];
+    if (off == null) return;
+    final f = pinch.focal;
+    final stride = (pinch.box.width - (n - 1) * _gap) / n + _gap;
+    final tile = stride - _gap;
+    // The part of the grid on screen at this scale.
+    final top = off + f.dy - f.dy / s, bottom = off + f.dy + (size.height - f.dy) / s;
+    Rect zoom(Rect r) => Rect.fromLTRB(f.dx + (r.left - f.dx) * s, f.dy + (r.top - f.dy) * s, f.dx + (r.right - f.dx) * s, f.dy + (r.bottom - f.dy) * s);
+    final image = Paint()
+      ..color = Color.fromRGBO(255, 255, 255, alpha)
+      ..filterQuality = FilterQuality.low;
+    final chip = Paint()..color = pinch.chip.withValues(alpha: pinch.chip.a * alpha);
+    final edge = Paint()
+      ..color = pinch.strong.withValues(alpha: alpha)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3 * s;
+    var y = 0.0;
+    var first = 0;
+    for (var g = 0; g < pinch.groups.length; g++) {
+      final count = pinch.groups[g];
+      if (pinch.headers) {
+        if (labels && y + _header >= top && y <= bottom && g < pinch.days.length) {
+          canvas.save();
+          canvas.translate(f.dx, f.dy);
+          canvas.scale(s);
+          canvas.translate(-f.dx, -f.dy);
+          pinch.days[g].paint(canvas, Offset(16, y - off + 14));
+          canvas.restore();
+        }
+        y += _header;
+      }
+      final rows = (count + n - 1) ~/ n;
+      final height = rows * stride - _gap;
+      if (y + height >= top && y <= bottom) {
+        final rowFrom = math.max(0, ((top - y) / stride).floor());
+        final rowTo = math.min(rows - 1, ((bottom - y) / stride).floor());
+        for (var row = rowFrom; row <= rowTo; row++) {
+          for (var col = 0; col < n; col++) {
+            final k = row * n + col;
+            if (k >= count) break;
+            final i = first + k;
+            final dst = zoom(Rect.fromLTWH(col * stride, y + row * stride - off, tile, tile));
+            final img = pinch.images[i];
+            if (img == null) {
+              canvas.drawRect(dst, chip);
+            } else {
+              // Cropped to a square, as BoxFit.cover does.
+              final w = img.width.toDouble(), h = img.height.toDouble();
+              final side = math.min(w, h);
+              final src = Rect.fromLTWH((w - side) / 2, (h - side) / 2, side, side);
+              canvas.drawImageRect(img, src, dst, image);
+            }
+            if (pinch.picked.contains(i)) canvas.drawRect(dst.deflate(1.5 * s), edge);
+          }
+        }
+      }
+      y += height;
+      first += count;
+    }
+  }
+
+  @override
+  bool shouldRepaint(_PinchPainter old) => old.pinch != pinch;
+}
+
 /// A day's name, and « Tout ce jour » with its square box.
 class _DayHeader extends StatelessWidget {
   const _DayHeader({required this.day, required this.items});
@@ -356,36 +1123,58 @@ class _DayHeader extends StatelessWidget {
   final DateTime day;
   final List<MediaEntry> items;
 
+  // It listens to the selection itself: the grid around it is kept as it is while its photos do
+  // not change, and a pick no longer showed (real test of 22 November 2026).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(listenable: AppScope.of(context).state.selection, builder: (context, _) => _build(context));
+
+  Widget _build(BuildContext context) {
     final state = AppScope.of(context).state;
     final l = AppLocalizations.of(context);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final locale = Localizations.localeOf(context).toLanguageTag();
-    final name = day == today
-        ? l.today
-        : day == today.subtract(const Duration(days: 1))
-        ? l.yesterday
-        : (day.year == today.year ? DateFormat.MMMMd(locale) : DateFormat.yMMMMd(locale)).format(day);
+    final name = _dayName(context, day);
     final picks = [for (final m in items) Explorer.pickMedia(m)];
     final all = state.selection.allOf(picks);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 6, 6, 2),
       child: Row(
         children: [
-          Expanded(child: Text(name, style: titleStyle(15))),
-          BoxToggle(
-            label: l.selectDay,
-            semanticLabel: l.selectDayLabel(name),
-            on: all,
-            small: true,
-            onPressed: () => state.selection.toggleAll(picks),
+          Expanded(child: _Decor(dim: 0.35, child: Text(name, style: titleStyle(14)))),
+          _Decor(
+            child: BoxToggle(
+              label: l.selectDay,
+              semanticLabel: l.selectDayLabel(name),
+              on: all,
+              small: true,
+              onPressed: () => state.selection.toggleAll(picks),
+            ),
           ),
         ],
       ),
     );
   }
+}
+
+/// The grid's number of columns, for what a tile sizes by it (its box, edge, duration): those
+/// only are built again when it changes, not the tiles.
+class _TileColumns extends InheritedWidget {
+  const _TileColumns({required this.columns, required super.child});
+
+  final int columns;
+
+  static int of(BuildContext context) => context.dependOnInheritedWidgetOfExactType<_TileColumns>()?.columns ?? 3;
+
+  @override
+  bool updateShouldNotify(_TileColumns old) => old.columns != columns;
+}
+
+/// What a tile sizes by the number of columns.
+class _ByColumns extends StatelessWidget {
+  const _ByColumns(this.build_);
+
+  final Widget Function(int columns) build_;
+
+  @override
+  Widget build(BuildContext context) => build_(_TileColumns.of(context));
 }
 
 /// A photo: all of it picks; the square box and a thick edge say it is picked.
@@ -395,26 +1184,57 @@ class _MediaTile extends StatelessWidget {
   final MediaKind kind;
   final MediaEntry entry;
 
+  // It listens to the selection itself: the grid around it is kept as it is while its photos do
+  // not change, and a pick no longer showed (real test of 22 November 2026).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(listenable: AppScope.of(context).state.selection, builder: (context, _) => _build(context));
+
+  Widget _build(BuildContext context) {
     final state = AppScope.of(context).state;
     final c = context.colors;
     final m = entry;
     final pick = Explorer.pickMedia(m);
     final on = state.selection.contains(pick.path);
+    // One node for the accessibility: its name, picked or not, and the tap (its badges and image
+    // said nothing more, and cost a node each at every pinch's end).
     return Semantics(
       button: true,
       toggled: on,
       label: m.name,
+      excludeSemantics: true,
+      onTap: () => state.selection.toggle(pick),
       child: GestureDetector(
         key: ValueKey('media-${m.id}'),
         onTap: () => state.selection.toggle(pick),
         child: Stack(
           fit: StackFit.expand,
           children: [
-            LibraryImage(cacheKey: '${kind.name}:${m.id}', load: (px) => state.library.thumbnail(kind, m.id, px)),
-            if (on) DecoratedBox(decoration: BoxDecoration(border: Border.all(color: c.strong, width: 4))),
-            Positioned(right: 8, top: 8, child: PickBox(on: on, onImage: true)),
+            LibraryImage(
+              cacheKey: '${kind.name}:${m.id}',
+              decodePx: gridDecodePx(context),
+              load: (px) => state.library.thumbnail(kind, m.id, px),
+              sharp: (px) => state.library.sharpThumbnail(m, px),
+              sharpPx: sharpDecodePx(context),
+            ),
+            if (on) _ByColumns((columns) => DecoratedBox(decoration: BoxDecoration(border: Border.all(color: c.strong, width: columns >= 5 ? 2 : 3)))),
+            if (kind == MediaKind.video)
+              Positioned(
+                left: 4,
+                bottom: 4,
+                child: _Decor(
+                  child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.72), borderRadius: BorderRadius.circular(6)),
+                  child: _ByColumns(
+                    (columns) => Text(
+                      formatDuration(context, m.durationMs ~/ 1000),
+                      style: TextStyle(color: Colors.white, fontSize: columns >= 4 ? 10 : 11, fontWeight: FontWeight.w700, fontFeatures: tabular),
+                    ),
+                  ),
+                  ),
+                ),
+              ),
+            Positioned(right: 5, top: 5, child: _Decor(child: _ByColumns((columns) => PickBox(on: on, onImage: true, size: columns >= 5 ? 18 : 22)))),
           ],
         ),
       ),
@@ -422,69 +1242,81 @@ class _MediaTile extends StatelessWidget {
   }
 }
 
-/// A video: its picture with the duration, its name and size under it.
-class _VideoTile extends StatelessWidget {
-  const _VideoTile({required this.entry});
+/// A photo or a video as a row of the list layout: its thumbnail, name, details, box.
+class _MediaRow extends StatelessWidget {
+  const _MediaRow({required this.kind, required this.entry});
 
+  final MediaKind kind;
   final MediaEntry entry;
 
+  static const nameStyle = TextStyle(fontSize: 14, fontWeight: FontWeight.w700);
+  static const detailStyle = TextStyle(fontSize: 12, fontFeatures: tabular);
+
+  /// Across a row, all but the name: the list's padding (16), the row's (12), the thumbnail and
+  /// its gap (66), the box and its gaps (34).
+  static const besideName = 128.0;
+
+  /// A row's height for the height of its name and details.
+  static double heightFor(double text) => math.max(56.0, text).ceilToDouble() + 12 + 2;
+
+  // It listens to the selection itself: the grid around it is kept as it is while its photos do
+  // not change, and a pick no longer showed (real test of 22 November 2026).
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(listenable: AppScope.of(context).state.selection, builder: (context, _) => _build(context));
+
+  Widget _build(BuildContext context) {
     final state = AppScope.of(context).state;
     final c = context.colors;
     final m = entry;
     final pick = Explorer.pickMedia(m);
     final on = state.selection.contains(pick.path);
-    return Semantics(
-      button: true,
-      toggled: on,
-      child: GestureDetector(
-        key: ValueKey('media-${m.id}'),
-        behavior: HitTestBehavior.opaque,
-        onTap: () => state.selection.toggle(pick),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              height: 108,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(controlRadius),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    LibraryImage(cacheKey: 'video:${m.id}', load: (px) => state.library.thumbnail(MediaKind.video, m.id, px)),
-                    if (on)
-                      DecoratedBox(
-                        decoration: BoxDecoration(border: Border.all(color: c.strong, width: 4), borderRadius: BorderRadius.circular(controlRadius)),
-                      ),
-                    Positioned(
-                      left: 8,
-                      bottom: 8,
-                      child: Container(
-                        padding: const EdgeInsets.fromLTRB(6, 3, 8, 3),
-                        decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.72), borderRadius: BorderRadius.circular(8)),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.play_arrow_rounded, size: 14, color: Colors.white),
-                            const SizedBox(width: 2),
-                            Text(
-                              formatDuration(context, m.durationMs ~/ 1000),
-                              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700, fontFeatures: tabular),
-                            ),
-                          ],
-                        ),
-                      ),
+    final when = DateTime.fromMillisecondsSinceEpoch(m.modified * 1000);
+    final date = MaterialLocalizations.of(context).formatShortDate(when);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Material(
+        color: on ? c.soft : Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          key: ValueKey('media-${m.id}'),
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => state.selection.toggle(pick),
+          child: Semantics(
+            toggled: on,
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: SizedBox.square(
+                      dimension: 56,
+                      child: LibraryImage(cacheKey: '${kind.name}:${m.id}', load: (px) => state.library.thumbnail(kind, m.id, px)),
                     ),
-                    Positioned(right: 8, top: 8, child: PickBox(on: on, onImage: true)),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(m.name, style: nameStyle), // in full, on as many lines as it needs
+                        Text(
+                          [date, if (kind == MediaKind.video) formatDuration(context, m.durationMs ~/ 1000), formatBytes(context, m.size)].join(' · '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: detailStyle.copyWith(color: c.muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  PickBox(on: on, size: 22),
+                  const SizedBox(width: 4),
+                ],
               ),
             ),
-            const SizedBox(height: 6),
-            Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-            Text(formatBytes(context, m.size), style: TextStyle(fontSize: 13, color: c.muted, fontFeatures: tabular)),
-          ],
+          ),
         ),
       ),
     );
@@ -539,7 +1371,6 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
             key: const Key('music-list'),
             padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
             itemCount: list.items.length,
-            itemExtent: 70,
             itemBuilder: (context, i) {
               final m = list.items[i];
               final pick = Explorer.pickMedia(m);
@@ -560,10 +1391,10 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
                         child: Row(
                           children: [
                             Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(color: c.section, borderRadius: BorderRadius.circular(12)),
-                              child: Icon(Icons.music_note_rounded, color: c.accent),
+                              width: 56,
+                              height: 56,
+                              decoration: BoxDecoration(color: c.section, borderRadius: BorderRadius.circular(10)),
+                              child: Icon(Icons.music_note_rounded, size: 30, color: c.accent),
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -571,18 +1402,18 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                                  Text(m.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                                   Text(
                                     [if (m.album.isNotEmpty) m.album, formatDuration(context, m.durationMs ~/ 1000), formatBytes(context, m.size)].join(' · '),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(fontSize: 13, color: c.muted, fontFeatures: tabular),
+                                    style: TextStyle(fontSize: 12, color: c.muted, fontFeatures: tabular),
                                   ),
                                 ],
                               ),
                             ),
                             const SizedBox(width: 8),
-                            PickBox(on: on),
+                            PickBox(on: on, size: 22),
                             const SizedBox(width: 4),
                           ],
                         ),
@@ -772,7 +1603,6 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
                   key: ValueKey('files-list:${ex.dir}'), // a new folder opens at its top
                   padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
                   itemCount: entries.length,
-                  itemExtent: 66,
                   itemBuilder: (context, i) => _FileRow(entry: entries[i], onOpen: () => unawaited(ex.open(entries[i].path))),
                 ),
         ),
@@ -795,7 +1625,6 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
         key: ValueKey('files-${cat.name}'),
         padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
         itemCount: list.items.length,
-        itemExtent: 66,
         itemBuilder: (context, i) => _FileRow(entry: list.items[i], showFolder: true),
       ),
     );
@@ -833,7 +1662,7 @@ class _FileRow extends StatelessWidget {
       sub = [formatBytes(context, e.size), if (where.isNotEmpty) where].join(' · ');
     }
     final thumbed = !e.dir && _thumbed.contains(_ext(e.name));
-    final icon = Icon(_iconOf(e), size: 32, color: e.dir ? c.accent : c.muted);
+    final icon = Icon(_iconOf(e), size: 44, color: e.dir ? c.accent : c.muted);
     final on = picked != null;
     // A folder opens; a file is picked. The box, apart, picks a folder whole (no ambiguity).
     final open = e.dir && onOpen != null;
@@ -850,11 +1679,11 @@ class _FileRow extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
                 onTap: open ? onOpen : toggle,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 0, 4, 0),
+                  padding: const EdgeInsets.fromLTRB(8, 6, 4, 6),
                   child: Row(
                     children: [
                       SizedBox.square(
-                        dimension: 44,
+                        dimension: 56,
                         child: thumbed
                             ? ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
@@ -868,9 +1697,9 @@ class _FileRow extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(e.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                            Text(e.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                             if (sub != null)
-                              Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c.muted, fontSize: 13, fontFeatures: tabular)),
+                              Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: c.muted, fontSize: 12, fontFeatures: tabular)),
                           ],
                         ),
                       ),
@@ -888,13 +1717,54 @@ class _FileRow extends StatelessWidget {
               child: InkWell(
                 borderRadius: BorderRadius.circular(16),
                 onTap: toggle,
-                child: SizedBox.square(dimension: 56, child: Center(child: PickBox(on: on))),
+                child: SizedBox.square(dimension: 48, child: Center(child: PickBox(on: on, size: 22))),
               ),
             ),
           ],
         ),
       ),
     );
+  }
+}
+
+/// The list layout's rows each have their height: a long name shows in full, on as many lines as
+/// it needs (real test of 22 November 2026). Measured once per name, width and text size, so the
+/// list knows every row's top without building it (a jump, a layout change, keep their place).
+class _RowHeights {
+  Object? _key;
+  final _byId = <int, double>{};
+  List<double> tops = const [0];
+
+  /// The height of row [i], once measured.
+  double? extent(int i) => i + 1 < tops.length ? tops[i + 1] - tops[i] : null;
+
+  void measure(BuildContext context, List<MediaEntry> items, double width) {
+    final scaler = MediaQuery.textScalerOf(context);
+    final base = DefaultTextStyle.of(context).style;
+    final direction = Directionality.of(context);
+    final key = (width, scaler, base, direction);
+    if (key != _key) {
+      _key = key;
+      _byId.clear();
+    }
+    final nameWidth = math.max(40.0, width - _MediaRow.besideName + 16);
+    final detail = TextPainter(text: TextSpan(text: '0', style: base.merge(_MediaRow.detailStyle)), textDirection: direction, textScaler: scaler, maxLines: 1)
+      ..layout();
+    final detailHeight = detail.height;
+    detail.dispose();
+    final nameStyle = base.merge(_MediaRow.nameStyle);
+    final out = List<double>.filled(items.length + 1, 0);
+    for (var i = 0; i < items.length; i++) {
+      final m = items[i];
+      final h = _byId[m.id] ??= () {
+        final name = TextPainter(text: TextSpan(text: m.name, style: nameStyle), textDirection: direction, textScaler: scaler)..layout(maxWidth: nameWidth);
+        final h = _MediaRow.heightFor(name.height + detailHeight);
+        name.dispose();
+        return h;
+      }();
+      out[i + 1] = out[i] + h;
+    }
+    tops = out;
   }
 }
 

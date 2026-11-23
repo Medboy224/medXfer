@@ -4,6 +4,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
@@ -35,9 +36,15 @@ class _Load {
 }
 
 class Explorer extends ChangeNotifier {
-  Explorer(this.library);
+  Explorer(this.library) {
+    _changes = library.changes.listen((_) => unawaited(refresh()));
+  }
 
   final Library library;
+  StreamSubscription<void>? _changes;
+  bool _disposed = false;
+  bool _refreshing = false;
+  bool _again = false;
 
   static const pageSize = 300;
 
@@ -47,6 +54,10 @@ class Explorer extends ChangeNotifier {
   /// Images loading at once. The rest wait, the last asked first: after a fling, the tiles on
   /// screen come before those scrolled past, which are dropped once gone ([forget]).
   static const parallel = 6;
+
+  /// Sharp images ([image] with low) loading at once, and only while no other waits: made, they
+  /// take up to 0.15 s each (kept, a few ms); the platform has 6 threads for all.
+  static const parallelLow = 4;
 
   List<AppEntry>? _apps;
   bool _appsLoading = false;
@@ -59,15 +70,53 @@ class Explorer extends ChangeNotifier {
   final _images = <String, Uint8List>{}; // ordered: the most recent last
   final _pending = <String, Future<Uint8List?>>{};
   final _waiting = <_Load>[];
+  final _waitingLow = <_Load>[];
   int _running = 0;
+  int _runningLow = 0;
 
   /// The Files tab: the folders, or one category of files.
   FileCategory? _category;
   final _files = {for (final c in FileCategory.values) c: FileList()};
   final _sizing = <String>{};
 
+  final _orders = {for (final k in MediaKind.values) k: const MediaOrder()};
+  final _columns = {MediaKind.images: 3, MediaKind.video: 2, MediaKind.audio: 1};
+  final _asList = {MediaKind.images: false, MediaKind.video: false, MediaKind.audio: true};
+
   List<AppEntry>? get apps => _apps;
   MediaList media(MediaKind k) => _media[k]!;
+
+  /// The order and search of a kind of media.
+  MediaOrder order(MediaKind k) => _orders[k]!;
+
+  /// A new order or search: the list loads again from its start, in that order.
+  void setOrder(MediaKind k, MediaOrder o) {
+    if (_orders[k] == o) return;
+    _orders[k] = o;
+    _media[k] = MediaList();
+    notifyListeners();
+    unawaited(more(k));
+  }
+
+  /// Columns of a grid (2 to 5), or a list.
+  int columns(MediaKind k) => _columns[k]!;
+  bool asList(MediaKind k) => _asList[k]!;
+
+  static const minColumns = 2;
+  static const maxColumns = 5;
+
+  /// [quiet]: kept without a word to the listeners, by a pinch: each step rebuilt every tab in
+  /// the middle of the gesture (real test of 18 November 2026), and once it was over, 16 to 63 ms
+  /// for none that needed it (23 November 2026); the grid shows it itself.
+  void setLayout(MediaKind k, {int? columns, bool? asList, bool quiet = false}) {
+    final c = (columns ?? _columns[k]!).clamp(minColumns, maxColumns);
+    final l = asList ?? _asList[k]!;
+    if (c == _columns[k] && l == _asList[k]) return;
+    _columns[k] = c;
+    _asList[k] = l;
+    if (!quiet) notifyListeners();
+  }
+
   bool? get mediaAllowed => _mediaAllowed;
   String get dir => _dir ?? library.storageRoot;
   List<FileEntry>? get entries => _entries;
@@ -141,7 +190,9 @@ class Explorer extends ChangeNotifier {
     // No notice yet: it may be called while a tab builds; the answer notifies.
     m.loading = true;
     try {
-      final page = await library.media(kind, offset: m.items.length, limit: pageSize);
+      final page = await library.media(kind, offset: m.items.length, limit: pageSize, order: _orders[kind]!);
+      // Another order asked meanwhile: this page belongs to a list no longer shown.
+      if (!identical(_media[kind], m)) return;
       m.items.addAll(page);
       if (kDebugMode) debugPrint('explorer: ${kind.name} +${page.length} (${m.items.length})');
       m.done = page.length < pageSize;
@@ -185,13 +236,14 @@ class Explorer extends ChangeNotifier {
   }
 
   /// A thumbnail or an icon, from the cache, else loaded once however many ask, in its turn.
-  Future<Uint8List?> image(String key, Future<Uint8List?> Function() load) {
+  /// [low]: a sharper one, loaded once no other waits ([parallelLow]).
+  Future<Uint8List?> image(String key, Future<Uint8List?> Function() load, {bool low = false}) {
     final hit = cached(key);
     if (hit != null) return SynchronousFuture(hit);
     final pending = _pending[key];
     if (pending != null) return pending;
     final job = _Load(key, load);
-    _waiting.add(job);
+    (low ? _waitingLow : _waiting).add(job);
     _pending[key] = job.done.future;
     _pump();
     return job.done.future;
@@ -199,17 +251,21 @@ class Explorer extends ChangeNotifier {
 
   /// A tile left the screen before its image was loaded: it is not loaded.
   void forget(String key) {
-    final i = _waiting.indexWhere((j) => j.key == key);
-    if (i < 0) return;
-    final job = _waiting.removeAt(i);
-    _pending.remove(key);
-    job.done.complete(null);
+    for (final waiting in [_waiting, _waitingLow]) {
+      final i = waiting.indexWhere((j) => j.key == key);
+      if (i < 0) continue;
+      final job = waiting.removeAt(i);
+      _pending.remove(key);
+      job.done.complete(null);
+    }
   }
 
   void _pump() {
-    while (_running < parallel && _waiting.isNotEmpty) {
-      final job = _waiting.removeLast(); // the last asked: on screen now
+    while (_running < parallel && (_waiting.isNotEmpty || (_runningLow < parallelLow && _waitingLow.isNotEmpty))) {
+      final low = _waiting.isEmpty;
+      final job = (low ? _waitingLow : _waiting).removeLast(); // the last asked: on screen now
       _running++;
+      if (low) _runningLow++;
       job
           .load()
           .then((bytes) {
@@ -228,10 +284,114 @@ class Explorer extends ChangeNotifier {
           .then((bytes) {
             _pending.remove(job.key);
             _running--;
+            if (low) _runningLow--;
             job.done.complete(bytes);
             _pump();
           });
     }
+  }
+
+  /// The device's content changed (a photo taken, a file added, an app installed), or the app
+  /// comes back to the screen: what was loaded is read again, and replaced only where it
+  /// differs; the scroll stays (real test of 22 November 2026: a screenshot showed only once the
+  /// app restarted). Asked again while it reads, it reads once more after.
+  Future<void> refresh() async {
+    if (_refreshing) {
+      _again = true;
+      return;
+    }
+    _refreshing = true;
+    try {
+      do {
+        _again = false;
+        var changed = false;
+        for (final k in MediaKind.values) {
+          changed = await _reloadMedia(k) || changed;
+        }
+        for (final c in FileCategory.values) {
+          changed = await _reloadFiles(c) || changed;
+        }
+        changed = await _reloadDir() || changed;
+        changed = await _reloadApps() || changed;
+        if (changed && !_disposed) notifyListeners();
+      } while (_again && !_disposed);
+    } on Object catch (e) {
+      if (kDebugMode) debugPrint('explorer: refresh failed: $e');
+    } finally {
+      _refreshing = false;
+    }
+  }
+
+  static bool _same<T>(List<T> a, List<T> b, bool Function(T, T) equal) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!equal(a[i], b[i])) return false;
+    }
+    return true;
+  }
+
+  /// A kind of media as far as it was loaded; a kind never shown loads when it is.
+  Future<bool> _reloadMedia(MediaKind k) async {
+    final m = _media[k]!;
+    if ((m.items.isEmpty && !m.done) || m.loading || m.error != null || _disposed) return false;
+    final want = math.max(m.items.length, pageSize);
+    final items = await library.media(k, limit: want, order: _orders[k]!);
+    // Another order, or a page, meanwhile: that list reads the device as it is.
+    if (!identical(_media[k], m) || m.loading) return false;
+    if (_same(items, m.items, (a, b) => a.id == b.id && a.name == b.name && a.size == b.size && a.modified == b.modified)) return false;
+    _media[k] = MediaList()
+      ..items.addAll(items)
+      ..done = items.length < want;
+    return true;
+  }
+
+  static bool _sameFile(FileEntry a, FileEntry b) => a.path == b.path && a.name == b.name && a.size == b.size && a.dir == b.dir;
+
+  Future<bool> _reloadFiles(FileCategory c) async {
+    final f = _files[c]!;
+    if ((f.items.isEmpty && !f.done) || f.loading || f.error != null || _disposed) return false;
+    final want = math.max(f.items.length, pageSize);
+    final items = await library.files(c, limit: want);
+    if (!identical(_files[c], f) || f.loading) return false;
+    if (_same(items, f.items, _sameFile)) return false;
+    _files[c] = FileList()
+      ..items.addAll(items)
+      ..done = items.length < want;
+    return true;
+  }
+
+  /// The folder open in Files.
+  Future<bool> _reloadDir() async {
+    final before = _entries;
+    if (before == null || _dirError != null || _disposed) return false;
+    final dir = this.dir;
+    final entries = await library.listDir(dir);
+    if (dir != this.dir || !identical(_entries, before)) return false; // another folder opened meanwhile
+    if (_same(entries, before, _sameFile)) return false;
+    _entries = entries;
+    return true;
+  }
+
+  Future<bool> _reloadApps() async {
+    final before = _apps;
+    if (before == null || _appsLoading || _disposed) return false;
+    final apps = await library.apps();
+    if (!identical(_apps, before)) return false;
+    if (_same(apps, before, (a, b) => a.package == b.package && a.label == b.label && a.size == b.size)) return false;
+    _apps = apps;
+    return true;
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    unawaited(_changes?.cancel());
+    super.dispose();
   }
 
   /// The picks of a tab's items, for "select all": 1 Apps, 2 Photos, 3 Videos, 4 Music, 5 Files.
@@ -244,7 +404,8 @@ class Explorer extends ChangeNotifier {
     _ => const [],
   };
 
-  static Pick pickApp(AppEntry a) => Pick(path: a.path, name: '${a.label}.apk', size: a.size, kind: PickKind.app);
-  static Pick pickMedia(MediaEntry m) => Pick(path: m.path, name: m.name, size: m.size, kind: PickKind.media);
-  static Pick pickFile(FileEntry e) => Pick(path: e.path, name: e.name, size: e.size, kind: e.dir ? PickKind.folder : PickKind.file);
+  static Pick pickApp(AppEntry a) => Pick(path: a.path, name: '${a.label}.apk', size: a.size, kind: PickKind.app, thumb: 'app:${a.package}');
+  static Pick pickMedia(MediaEntry m) => Pick(path: m.path, name: m.name, size: m.size, kind: PickKind.media, thumb: '${m.kind.name}:${m.id}');
+  static Pick pickFile(FileEntry e) =>
+      Pick(path: e.path, name: e.name, size: e.size, kind: e.dir ? PickKind.folder : PickKind.file, thumb: e.dir ? null : 'file:${e.path}');
 }
