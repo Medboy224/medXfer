@@ -4,13 +4,21 @@
 # DEPENDANCES.txt lists are installed, every library is found, and the app runs for 15 seconds
 # (on Xvfb) without stopping.
 # Usage: bash scripts/test-fresh-linux.sh dist/medxfer-<version>-linux-x64.tar.gz [image]
+# APT_MIRROR (optional, e.g. http://azure.archive.ubuntu.com): the same Ubuntu packages from that
+# mirror rather than archive.ubuntu.com. On GitHub's machines, the public servers made the install
+# last 22 to 32 minutes on 23 November 2026, against seconds from the mirror they use themselves.
 set -euo pipefail
 archive=$(readlink -f "$1")
 image=${2:-ubuntu:24.04}
 name=$(basename "$archive" .tar.gz)
 
-docker run --rm -v "$archive:/pkg.tar.gz:ro" "$image" bash -euo pipefail -c "
+docker run --rm -e APT_MIRROR="${APT_MIRROR:-}" -v "$archive:/pkg.tar.gz:ro" "$image" bash -euo pipefail -c "
   export DEBIAN_FRONTEND=noninteractive
+  if [ -n \"\$APT_MIRROR\" ]; then
+    # 22.04: sources.list; 24.04: sources.list.d/ubuntu.sources.
+    sed -i -E \"s#https?://(archive|security)\.ubuntu\.com#\$APT_MIRROR#g\" /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+    echo \"Packages from \$APT_MIRROR\"
+  fi
   mkdir -p /opt && tar -C /opt -xzf /pkg.tar.gz
   cd /opt/$name
   # The packages of DEPENDANCES.txt: the lines after their heading, up to the blank line.
