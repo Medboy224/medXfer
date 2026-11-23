@@ -17,16 +17,87 @@ import 'image_viewer.dart';
 import 'music_screen.dart';
 import 'video_screen.dart';
 
-/// Opens the player of [items] at [index]: images, videos or music, by its kind.
-Future<void> openMedia(BuildContext context, List<MediaEntry> items, int index) => Navigator.of(context).push(
-  MaterialPageRoute<void>(
-    builder: (_) => switch (items[index].kind) {
-      MediaKind.images => ImageViewer(items: items, index: index),
-      MediaKind.video => VideoScreen(items: items, index: index),
-      MediaKind.audio => MusicScreen(items: items, index: index),
-    },
-  ),
+/// Opens the player of [items] at [index]: images, videos or music, by its kind. [onLeave]: the
+/// photo shown as the viewer of photos closes.
+Future<void> openMedia(BuildContext context, List<MediaEntry> items, int index, {ValueChanged<MediaEntry>? onLeave}) => Navigator.of(context).push(
+  items[index].kind == MediaKind.images
+      ? _PhotoRoute(ImageViewer(items: items, index: index, onLeave: onLeave))
+      : MaterialPageRoute<void>(
+          builder: (_) => switch (items[index].kind) {
+            MediaKind.video => VideoScreen(items: items, index: index),
+            _ => MusicScreen(items: items, index: index),
+          },
+        ),
 );
+
+/// The tag of a photo flying between its tile and the viewer.
+Object mediaHeroTag(MediaEntry m) => 'media-hero-${m.kind.name}-${m.id}';
+
+/// How a photo flies between its tile and the viewer: moving from the first frame, slowing into
+/// place. Flutter flies its heroes on [Curves.fastOutSlowIn], which starts slowly: the photo
+/// stayed by its tile for 3 frames on the black as it opened, and still over the grid back
+/// around it as it closed (filmed at 60 frames a second, 23 November 2026).
+const mediaFlightCurve = Cubic(0.22, 0.25, 0, 1);
+
+/// The rect of a photo in flight ([Hero.createRectTween]), on [mediaFlightCurve].
+RectTween mediaRectTween(Rect? begin, Rect? end) => _MediaRectTween(begin: begin, end: end);
+
+class _MediaRectTween extends MaterialRectArcTween {
+  _MediaRectTween({super.begin, super.end});
+
+  // Heroes give their progress through fastOutSlowIn: undone, then on the flight's own curve.
+  @override
+  Rect lerp(double t) => super.lerp(mediaFlightCurve.transform(_beforeSlowIn(t)));
+}
+
+/// When [Curves.fastOutSlowIn] reaches [t]: found by halving, as it only rises.
+double _beforeSlowIn(double t) {
+  if (t <= 0 || t >= 1) return t.clamp(0.0, 1.0);
+  var lo = 0.0, hi = 1.0;
+  for (var i = 0; i < 20; i++) {
+    final mid = (lo + hi) / 2;
+    if (Curves.fastOutSlowIn.transform(mid) < t) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return (lo + hi) / 2;
+}
+
+/// The viewer of photos opens as a phone's gallery does (filmed on 23 November 2026): black, the
+/// photo growing from its tile to the screen in 0.22 s, the controls coming in after; closing,
+/// the grid back at once behind the photo, which shrinks into its tile.
+/// The black comes over the first 80 ms: at once, it flashed over the grid before the photo had
+/// grown, the whole screen black for a dark one (filmed at 60 frames a second, 23 November 2026).
+class _PhotoRoute extends PageRouteBuilder<void> {
+  _PhotoRoute(Widget viewer)
+    : super(
+        opaque: false,
+        transitionDuration: const Duration(milliseconds: 220),
+        reverseTransitionDuration: const Duration(milliseconds: 200),
+        pageBuilder: (_, _, _) => viewer,
+        transitionsBuilder: (context, animation, _, child) => AnimatedBuilder(
+          animation: animation,
+          child: child,
+          builder: (context, child) {
+            final status = animation.status;
+            final leaving = status == AnimationStatus.reverse || status == AnimationStatus.dismissed;
+            final black = leaving ? 0.0 : Curves.easeOut.transform((animation.value / blackIn).clamp(0.0, 1.0));
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                if (black > 0) ColoredBox(key: const Key('photo-backdrop'), color: Colors.black.withValues(alpha: black)),
+                child!,
+              ],
+            );
+          },
+        ),
+      );
+
+  /// The share of the opening the black takes to come in: 80 of its 220 ms.
+  static const blackIn = 80 / 220;
+}
 
 /// What a media is: its size, its picture's size, its date, its length.
 String mediaDetails(BuildContext context, MediaEntry m) {

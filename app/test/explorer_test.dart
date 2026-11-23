@@ -1,8 +1,10 @@
 // The explorer by categories (WP-B.9) on a fake library: tabs, picking across tabs, the
 // basket, select all, and how the selection goes to the core.
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +12,7 @@ import 'package:medxfer/app.dart';
 import 'package:medxfer/app_state.dart';
 import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
+import 'package:medxfer/features/explorer/explorer_tabs.dart' show gridDecodePx;
 import 'package:medxfer/features/explorer/gallery_toolbar.dart';
 import 'package:medxfer/library/selection.dart';
 import 'package:medxfer/media/media_player.dart';
@@ -37,12 +40,18 @@ class _Storage extends NoReceiveStorage {
   bool get supported => true;
 }
 
+/// A 1×1 PNG: a thumbnail that decodes.
+final _png = base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==');
+
 /// A phone with two apps, three photos, a song, and a folder.
 class _Library implements Library {
-  _Library({this.photos = 3, this.long = false, this.sizes = const [], this.videos = 0, this.songs = 1});
+  _Library({this.photos = 3, this.long = false, this.sizes = const [], this.videos = 0, this.songs = 1, this.thumbs = false});
 
   /// How many videos and songs the phone holds.
   final int videos, songs;
+
+  /// Its thumbnails: each its own bytes (none otherwise).
+  final bool thumbs;
 
   /// The photos' sizes (width, height), from the first; unknown beyond.
   final List<(int, int)> sizes;
@@ -105,7 +114,7 @@ class _Library implements Library {
           ],
         };
   @override
-  Future<Uint8List?> thumbnail(MediaKind kind, int id, int size) async => null;
+  Future<Uint8List?> thumbnail(MediaKind kind, int id, int size) async => thumbs ? Uint8List.fromList(_png) : null;
 
   /// The sharp images asked: (id, px).
   final sharpAsked = <(int, int)>[];
@@ -911,6 +920,242 @@ void main() {
     await tester.tap(find.byKey(const Key('image-share')));
     await tester.pump();
     expect(openWith.shared, [3]);
+  });
+
+  testWidgets('23 November: the photo flies from its tile; zoomed in by a double tap, the controls go, and come back', (tester) async {
+    await _app(tester, _Library(photos: 3, sizes: const [(3000, 4000), (3000, 4000), (3000, 4000)]));
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    // The tile and the viewer share the photo's hero: it grows from one to the other.
+    expect(find.byType(Hero), findsWidgets);
+    await tester.tap(find.byKey(const ValueKey('open-1')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(const Key('image-pages')), findsOneWidget);
+    await tester.pumpAndSettle();
+
+    double shown() => tester.widget<AnimatedOpacity>(find.ancestor(of: find.byKey(const Key('image-strip')), matching: find.byType(AnimatedOpacity)).first).opacity;
+    expect(shown(), 1);
+    final photo = find.byKey(const ValueKey('photo-1'));
+    await tester.tap(photo);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tap(photo);
+    await tester.pumpAndSettle();
+    expect(shown(), 0, reason: 'zoomed in: the controls go');
+
+    await tester.tap(photo);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tap(photo);
+    await tester.pumpAndSettle();
+    expect(shown(), 1, reason: 'the whole photo again: they come back');
+  });
+
+  testWidgets('23 November: two fingers spread on a photo zoom it in', (tester) async {
+    await _app(tester, _Library(photos: 3, sizes: const [(3000, 4000), (3000, 4000), (3000, 4000)]));
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-1')));
+    await tester.pumpAndSettle();
+    final viewer = find.descendant(of: find.byKey(const ValueKey('photo-1')), matching: find.byType(InteractiveViewer));
+    double scale() => tester.widget<InteractiveViewer>(viewer).transformationController!.value.getMaxScaleOnAxis();
+    expect(scale(), 1);
+    final center = tester.getCenter(find.byKey(const ValueKey('photo-1')));
+    final a = await tester.startGesture(center - const Offset(30, 0), pointer: 21);
+    final b = await tester.startGesture(center + const Offset(30, 0), pointer: 22);
+    await tester.pump();
+    for (var i = 1; i <= 10; i++) {
+      await a.moveTo(center - Offset(30.0 + i * 12, 0));
+      await b.moveTo(center + Offset(30.0 + i * 12, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await a.up();
+    await b.up();
+    await tester.pumpAndSettle();
+    expect(scale(), greaterThan(1.5), reason: 'the pinch zoomed it in');
+  });
+
+  testWidgets("23 November: a hand's pinch zooms in at Android's touch slop, the pages held still", (tester) async {
+    // On the phone a swipe starts after 8 dp, a pinch after 18: the pages took the pinch there,
+    // never at Flutter's own slop in a test (real test of 23 November 2026).
+    tester.view.gestureSettings = const ui.GestureSettings(physicalTouchSlop: 8 * 2.75);
+    addTearDown(tester.view.resetGestureSettings);
+    await _app(tester, _Library(photos: 3, sizes: const [(3000, 4000), (3000, 4000), (3000, 4000)]));
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-2')));
+    await tester.pumpAndSettle();
+    final pages = tester.widget<PageView>(find.byKey(const Key('image-pages'))).controller!;
+    final viewer = find.descendant(of: find.byKey(const ValueKey('photo-2')), matching: find.byType(InteractiveViewer));
+    double scale() => tester.widget<InteractiveViewer>(viewer).transformationController!.value.getMaxScaleOnAxis();
+    expect(scale(), 1);
+    final center = tester.getCenter(find.byKey(const ValueKey('photo-2')));
+    // The thumb stays; the finger, set down after it and far from it, opens to the right.
+    final thumb = await tester.startGesture(center + const Offset(-120, 80), pointer: 31);
+    await tester.pump(const Duration(milliseconds: 20));
+    final finger = await tester.startGesture(center + const Offset(60, -60), pointer: 32);
+    await tester.pump(const Duration(milliseconds: 8));
+    for (var i = 1; i <= 30; i++) {
+      await finger.moveTo(center + Offset(60.0 + i * 3, -60.0 - i));
+      await tester.pump(const Duration(milliseconds: 8));
+    }
+    await thumb.up();
+    await finger.up();
+    await tester.pumpAndSettle();
+    expect(scale(), greaterThan(1.2), reason: 'the pinch zoomed it in');
+    expect(pages.page, 1, reason: 'the pages did not take it');
+  });
+
+  testWidgets('23 November: the controls come once the photo has flown in, and go at once as it flies back', (tester) async {
+    await _app(tester, _Library(photos: 3, sizes: const [(3000, 4000), (3000, 4000), (3000, 4000)]));
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-1')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 150));
+    double shown() => tester.widget<AnimatedOpacity>(find.ancestor(of: find.byKey(const Key('image-strip')), matching: find.byType(AnimatedOpacity)).first).opacity;
+    expect(shown(), 0, reason: 'the photo still flying, over them');
+    // What flies is the viewer's photo, whole (its tile may crop it): both ways.
+    expect(find.byKey(const Key('photo-flying')), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('photo-flying')), findsNothing);
+    expect(shown(), 1, reason: 'landed: they come');
+    await tester.tap(find.byKey(const Key('player-close')));
+    await tester.pump();
+    await tester.pump();
+    expect(shown(), 0, reason: 'flying back over the grid: gone at once');
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(find.byKey(const Key('photo-flying')), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('image-pages')), findsNothing);
+  });
+
+  testWidgets('23 November: swiped far, the viewer closes on a photo the grid brings into view, its tile under it', (tester) async {
+    await _app(tester, _Library(photos: 90));
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    Finder tileOf(int id) => find.byWidgetPredicate((w) => w is Hero && w.tag == 'media-hero-images-$id');
+    expect(tileOf(85), findsNothing, reason: 'far down the grid, not built');
+    await tester.tap(find.byKey(const ValueKey('open-1')));
+    await tester.pumpAndSettle();
+    tester.widget<PageView>(find.byKey(const Key('image-pages'))).controller!.jumpToPage(84);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('player-close')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('image-pages')), findsNothing);
+    expect(tileOf(85), findsOneWidget, reason: 'the grid brought it into view');
+    final r = tester.getRect(tileOf(85));
+    expect(r.top, greaterThanOrEqualTo(0));
+    expect(r.bottom, lessThanOrEqualTo(tester.view.physicalSize.height / tester.view.devicePixelRatio));
+  });
+
+  testWidgets('23 November: opening, the black comes over the first 80 ms, and the photo is on its way from the first frame', (tester) async {
+    await _app(tester, _Library(photos: 3, sizes: const [(3000, 4000), (3000, 4000), (3000, 4000)]));
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    final tile = tester.getRect(find.byKey(const ValueKey('media-1')));
+    await tester.tap(find.byKey(const ValueKey('open-1')));
+    await tester.pump(); // pushed: the photo flies from the next frame
+    await tester.pump(const Duration(milliseconds: 16));
+    double black() => tester.widget<ColoredBox>(find.byKey(const Key('photo-backdrop'))).color.a;
+    expect(black(), inExclusiveRange(0.05, 0.9), reason: 'coming, the grid still seen: no black flash');
+    final flying = tester.getRect(find.byKey(const Key('photo-flying')));
+    final screen = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+    expect((flying.width - tile.width) / (screen - tile.width), greaterThan(0.08), reason: "grown already (Flutter's own curve: 1 %)");
+    await tester.pump(const Duration(milliseconds: 80));
+    expect(black(), 1);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('photo-flying')), findsNothing);
+  });
+
+  testWidgets("23 November: Android's back drawn as the pages move: they come back to the photo shown and hold still", (tester) async {
+    await _app(tester, _Library(photos: 3, sizes: const [(3000, 4000), (3000, 4000), (3000, 4000)]));
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-1')));
+    await tester.pumpAndSettle();
+    final pages = tester.widget<PageView>(find.byKey(const Key('image-pages'))).controller!;
+    final center = tester.getCenter(find.byKey(const Key('image-pages')));
+    // The finger drawing the back gesture swipes the pages too, a quarter of the way.
+    final finger = await tester.startGesture(center);
+    for (var i = 1; i <= 8; i++) {
+      await finger.moveTo(center - Offset(i * 16.0, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(pages.page, greaterThan(0.2));
+    await tester.binding.handlePopRoute(); // taken as back
+    expect(pages.page, 0, reason: 'back on the photo shown, the one flying back');
+    await tester.pump();
+    await finger.moveTo(center - const Offset(220, 0));
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(pages.page, 0, reason: 'the pages hold still while it flies back: no other photo over the grid');
+    await finger.up();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('image-pages')), findsNothing);
+  });
+
+  testWidgets("23 November: a finger set down at a side, where Android's back gesture starts, does not swipe the photos", (tester) async {
+    await _app(tester, _Library(photos: 3, sizes: const [(3000, 4000), (3000, 4000), (3000, 4000)]));
+    tester.view.systemGestureInsets = const FakeViewPadding(left: 30 * 2.75, right: 30 * 2.75);
+    addTearDown(tester.view.resetSystemGestureInsets);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-1')));
+    await tester.pumpAndSettle();
+    final pages = tester.widget<PageView>(find.byKey(const Key('image-pages'))).controller!;
+    final width = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+    final y = tester.getCenter(find.byKey(const Key('image-pages'))).dy;
+    Future<void> swipeFrom(double x) async {
+      final finger = await tester.startGesture(Offset(x, y));
+      await tester.pump();
+      for (var i = 1; i <= 10; i++) {
+        await finger.moveTo(Offset(x - i * 24, y));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await finger.up();
+      await tester.pumpAndSettle();
+    }
+
+    await swipeFrom(width - 10);
+    expect(pages.page, 0, reason: "from the side: Android's back, not the next photo");
+    await swipeFrom(width - 60);
+    expect(pages.page, 1, reason: 'from within: the next one');
+  });
+
+  testWidgets('23 November: flung fast, the tiles passing decode their thumbnails at once, not once it slows', (tester) async {
+    final (_, state) = await _app(tester, _Library(photos: 300, thumbs: true));
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    final grid = find.byKey(const ValueKey('media-images'));
+    final px = gridDecodePx(tester.element(grid));
+    Iterable<int> tiles() => find
+        .byWidgetPredicate((w) => w is GestureDetector && w.key is ValueKey<String> && RegExp(r'^media-\d+$').hasMatch((w.key! as ValueKey<String>).value))
+        .evaluate()
+        .map((e) => int.parse(((e.widget.key! as ValueKey<String>).value).substring(6)));
+    final before = tiles().toSet();
+    await tester.fling(grid, const Offset(0, -500), 12000);
+    var seen = <int, Uint8List>{}; // tiles come with the fling, with their bytes at the frame before
+    var checked = 0;
+    for (var f = 0; f < 15; f++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      final ids = tiles().where((id) => !before.contains(id)).toList();
+      if (ids.isEmpty) continue;
+      if (!Scrollable.recommendDeferredLoadingForContext(tester.element(find.byKey(ValueKey('media-${ids.first}'))))) break;
+      for (final id in ids) {
+        final bytes = seen[id];
+        if (bytes == null) continue;
+        checked++;
+        final key = ResizeImage(MemoryImage(bytes), width: px);
+        final cache = PaintingBinding.instance.imageCache;
+        final decoded = cache.containsKey(key) || cache.statusForKey(await key.obtainKey(ImageConfiguration.empty)).live;
+        expect(decoded, isTrue, reason: 'photo $id: decoding, or decoded');
+      }
+      seen = {};
+      for (final id in ids) {
+        final bytes = state.explorer.cached('images:$id');
+        if (bytes != null) seen[id] = bytes;
+      }
+    }
+    expect(checked, greaterThan(10), reason: 'tiles seen while Flutter would have put their decoding off');
   });
 
   testWidgets('WP-8.2: a video plays from ⤢; pause, the next one; a format not read says so, with another app', (tester) async {

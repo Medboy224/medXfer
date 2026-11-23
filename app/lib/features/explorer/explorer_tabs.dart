@@ -70,11 +70,29 @@ class _LibraryImageState extends State<LibraryImage> {
   bool _keptAsked = false; // the sharp image made already asked, no answer yet: the first waits
   ImageStream? _sharpStream;
   ImageStreamListener? _sharpListener;
+  ImageProvider? _first; // the first image as decoded for [_firstBytes] at [_firstPx]
+  Uint8List? _firstBytes;
+  int _firstPx = 0;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _explorer = AppScope.of(context, listen: false).state.explorer;
+  }
+
+  /// [bytes] decoded at [px], the decoding started at once. Left to [Image], it waited until a
+  /// fling slowed down (Flutter puts off decoding while a list moves fast): the tiles flung past
+  /// stayed empty, up to 60 % of the grid, and filled 5 to 10 frames after (filmed at 60 frames
+  /// a second, 23 November 2026). A thumbnail decodes in a few ms, off the main thread.
+  ImageProvider _decoded(Uint8List bytes, int px) {
+    final known = _first;
+    if (known != null && identical(bytes, _firstBytes) && px == _firstPx) return known;
+    final first = ResizeImage(MemoryImage(bytes), width: px); // Image.memory's own key
+    _first = first;
+    _firstBytes = bytes;
+    _firstPx = px;
+    unawaited(precacheImage(first, context, onError: (_, _) {}));
+    return first;
   }
 
   void _fetch(int px) {
@@ -214,12 +232,12 @@ class _LibraryImageState extends State<LibraryImage> {
           // The sharp one is coming (read, or decoding): the first only if it is at hand already.
           final first = _explorer.cached(widget.cacheKey);
           if (first == null) return widget.placeholder ?? ColoredBox(color: context.colors.chip);
-          return Image.memory(first, fit: widget.fit, cacheWidth: px, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
+          return Image(image: _decoded(first, px), fit: widget.fit, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
         }
         _fetch(px);
         final bytes = _bytes;
         if (bytes == null) return widget.placeholder ?? ColoredBox(color: context.colors.chip);
-        return Image.memory(bytes, fit: widget.fit, cacheWidth: px, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
+        return Image(image: _decoded(bytes, px), fit: widget.fit, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
       },
     );
   }
@@ -529,6 +547,24 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   GridLayout _layoutOf(int columns) => _layouts[columns] ??= columns <= Explorer.minColumns
       ? GridLayout.mosaic(groups: _groups, headers: _headers, width: _box.width, aspects: _aspects, gap: _gap, header: _headerHeight)
       : GridLayout.squares(groups: _groups, headers: _headers, width: _box.width, columns: columns, gap: _gap, header: _headerHeight);
+
+  // The photos as the grid shows them (an album chosen, or all).
+  List<MediaEntry> _shownItems = const [];
+
+  /// [m] brought into view, if out of it: the viewer of photos closes on it, and it flies back
+  /// into its tile (swiped far from where it opened, it flew to nothing, 23 November 2026).
+  void _reveal(MediaEntry m) {
+    if (!mounted || !_scroll.hasClients || _box.isEmpty) return;
+    var i = _shownItems.indexWhere((x) => identical(x, m));
+    if (i < 0) i = _shownItems.indexWhere((x) => x.id == m.id);
+    if (i < 0) return;
+    final top = _top(i, _shownColumns, _shownList);
+    final h = _shownList ? (_rows.extent(i) ?? _rowHeight) : _layoutOf(_shownColumns).rectOf(i).height;
+    final p = _scroll.position;
+    final view = p.viewportDimension;
+    if (top >= p.pixels && top + h <= p.pixels + view - 96) return; // in view, above the floating bar
+    p.jumpTo((top - (view - h) / 2).clamp(p.minScrollExtent, p.maxScrollExtent).toDouble());
+  }
 
   // The photo under the fingers, its height in each layout: how much a step zooms. Square tiles
   // go by the ratio of their columns; the mosaic's rows each have their height.
@@ -913,6 +949,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
         if (!pinching && _shownColumns != 0 && (_shownColumns != columns || _shownList != asList) && _startSpread == null) {
           _keep(_shownColumns, _shownList, columns, asList, 0);
         }
+        _shownItems = items;
         _groups = asList ? [items.length] : [for (final d in days) d.$2.length];
         _headers = byDay && !asList;
         if (!pinching) {
@@ -1350,7 +1387,9 @@ class _MediaTile extends StatelessWidget {
           child: Stack(
           fit: StackFit.expand,
           children: [
-            LibraryImage(
+            _HeroOf(
+              entry: m,
+              child: LibraryImage(
               cacheKey: '${kind.name}:${m.id}',
               decodePx: gridDecodePx(context),
               load: (px) => state.library.thumbnail(kind, m.id, px),
@@ -1362,6 +1401,7 @@ class _MediaTile extends StatelessWidget {
                 final size = sharpSize(context);
                 return state.library.sharpThumbnail(m, height: size.height, width: size.width, keptOnly: true);
               },
+            ),
             ),
             if (on) _ByColumns((columns) => DecoratedBox(decoration: BoxDecoration(border: Border.all(color: c.strong, width: columns >= 5 ? 2 : 3)))),
             if (kind == MediaKind.video)
@@ -1922,12 +1962,40 @@ class _RowHeights {
   }
 }
 
+/// A photo's tile as it flies to the viewer and back: the tile's own image, cropped to the rect
+/// as it grows into the photo's shape (videos open their player without it).
+class _HeroOf extends StatelessWidget {
+  const _HeroOf({required this.entry, required this.child});
+
+  final MediaEntry entry;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (entry.kind != MediaKind.images) return child;
+    return Hero(
+      tag: mediaHeroTag(entry),
+      createRectTween: mediaRectTween, // closing: the flight lands here, on its curve
+      // Closing, the viewer's own flies back: its photo whole, which this tile may show cropped
+      // (beyond the mosaic's proportions). Opening, Flutter takes the viewer's by itself.
+      flightShuttleBuilder: (context, animation, direction, from, to) {
+        final viewer = direction == HeroFlightDirection.pop ? (from.widget as Hero).flightShuttleBuilder : null;
+        if (viewer != null) return viewer(context, animation, direction, from, to);
+        return ((direction == HeroFlightDirection.push ? from : to).widget as Hero).child;
+      },
+      child: child,
+    );
+  }
+}
+
 /// Opens the player of [m], among the media of its kind as the explorer holds them.
 void _openFromExplorer(BuildContext context, MediaEntry m) {
   final items = AppScope.of(context, listen: false).state.explorer.media(m.kind).items;
   var i = items.indexWhere((x) => identical(x, m));
   if (i < 0) i = items.indexWhere((x) => x.id == m.id);
-  if (i >= 0) unawaited(openMedia(context, List.of(items), i));
+  // The grid brings the photo the viewer closes on into view, for it to fly back into its tile.
+  final grid = context.findAncestorStateOfType<_MediaGridState>();
+  if (i >= 0) unawaited(openMedia(context, List.of(items), i, onLeave: grid?._reveal));
 }
 
 /// ⤢ (▶ for a song): opens the player; 44 px to touch, a 30 px round on a picture.

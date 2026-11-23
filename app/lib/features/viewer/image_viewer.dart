@@ -8,10 +8,14 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:io';
-import 'dart:typed_data';
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderImage;
+import 'package:flutter/services.dart';
 
 import '../../app.dart';
 import '../../l10n/app_localizations.dart';
@@ -42,10 +46,14 @@ ImageProvider _photoAt(BuildContext context, MediaEntry m, double scale) {
 }
 
 class ImageViewer extends StatefulWidget {
-  const ImageViewer({super.key, required this.items, required this.index});
+  const ImageViewer({super.key, required this.items, required this.index, this.onLeave});
 
   final List<MediaEntry> items;
   final int index;
+
+  /// The photo shown as the viewer closes: the grid brings its tile into view, for the photo to
+  /// fly back into it (swiped far from where it opened, real test of 23 November 2026).
+  final ValueChanged<MediaEntry>? onLeave;
 
   @override
   State<ImageViewer> createState() => _ImageViewerState();
@@ -54,9 +62,15 @@ class ImageViewer extends StatefulWidget {
 class _ImageViewerState extends State<ImageViewer> {
   late final PageController _pages = PageController(initialPage: widget.index);
   late int _index = widget.index;
-  bool _chrome = true;
-  bool _zoomed = false;
+  bool _chrome = true; // shown or hidden by a touch
+  bool _zoomed = false; // zoomed in: the pages held still (set once a gesture ends)
+  bool _zooming = false; // zooming in: the controls hidden, as a phone's gallery does
   bool _info = false; // the details line, as « Infos » shows it
+  bool _landed = false; // the photo has flown in from its tile: the controls come after it
+  bool _leaving = false; // flying back to its tile: the pages hold still, the photo alone shown
+  Animation<double>? _route;
+  final _fingers = <int>{}; // on the photo: two, and the pages hold still for the pinch
+  final _edge = <int>{}; // set down at a side, where Android's back gesture starts: no swipe
 
   bool _primed = false;
   Timer? _settle;
@@ -71,10 +85,53 @@ class _ImageViewerState extends State<ImageViewer> {
     super.didChangeDependencies();
     if (_primed) return;
     _primed = true;
+    // The controls come once the photo has landed. Flying over them, it hid the strip and the
+    // arrows, which all came at once as it landed: the photo seemed to bounce back (filmed at
+    // 60 frames a second, 23 November 2026).
+    _route = ModalRoute.of(context)?.animation?..addStatusListener(_landing);
+    _landed = _route?.isCompleted ?? true;
     _explorer = AppScope.of(context, listen: false).state.explorer..addListener(_grown);
     _strip(_index);
     _ahead(_index);
     _more(_index);
+  }
+
+  /// Landed: the controls come in; leaving: they go at once, the photo flying back over the grid.
+  void _landing(AnimationStatus status) {
+    final landed = status == AnimationStatus.completed;
+    final leaving = status == AnimationStatus.reverse || status == AnimationStatus.dismissed;
+    if ((landed != _landed || leaving != _leaving) && mounted) {
+      setState(() {
+        _landed = landed;
+        _leaving = leaving;
+      });
+    }
+  }
+
+  /// Closing: the pages back on the photo shown, and held still. Android's back gesture, drawn
+  /// from the right side, also swiped the pages: the next photo stayed over the grid while the
+  /// other flew back, then vanished at once (filmed at 60 frames a second, 23 November 2026).
+  void _leave() {
+    if (_pages.hasClients && _pages.page != _index.toDouble()) _pages.jumpToPage(_index);
+    widget.onLeave?.call(_items[_index]);
+  }
+
+  /// A finger down or up on the photo. Two: the pages hold still at once, for the pinch. Android
+  /// starts a swipe after 8 dp, Flutter a pinch after 18: the swipe took the pinch on the phone
+  /// (real test of 23 November 2026), as it does a pager's unless the photo claims it.
+  /// Set down at a side, where Android's back gesture starts: no swipe either (see [_leave]).
+  void _finger(PointerEvent e, {required bool down}) {
+    final before = (_fingers.length > 1, _edge.isNotEmpty);
+    if (down) {
+      _fingers.add(e.pointer);
+      final sides = MediaQuery.systemGestureInsetsOf(context);
+      final width = MediaQuery.sizeOf(context).width;
+      if (e.position.dx < sides.left || e.position.dx > width - sides.right) _edge.add(e.pointer);
+    } else {
+      _fingers.remove(e.pointer);
+      _edge.remove(e.pointer);
+    }
+    if ((_fingers.length > 1, _edge.isNotEmpty) != before) setState(() {});
   }
 
   /// The explorer loaded further: the same photos, and more after them.
@@ -140,6 +197,7 @@ class _ImageViewerState extends State<ImageViewer> {
   @override
   void dispose() {
     _settle?.cancel();
+    _route?.removeStatusListener(_landing);
     if (_primed) _explorer.removeListener(_grown);
     _pages.dispose();
     super.dispose();
@@ -157,14 +215,24 @@ class _ImageViewerState extends State<ImageViewer> {
     final m = _items[_index];
     return Theme(
       data: ThemeData.dark(useMaterial3: true).copyWith(colorScheme: ColorScheme.dark(primary: c.accent)),
-      child: Scaffold(
-        backgroundColor: Colors.black,
+      // Transparent: the black behind is the route's, gone at once when it closes, the grid
+      // seen behind the photo flying back to its tile (openMedia).
+      child: PopScope(
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) _leave();
+        },
+        child: Scaffold(
+        backgroundColor: Colors.transparent,
         body: Stack(
           children: [
-            PageView.builder(
+            Listener(
+              onPointerDown: (e) => _finger(e, down: true),
+              onPointerUp: (e) => _finger(e, down: false),
+              onPointerCancel: (e) => _finger(e, down: false),
+              child: PageView.builder(
               key: const Key('image-pages'),
               controller: _pages,
-              physics: _zoomed ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
+              physics: _zoomed || _fingers.length > 1 || _edge.isNotEmpty || _leaving ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
               itemCount: _items.length,
               onPageChanged: (i) {
                 setState(() {
@@ -173,16 +241,32 @@ class _ImageViewerState extends State<ImageViewer> {
                 });
                 _settled(i);
               },
-              itemBuilder: (context, i) => _ZoomablePhoto(
+              // Leaving, the photo flying back alone: no other page over the grid.
+              itemBuilder: (context, i) => Opacity(
+                opacity: _leaving && i != _index ? 0 : 1,
+                child: _ZoomablePhoto(
                 key: ValueKey('photo-${_items[i].id}'),
                 entry: _items[i],
+                hero: i == _index,
+                // The controls go as soon as a pinch zooms in; the pages stop following the
+                // finger only once it lifts (changed during the pinch, it was lost, 23 November).
+                onZooming: () {
+                  if (!_zooming) setState(() => _zooming = true);
+                },
                 onZoom: (z) {
-                  if (z != _zoomed) setState(() => _zoomed = z);
+                  if (z != _zoomed || z != _zooming) {
+                    setState(() {
+                      _zoomed = z;
+                      _zooming = z;
+                    });
+                  }
                 },
                 onTap: () => setState(() => _chrome = !_chrome),
+                ),
               ),
             ),
-            if (_chrome) ...[
+            ),
+            ..._controls(context, [
               Positioned(
                 left: 0,
                 right: 0,
@@ -227,11 +311,35 @@ class _ImageViewerState extends State<ImageViewer> {
                   ),
                 ),
               ),
-            ],
+            ]),
           ],
         ),
       ),
+      ),
     );
+  }
+
+  /// The controls: hidden by a touch, or while zoomed in (both in 0.15 s); come in once the photo
+  /// has flown from its tile, and go at once as it flies back. The system's bars stay as they
+  /// are: hidden and shown, they changed what the app was given under the photo.
+  List<Widget> _controls(BuildContext context, List<Widget> children) {
+    final shown = _chrome && !_zooming && _landed;
+    return [
+      for (final child in children)
+        if (child is Positioned)
+          Positioned(
+            left: child.left,
+            top: child.top,
+            right: child.right,
+            bottom: child.bottom,
+            width: child.width,
+            height: child.height,
+            child: IgnorePointer(
+              ignoring: !shown,
+              child: AnimatedOpacity(opacity: shown ? 1 : 0, duration: _landed ? const Duration(milliseconds: 150) : Duration.zero, child: child.child),
+            ),
+          ),
+    ];
   }
 }
 
@@ -475,11 +583,17 @@ class _Actions extends StatelessWidget {
 /// does not), the sharp one read from the disk and the photo at the screen's size; zoomed in,
 /// the whole of it.
 class _ZoomablePhoto extends StatefulWidget {
-  const _ZoomablePhoto({super.key, required this.entry, required this.onZoom, required this.onTap});
+  const _ZoomablePhoto({super.key, required this.entry, required this.onZoom, required this.onZooming, required this.onTap, this.hero = false});
 
   final MediaEntry entry;
   final ValueChanged<bool> onZoom;
+
+  /// A pinch is zooming in (said at each move): the controls go.
+  final VoidCallback onZooming;
   final VoidCallback onTap;
+
+  /// The photo shown: it flies from its tile when the viewer opens, back to it when it closes.
+  final bool hero;
 
   /// How long a photo stays before it is decoded: a swipe running through stays less.
   static const settleAfter = Duration(milliseconds: 150);
@@ -490,7 +604,8 @@ class _ZoomablePhoto extends StatefulWidget {
 
 class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProviderStateMixin {
   final _zoom = TransformationController();
-  late final AnimationController _anim = AnimationController(vsync: this, duration: const Duration(milliseconds: 200))
+  // A double tap zooms in 0.28 s, as a phone's gallery does (filmed on 23 November 2026).
+  late final AnimationController _anim = AnimationController(vsync: this, duration: const Duration(milliseconds: 280))
     ..addListener(() {
       final a = _from;
       final b = _to;
@@ -506,6 +621,50 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProvide
   Timer? _settle;
   final _pending = <String>[]; // asked of the explorer, not come yet: dropped if it goes
   late Explorer _explorer;
+  Size _view = Size.zero; // the screen given
+  Rect _photo = Rect.zero; // where the photo lies in it, fitted
+  bool _holding = false;
+  // The photo whole, as shown here, for its flight to and from its tile ([_Flying]).
+  final _flying = ValueNotifier<ImageProvider?>(null);
+  double? _shownAt; // the photo itself shown, decoded at this scale: at hand
+
+  @override
+  void initState() {
+    super.initState();
+    _zoom.addListener(_hold);
+  }
+
+  /// The zoom held within the photo: never smaller than the screen fits it, never panned past its
+  /// edges into the black around it; centred along a side it does not fill (filmed in a phone's
+  /// gallery, 23 November 2026).
+  void _hold() {
+    if (_holding || _photo.isEmpty) return;
+    final m = _zoom.value;
+    final s = m.getMaxScaleOnAxis();
+    final held = _held(s, m.getTranslation().x, m.getTranslation().y);
+    if (held == null) return;
+    _holding = true;
+    _zoom.value = held;
+    _holding = false;
+  }
+
+  /// The transform at scale [s] nearest (tx, ty) that keeps the photo inside its bounds; null when
+  /// it already does.
+  Matrix4? _held(double s, double tx, double ty) {
+    double axis(double t, double lo, double size, double view) {
+      final scaled = size * s;
+      if (scaled <= view + 0.5) return (view - scaled) / 2 - lo * s; // centred
+      return t.clamp(view - (lo + size) * s, -lo * s).toDouble();
+    }
+
+    final scale = s < 1 ? 1.0 : s;
+    final nx = axis(tx, _photo.left, _photo.width, _view.width);
+    final ny = axis(ty, _photo.top, _photo.height, _view.height);
+    if ((nx - tx).abs() < 0.01 && (ny - ty).abs() < 0.01 && scale == s) return null;
+    return Matrix4.identity()
+      ..translateByDouble(nx, ny, 0, 1)
+      ..scaleByDouble(scale, scale, 1, 1);
+  }
 
   String get _key => '${widget.entry.kind.name}:${widget.entry.id}';
 
@@ -526,6 +685,7 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProvide
     final sharp = _sharpWhole ? state.explorer.cached('$_key@sharp') : null;
     _sharpFirst = sharp != null;
     _first = sharp ?? state.explorer.cached(_key);
+    _flyingNow();
     if (_first == null) _ask(_key, () => state.library.thumbnail(widget.entry.kind, widget.entry.id, gridDecodePx(context)), sharp: false);
     // Already decoded (a neighbour decoded ahead): at once; else once it has stayed.
     final photo = _photoAt(context, widget.entry, 1.5);
@@ -564,19 +724,40 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProvide
             _first = bytes;
             _sharpFirst = _sharpFirst || sharp;
           });
+          _flyingNow();
         }
       }),
     );
   }
 
+  /// What flies between the tile and the screen: the photo whole, as shown here, the frame
+  /// cropping it as it goes (cover). Its tile shows a very tall or very wide photo cropped
+  /// (beyond the mosaic's proportions): flown, that crop grew larger than the photo, which then
+  /// shrank by 6 % as it landed (filmed at 60 frames a second, 23 November 2026). Until the
+  /// photo here is at hand, the tile's own image flies.
+  void _flyingNow() {
+    final first = _first;
+    final at = _shownAt;
+    _flying.value = at != null
+        ? _photoAt(context, widget.entry, at)
+        : first == null
+        ? null
+        : _sharpFirst
+        ? MemoryImage(first)
+        : _thumbOf(context, first);
+  }
+
   @override
   void dispose() {
     _settle?.cancel();
+    _flying.dispose();
     for (final key in _pending) {
       _explorer.forget(key); // passed by a swipe: not read for nothing
     }
     _anim.dispose();
-    _zoom.dispose();
+    _zoom
+      ..removeListener(_hold)
+      ..dispose();
     super.dispose();
   }
 
@@ -587,15 +768,20 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProvide
     widget.onZoom(z);
   }
 
+  /// Double tap: zoomed in around the finger (2.5×, or more if that is what fills the screen),
+  /// or back to the whole photo.
   void _doubleTap() {
     _from = _zoom.value.clone();
     if (_isZoomed) {
       _to = Matrix4.identity();
     } else {
-      const s = 2.5;
-      _to = Matrix4.identity()
-        ..translateByDouble(-_tapAt.dx * (s - 1), -_tapAt.dy * (s - 1), 0, 1)
-        ..scaleByDouble(s, s, 1, 1);
+      final fill = _photo.isEmpty ? 1.0 : math.max(_view.width / _photo.width, _view.height / _photo.height);
+      final s = math.min(4.0, math.max(2.5, fill));
+      final tx = -_tapAt.dx * (s - 1), ty = -_tapAt.dy * (s - 1);
+      _to = _held(s, tx, ty) ??
+          (Matrix4.identity()
+            ..translateByDouble(tx, ty, 0, 1)
+            ..scaleByDouble(s, s, 1, 1));
     }
     _zoomed(!_isZoomed);
     unawaited(_anim.forward(from: 0));
@@ -614,37 +800,163 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProvide
             filterQuality: FilterQuality.medium,
             excludeFromSemantics: true,
           );
-    return GestureDetector(
-      onTap: widget.onTap,
-      onDoubleTapDown: (d) => _tapAt = d.localPosition,
-      onDoubleTap: _doubleTap,
-      child: InteractiveViewer(
-        transformationController: _zoom,
-        maxScale: 5,
-        onInteractionEnd: (_) => _zoomed(_isZoomed),
-        // Two layers, each kept as it is: the thumbnail always under, the photo over it once
-        // decoded. One image swapped for the other went black for 2 or 3 frames at the end of a
-        // swipe (filmed at 60 frames a second, 23 November 2026).
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
+    // Two layers, each kept as it is: the thumbnail always under, the photo over it once
+    // decoded. One image swapped for the other went black for 2 or 3 frames at the end of a
+    // swipe (filmed at 60 frames a second, 23 November 2026).
+    final scale = _whole ? 3.0 : 1.5;
+    final layers = Stack(
+      fit: StackFit.expand,
+      children: [
             KeyedSubtree(key: const ValueKey('thumb'), child: placeholder),
             if (_decode)
               KeyedSubtree(
                 key: const ValueKey('photo'),
                 child: Image(
-                  image: _photoAt(context, m, _whole ? 3 : 1.5),
+                  image: _photoAt(context, m, scale),
                   fit: BoxFit.contain,
                   gaplessPlayback: true, // the screen-sized one stays until the whole is decoded
                   filterQuality: FilterQuality.medium,
                   semanticLabel: m.name,
-                  frameBuilder: (context, child, frame, sync) => frame == null && !sync ? const SizedBox.shrink() : child,
+                  // Nothing until its first frame; then always what it has, the one before
+                  // while the next decodes (hidden then, the blurred thumbnail showed through).
+                  frameBuilder: (context, child, frame, sync) {
+                    if ((frame != null || sync) && _shownAt != scale) {
+                      _shownAt = scale;
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) _flyingNow();
+                      });
+                    }
+                    return _shownAt == null ? const SizedBox.shrink() : child;
+                  },
                   errorBuilder: (context, error, stack) => const SizedBox.shrink(),
                 ),
               ),
-          ],
-        ),
-      ),
+      ],
+    );
+    return LayoutBuilder(
+      builder: (context, box) {
+        _view = box.biggest;
+        // The photo fitted to the screen, by its proportions (known from MediaStore): its rect is
+        // what the zoom keeps within, and what flies from its tile.
+        final a = m.aspect;
+        final fitted = a > 0 ? applyBoxFit(BoxFit.contain, Size(a, 1), _view).destination : _view;
+        _photo = Alignment.center.inscribe(fitted, Offset.zero & _view);
+        return GestureDetector(
+          onTap: widget.onTap,
+          onDoubleTapDown: (d) => _tapAt = d.localPosition,
+          onDoubleTap: _doubleTap,
+          child: InteractiveViewer(
+            transformationController: _zoom,
+            minScale: 1, // never smaller than the screen fits it
+            maxScale: 5,
+            // The controls go at once as a pinch zooms in, and the whole photo starts loading.
+            onInteractionUpdate: (_) {
+              if (!_isZoomed) return;
+              if (!_whole) setState(() => _whole = true);
+              widget.onZooming();
+            },
+            onInteractionEnd: (_) => _zoomed(_isZoomed),
+            child: Stack(
+              children: [
+                Positioned.fromRect(
+                  rect: _photo,
+                  child: HeroMode(
+                    enabled: widget.hero,
+                    child: Hero(
+                      tag: mediaHeroTag(m),
+                      createRectTween: mediaRectTween,
+                      flightShuttleBuilder: (context, animation, direction, from, to) => _Flying(
+                        key: const Key('photo-flying'),
+                        whole: _flying,
+                        tile: ((direction == HeroFlightDirection.push ? from : to).widget as Hero).child,
+                        from: direction == HeroFlightDirection.push ? from : null,
+                      ),
+                      child: layers,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
+}
+
+/// The photo flying between its tile and the screen: whole, cropped by the frame as it goes
+/// (cover), which shows it as its tile does at one end and as the screen does at the other.
+/// Until the whole photo is at hand, its tile's image; once shown, never the tile's again.
+class _Flying extends StatefulWidget {
+  const _Flying({super.key, required this.whole, required this.tile, this.from});
+
+  final ValueListenable<ImageProvider?> whole;
+  final Widget tile;
+
+  /// Opening: the tile's hero, its image as painted there flying first.
+  final BuildContext? from;
+
+  @override
+  State<_Flying> createState() => _FlyingState();
+}
+
+class _FlyingState extends State<_Flying> {
+  bool _shown = false;
+  ui.Image? _painted;
+
+  @override
+  void initState() {
+    super.initState();
+    final from = widget.from;
+    if (from != null && from.mounted) _painted = _paintedIn(from.findRenderObject());
+  }
+
+  @override
+  void dispose() {
+    _painted?.dispose();
+    super.dispose();
+  }
+
+  /// The tile as it was painted, from the very first frame. Its widget built again here decoded
+  /// its image anew when Flutter's cache no longer held it: nothing flew for the first frames,
+  /// the screen all black for a dark screenshot (filmed at 60 frames a second, 23 November 2026).
+  Widget get _tile {
+    final painted = _painted;
+    return painted == null ? widget.tile : RawImage(image: painted, fit: BoxFit.cover, filterQuality: FilterQuality.medium);
+  }
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<ImageProvider?>(
+    valueListenable: widget.whole,
+    builder: (context, image, _) => image == null
+        ? _tile
+        : Image(
+            image: image,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.medium,
+            excludeFromSemantics: true,
+            frameBuilder: (context, child, frame, sync) {
+              if (frame != null || sync) _shown = true;
+              return _shown ? child : _tile;
+            },
+          ),
+  );
+}
+
+/// The first image painted under [root], as a copy its taker disposes of; null if none.
+ui.Image? _paintedIn(RenderObject? root) {
+  ui.Image? found;
+  void visit(RenderObject r) {
+    if (found != null) return;
+    final image = r is RenderImage ? r.image : null;
+    if (image != null) {
+      found = image.clone();
+      return;
+    }
+    r.visitChildren(visit);
+  }
+
+  if (root != null) visit(root);
+  return found;
 }
