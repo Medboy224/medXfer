@@ -84,6 +84,18 @@ class _Library implements Library {
         };
   @override
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size) async => null;
+
+  /// The sharp images asked: (id, px).
+  final sharpAsked = <(int, int)>[];
+  /// The preparations asked: (px, on).
+  final prepared = <(int, bool)>[];
+  @override
+  Future<void> prepareSharp(int size, {required bool on}) async => prepared.add((size, on));
+  @override
+  Future<Uint8List?> sharpThumbnail(MediaEntry m, int size) async {
+    sharpAsked.add((m.id, size));
+    return null;
+  }
   @override
   Future<bool> mediaAllowed() async => allowed;
   @override
@@ -623,6 +635,27 @@ void main() {
     await tester.pumpAndSettle();
     expect(core.calls.map((c) => c.action), contains('disconnect'));
     expect(exits.calls, ['toBack', 'quit']);
+  });
+
+  testWidgets('23 November: a large tile asks its sharp image once still on screen; a small one does not', (tester) async {
+    final library = _Library();
+    final (_, state) = await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(library.sharpAsked, isEmpty, reason: 'not before it has stayed still');
+    await tester.pumpAndSettle(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 300));
+    // 3 columns over 1080 px: a tile of about 359 px, more than Android's 270.
+    expect(library.sharpAsked.map((a) => a.$1).toSet(), {1, 2, 3});
+    expect(library.sharpAsked.map((a) => a.$2).toSet(), {537}, reason: 'one size, a tile of 2 columns');
+    expect(library.prepared.last, (537, true), reason: 'made ahead, the app on screen and no transfer');
+
+    library.sharpAsked.clear();
+    state.explorer.setLayout(MediaKind.images, columns: 5);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(library.sharpAsked, isEmpty, reason: "at 5 columns, Android's thumbnail is large enough");
   });
 
   test('the plan: descriptors without folders, paths with them, never apps with folders', () {

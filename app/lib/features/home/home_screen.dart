@@ -218,7 +218,49 @@ class _HomeFrameState extends State<_HomeFrame> with SingleTickerProviderStateMi
 
   // Back on the screen: what the device holds may have changed meanwhile (a photo taken in
   // another app, a file downloaded); the explorer reads it again (22 November 2026).
-  late final _life = AppLifecycleListener(onResume: () => unawaited(AppScope.of(context, listen: false).state.explorer.refresh()));
+  late final _life = AppLifecycleListener(
+    onResume: () {
+      _away = false;
+      _prepare();
+      unawaited(AppScope.of(context, listen: false).state.explorer.refresh());
+    },
+    onHide: () {
+      _away = true;
+      _prepare();
+    },
+  );
+
+  // The sharp thumbnails made ahead (23 November 2026), while the app is on screen, allowed to
+  // read the media, and no transfer runs: the transfer keeps every core it can.
+  bool _away = false;
+  int _sharpPx = 0;
+  bool? _preparing;
+  AppState? _watched;
+
+  void _prepare() {
+    final state = _watched;
+    if (state == null || !mounted) return;
+    final a = state.transfers.active;
+    final on = !_away && _sharpPx > 0 && state.library.supported && state.explorer.mediaAllowed == true && (a == null || a.stage == Stage.done);
+    if (on == _preparing) return;
+    _preparing = on;
+    unawaited(state.library.prepareSharp(_sharpPx, on: on).catchError((Object _) {}));
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sharpPx = sharpDecodePx(context);
+    final state = AppScope.of(context, listen: false).state;
+    if (!identical(state, _watched)) {
+      _watched?.transfers.removeListener(_prepare);
+      _watched?.explorer.removeListener(_prepare);
+      _watched = state
+        ..transfers.addListener(_prepare)
+        ..explorer.addListener(_prepare);
+    }
+    _prepare();
+  }
 
   @override
   void initState() {
@@ -357,6 +399,8 @@ class _HomeFrameState extends State<_HomeFrame> with SingleTickerProviderStateMi
   @override
   void dispose() {
     if (_frame == this) _frame = null;
+    _watched?.transfers.removeListener(_prepare);
+    _watched?.explorer.removeListener(_prepare);
     _life.dispose();
     _fold.dispose();
     super.dispose();

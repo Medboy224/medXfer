@@ -122,6 +122,13 @@ abstract interface class Library {
   Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200, MediaOrder order = const MediaOrder()});
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size);
 
+  /// A tile's square at [size] px, read from the file itself: sharp where [thumbnail] stops
+  /// short (about 270 px on Android), slower the first time (then kept). Null when there is none.
+  Future<Uint8List?> sharpThumbnail(MediaEntry m, int size);
+
+  /// Makes the sharp thumbnails ahead, in the background, newest first ([on]), or stops.
+  Future<void> prepareSharp(int size, {required bool on});
+
   /// Whether photos, videos and music can be read; [askMedia] asks Android.
   Future<bool> mediaAllowed();
   Future<bool> askMedia();
@@ -162,6 +169,10 @@ class NoLibrary implements Library {
   Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200, MediaOrder order = const MediaOrder()}) async => const [];
   @override
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size) async => null;
+  @override
+  Future<Uint8List?> sharpThumbnail(MediaEntry m, int size) async => null;
+  @override
+  Future<void> prepareSharp(int size, {required bool on}) async {}
   @override
   Future<bool> mediaAllowed() async => false;
   @override
@@ -248,6 +259,13 @@ class AndroidLibrary implements Library {
   @override
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size) =>
       platformChannel.invokeMethod<Uint8List>('libThumbnail', {'kind': kind.name, 'id': id, 'size': size});
+
+  @override
+  Future<Uint8List?> sharpThumbnail(MediaEntry m, int size) =>
+      platformChannel.invokeMethod<Uint8List>('libSharpThumbnail', {'kind': m.kind.name, 'id': m.id, 'size': size, 'modified': m.modified});
+
+  @override
+  Future<void> prepareSharp(int size, {required bool on}) => platformChannel.invokeMethod<void>('libPrepareSharp', {'size': size, 'on': on});
 
   @override
   Future<bool> mediaAllowed() async => await platformChannel.invokeMethod<bool>('mediaAllowed') ?? false;

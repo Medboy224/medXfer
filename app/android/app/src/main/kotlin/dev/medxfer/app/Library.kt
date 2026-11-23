@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.ImageDecoder
+import android.graphics.Matrix
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.pdf.PdfRenderer
 import android.media.ThumbnailUtils
@@ -25,8 +27,9 @@ import java.util.concurrent.Executors
 // launched from the home screen, the media of MediaStore, the files of the storage. Everything
 // slow runs on a thread of its own; the answers come back on the main thread.
 class Library(private val activity: Activity) {
-    // Thumbnails decode on several cores at once; the Dart side keeps at most a few asked.
-    private val worker = Executors.newFixedThreadPool(4)
+    // Thumbnails decode on several cores at once; the Dart side keeps at most a few asked (6, of
+    // which 4 sharp ones).
+    private val worker = Executors.newFixedThreadPool(6)
 
     private fun <T> later(work: () -> T, done: (T?, String?) -> Unit) {
         worker.execute {
@@ -187,11 +190,158 @@ class Library(private val activity: Activity) {
         jpeg(activity.contentResolver.loadThumbnail(uri, Size(size, size), null))
     }, done)
 
-    // The size asked is the tile's, in pixels: no stretching, so no blur. Quality 90: sharp,
-    // and still a few tens of kilobytes.
-    private fun jpeg(bitmap: Bitmap): ByteArray = ByteArrayOutputStream().use { out ->
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+    // Quality 90: a few tens of kilobytes. Android's thumbnails stop at about 270 px on their
+    // short side, whatever is asked (measured on the A57, 23 November 2026): see sharpThumbnail.
+    private fun jpeg(bitmap: Bitmap, quality: Int = 90): ByteArray = ByteArrayOutputStream().use { out ->
+        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
         out.toByteArray()
+    }
+
+    /**
+     * A tile's square at the size asked, read from the file itself (23 November 2026): Android's
+     * thumbnails stop at about 270 px on their short side (236 at the least), which a grid of 3
+     * columns or fewer stretched, blurred. Measured on the A57: about 115-130 ms for a camera's
+     * photo (the decoding itself; BitmapFactory is no quicker, the EXIF thumbnail is 512x236),
+     * 20-25 ms for a screenshot, 20-220 ms for a video's frame. So each is made once: kept in the
+     * app's cache folder ([sharpDir], at most [sharpMaxBytes]), read again in a few ms, made
+     * anew when the photo changes ([modified] in its name).
+     */
+    fun sharpThumbnail(kind: String, id: Long, size: Int, modified: Long, done: (ByteArray?, String?) -> Unit) = later({
+        demand.incrementAndGet() // the preparation waits meanwhile
+        try {
+            val file = sharpFile(kind, id, modified, size)
+            if (file.isFile) {
+                file.setLastModified(System.currentTimeMillis()) // the least recently seen go first
+                file.readBytes()
+            } else {
+                makeSharp(kind, id, size).also { keep(file, it) }
+            }
+        } finally {
+            demand.decrementAndGet()
+        }
+    }, done)
+
+    private fun sharpFile(kind: String, id: Long, modified: Long, size: Int) = File(sharpDir, "$kind-$id-$modified-$size.jpg")
+
+    private fun makeSharp(kind: String, id: Long, size: Int): ByteArray {
+        val uri = ContentUris.withAppendedId(collection(kind), id)
+        // Android's own, while it may be large enough: once seen too small 8 times, not asked.
+        val quick = if (systemSeen.get() < 8 || systemSide.get() >= size) {
+            activity.contentResolver.loadThumbnail(uri, Size(size, size), null).also {
+                systemSeen.incrementAndGet()
+                systemSide.accumulateAndGet(minOf(it.width, it.height)) { a, b -> maxOf(a, b) }
+            }
+        } else {
+            null
+        }
+        val full = if (quick != null && minOf(quick.width, quick.height) >= size) {
+            quick
+        } else {
+            try {
+                if (kind == "video") videoFrame(uri, size) else decodeAt(uri, size)
+            } catch (e: Exception) {
+                null
+            } ?: quick ?: activity.contentResolver.loadThumbnail(uri, Size(size, size), null)
+        }
+        return jpeg(square(full, size))
+    }
+
+    private val systemSeen = java.util.concurrent.atomic.AtomicInteger(0)
+    private val systemSide = java.util.concurrent.atomic.AtomicInteger(0) // the largest short side seen
+    private val sharpDir by lazy { File(activity.cacheDir, "sharp").apply { mkdirs() } }
+    private val sharpWrites = java.util.concurrent.atomic.AtomicInteger(0)
+    private val demand = java.util.concurrent.atomic.AtomicInteger(0) // sharp images asked by the screen
+
+    // The sharp thumbnails made ahead, as a gallery does (23 November 2026: made when first seen,
+    // a camera's photo took 70-130 ms; kept, 1 ms). One thread, in the background, newest first,
+    // waiting while the screen asks for its own. Dart stops it during a transfer and while the
+    // app is away; a new start or a stop ends the one running.
+    private val preparer = Executors.newSingleThreadExecutor { r ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            r.run()
+        }, "medxfer-sharp")
+    }
+    private val prepareRun = java.util.concurrent.atomic.AtomicInteger(0)
+
+    fun prepareSharp(size: Int, on: Boolean) {
+        val run = prepareRun.incrementAndGet()
+        if (on) preparer.execute { prepare(size, run) }
+    }
+
+    private fun prepare(size: Int, run: Int) {
+        if (run != prepareRun.get()) return
+        // Another size: a screen of another width, or an older choice.
+        sharpDir.listFiles()?.forEach { if (!it.name.endsWith("-$size.jpg")) it.delete() }
+        var total = sharpDir.listFiles()?.sumOf { it.length() } ?: 0L
+        val args = android.os.Bundle().apply {
+            putStringArray(android.content.ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(MediaStore.MediaColumns.DATE_MODIFIED))
+            putInt(android.content.ContentResolver.QUERY_ARG_SORT_DIRECTION, android.content.ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
+        }
+        loop@ for (kind in listOf("images", "video")) {
+            activity.contentResolver.query(collection(kind), arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATE_MODIFIED), args, null)?.use { c ->
+                while (c.moveToNext()) {
+                    if (run != prepareRun.get()) break@loop
+                    // The disk's room: the rest is made when seen, the least seen going.
+                    if (total > sharpMaxBytes * 7 / 10) break@loop
+                    val id = c.getLong(0)
+                    val file = sharpFile(kind, id, c.getLong(1), size)
+                    if (file.isFile) continue
+                    while (demand.get() > 0 && run == prepareRun.get()) Thread.sleep(20)
+                    try {
+                        val bytes = makeSharp(kind, id, size)
+                        keep(file, bytes)
+                        total += bytes.size
+                    } catch (e: Exception) {
+                        // Unreadable: made, or not, when seen.
+                    }
+                }
+            }
+        }
+    }
+
+    /** Writes [bytes] whole or not at all; past [sharpMaxBytes], the least recently seen go. */
+    private fun keep(file: File, bytes: ByteArray) {
+        try {
+            val part = File(file.parentFile, file.name + "." + Thread.currentThread().id + ".part")
+            part.writeBytes(bytes)
+            part.renameTo(file)
+        } catch (e: Exception) {
+            return // a full disk: the image is shown all the same, made again next time
+        }
+        if (sharpWrites.incrementAndGet() % 40 != 0) return
+        val files = sharpDir.listFiles()?.filter { it.name.endsWith(".jpg") }?.sortedBy { it.lastModified() } ?: return
+        var total = files.sumOf { it.length() }
+        for (f in files) {
+            if (total <= sharpMaxBytes * 3 / 4) break
+            total -= f.length()
+            f.delete()
+        }
+    }
+
+    /** The image of [uri], decoded at [size] on its short side (never above its own); EXIF turns. */
+    private fun decodeAt(uri: Uri, size: Int): Bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(activity.contentResolver, uri)) { decoder, info, _ ->
+        val w = info.size.width
+        val h = info.size.height
+        val scale = minOf(1.0, size.toDouble() / minOf(w, h))
+        decoder.setTargetSize(maxOf(1, Math.round(w * scale).toInt()), maxOf(1, Math.round(h * scale).toInt()))
+        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+    }
+
+    /** A video's frame, at least [size] on its short side when the video has it. */
+    private fun videoFrame(uri: Uri, size: Int): Bitmap? {
+        val path = activity.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        } ?: return null
+        return ThumbnailUtils.createVideoThumbnail(File(path), Size(size * 2, size * 2), null)
+    }
+
+    /** The centred square of [b], [size] px a side at most. */
+    private fun square(b: Bitmap, size: Int): Bitmap {
+        val side = minOf(b.width, b.height)
+        val out = minOf(size, side)
+        val m = Matrix().apply { setScale(out.toFloat() / side, out.toFloat() / side) }
+        return Bitmap.createBitmap(b, (b.width - side) / 2, (b.height - side) / 2, side, side, m, true)
     }
 
     /** A file's thumbnail by its kind: image, video, PDF (first page), APK (its icon); else null. */
@@ -302,6 +452,9 @@ class Library(private val activity: Activity) {
     }
 
     companion object {
+        /** The sharp thumbnails kept on the disk: some 2,500 tiles. */
+        const val sharpMaxBytes = 200L * 1024 * 1024
+
         private val IMAGES = setOf("jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "avif")
         private val VIDEOS = setOf("mp4", "mkv", "mov", "avi", "webm", "3gp", "m4v", "ts", "wmv")
         private const val LARGE_BYTES = 100L * 1024 * 1024

@@ -161,6 +161,11 @@ class MainActivity : FlutterActivity() {
                         call.argument<String>("sort") ?: "date", call.argument<Boolean>("descending") ?: true, call.argument<String>("search") ?: "",
                     ) { v, e -> reply(result, v, e) }
                     "libThumbnail" -> library.thumbnail(call.argument<String>("kind") ?: "images", (call.argument<Number>("id") ?: 0).toLong(), call.argument<Int>("size") ?: 256) { v, e -> reply(result, v, e) }
+                    "libPrepareSharp" -> { library.prepareSharp(call.argument<Int>("size") ?: 0, call.argument<Boolean>("on") == true); result.success(null) }
+                    "libSharpThumbnail" -> library.sharpThumbnail(
+                        call.argument<String>("kind") ?: "images", (call.argument<Number>("id") ?: 0).toLong(), call.argument<Int>("size") ?: 256,
+                        (call.argument<Number>("modified") ?: 0).toLong(),
+                    ) { v, e -> reply(result, v, e) }
                     "libFileThumb" -> library.fileThumbnail(call.argument<String>("path") ?: "", call.argument<Int>("size") ?: 128) { v, e -> reply(result, v, e) }
                     "libDirSize" -> library.dirSize(call.argument<String>("path") ?: "") { v, e -> reply(result, v, e) }
                     "libFiles" -> library.files(call.argument<String>("category") ?: "documents", call.argument<Int>("offset") ?: 0, call.argument<Int>("limit") ?: 200) { v, e -> reply(result, v, e) }

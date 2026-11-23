@@ -55,6 +55,10 @@ class Explorer extends ChangeNotifier {
   /// screen come before those scrolled past, which are dropped once gone ([forget]).
   static const parallel = 6;
 
+  /// Sharp images ([image] with low) loading at once, and only while no other waits: made, they
+  /// take up to 0.15 s each (kept, a few ms); the platform has 6 threads for all.
+  static const parallelLow = 4;
+
   List<AppEntry>? _apps;
   bool _appsLoading = false;
   final _media = {for (final k in MediaKind.values) k: MediaList()};
@@ -66,7 +70,9 @@ class Explorer extends ChangeNotifier {
   final _images = <String, Uint8List>{}; // ordered: the most recent last
   final _pending = <String, Future<Uint8List?>>{};
   final _waiting = <_Load>[];
+  final _waitingLow = <_Load>[];
   int _running = 0;
+  int _runningLow = 0;
 
   /// The Files tab: the folders, or one category of files.
   FileCategory? _category;
@@ -231,13 +237,14 @@ class Explorer extends ChangeNotifier {
   }
 
   /// A thumbnail or an icon, from the cache, else loaded once however many ask, in its turn.
-  Future<Uint8List?> image(String key, Future<Uint8List?> Function() load) {
+  /// [low]: a sharper one, loaded once no other waits ([parallelLow]).
+  Future<Uint8List?> image(String key, Future<Uint8List?> Function() load, {bool low = false}) {
     final hit = cached(key);
     if (hit != null) return SynchronousFuture(hit);
     final pending = _pending[key];
     if (pending != null) return pending;
     final job = _Load(key, load);
-    _waiting.add(job);
+    (low ? _waitingLow : _waiting).add(job);
     _pending[key] = job.done.future;
     _pump();
     return job.done.future;
@@ -245,17 +252,21 @@ class Explorer extends ChangeNotifier {
 
   /// A tile left the screen before its image was loaded: it is not loaded.
   void forget(String key) {
-    final i = _waiting.indexWhere((j) => j.key == key);
-    if (i < 0) return;
-    final job = _waiting.removeAt(i);
-    _pending.remove(key);
-    job.done.complete(null);
+    for (final waiting in [_waiting, _waitingLow]) {
+      final i = waiting.indexWhere((j) => j.key == key);
+      if (i < 0) continue;
+      final job = waiting.removeAt(i);
+      _pending.remove(key);
+      job.done.complete(null);
+    }
   }
 
   void _pump() {
-    while (_running < parallel && _waiting.isNotEmpty) {
-      final job = _waiting.removeLast(); // the last asked: on screen now
+    while (_running < parallel && (_waiting.isNotEmpty || (_runningLow < parallelLow && _waitingLow.isNotEmpty))) {
+      final low = _waiting.isEmpty;
+      final job = (low ? _waitingLow : _waiting).removeLast(); // the last asked: on screen now
       _running++;
+      if (low) _runningLow++;
       job
           .load()
           .then((bytes) {
@@ -274,6 +285,7 @@ class Explorer extends ChangeNotifier {
           .then((bytes) {
             _pending.remove(job.key);
             _running--;
+            if (low) _runningLow--;
             job.done.complete(bytes);
             _pump();
           });

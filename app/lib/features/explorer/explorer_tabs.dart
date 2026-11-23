@@ -22,7 +22,7 @@ import '../../widgets/v4.dart';
 
 /// A thumbnail or an icon from the explorer's cache, decoded at its displayed size.
 class LibraryImage extends StatefulWidget {
-  const LibraryImage({super.key, required this.cacheKey, required this.load, this.fit = BoxFit.cover, this.placeholder, this.decodePx});
+  const LibraryImage({super.key, required this.cacheKey, required this.load, this.fit = BoxFit.cover, this.placeholder, this.decodePx, this.sharp, this.sharpPx = 0});
 
   final String cacheKey;
 
@@ -38,6 +38,21 @@ class LibraryImage extends StatefulWidget {
   /// at each grid's size, the tiles of the next grid stuttered the gesture, 18 November 2026).
   final int? decodePx;
 
+  /// A sharper image at the size shown, asked once the tile is settled on screen, shown in place
+  /// of the first once it comes: the platform's thumbnails stop short of a large tile (about
+  /// 270 px on Android, measured on 23 November 2026).
+  final Future<Uint8List?> Function(int px)? sharp;
+
+  /// The one size of the sharp images ([sharpDecodePx]), loaded and decoded at it for any number
+  /// of columns: made once on the platform, decoded once here, the same after a pinch.
+  final int sharpPx;
+
+  /// From this size shown, in pixels, the platform's thumbnail is too small.
+  static const sharpFrom = 300;
+
+  /// How long a tile stays on screen, still, before its sharp image is asked.
+  static const sharpAfter = Duration(milliseconds: 60);
+
   @override
   State<LibraryImage> createState() => _LibraryImageState();
 }
@@ -46,6 +61,12 @@ class _LibraryImageState extends State<LibraryImage> {
   Uint8List? _bytes;
   String? _asked;
   late Explorer _explorer;
+  ImageProvider? _sharp; // decoded: shown in place of the first image
+  String? _sharpKey; // asked, or about to be
+  Timer? _sharpTimer;
+  bool _sharpPending = false;
+  ImageStream? _sharpStream;
+  ImageStreamListener? _sharpListener;
 
   @override
   void didChangeDependencies() {
@@ -69,10 +90,75 @@ class _LibraryImageState extends State<LibraryImage> {
     });
   }
 
+  /// The sharp image of a tile [shown] px wide, from the cache, else asked once the tile has
+  /// stayed still on screen for [LibraryImage.sharpAfter]; shown once decoded, so that the first
+  /// stays until then, without a frame of placeholder.
+  void _fetchSharp(int shown) {
+    final sharp = widget.sharp;
+    final px = widget.sharpPx;
+    if (sharp == null || px <= 0 || shown < LibraryImage.sharpFrom) return;
+    final key = '${widget.cacheKey}@sharp';
+    if (_sharpKey == key) return;
+    _sharpKey = key;
+    _sharpTimer?.cancel();
+    final cached = _explorer.cached(key);
+    if (cached != null) {
+      _decodeSharp(key, cached, px);
+      return;
+    }
+    void ask() {
+      if (!mounted || _sharpKey != key) return;
+      // Still flinging: later.
+      if (Scrollable.recommendDeferredLoadingForContext(context)) {
+        _sharpTimer = Timer(LibraryImage.sharpAfter, ask);
+        return;
+      }
+      _sharpPending = true;
+      _explorer.image(key, () => sharp(px), low: true).then((bytes) {
+        if (_sharpKey == key) _sharpPending = false;
+        if (mounted && _sharpKey == key && bytes != null) {
+          _decodeSharp(key, bytes, px);
+        }
+      });
+    }
+
+    _sharpTimer = Timer(LibraryImage.sharpAfter, ask);
+  }
+
+  /// Decodes [bytes] at [px]; at once when already decoded (after a pinch), else in its time.
+  void _decodeSharp(String key, Uint8List bytes, int px) {
+    final provider = ResizeImage(MemoryImage(bytes), width: px);
+    _dropSharpStream();
+    final stream = provider.resolve(createLocalImageConfiguration(context));
+    var building = true;
+    final listener = ImageStreamListener((_, _) {
+      if (!mounted || _sharpKey != key || _sharp == provider) return;
+      if (building) {
+        _sharp = provider; // decoded already: this very build shows it
+      } else {
+        setState(() => _sharp = provider);
+      }
+    });
+    stream.addListener(listener);
+    building = false;
+    _sharpStream = stream;
+    _sharpListener = listener;
+  }
+
+  void _dropSharpStream() {
+    final l = _sharpListener;
+    if (l != null) _sharpStream?.removeListener(l);
+    _sharpStream = null;
+    _sharpListener = null;
+  }
+
   @override
   void dispose() {
     // Scrolled away before its turn: not loaded at all.
     if (_bytes == null && _asked != null) _explorer.forget(_asked!);
+    _sharpTimer?.cancel();
+    _dropSharpStream();
+    if (_sharpPending && _sharpKey != null) _explorer.forget(_sharpKey!);
     super.dispose();
   }
 
@@ -81,7 +167,11 @@ class _LibraryImageState extends State<LibraryImage> {
     return LayoutBuilder(
       builder: (context, box) {
         final dpr = MediaQuery.devicePixelRatioOf(context);
-        final px = widget.decodePx ?? (box.biggest.shortestSide * dpr).round().clamp(32, 1024);
+        final shown = (box.biggest.shortestSide * dpr).round().clamp(32, 1024);
+        final px = widget.decodePx ?? shown;
+        _fetchSharp(shown);
+        final sharp = _sharp;
+        if (sharp != null) return Image(image: sharp, fit: widget.fit, gaplessPlayback: true, filterQuality: FilterQuality.medium);
         _fetch(px);
         final bytes = _bytes;
         if (bytes == null) return widget.placeholder ?? ColoredBox(color: context.colors.chip);
@@ -262,6 +352,15 @@ class _MediaGrid extends StatefulWidget {
 
 /// The size the photos' grids decode their thumbnails at, whatever their number of columns:
 /// the tile of the fewest square columns (3), sharp there, and shared by all.
+/// The one size of the sharp images: a tile of 2 columns, the largest; 3 columns show it smaller
+/// (23 November 2026: one size made, kept and decoded, rather than one per number of columns).
+int sharpDecodePx(BuildContext context) {
+  // The short side: turned sideways, the screen keeps its size (23 November 2026: made again at
+  // 1167 px, then again at 537 once turned back).
+  final width = MediaQuery.sizeOf(context).shortestSide;
+  return ((width - 2) / 2 * MediaQuery.devicePixelRatioOf(context)).round().clamp(32, 1440);
+}
+
 int gridDecodePx(BuildContext context) {
   final width = MediaQuery.sizeOf(context).width;
   return ((width - 2 * 2) / 3 * MediaQuery.devicePixelRatioOf(context)).round().clamp(32, 1024);
@@ -1065,7 +1164,13 @@ class _MediaTile extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            LibraryImage(cacheKey: '${kind.name}:${m.id}', decodePx: gridDecodePx(context), load: (px) => state.library.thumbnail(kind, m.id, px)),
+            LibraryImage(
+              cacheKey: '${kind.name}:${m.id}',
+              decodePx: gridDecodePx(context),
+              load: (px) => state.library.thumbnail(kind, m.id, px),
+              sharp: (px) => state.library.sharpThumbnail(m, px),
+              sharpPx: sharpDecodePx(context),
+            ),
             if (on) DecoratedBox(decoration: BoxDecoration(border: Border.all(color: c.strong, width: columns >= 5 ? 2 : 3))),
             if (kind == MediaKind.video)
               Positioned(
