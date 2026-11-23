@@ -79,6 +79,12 @@ jobs:
   # of G2a), and kept 14 days for the real tests.
   package-linux:
     runs-on: ubuntu-22.04
+    # Usually 4 to 5 minutes: past this, something outside is stuck, said rather than waited for.
+    timeout-minutes: 25
+    # The fresh containers take Ubuntu's packages from the mirror of GitHub's machines
+    # (scripts/test-fresh-linux.sh).
+    env:
+      APT_MIRROR: http://azure.archive.ubuntu.com
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
