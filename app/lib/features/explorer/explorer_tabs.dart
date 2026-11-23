@@ -616,6 +616,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
       columns: c,
       offsets: offsets,
       layouts: {for (var n = Explorer.minColumns; n <= Explorer.maxColumns; n++) n: _layoutOf(n)},
+      wanted: wanted,
       box: _box,
       focal: _focal,
       background: colors.background,
@@ -1084,6 +1085,7 @@ class _Pinch {
     required this.columns,
     required this.offsets,
     required this.layouts,
+    required this.wanted,
     required this.box,
     required this.focal,
     required this.background,
@@ -1097,11 +1099,36 @@ class _Pinch {
   late int built = columns; // the real grid's, behind the painting
   final Map<int, double> offsets;
   final Map<int, GridLayout> layouts;
+  final Set<int> wanted; // the photos the grids may show during the gesture
   final Size box;
   final Offset focal;
   final Color background, chip, strong, seam;
   final List<TextPainter> days;
   final images = <int, ui.Image>{};
+  final _morphs = <int, Set<int>>{};
+
+  /// Between the mosaic and a grid, the photos that keep their column ([from] and [to] laid as
+  /// the fingers place them): they change shape rather than fade, as a phone's gallery does with
+  /// three tall photos to a row (its video of 23 November 2026). Those that change row or column
+  /// (a landscape photo alone on its row) fade, with the zoom: moved, they would cross the
+  /// others. Between grids of 3 to 5 columns, none: all fade, as agreed on 22 November.
+  Set<int> morphs(int from, int to, double height) {
+    if (from > Explorer.minColumns && to > Explorer.minColumns) return const {};
+    return _morphs[from * 16 + to] ??= () {
+      final a = layouts[from], b = layouts[to];
+      final oa = offsets[from], ob = offsets[to];
+      if (a == null || b == null || oa == null || ob == null) return const <int>{};
+      final out = <int>{};
+      for (final i in wanted) {
+        if (i >= a.count || i >= b.count) continue;
+        final ra = a.rectOf(i).shift(Offset(0, -oa)), rb = b.rectOf(i).shift(Offset(0, -ob));
+        final across = math.min(ra.right, rb.right) - math.max(ra.left, rb.left);
+        // Its column kept (half its width at least), and not sent across the screen.
+        if (across >= 0.5 * math.min(ra.width, rb.width) && (ra.center.dy - rb.center.dy).abs() <= height * 0.5) out.add(i);
+      }
+      return out;
+    }();
+  }
   final picked = <int>{};
   final streams = <(ImageStream, ImageStreamListener)>[];
 
@@ -1132,11 +1159,57 @@ class _PinchPainter extends CustomPainter {
     canvas.drawRect(Offset.zero & size, Paint()..color = pinch.background);
     final c = grid._shownColumns, t = grid._target, s = grid._scale;
     final fade = grid._progress;
-    _level(canvas, size, c, s, 1 - fade, labels: fade < 0.5);
-    if (t != null && fade > 0) _level(canvas, size, t, s / grid._ratio(c, t), fade, labels: fade >= 0.5);
+    final morphs = t != null && fade > 0 ? pinch.morphs(c, t, size.height) : const <int>{};
+    _level(canvas, size, c, s, 1 - fade, labels: fade < 0.5, skip: morphs);
+    if (t != null && fade > 0) {
+      final st = s / grid._ratio(c, t);
+      _level(canvas, size, t, st, fade, labels: fade >= 0.5, skip: morphs);
+      if (morphs.isNotEmpty) _morph(canvas, size, c, t, s, st, fade, morphs);
+    }
   }
 
-  void _level(Canvas canvas, Size size, int n, double s, double alpha, {required bool labels}) {
+  /// [r] in the grid, [off] its scroll, zoomed by [s] around the fingers.
+  Rect _zoom(Rect r, double off, double s) {
+    final f = pinch.focal;
+    return Rect.fromLTRB(f.dx + (r.left - f.dx) * s, f.dy + (r.top - off - f.dy) * s, f.dx + (r.right - f.dx) * s, f.dy + (r.bottom - off - f.dy) * s);
+  }
+
+  /// One photo in [dst], cropped to it as BoxFit.cover does; its half line around it.
+  void _tile(Canvas canvas, int i, Rect dst, double s, Paint image, Paint chip, Paint seam, Paint edge) {
+    canvas.drawRect(dst.inflate(_MediaGridState._gap * s / 2), seam);
+    final img = pinch.images[i];
+    if (img == null) {
+      canvas.drawRect(dst, chip);
+    } else {
+      final w = img.width.toDouble(), h = img.height.toDouble();
+      final fit = dst.width / dst.height;
+      final src = w / h > fit ? Rect.fromLTWH((w - h * fit) / 2, 0, h * fit, h) : Rect.fromLTWH(0, (h - w / fit) / 2, w, w / fit);
+      canvas.drawImageRect(img, src, dst, image);
+    }
+    if (pinch.picked.contains(i)) canvas.drawRect(dst.deflate(1.5 * s), edge);
+  }
+
+  /// The photos that change shape: each once, whole, from its place in [c] (zoomed [sc]) to its
+  /// place in [t] (zoomed [st]) as the gesture goes.
+  void _morph(Canvas canvas, Size size, int c, int t, double sc, double st, double fade, Set<int> morphs) {
+    final a = pinch.layouts[c]!, b = pinch.layouts[t]!;
+    final oa = pinch.offsets[c]!, ob = pinch.offsets[t]!;
+    final screen = Offset.zero & size;
+    final s = sc + (st - sc) * fade;
+    final image = Paint()..filterQuality = FilterQuality.low;
+    final chip = Paint()..color = pinch.chip;
+    final seam = Paint()..color = pinch.seam;
+    final edge = Paint()
+      ..color = pinch.strong
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3 * s;
+    for (final i in morphs) {
+      final dst = Rect.lerp(_zoom(a.rectOf(i), oa, sc), _zoom(b.rectOf(i), ob, st), fade)!;
+      if (dst.overlaps(screen)) _tile(canvas, i, dst, s, image, chip, seam, edge);
+    }
+  }
+
+  void _level(Canvas canvas, Size size, int n, double s, double alpha, {required bool labels, Set<int> skip = const {}}) {
     if (alpha <= 0.002) return;
     final off = pinch.offsets[n];
     final layout = pinch.layouts[n];
@@ -1144,7 +1217,6 @@ class _PinchPainter extends CustomPainter {
     final f = pinch.focal;
     // The part of the grid on screen at this scale.
     final top = off + f.dy - f.dy / s, bottom = off + f.dy + (size.height - f.dy) / s;
-    Rect zoom(Rect r) => Rect.fromLTRB(f.dx + (r.left - f.dx) * s, f.dy + (r.top - f.dy) * s, f.dx + (r.right - f.dx) * s, f.dy + (r.bottom - f.dy) * s);
     final image = Paint()
       ..color = Color.fromRGBO(255, 255, 255, alpha)
       ..filterQuality = FilterQuality.low;
@@ -1167,19 +1239,7 @@ class _PinchPainter extends CustomPainter {
       }
     }
     layout.visit(top, bottom, (i, r) {
-      final dst = zoom(r.shift(Offset(0, -off)));
-      canvas.drawRect(dst.inflate(_MediaGridState._gap * s / 2), seam);
-      final img = pinch.images[i];
-      if (img == null) {
-        canvas.drawRect(dst, chip);
-      } else {
-        // Cropped to the tile, as BoxFit.cover does.
-        final w = img.width.toDouble(), h = img.height.toDouble();
-        final fit = dst.width / dst.height;
-        final src = w / h > fit ? Rect.fromLTWH((w - h * fit) / 2, 0, h * fit, h) : Rect.fromLTWH(0, (h - w / fit) / 2, w, w / fit);
-        canvas.drawImageRect(img, src, dst, image);
-      }
-      if (pinch.picked.contains(i)) canvas.drawRect(dst.deflate(1.5 * s), edge);
+      if (!skip.contains(i)) _tile(canvas, i, _zoom(r, off, s), s, image, chip, seam, edge);
     });
   }
 

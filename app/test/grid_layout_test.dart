@@ -83,6 +83,13 @@ void main() {
     expect(l.rectOf(4).top, closeTo(l.headerTops[1] + 52, 1e-9));
   });
 
+  test("real test of 23 November: a day's last three tall photos fill the row, no gap on the right", () {
+    final l = _mosaic([0.5, 0.5, 0.5, 1], groups: [3, 1]);
+    expect(_rows(l).first, [0, 1, 2]);
+    expect(l.rectOf(2).right, closeTo(_width, 1e-9));
+    expect(l.rectOf(0).height, lessThanOrEqualTo(_width * GridLayout.maxRowShare));
+  });
+
   test('the mosaic: proportions unknown show squares; extremes are cropped to 1:2 and 3:1', () {
     final unknown = _mosaic([0, 0, 0, 0]);
     expect(unknown.rectOf(0).width, closeTo(unknown.rectOf(0).height, 1e-9));

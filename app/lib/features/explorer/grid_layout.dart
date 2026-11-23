@@ -61,7 +61,9 @@ class GridLayout {
   /// A row takes the photos in their order while, at the aimed height (the width ×
   /// [rowShare]), they are not as wide as the screen; then its height is set for them to fill
   /// the width exactly, with or without the photo that passed it, whichever is nearer the aimed
-  /// height. A day's last row, short of photos, keeps the aimed height and stays to the left.
+  /// height. A day's last row fills the width too while it stays no taller than the highest
+  /// (three tall photos a little taller than aimed: they left a gap on the right, real test of 23
+  /// November 2026); short of photos (one tall photo), it keeps the aimed height, to the left.
   factory GridLayout.mosaic({required List<int> groups, required bool headers, required double width, required List<double> aspects, double gap = 2, double header = 52}) {
     final count = groups.fold(0, (a, b) => a + b);
     final rects = Float64List(count * 4);
@@ -108,8 +110,12 @@ class GridLayout {
             break;
           }
           if (j == end) {
-            height = aimed; // the day's last photos: not stretched to the width
-            filled = false;
+            if (h <= highest) {
+              height = h; // the day's last photos, a little taller than aimed: the width filled
+            } else {
+              height = aimed; // too few to fill it: not stretched
+              filled = false;
+            }
             break;
           }
         }
