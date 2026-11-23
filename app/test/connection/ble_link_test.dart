@@ -120,6 +120,16 @@ class _Hotspot implements Hotspot {
   Future<bool> wifiOn() async => true;
 }
 
+/// Until [done], at most [within]: a timer of the code under test comes late on a busy machine
+/// (the CI's, 23 November 2026: the third try came after the test's fixed 100 ms).
+Future<void> _until(bool Function() done, {Duration within = const Duration(seconds: 2)}) async {
+  final deadline = DateTime.now().add(within);
+  while (!done() && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await _settle();
+  }
+}
+
 Future<void> _settle() async {
   for (var i = 0; i < 30; i++) {
     await Future<void>.delayed(Duration.zero);
@@ -731,11 +741,9 @@ void main() {
     await _settle();
     Iterable<Map<String, Object?>> hellos() => steps('ble_client').where((p) => p['step'] == 'hello');
     expect(hellos(), hasLength(1));
-    await Future<void>.delayed(const Duration(milliseconds: 60));
-    await _settle();
+    await _until(() => hellos().length >= 2);
     expect(hellos(), hasLength(2)); // after 40 ms
-    await Future<void>.delayed(const Duration(milliseconds: 100));
-    await _settle();
+    await _until(() => hellos().length >= 3);
     expect(hellos(), hasLength(3)); // after 80 ms more
     await Future<void>.delayed(const Duration(milliseconds: 200));
     await _settle();
