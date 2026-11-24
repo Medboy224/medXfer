@@ -158,7 +158,15 @@ class _Library implements Library {
   String get storageRoot => '/storage/emulated/0';
   @override
   Future<List<FileEntry>> listDir(String path) async => path == storageRoot
-      ? const [FileEntry(name: 'DCIM', path: '/storage/emulated/0/DCIM', dir: true, size: 0)]
+      ? const [
+          FileEntry(name: 'DCIM', path: '/storage/emulated/0/DCIM', dir: true, size: 0),
+          FileEntry(name: 'Camera', path: '/storage/emulated/0/DCIM/Camera', dir: true, size: 0),
+        ]
+      : path.endsWith('/Camera')
+      ? const [
+          FileEntry(name: 'IMG_1.jpg', path: '/storage/emulated/0/DCIM/Camera/IMG_1.jpg', dir: false, size: 10),
+          FileEntry(name: 'shot.heic', path: '/storage/emulated/0/DCIM/Camera/shot.heic', dir: false, size: 20),
+        ]
       : path.endsWith('/DCIM')
       ? const [
           FileEntry(name: 'known.jpg', path: '/storage/emulated/0/DCIM/known.jpg', dir: false, size: 10),
@@ -169,6 +177,14 @@ class _Library implements Library {
       : const [];
   @override
   Future<Uint8List?> fileThumbnail(String path, int px) async => null;
+
+  /// The photos decoded apart: their paths.
+  final decodedPhotos = <String>[];
+  @override
+  Future<Uint8List?> decodePhoto(String path, int width, int height) async {
+    decodedPhotos.add(path);
+    return null;
+  }
   @override
   Future<int> dirSize(String path) async => 7 << 20;
   @override
@@ -1163,7 +1179,7 @@ void main() {
     await _app(tester, _Library(photos: 90));
     await tester.tap(find.text('Photos'));
     await tester.pumpAndSettle();
-    Finder tileOf(int id) => find.byWidgetPredicate((w) => w is Hero && w.tag == 'media-hero-images-/storage/emulated/0/DCIM/Camera/IMG_$id.jpg');
+    Finder tileOf(int id) => find.byWidgetPredicate((w) => w is Hero && w.tag == 'media-hero-grid-images-/storage/emulated/0/DCIM/Camera/IMG_$id.jpg');
     expect(tileOf(85), findsNothing, reason: 'far down the grid, not built');
     await tester.tap(find.byKey(const ValueKey('open-1')));
     await tester.pumpAndSettle();
@@ -1518,6 +1534,54 @@ void main() {
     expect(find.byKey(const Key('photo-flying')), findsOneWidget, reason: 'back to its row, flying');
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('image-pages')), findsNothing);
+  });
+
+  testWidgets('24 November: a photo in the Photos tab and in Files flies from the Files row, not from the tab not shown', (tester) async {
+    await _app(tester, _Library());
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('media-1')), findsOneWidget, reason: 'the Photos tab, kept alive behind');
+    await tester.ensureVisible(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('file-Camera')));
+    await tester.pumpAndSettle();
+    final row = tester.getRect(find.byKey(const ValueKey('play-IMG_1.jpg')));
+    await tester.tap(find.byKey(const ValueKey('play-IMG_1.jpg')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 16));
+    // Two heroes of one tag in a route: Flutter stops on it (a debug check), else picks one.
+    expect(tester.takeException(), isNull);
+    final flying = tester.getRect(find.byKey(const Key('photo-flying')));
+    expect((flying.center.dy - row.center.dy).abs(), lessThan(200), reason: 'from its row');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('image-pages')), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('24 November: a HEIC photo is decoded by the library, away from the thread that draws', (tester) async {
+    // Decoded ahead as the neighbour of the test before: kept in the cache the tests share.
+    PaintingBinding.instance.imageCache
+      ..clear()
+      ..clearLiveImages();
+    final library = _Library();
+    await _app(tester, library);
+    await tester.ensureVisible(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('file-Camera')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('play-shot.heic')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('image-pages')), findsOneWidget);
+    expect(library.decodedPhotos, contains('/storage/emulated/0/DCIM/Camera/shot.heic'));
+    expect(library.decodedPhotos.where((p) => p.endsWith('.jpg')), isEmpty, reason: 'a JPEG, Flutter decodes it itself');
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
   });
 
   test('24 November: the layouts and orders, kept and given back at the next start', () async {

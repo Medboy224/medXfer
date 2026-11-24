@@ -18,10 +18,10 @@ import 'music_screen.dart';
 import 'video_screen.dart';
 
 /// Opens the player of [items] at [index]: images, videos or music, by its kind. [onLeave]: the
-/// photo shown as the viewer of photos closes.
-Future<void> openMedia(BuildContext context, List<MediaEntry> items, int index, {ValueChanged<MediaEntry>? onLeave}) => Navigator.of(context).push(
+/// photo shown as the viewer of photos closes; [from]: where its tiles are.
+Future<void> openMedia(BuildContext context, List<MediaEntry> items, int index, {ValueChanged<MediaEntry>? onLeave, HeroFrom from = HeroFrom.grid}) => Navigator.of(context).push(
   items[index].kind == MediaKind.images
-      ? _PhotoRoute(ImageViewer(items: items, index: index, onLeave: onLeave))
+      ? _PhotoRoute(ImageViewer(items: items, index: index, onLeave: onLeave, from: from))
       : MaterialPageRoute<void>(
           builder: (_) => switch (items[index].kind) {
             MediaKind.video => VideoScreen(items: items, index: index),
@@ -34,12 +34,17 @@ Future<void> openMedia(BuildContext context, List<MediaEntry> items, int index, 
 /// being dark. In the light theme, they took its deep one, dull on black (24 November 2026).
 Color playerAccent(BuildContext context) => AppScope.of(context).state.settings.accent.bright;
 
+/// Where a photo's viewer was opened from: the tile it flies from and back to is there.
+enum HeroFrom { grid, files }
+
 /// The tag of a photo flying between its tile and the viewer.
-Object mediaHeroTag(MediaEntry m) => heroTagOf(m.kind, m.path);
+Object mediaHeroTag(MediaEntry m, HeroFrom from) => heroTagOf(m.kind, m.path, from);
 
 /// By its path: the grid knows a photo's id, the Files tab only its path (its photos flew to and
-/// from nowhere, 24 November 2026).
-Object heroTagOf(MediaKind kind, String path) => 'media-hero-${kind.name}-$path';
+/// from nowhere, 24 November 2026). And by where it opened: the tabs not shown stay alive, the
+/// Photos tab's tile and the Files tab's of the same photo shared a tag, and the photo flew from
+/// the one not shown, or to it (« bug parfois, des clignotements », 24 November 2026).
+Object heroTagOf(MediaKind kind, String path, HeroFrom from) => 'media-hero-${from.name}-${kind.name}-$path';
 
 /// How a photo flies between its tile and the viewer: moving from the first frame, slowing into
 /// place. Flutter flies its heroes on [Curves.fastOutSlowIn], which starts slowly: the photo

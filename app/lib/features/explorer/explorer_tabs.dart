@@ -1390,6 +1390,7 @@ class _MediaTile extends StatelessWidget {
             _HeroOf(
               kind: m.kind,
               path: m.path,
+              from: HeroFrom.grid,
               child: LibraryImage(
               cacheKey: '${kind.name}:${m.id}',
               decodePx: gridDecodePx(context),
@@ -1862,7 +1863,32 @@ Future<void> _openFromFiles(BuildContext context, List<FileEntry> shown, FileEnt
     for (final (i, f) in around.indexed) byPath[f.path] ?? MediaEntry(id: -1 - i, kind: kind, name: f.name, path: f.path, size: f.size, modified: f.modified),
   ];
   if (!context.mounted || at < 0) return;
-  await openMedia(context, items, at);
+  // A photo the library does not know comes without its proportions: it flew to the whole
+  // screen, cropped, then shrank into place. Its row's thumbnail gives them, turned as shown.
+  final opened = items[at];
+  if (kind == MediaKind.images && opened.aspect <= 0) {
+    final bytes = AppScope.of(context, listen: false).state.explorer.cached('file:${opened.path}');
+    if (bytes != null) {
+      try {
+        final image = await decodeImageFromList(bytes);
+        items[at] = MediaEntry(
+          id: opened.id,
+          kind: kind,
+          name: opened.name,
+          path: opened.path,
+          size: opened.size,
+          modified: opened.modified,
+          width: image.width,
+          height: image.height,
+        );
+        image.dispose();
+      } on Object {
+        // Shown without: it fills the screen as it flies.
+      }
+    }
+    if (!context.mounted) return;
+  }
+  await openMedia(context, items, at, from: HeroFrom.files);
 }
 
 class _FileRow extends StatelessWidget {
@@ -1928,6 +1954,7 @@ class _FileRow extends StatelessWidget {
                                 child: _HeroOf(
                                   kind: mediaKindOf(e.name) ?? MediaKind.video,
                                   path: e.path,
+                                  from: HeroFrom.files,
                                   child: LibraryImage(cacheKey: 'file:${e.path}', load: (px) => state.library.fileThumbnail(e.path, px), placeholder: Center(child: icon)),
                                 ),
                               )
@@ -2020,17 +2047,18 @@ class _RowHeights {
 /// A photo's tile as it flies to the viewer and back: the tile's own image, cropped to the rect
 /// as it grows into the photo's shape (videos open their player without it).
 class _HeroOf extends StatelessWidget {
-  const _HeroOf({required this.kind, required this.path, required this.child});
+  const _HeroOf({required this.kind, required this.path, required this.from, required this.child});
 
   final MediaKind kind;
   final String path;
+  final HeroFrom from;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
     if (kind != MediaKind.images) return child;
     return Hero(
-      tag: heroTagOf(kind, path),
+      tag: heroTagOf(kind, path, from),
       createRectTween: mediaRectTween, // closing: the flight lands here, on its curve
       // Closing, the viewer's own flies back: its photo whole, which this tile may show cropped
       // (beyond the mosaic's proportions). Opening, Flutter takes the viewer's by itself.

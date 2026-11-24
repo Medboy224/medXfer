@@ -51,11 +51,16 @@ class FrameStats {
     final seconds = (last - _windowStart) / 1e6;
     final slow = total.where((us) => us > 16667).length;
     final hitches = total.where((us) => us > 100000).length;
+    // The longest frame's parts: a first HEIC photo opened took 93 ms, its cause unseen in the
+    // figures above (24 November 2026).
+    final worst = _timings.reduce((a, b) => a.totalSpan >= b.totalSpan ? a : b);
+    String ms(Duration d) => (d.inMicroseconds / 1000).toStringAsFixed(1);
     debugPrint('perf: ${_timings.length} frames in ${seconds.toStringAsFixed(1)} s '
         '(${(_timings.length / seconds).toStringAsFixed(0)}/s while drawing), '
         'over 16.7 ms: $slow, over 100 ms: $hitches, build p90 ${(p(build, .9) / 1000).toStringAsFixed(1)} ms, '
         'raster p90 ${(p(raster, .9) / 1000).toStringAsFixed(1)} ms, total p90 ${(p(total, .9) / 1000).toStringAsFixed(1)} ms, '
-        'max ${(total.last / 1000).toStringAsFixed(1)} ms, longest gap ${(gap / 1000).toStringAsFixed(1)} ms');
+        'max ${(total.last / 1000).toStringAsFixed(1)} ms (build ${ms(worst.buildDuration)}, raster ${ms(worst.rasterDuration)}, '
+        'waiting ${ms(worst.vsyncOverhead)}), longest gap ${(gap / 1000).toStringAsFixed(1)} ms');
     _timings.clear();
     _windowStart = 0;
   }

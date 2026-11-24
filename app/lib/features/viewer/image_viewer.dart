@@ -12,7 +12,7 @@ import 'dart:math' as math;
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart' show SynchronousFuture, ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderImage;
 import 'package:flutter/services.dart';
@@ -36,19 +36,61 @@ ImageProvider _thumbOf(BuildContext context, Uint8List bytes) => ResizeImage(Mem
 ImageProvider _photoAt(BuildContext context, MediaEntry m, double scale) {
   final size = MediaQuery.sizeOf(context);
   final dpr = MediaQuery.devicePixelRatioOf(context);
+  final width = (size.width * dpr * scale).round();
+  final height = (size.height * dpr * scale).round();
   return ResizeImage(
-    FileImage(File(m.path)),
-    width: (size.width * dpr * scale).round(),
-    height: (size.height * dpr * scale).round(),
+    decodedApart(m.path) ? _DecodedApart(AppScope.of(context, listen: false).state.library, m.path, width, height) : FileImage(File(m.path)),
+    width: width,
+    height: height,
     policy: ResizeImagePolicy.fit,
   );
 }
 
+/// A HEIC (HEIF, AVIF) photo decoded by the library, away from the thread that draws: Flutter
+/// decodes those through Android on it, and froze the screen 0.3 s as one flew open (filmed at
+/// 120 frames a second, 24 November 2026). The file itself where the library does not.
+@immutable
+class _DecodedApart extends ImageProvider<_DecodedApart> {
+  const _DecodedApart(this.library, this.path, this.width, this.height);
+
+  final Library library;
+  final String path;
+  final int width;
+  final int height;
+
+  @override
+  Future<_DecodedApart> obtainKey(ImageConfiguration configuration) => SynchronousFuture(this);
+
+  @override
+  ImageStreamCompleter loadImage(_DecodedApart key, ImageDecoderCallback decode) =>
+      MultiFrameImageStreamCompleter(codec: _load(decode), scale: 1, debugLabel: path);
+
+  Future<ui.Codec> _load(ImageDecoderCallback decode) async {
+    Uint8List? bytes;
+    try {
+      bytes = await library.decodePhoto(path, width, height);
+    } on Object {
+      bytes = null;
+    }
+    bytes ??= await File(path).readAsBytes();
+    return decode(await ui.ImmutableBuffer.fromUint8List(bytes));
+  }
+
+  @override
+  bool operator ==(Object other) => other is _DecodedApart && other.path == path && other.width == width && other.height == height;
+
+  @override
+  int get hashCode => Object.hash(path, width, height);
+}
+
 class ImageViewer extends StatefulWidget {
-  const ImageViewer({super.key, required this.items, required this.index, this.onLeave});
+  const ImageViewer({super.key, required this.items, required this.index, this.onLeave, this.from = HeroFrom.grid});
 
   final List<MediaEntry> items;
   final int index;
+
+  /// Where the photos' tiles are: they fly from there and back.
+  final HeroFrom from;
 
   /// The photo shown as the viewer closes: the grid brings its tile into view, for the photo to
   /// fly back into it (swiped far from where it opened, real test of 23 November 2026).
@@ -247,6 +289,7 @@ class _ImageViewerState extends State<ImageViewer> {
                 key: ValueKey('photo-${_items[i].id}'),
                 entry: _items[i],
                 hero: i == _index,
+                from: widget.from,
                 // The controls go as soon as a pinch zooms in; the pages stop following the
                 // finger only once it lifts (changed during the pinch, it was lost, 23 November).
                 onZooming: () {
@@ -582,9 +625,10 @@ class _Actions extends StatelessWidget {
 /// does not), the sharp one read from the disk and the photo at the screen's size; zoomed in,
 /// the whole of it.
 class _ZoomablePhoto extends StatefulWidget {
-  const _ZoomablePhoto({super.key, required this.entry, required this.onZoom, required this.onZooming, required this.onTap, this.hero = false});
+  const _ZoomablePhoto({super.key, required this.entry, required this.onZoom, required this.onZooming, required this.onTap, this.hero = false, this.from = HeroFrom.grid});
 
   final MediaEntry entry;
+  final HeroFrom from;
   final ValueChanged<bool> onZoom;
 
   /// A pinch is zooming in (said at each move): the controls go.
@@ -681,17 +725,33 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProvide
     if (_asked) return;
     _asked = true;
     final state = AppScope.of(context, listen: false).state;
+    final m = widget.entry;
     final sharp = _sharpWhole ? state.explorer.cached('$_key@sharp') : null;
+    final thumb = state.explorer.cached(_key);
     _sharpFirst = sharp != null;
-    _first = sharp ?? state.explorer.cached(_key);
+    // Opened from the Files tab, its row's thumbnail: the system's was often not at hand, and
+    // the screen went black between the flight and the photo (« clignotements », 24 November).
+    final file = 'file:${m.path}';
+    _first = sharp ?? thumb ?? state.explorer.cached(file);
     _flyingNow();
-    if (_first == null) _ask(_key, () => state.library.thumbnail(widget.entry.kind, widget.entry.id, gridDecodePx(context)), sharp: false);
-    // Already decoded (a neighbour decoded ahead): at once; else once it has stayed.
-    final photo = _photoAt(context, widget.entry, 1.5);
+    if (sharp == null && thumb == null) {
+      if (m.id >= 0) {
+        _ask(_key, () => state.library.thumbnail(m.kind, m.id, gridDecodePx(context)), sharp: false);
+      } else if (_first == null) {
+        // Not known to the system's library: its thumbnail made from the file.
+        _ask(file, () => state.library.fileThumbnail(m.path, gridDecodePx(context)), sharp: false);
+      }
+    }
+    // The photo opened: at once, it is the one wanted. Already decoded (a neighbour decoded
+    // ahead): at once too; else once it has stayed.
+    final opened = widget.hero;
+    final photo = _photoAt(context, m, 1.5);
     unawaited(
       photo.obtainKey(createLocalImageConfiguration(context)).then((key) {
         if (!mounted) return;
-        if (PaintingBinding.instance.imageCache.containsKey(key)) {
+        if (opened) {
+          _stayed();
+        } else if (PaintingBinding.instance.imageCache.containsKey(key)) {
           setState(() => _decode = true);
         } else {
           _settle = Timer(_ZoomablePhoto.settleAfter, _stayed);
@@ -702,7 +762,7 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProvide
 
   /// It stayed: the sharp thumbnail from the disk, and the photo itself.
   void _stayed() {
-    if (!mounted) return;
+    if (!mounted || _decode) return;
     final state = AppScope.of(context, listen: false).state;
     if (!_sharpFirst && _sharpWhole) {
       final size = sharpSize(context);
@@ -862,7 +922,7 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProvide
                   child: HeroMode(
                     enabled: widget.hero,
                     child: Hero(
-                      tag: mediaHeroTag(m),
+                      tag: mediaHeroTag(m, widget.from),
                       createRectTween: mediaRectTween,
                       flightShuttleBuilder: (context, animation, direction, from, to) => _Flying(
                         key: const Key('photo-flying'),

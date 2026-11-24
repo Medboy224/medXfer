@@ -243,6 +243,7 @@ class MainActivity : FlutterActivity() {
                         call.argument<Int>("height") ?: 256, call.argument<Int>("width") ?: 256,
                         (call.argument<Number>("modified") ?: 0).toLong(), call.argument<Boolean>("keptOnly") == true,
                     ) { v, e -> reply(result, v, e) }
+                    "libDecodePhoto" -> library.decodePhoto(call.argument<String>("path") ?: "", call.argument<Int>("width") ?: 1080, call.argument<Int>("height") ?: 1920) { v, e -> reply(result, v, e) }
                     "libFileThumb" -> library.fileThumbnail(call.argument<String>("path") ?: "", call.argument<Int>("size") ?: 128) { v, e -> reply(result, v, e) }
                     "libDirSize" -> library.dirSize(call.argument<String>("path") ?: "") { v, e -> reply(result, v, e) }
                     "libFiles" -> library.files(call.argument<String>("category") ?: "documents", call.argument<Int>("offset") ?: 0, call.argument<Int>("limit") ?: 200) { v, e -> reply(result, v, e) }

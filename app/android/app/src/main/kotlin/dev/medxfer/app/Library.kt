@@ -418,6 +418,31 @@ class Library(private val activity: Activity) {
         }
     }
 
+    /**
+     * A photo Flutter would decode through Android on its own drawing thread (HEIC, HEIF, AVIF):
+     * decoded here instead, on a worker, at least [width] x [height] px (halved while that holds),
+     * as JPEG. Flutter's own way froze the screen 0.3 s as a HEIC photo flew open (filmed at 120
+     * frames a second, 24 November 2026).
+     */
+    fun decodePhoto(path: String, width: Int, height: Int, done: (ByteArray?, String?) -> Unit) = later({
+        val bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(File(path))) { decoder, info, _ ->
+            // By the long and the short sides: the same whichever way the photo is turned.
+            val long = maxOf(info.size.width, info.size.height).toDouble()
+            val short = minOf(info.size.width, info.size.height).toDouble()
+            val wantLong = maxOf(width, height).coerceAtLeast(1)
+            val wantShort = minOf(width, height).coerceAtLeast(1)
+            var sample = 1
+            while (long / (sample * 2) >= wantLong && short / (sample * 2) >= wantShort) sample *= 2
+            decoder.setTargetSampleSize(sample)
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+        }
+        try {
+            jpeg(bitmap, 92)
+        } finally {
+            bitmap.recycle()
+        }
+    }, done)
+
     /** A file's thumbnail by its kind: image, video, PDF (first page), APK (its icon); else null. */
     fun fileThumbnail(path: String, size: Int, done: (ByteArray?, String?) -> Unit) = later({
         val f = File(path)

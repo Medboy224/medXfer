@@ -159,6 +159,10 @@ abstract interface class Library {
   /// A file's thumbnail (image, video, PDF, APK's icon), px wide; null for other kinds.
   Future<Uint8List?> fileThumbnail(String path, int px);
 
+  /// A photo Flutter would decode on the thread that draws ([decodedApart]), decoded away from
+  /// it, at least width × height px, as JPEG; null where this library does not.
+  Future<Uint8List?> decodePhoto(String path, int width, int height);
+
   /// A folder's size, all its files.
   Future<int> dirSize(String path);
 
@@ -203,6 +207,8 @@ class NoLibrary implements Library {
   Future<List<OpenFile>> open(List<({String path, String name})> files) async => const [];
   @override
   Future<Uint8List?> fileThumbnail(String path, int px) async => null;
+  @override
+  Future<Uint8List?> decodePhoto(String path, int width, int height) async => null;
 
   /// A desktop: the folder is walked here, away from the screen's isolate (the basket).
   @override
@@ -324,6 +330,10 @@ class AndroidLibrary implements Library {
   Future<Uint8List?> fileThumbnail(String path, int px) => platformChannel.invokeMethod<Uint8List>('libFileThumb', {'path': path, 'size': px});
 
   @override
+  Future<Uint8List?> decodePhoto(String path, int width, int height) =>
+      platformChannel.invokeMethod<Uint8List>('libDecodePhoto', {'path': path, 'width': width, 'height': height});
+
+  @override
   Future<int> dirSize(String path) async => (await platformChannel.invokeMethod<num>('libDirSize', {'path': path}))?.toInt() ?? 0;
 
   @override
@@ -346,4 +356,11 @@ MediaKind? mediaKindOf(String name) {
     'mp3' || 'm4a' || 'aac' || 'flac' || 'ogg' || 'opus' || 'wav' || 'wma' || 'amr' || 'mka' || 'ape' || 'ac3' => MediaKind.audio,
     _ => null,
   };
+}
+
+/// The photos Flutter decodes through Android, on its platform thread, which is also the one
+/// that draws (merged since Flutter 3.29): HEIC, HEIF, AVIF. [Library.decodePhoto] decodes them.
+bool decodedApart(String path) {
+  final dot = path.lastIndexOf('.');
+  return dot >= 0 && const {'heic', 'heif', 'avif'}.contains(path.substring(dot + 1).toLowerCase());
 }
