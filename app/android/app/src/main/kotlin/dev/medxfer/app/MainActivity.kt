@@ -15,6 +15,7 @@ import android.util.Log
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterShellArgs
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONObject
 
@@ -393,6 +394,15 @@ class MainActivity : FlutterActivity() {
     }
 
     private var pendingProbe: Intent? = null
+
+    // Skia where Impeller would draw through OpenGL ES (Renderer.kt): before the engine starts.
+    override fun getFlutterShellArgs(): FlutterShellArgs {
+        val args = super.getFlutterShellArgs()
+        val skia = Renderer.skiaBecause(this)
+        Log.i("medxfer", if (skia == null) "renderer: Impeller" else "renderer: Skia ($skia)")
+        if (skia != null) args.add(FlutterShellArgs.ARG_DISABLE_IMPELLER)
+        return args
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
