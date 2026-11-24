@@ -18,6 +18,10 @@ abstract interface class OpenWith {
 
   /// Shares [m] with another app (the system's share sheet); true once it opened.
   Future<bool> share(MediaEntry m);
+
+  /// The same for any file, by its path (a PDF, a media the system's library does not know).
+  Future<bool> openFile(String path, String mime);
+  Future<bool> shareFile(String path, String mime);
 }
 
 class NoOpenWith implements OpenWith {
@@ -31,6 +35,12 @@ class NoOpenWith implements OpenWith {
 
   @override
   Future<bool> share(MediaEntry m) async => false;
+
+  @override
+  Future<bool> openFile(String path, String mime) async => false;
+
+  @override
+  Future<bool> shareFile(String path, String mime) async => false;
 }
 
 /// MainActivity.kt: the system's chooser, the file read through its `content://` address.
@@ -42,6 +52,8 @@ class AndroidOpenWith implements OpenWith {
 
   @override
   Future<bool> open(MediaEntry m) async {
+    // Not known to the system's library (opened from the Files tab): by its path.
+    if (m.id < 0) return openFile(m.path, mimeOf(m));
     try {
       return await platformChannel.invokeMethod<bool>('openWith', {'uri': contentUriOf(m).toString(), 'mime': mimeOf(m)}) ?? false;
     } on PlatformException {
@@ -51,8 +63,26 @@ class AndroidOpenWith implements OpenWith {
 
   @override
   Future<bool> share(MediaEntry m) async {
+    if (m.id < 0) return shareFile(m.path, mimeOf(m));
     try {
       return await platformChannel.invokeMethod<bool>('shareMedia', {'uri': contentUriOf(m).toString(), 'mime': mimeOf(m)}) ?? false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> openFile(String path, String mime) => _byPath('openWith', path, mime);
+
+  @override
+  Future<bool> shareFile(String path, String mime) => _byPath('shareMedia', path, mime);
+
+  /// The file's content:// address from MediaStore, which knows the shared storage's files.
+  Future<bool> _byPath(String method, String path, String mime) async {
+    try {
+      final uri = await platformChannel.invokeMethod<String>('libContentUri', {'path': path});
+      if (uri == null) return false;
+      return await platformChannel.invokeMethod<bool>(method, {'uri': uri, 'mime': mime}) ?? false;
     } on PlatformException {
       return false;
     }

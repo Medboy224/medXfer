@@ -198,6 +198,18 @@ class Library(private val activity: Activity) {
         out
     }, done)
 
+    /**
+     * A file's content:// address by its path, for another app to read it (« Ouvrir avec »,
+     * « Partager »): MediaStore's, which knows the files of the shared storage; null if not.
+     */
+    fun contentUri(path: String, done: (String?, String?) -> Unit) = later({
+        val files = MediaStore.Files.getContentUri("external")
+        @Suppress("DEPRECATION")
+        activity.contentResolver.query(files, arrayOf(MediaStore.MediaColumns._ID), "${MediaStore.MediaColumns.DATA} = ?", arrayOf(path), null)?.use { c ->
+            if (c.moveToFirst()) ContentUris.withAppendedId(files, c.getLong(0)).toString() else null
+        }
+    }, done)
+
     private fun rows(cursor: android.database.Cursor?): List<Map<String, Any?>> {
         val out = mutableListOf<Map<String, Any?>>()
         cursor?.use { c ->

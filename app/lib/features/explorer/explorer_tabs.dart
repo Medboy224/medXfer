@@ -17,6 +17,7 @@ import '../../app.dart';
 import '../../l10n/app_localizations.dart';
 import '../../library/explorer.dart';
 import '../viewer/open_media.dart';
+import '../viewer/pdf_screen.dart';
 import 'grid_layout.dart';
 import '../../platform/library.dart';
 import '../../theme.dart';
@@ -1802,7 +1803,7 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
                   itemBuilder: (context, i) => _FileRow(
                     entry: entries[i],
                     onOpen: () => unawaited(ex.open(entries[i].path)),
-                    onPlay: mediaKindOf(entries[i].name) == null || entries[i].dir ? null : () => unawaited(_openFromFiles(context, entries, entries[i])),
+                    onPlay: _openerOf(context, entries, entries[i]),
                   ),
                 ),
         ),
@@ -1828,14 +1829,21 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
         itemBuilder: (context, i) => _FileRow(
           entry: list.items[i],
           showFolder: true,
-          onPlay: mediaKindOf(list.items[i].name) == null ? null : () => unawaited(_openFromFiles(context, list.items, list.items[i])),
+          onPlay: _openerOf(context, list.items, list.items[i]),
         ),
       ),
     );
   }
 }
 
-/// One file or folder: its thumbnail or icon, name, size; a box to pick it.
+/// What ⤢ (▶ for a song) does on a row of the Files tab: a PDF in the PDF reader (WP-8.2,
+/// mockups 27 and 28), a media in its player; nothing for the rest.
+VoidCallback? _openerOf(BuildContext context, List<FileEntry> shown, FileEntry e) {
+  if (e.dir) return null;
+  if (isPdf(e.name)) return AppScope.of(context).state.pdf.supported ? () => unawaited(openPdf(context, e)) : null;
+  return mediaKindOf(e.name) == null ? null : () => unawaited(_openFromFiles(context, shown, e));
+}
+
 /// Opens a photo, a video or a song of the Files tab in its player, among the files of its kind
 /// [shown] with it, in their order: its folder, or its category, makes the queue (asked on 24
 /// November 2026). The system's library gives each its id, for its thumbnail and its address; one
@@ -1891,6 +1899,7 @@ Future<void> _openFromFiles(BuildContext context, List<FileEntry> shown, FileEnt
   await openMedia(context, items, at, from: HeroFrom.files);
 }
 
+/// One file or folder: its thumbnail or icon, name, size; a box to pick it.
 class _FileRow extends StatelessWidget {
   const _FileRow({required this.entry, this.onOpen, this.onPlay, this.showFolder = false});
 

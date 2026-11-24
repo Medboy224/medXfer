@@ -477,5 +477,18 @@
   "pictureStretch": "Étirer",
   "pictureCrop": "Remplir (rogner)",
   "underNotch": "Afficher sous l'encoche",
-  "cannotPlayDetail": "Raison : {detail}"
+  "cannotPlayDetail": "Raison : {detail}",
+  "pdfPageOf": "Page {page} sur {count}",
+  "goToPage": "Aller à la page",
+  "pageRange": "Page (1 à {count})",
+  "goAction": "Aller",
+  "allPages": "Toutes les pages",
+  "pageCount": "{count, plural, =1{1 page} other{{count} pages}}",
+  "pdfPage": "Page {page}",
+  "pdfCurrentPage": "Page {page}, page actuelle",
+  "pdfPages": "Pages du document",
+  "pdfProtected": "Ce PDF est protégé par un mot de passe",
+  "pdfProtectedDetail": "medXfer ne sait pas encore l'ouvrir. Une autre application le peut, et il s'envoie comme n'importe quel fichier.",
+  "pdfCannotOpen": "Ce PDF ne s'ouvre pas",
+  "backToReading": "Retour à la lecture"
 }

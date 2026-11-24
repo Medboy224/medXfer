@@ -1,3 +1,4 @@
+import 'media/pdf_document.dart';
 import 'media/video_player_adapter.dart';
 import 'platform/open_with.dart';
 import 'dart:io';
@@ -51,6 +52,7 @@ Future<void> main() async {
     players: systemMediaPlayers(),
     openWith: systemOpenWith(),
     screen: systemScreenControls(),
+    pdf: systemPdfReader(),
     resumeStore: FileSettingsStore(const SystemFolders().dataDir, name: 'resume.json'),
     desktop: Platform.isWindows || Platform.isLinux || Platform.isMacOS,
   );

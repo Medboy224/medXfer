@@ -17,6 +17,7 @@ import 'package:medxfer/features/explorer/gallery_toolbar.dart';
 import 'package:medxfer/library/explorer.dart';
 import 'package:medxfer/library/selection.dart';
 import 'package:medxfer/media/media_player.dart';
+import 'package:medxfer/media/pdf_document.dart';
 import 'package:medxfer/media/two_engines.dart';
 import 'package:medxfer/media/video_player_adapter.dart' show shownSize;
 import 'package:medxfer/platform/open_with.dart';
@@ -412,6 +413,58 @@ Future<_FakePlayer> _openVideo(WidgetTester tester, _FakePlayers players, {int i
   return players.made.last;
 }
 
+/// A PDF of 24 A4 pages; [locked]: protected by a password.
+class _FakePdf implements PdfReader {
+  _FakePdf({this.locked = false});
+
+  static const pages = 24;
+  final bool locked;
+  final docs = <_FakePdfDoc>[];
+
+  @override
+  bool get supported => true;
+
+  @override
+  Future<PdfDocument> open(String path) async {
+    if (locked) throw const PdfProtected();
+    final d = _FakePdfDoc(List.filled(pages, const ui.Size(595, 842)));
+    docs.add(d);
+    return d;
+  }
+}
+
+class _FakePdfDoc implements PdfDocument {
+  _FakePdfDoc(this.pages);
+
+  @override
+  final List<ui.Size> pages;
+
+  /// The renders asked: (page, width, region).
+  final asked = <(int, int, ui.Rect?)>[];
+  bool closed = false;
+
+  @override
+  Future<ui.Image?> render(int index, int width, {ui.Rect? region}) async {
+    asked.add((index, width, region));
+    return null; // a white page
+  }
+
+  @override
+  void close() => closed = true;
+}
+
+Future<_FakePdfDoc> _openPdf(WidgetTester tester, _FakePdf pdf) async {
+  await tester.ensureVisible(find.text('Fichiers'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Fichiers'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Documents'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const ValueKey('play-rapport.pdf')));
+  await tester.pumpAndSettle();
+  return pdf.docs.isEmpty ? _FakePdfDoc(const []) : pdf.docs.last;
+}
+
 class _FakeOpenWith implements OpenWith {
   final opened = <int>[];
 
@@ -430,6 +483,20 @@ class _FakeOpenWith implements OpenWith {
     shared.add(m.id);
     return true;
   }
+
+  /// Files opened or shared by path.
+  final files = <String>[];
+  @override
+  Future<bool> openFile(String path, String mime) async {
+    files.add('open $path $mime');
+    return true;
+  }
+
+  @override
+  Future<bool> shareFile(String path, String mime) async {
+    files.add('share $path $mime');
+    return true;
+  }
 }
 
 Future<(FakeCore, AppState)> _app(
@@ -438,6 +505,7 @@ Future<(FakeCore, AppState)> _app(
   MediaPlayers players = const NoMediaPlayers(),
   OpenWith openWith = const NoOpenWith(),
   ScreenControls screen = const NoScreenControls(),
+  PdfReader pdf = const NoPdfReader(),
 }) async {
   final core = FakeCore()..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy'})]));
   final state = AppState(
@@ -449,6 +517,7 @@ Future<(FakeCore, AppState)> _app(
     players: players,
     openWith: openWith,
     screen: screen,
+    pdf: pdf,
   );
   tester.platformDispatcher.localesTestValue = [const Locale('fr')];
   addTearDown(tester.platformDispatcher.clearLocalesTestValue);
@@ -1582,6 +1651,204 @@ void main() {
     expect(library.decodedPhotos.where((p) => p.endsWith('.jpg')), isEmpty, reason: 'a JPEG, Flutter decodes it itself');
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('24 November: ⤢ on a PDF opens the reader; a page by its number; selected as in the grid; closed, the document too', (tester) async {
+    final pdf = _FakePdf();
+    final (_, state) = await _app(tester, _Library(), pdf: pdf);
+    final doc = await _openPdf(tester, pdf);
+    expect(find.byKey(const Key('pdf-pages')), findsOneWidget);
+    expect(find.textContaining('Page 1 sur 24'), findsOneWidget);
+    expect(doc.asked.map((a) => a.$1), contains(0), reason: 'the first page drawn');
+    expect(find.byKey(const Key('pdf-slider')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('pdf-goto')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('pdf-goto-field')), '12');
+    await tester.tap(find.byKey(const Key('pdf-goto-go')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Page 12 sur 24'), findsOneWidget);
+    expect(doc.asked.map((a) => a.$1), contains(11));
+
+    await tester.tap(find.byKey(const Key('media-select')));
+    await tester.pump();
+    expect(state.selection.contains('/storage/emulated/0/Documents/rapport.pdf'), isTrue);
+
+    await tester.tap(find.byKey(const Key('player-close')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('pdf-pages')), findsNothing);
+    expect(doc.closed, isTrue);
+  });
+
+  testWidgets('24 November: all the pages as thumbnails; touching one goes to it', (tester) async {
+    final pdf = _FakePdf();
+    await _app(tester, _Library(), pdf: pdf);
+    await _openPdf(tester, pdf);
+    await tester.tap(find.byKey(const Key('pdf-all')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('pdf-all-pages')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('pdf-thumb-4')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('pdf-all-pages')), findsNothing);
+    expect(find.textContaining('Page 5 sur 24'), findsOneWidget);
+  });
+
+  testWidgets('24 November: a double tap zooms in, the part shown drawn again sharp; a touch hides the bars, the page number stays', (tester) async {
+    final pdf = _FakePdf();
+    await _app(tester, _Library(), pdf: pdf);
+    final doc = await _openPdf(tester, pdf);
+    final screen = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+    expect(tester.getSize(find.byKey(const ValueKey('pdf-page-0'))).width, lessThan(screen));
+    final at = tester.getCenter(find.byKey(const Key('pdf-pages')));
+    await tester.tapAt(at);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(at);
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byKey(const ValueKey('pdf-page-0'))).width, greaterThan(screen * 2));
+    await tester.pump(const Duration(milliseconds: 200)); // drawn again once still
+    await tester.pumpAndSettle();
+    expect(doc.asked.where((a) => a.$3 != null), isNotEmpty, reason: 'the part shown, drawn at the zoom');
+
+    await tester.tapAt(at);
+    await tester.pump(const Duration(milliseconds: 400)); // a touch, once no second one came
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('pdf-header-line')), findsNothing);
+    expect(find.byKey(const Key('pdf-page-chip')), findsOneWidget);
+    expect(find.textContaining('250 %'), findsOneWidget);
+  });
+
+  testWidgets('24 November: two fingers pinch the pages larger; the list holds still meanwhile', (tester) async {
+    final pdf = _FakePdf();
+    await _app(tester, _Library(), pdf: pdf);
+    await _openPdf(tester, pdf);
+    final screen = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+    final c = tester.getCenter(find.byKey(const Key('pdf-pages')));
+    final a = await tester.startGesture(c - const Offset(40, 0));
+    final b = await tester.startGesture(c + const Offset(40, 0));
+    await tester.pump();
+    for (var i = 1; i <= 8; i++) {
+      await a.moveTo(c - Offset(40.0 + i * 12, 0));
+      await b.moveTo(c + Offset(40.0 + i * 12, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await a.up();
+    await b.up();
+    await tester.pumpAndSettle();
+    final w = tester.getSize(find.byKey(const ValueKey('pdf-page-0'))).width;
+    // The fingers 80 px apart, then 272: 3.4 times larger.
+    expect(w, greaterThan(screen * 2.8));
+    expect(w, lessThan(screen * 3.8));
+  });
+
+  testWidgets('real test of 24 November: zoomed on page 5, the reader stays on page 5 (it went back to the top of the first page)', (tester) async {
+    final pdf = _FakePdf();
+    await _app(tester, _Library(), pdf: pdf);
+    await _openPdf(tester, pdf);
+    await tester.tap(find.byKey(const Key('pdf-goto')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('pdf-goto-field')), '5');
+    await tester.tap(find.byKey(const Key('pdf-goto-go')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Page 5 sur 24'), findsOneWidget);
+    final screen = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+    final c = tester.getCenter(find.byKey(const Key('pdf-pages')));
+
+    // Two fingers.
+    final a = await tester.startGesture(c - const Offset(40, 0));
+    final b = await tester.startGesture(c + const Offset(40, 0));
+    await tester.pump();
+    for (var i = 1; i <= 6; i++) {
+      await a.moveTo(c - Offset(40.0 + i * 8, 0));
+      await b.moveTo(c + Offset(40.0 + i * 8, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    // While pinching too: still page 5 under the fingers.
+    expect(find.byKey(const ValueKey('pdf-page-4')), findsOneWidget);
+    expect(find.byKey(const ValueKey('pdf-page-0')), findsNothing);
+    await a.up();
+    await b.up();
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Page 5 sur 24'), findsOneWidget, reason: 'still on page 5');
+    expect(find.byKey(const ValueKey('pdf-page-0')), findsNothing);
+    // Its middle under where the fingers were, not its corner.
+    final page = tester.getRect(find.byKey(const ValueKey('pdf-page-4')));
+    expect(page.width, greaterThan(screen * 1.8));
+    expect(page.left, lessThan(0));
+    expect(page.right, greaterThan(screen));
+
+    // A double tap: back to the screen's width, still on page 5.
+    await tester.tapAt(c);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(c);
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byKey(const ValueKey('pdf-page-4'))).width, lessThan(screen));
+    expect(find.textContaining('Page 5 sur 24'), findsOneWidget);
+  });
+
+  testWidgets('real test of 24 November: zoomed in, then out at once, the pages around show (a piece of page stayed alone in the dark)', (tester) async {
+    final pdf = _FakePdf();
+    await _app(tester, _Library(), pdf: pdf);
+    await _openPdf(tester, pdf);
+    final screen = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+    final c = tester.getCenter(find.byKey(const Key('pdf-pages')));
+    // The part of the screen the pages are drawn in: the whole screen, whatever the zoom.
+    Rect shown() => tester.getRect(find.descendant(of: find.byKey(const ValueKey('layer-pages')), matching: find.byType(SingleChildScrollView)));
+
+    await tester.tapAt(c);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(c);
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byKey(const ValueKey('pdf-page-0'))).width, greaterThan(screen * 2));
+
+    // Two fingers 200 apart, then 100: half the zoom.
+    final a = await tester.startGesture(c - const Offset(100, 0));
+    final b = await tester.startGesture(c + const Offset(100, 0));
+    await tester.pump();
+    for (var i = 1; i <= 5; i++) {
+      await a.moveTo(c - Offset(100.0 - i * 10, 0));
+      await b.moveTo(c + Offset(100.0 - i * 10, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(shown().width, greaterThanOrEqualTo(screen - 1), reason: 'not the old screen shrunk');
+    final w = tester.getSize(find.byKey(const ValueKey('pdf-page-0'))).width;
+    expect(w, closeTo((screen - 16) * 1.25, 30), reason: 'laid out at 125 %, while the fingers move');
+    await a.up();
+    await b.up();
+    await tester.pumpAndSettle();
+    expect(shown().width, greaterThanOrEqualTo(screen - 1));
+
+    // A double tap back to the screen's width: laid out all along, not shrunk.
+    await tester.tapAt(c);
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tapAt(c);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(shown().width, greaterThanOrEqualTo(screen - 1), reason: 'halfway back');
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byKey(const ValueKey('pdf-page-0'))).width, lessThan(screen));
+  });
+
+  testWidgets('24 November: a PDF locked by a password says so, and goes to another app', (tester) async {
+    final pdf = _FakePdf(locked: true);
+    final openWith = _FakeOpenWith();
+    await _app(tester, _Library(), pdf: pdf, openWith: openWith);
+    await _openPdf(tester, pdf);
+    expect(find.byKey(const Key('pdf-protected')), findsOneWidget);
+    expect(find.text('Ce PDF est protégé par un mot de passe'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('open-with')));
+    await tester.pump();
+    expect(openWith.files, ['open /storage/emulated/0/Documents/rapport.pdf application/pdf']);
+  });
+
+  testWidgets('24 November: without a PDF reader (the desktops for now), a PDF has no ⤢', (tester) async {
+    await _app(tester, _Library());
+    await tester.ensureVisible(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Documents'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('play-rapport.pdf')), findsNothing);
   });
 
   test('24 November: the layouts and orders, kept and given back at the next start', () async {

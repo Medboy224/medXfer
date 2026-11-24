@@ -131,9 +131,11 @@ String mediaDetails(BuildContext context, MediaEntry m) {
 
 /// « Sélectionner »: the same selection as the grid's, the basket said once picked.
 class MediaSelectButton extends StatelessWidget {
-  const MediaSelectButton({super.key, required this.entry, this.accent});
+  const MediaSelectButton({super.key, this.entry, this.file, this.accent}) : assert(entry != null || file != null);
 
-  final MediaEntry entry;
+  /// A media; or [file], a file of the Files tab (a PDF).
+  final MediaEntry? entry;
+  final FileEntry? file;
 
   /// Over a dark picture, the accent of the theme.
   final Color? accent;
@@ -143,7 +145,8 @@ class MediaSelectButton extends StatelessWidget {
     final state = AppScope.of(context).state;
     final l = AppLocalizations.of(context);
     final sel = state.selection;
-    final pick = Explorer.pickMedia(entry);
+    final m = entry;
+    final pick = m != null ? Explorer.pickMedia(m) : Explorer.pickFile(file!);
     return ListenableBuilder(
       listenable: sel,
       builder: (context, _) {

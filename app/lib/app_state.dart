@@ -4,6 +4,7 @@
 library;
 
 import 'media/media_player.dart';
+import 'media/pdf_document.dart';
 import 'media/resume_points.dart';
 import 'platform/open_with.dart';
 import 'platform/screen_controls.dart';
@@ -60,6 +61,7 @@ class AppState extends ChangeNotifier {
     this.players = const NoMediaPlayers(),
     this.openWith = const NoOpenWith(),
     this.screen = const NoScreenControls(),
+    this.pdf = const NoPdfReader(),
     SettingsStore? resumeStore,
     HistoryStore? history,
     AppSettings? settings,
@@ -194,6 +196,9 @@ class AppState extends ChangeNotifier {
 
   /// The brightness and the media volume the video player's gestures change.
   final ScreenControls screen;
+
+  /// What opens PDFs (WP-8.2, mockups 27 and 28).
+  final PdfReader pdf;
 
   /// Where each video was left.
   final ResumePoints resume;
