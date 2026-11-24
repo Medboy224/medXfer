@@ -51,7 +51,10 @@ final _png = base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQ
 
 /// A phone with two apps, three photos, a song, and a folder.
 class _Library implements Library {
-  _Library({this.photos = 3, this.long = false, this.sizes = const [], this.videos = 0, this.songs = 1, this.thumbs = false});
+  _Library({this.photos = 3, this.long = false, this.sizes = const [], this.videos = 0, this.songs = 1, this.thumbs = false, this.daily = false});
+
+  /// Each photo on a day of its own, the latest first: as many days as photos.
+  final bool daily;
 
   /// How many videos and songs the phone holds.
   final int videos, songs;
@@ -107,6 +110,7 @@ class _Library implements Library {
                 album: i < 3 ? 'Camera' : 'WhatsApp',
                 width: i <= sizes.length ? sizes[i - 1].$1 : 0,
                 height: i <= sizes.length ? sizes[i - 1].$2 : 0,
+                modified: daily ? 1795000000 - i * 86400 : 0,
               ),
           ],
           MediaKind.audio => [
@@ -1826,6 +1830,23 @@ void main() {
     expect(shown().width, greaterThanOrEqualTo(screen - 1), reason: 'halfway back');
     await tester.pumpAndSettle();
     expect(tester.getSize(find.byKey(const ValueKey('pdf-page-0'))).width, lessThan(screen));
+  });
+
+  testWidgets('TECNO, 24 November: the grid builds the days in view only, not the whole library (half a second at each page loaded)', (tester) async {
+    final library = _Library(photos: 150, daily: true);
+    final (_, state) = await _app(tester, library);
+    await tester.tap(find.text('Photos'));
+    await tester.pumpAndSettle();
+    // Built, on the screen or not.
+    Finder headers() => find.byWidgetPredicate((w) => w.runtimeType.toString() == '_DayHeader', skipOffstage: false);
+    expect(state.explorer.media(MediaKind.images).items, hasLength(150));
+    final built = tester.widgetList(headers()).length;
+    expect(built, lessThan(20), reason: '150 days, a few on the screen');
+    // Far down, the days there are built, and the first ones let go.
+    await tester.drag(find.byKey(const ValueKey('media-images')), const Offset(0, -6000));
+    await tester.pumpAndSettle();
+    expect(tester.widgetList(headers()).length, lessThan(20));
+    expect(find.byKey(const ValueKey('media-1'), skipOffstage: false), findsNothing);
   });
 
   testWidgets('24 November: a PDF locked by a password says so, and goes to another app', (tester) async {

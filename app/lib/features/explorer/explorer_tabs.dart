@@ -989,6 +989,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                     if (layoutsKey != _layoutsKey) {
                       _layoutsKey = layoutsKey;
                       _layouts.clear();
+                      _lines.clear();
                       _aspects = [for (final m in items) m.aspect];
                     }
                     Widget view(ScrollController controller, int cols, Key key) => _TileColumns(
@@ -1008,10 +1009,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                             ),
                           )
                         else
-                          for (final (g, day) in days.indexed) ...[
-                            if (byDay) SliverToBoxAdapter(child: SizedBox(height: _headerHeight, child: _DayHeader(day: day.$1, items: day.$2))),
-                            if (cols <= Explorer.minColumns) _mosaic(items, _layoutOf(cols), g) else _grid(day.$2, cols),
-                          ],
+                          _lined(items, days, cols),
                         SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
                       ],
                     ),
@@ -1055,40 +1053,52 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                 ),
               ),
             ),
-            if (list.loading) LinearProgressIndicator(minHeight: 2, color: c.muted),
+            // Its room kept: come and gone at each page of photos, it changed the grid's height,
+            // which was built again whole, twice a page (TECNO BF6, 24 November 2026).
+            SizedBox(height: 2, child: list.loading ? LinearProgressIndicator(minHeight: 2, color: c.muted) : null),
           ],
         );
       },
     );
   }
 
-  Widget _grid(List<MediaEntry> items, int columns) => SliverGrid(
-    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, mainAxisSpacing: _gap, crossAxisSpacing: _gap),
-    delegate: SliverChildBuilderDelegate((context, i) => _tiles[items[i]] ??= _MediaTile(kind: widget.kind, entry: items[i]), childCount: items.length),
-  );
-
-  /// A day of the mosaic ([GridLayout.mosaic]): its rows, each its photos at their places.
-  Widget _mosaic(List<MediaEntry> items, GridLayout layout, int group) {
-    final rows = layout.groupRows[group];
-    return SliverVariedExtentList.builder(
-      itemCount: rows.length,
-      itemExtentBuilder: (r, _) => r < rows.length ? rows[r].height + _gap : null,
-      itemBuilder: (context, r) {
-        final row = rows[r];
+  /// The grid as one list of lines, each day's header then its rows, built only as they come
+  /// into view. One sliver per day built every day's header at each change, the whole library's
+  /// (a page of photos loaded, a pick): half a second to a second on a modest phone (TECNO BF6,
+  /// measured on 24 November 2026). The same places as [GridLayout]'s, to the pixel.
+  Widget _lined(List<MediaEntry> items, List<(DateTime, List<MediaEntry>)> days, int columns) {
+    final layout = _layoutOf(columns);
+    final lines = _linesOf(columns, layout);
+    return SliverVariedExtentList(
+      itemExtentBuilder: (i, _) => i < lines.length ? lines.extent[i] : null,
+      delegate: _ExactLength(childCount: lines.length, total: lines.total, (context, i) {
+        final first = lines.first[i];
+        if (first < 0) {
+          final day = days[lines.group[i]];
+          return SizedBox(height: _headerHeight, child: _DayHeader(day: day.$1, items: day.$2));
+        }
         return Stack(
           children: [
-            for (var k = row.first; k < row.first + row.count; k++)
+            for (var k = first; k < first + lines.count[i]; k++)
               Positioned(
                 left: layout.rectOf(k).left,
                 top: 0,
                 width: layout.rectOf(k).width,
-                height: row.height,
+                height: layout.rectOf(k).height,
                 child: _tiles[items[k]] ??= _MediaTile(kind: widget.kind, entry: items[k]),
               ),
           ],
         );
-      },
+      }),
     );
+  }
+
+  final _lines = <int, _Lines>{};
+
+  _Lines _linesOf(int columns, GridLayout layout) {
+    final had = _lines[columns];
+    if (had != null && identical(had.layout, layout)) return had;
+    return _lines[columns] = _Lines(layout, _groups, headers: _headers, header: _headerHeight, gap: _gap, columns: columns);
   }
 
   /// The media by day, in the order shown: what « Tout ce jour » picks.
@@ -1288,6 +1298,61 @@ class _PinchPainter extends CustomPainter {
 }
 
 /// A day's name, and « Tout ce jour » with its square box.
+/// A grid's lines, in order: each day's header (if [headers]), then its rows of photos, each
+/// line's height and, for a row, its photos ([first], [count]); [first] is -1 for a header.
+class _Lines {
+  _Lines(this.layout, List<int> groups, {required bool headers, required double header, required double gap, required int columns}) {
+    var start = 0;
+    for (var g = 0; g < groups.length; g++) {
+      final n = groups[g];
+      if (headers) _add(g, -1, 0, header);
+      if (layout.isMosaic) {
+        for (final r in layout.groupRows[g]) {
+          _add(g, r.first, r.count, r.height + gap);
+        }
+      } else {
+        // Square tiles: a gap under each row but a day's last ([GridLayout.squares]).
+        final rows = (n + columns - 1) ~/ columns;
+        for (var r = 0; r < rows; r++) {
+          final f = start + r * columns;
+          _add(g, f, math.min(columns, start + n - f), layout.rectOf(f).height + (r < rows - 1 ? gap : 0));
+        }
+      }
+      start += n;
+    }
+  }
+
+  final GridLayout layout;
+  final group = <int>[];
+  final first = <int>[];
+  final count = <int>[];
+  final extent = <double>[];
+
+  int get length => extent.length;
+
+  /// All the lines' height.
+  double total = 0;
+
+  void _add(int g, int f, int c, double e) {
+    group.add(g);
+    first.add(f);
+    count.add(c);
+    extent.add(e);
+    total += e;
+  }
+}
+
+/// Lines whose whole length is known: Flutter guesses it from those built, too short where a
+/// day's header (52 px) is among them, and the grid stopped short of a photo brought into view.
+class _ExactLength extends SliverChildBuilderDelegate {
+  _ExactLength(super.builder, {required super.childCount, required this.total});
+
+  final double total;
+
+  @override
+  double? estimateMaxScrollOffset(int firstIndex, int lastIndex, double leadingScrollOffset, double trailingScrollOffset) => total;
+}
+
 class _DayHeader extends StatelessWidget {
   const _DayHeader({required this.day, required this.items});
 
