@@ -34,8 +34,42 @@ abstract class MediaPlayer extends ChangeNotifier {
   Future<void> seek(Duration to);
   Future<void> setVolume(double volume);
 
-  /// The picture, for a video.
-  Widget view();
+  /// The picture, for a video, fitted in the space it is given: whole ([BoxFit.contain]), or
+  /// filling it ([BoxFit.cover], « Remplir l'écran »).
+  Widget view({BoxFit fit = BoxFit.contain});
+
+  /// How fast it plays: 1 is its own speed.
+  double get speed => 1;
+  Future<void> setSpeed(double speed) async {}
+
+  /// Played again from its start once at its end (« Répéter la vidéo »).
+  bool get looping => false;
+  Future<void> setLooping(bool on) async {}
+
+  /// The sound tracks and the subtitles the file carries, where the engine reads them; none
+  /// otherwise (the screens then offer no choice).
+  List<MediaTrack> get audioTracks => const [];
+  List<MediaTrack> get subtitleTracks => const [];
+
+  /// The sound track played, and the subtitles shown (null: none), by their [MediaTrack.id].
+  String? get audioTrack => null;
+  String? get subtitleTrack => null;
+  Future<void> setAudioTrack(String id) async {}
+  Future<void> setSubtitleTrack(String? id) async {}
+
+  /// The subtitles' words at this moment: empty when none show.
+  String get subtitle => '';
+
+  /// The engine playing it, named in the file's details; null where there is a single one.
+  String? get engine => null;
+}
+
+/// A sound track or the subtitles of a file: its id for the engine, and what it is called.
+class MediaTrack {
+  const MediaTrack(this.id, this.label);
+
+  final String id;
+  final String label;
 }
 
 /// Makes the players of this system.
@@ -85,7 +119,7 @@ class _Unsupported extends MediaPlayer {
   @override
   Future<void> setVolume(double volume) async {}
   @override
-  Widget view() => const SizedBox.shrink();
+  Widget view({BoxFit fit = BoxFit.contain}) => const SizedBox.shrink();
 }
 
 /// A media's address in Android's MediaStore, which the players and other apps read.

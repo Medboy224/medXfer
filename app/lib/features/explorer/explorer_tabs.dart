@@ -1388,7 +1388,8 @@ class _MediaTile extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             _HeroOf(
-              entry: m,
+              kind: m.kind,
+              path: m.path,
               child: LibraryImage(
               cacheKey: '${kind.name}:${m.id}',
               decodePx: gridDecodePx(context),
@@ -1797,7 +1798,11 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
                   key: ValueKey('files-list:${ex.dir}'), // a new folder opens at its top
                   padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
                   itemCount: entries.length,
-                  itemBuilder: (context, i) => _FileRow(entry: entries[i], onOpen: () => unawaited(ex.open(entries[i].path))),
+                  itemBuilder: (context, i) => _FileRow(
+                    entry: entries[i],
+                    onOpen: () => unawaited(ex.open(entries[i].path)),
+                    onPlay: mediaKindOf(entries[i].name) == null || entries[i].dir ? null : () => unawaited(_openFromFiles(context, entries, entries[i])),
+                  ),
                 ),
         ),
       ],
@@ -1819,18 +1824,56 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
         key: ValueKey('files-${cat.name}'),
         padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
         itemCount: list.items.length,
-        itemBuilder: (context, i) => _FileRow(entry: list.items[i], showFolder: true),
+        itemBuilder: (context, i) => _FileRow(
+          entry: list.items[i],
+          showFolder: true,
+          onPlay: mediaKindOf(list.items[i].name) == null ? null : () => unawaited(_openFromFiles(context, list.items, list.items[i])),
+        ),
       ),
     );
   }
 }
 
 /// One file or folder: its thumbnail or icon, name, size; a box to pick it.
+/// Opens a photo, a video or a song of the Files tab in its player, among the files of its kind
+/// [shown] with it, in their order: its folder, or its category, makes the queue (asked on 24
+/// November 2026). The system's library gives each its id, for its thumbnail and its address; one
+/// it does not know is read by its path (an id below 0).
+Future<void> _openFromFiles(BuildContext context, List<FileEntry> shown, FileEntry e) async {
+  final kind = mediaKindOf(e.name);
+  if (kind == null) return;
+  final library = AppScope.of(context, listen: false).state.library;
+  var around = [for (final f in shown) if (!f.dir && mediaKindOf(f.name) == kind) f];
+  // At most 300 around it: a folder of thousands is a long way to go anyway.
+  var at = around.indexWhere((f) => f.path == e.path);
+  if (around.length > 300) {
+    final from = (at - 150).clamp(0, around.length - 300);
+    around = around.sublist(from, from + 300);
+    at -= from;
+  }
+  List<MediaEntry> known;
+  try {
+    known = await library.mediaAt(kind, [for (final f in around) f.path]);
+  } on Object {
+    known = const [];
+  }
+  final byPath = {for (final m in known) m.path: m};
+  final items = [
+    for (final (i, f) in around.indexed) byPath[f.path] ?? MediaEntry(id: -1 - i, kind: kind, name: f.name, path: f.path, size: f.size, modified: f.modified),
+  ];
+  if (!context.mounted || at < 0) return;
+  await openMedia(context, items, at);
+}
+
 class _FileRow extends StatelessWidget {
-  const _FileRow({required this.entry, this.onOpen, this.showFolder = false});
+  const _FileRow({required this.entry, this.onOpen, this.onPlay, this.showFolder = false});
 
   final FileEntry entry;
   final VoidCallback? onOpen;
+
+  /// A photo, a video or a song: its player, opened by ⤢ (▶ for a song); touching the row
+  /// still picks it.
+  final VoidCallback? onPlay;
 
   /// In a category, where the file is.
   final bool showFolder;
@@ -1881,7 +1924,12 @@ class _FileRow extends StatelessWidget {
                         child: thumbed
                             ? ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
-                                child: LibraryImage(cacheKey: 'file:${e.path}', load: (px) => state.library.fileThumbnail(e.path, px), placeholder: Center(child: icon)),
+                                // A photo flies from here to its viewer, and back.
+                                child: _HeroOf(
+                                  kind: mediaKindOf(e.name) ?? MediaKind.video,
+                                  path: e.path,
+                                  child: LibraryImage(cacheKey: 'file:${e.path}', load: (px) => state.library.fileThumbnail(e.path, px), placeholder: Center(child: icon)),
+                                ),
                               )
                             : icon,
                       ),
@@ -1903,6 +1951,13 @@ class _FileRow extends StatelessWidget {
                 ),
               ),
             ),
+            if (onPlay != null)
+              _OpenButton(
+                key: ValueKey('play-${e.name}'),
+                label: (mediaKindOf(e.name) == MediaKind.audio ? l.listenThis : l.openThis)(e.name),
+                icon: mediaKindOf(e.name) == MediaKind.audio ? Icons.play_arrow_rounded : Icons.open_in_full_rounded,
+                onOpen: onPlay!,
+              ),
             Semantics(
               button: true,
               toggled: on,
@@ -1965,16 +2020,17 @@ class _RowHeights {
 /// A photo's tile as it flies to the viewer and back: the tile's own image, cropped to the rect
 /// as it grows into the photo's shape (videos open their player without it).
 class _HeroOf extends StatelessWidget {
-  const _HeroOf({required this.entry, required this.child});
+  const _HeroOf({required this.kind, required this.path, required this.child});
 
-  final MediaEntry entry;
+  final MediaKind kind;
+  final String path;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    if (entry.kind != MediaKind.images) return child;
+    if (kind != MediaKind.images) return child;
     return Hero(
-      tag: mediaHeroTag(entry),
+      tag: heroTagOf(kind, path),
       createRectTween: mediaRectTween, // closing: the flight lands here, on its curve
       // Closing, the viewer's own flies back: its photo whole, which this tile may show cropped
       // (beyond the mosaic's proportions). Opening, Flutter takes the viewer's by itself.

@@ -20,6 +20,13 @@ dependencies:
   file_selector: ^1.1.0
   desktop_drop: ^0.8.4
   video_player: ^2.14.1
+  # The second engine (WP-8.2, decided on 23 November 2026): libmpv, for what the phone's own
+  # decoders do not read (AVI in Xvid, WMV, FLV, Dolby, DTS, embedded subtitles). media_kit is
+  # MIT; its libmpv and FFmpeg are built LGPL v3, without GPL parts. Android only for now: the
+  # other systems build media_kit_video's plugin empty, without libmpv.
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_android_video: ^1.3.8
 
 dev_dependencies:
   flutter_test:

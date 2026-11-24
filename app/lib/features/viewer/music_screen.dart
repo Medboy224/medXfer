@@ -67,9 +67,10 @@ class _MusicScreenState extends State<MusicScreen> {
     final state = AppScope.of(context).state;
     final l = AppLocalizations.of(context);
     final c = context.colors;
+    final accent = playerAccent(context);
     final m = widget.items[_index];
     return Theme(
-      data: ThemeData.dark(useMaterial3: true).copyWith(colorScheme: ColorScheme.dark(primary: c.accent)),
+      data: ThemeData.dark(useMaterial3: true).copyWith(colorScheme: ColorScheme.dark(primary: accent)),
       child: Scaffold(
         backgroundColor: c.background,
         body: SafeArea(
@@ -88,7 +89,7 @@ class _MusicScreenState extends State<MusicScreen> {
                       height: 260,
                       margin: const EdgeInsets.symmetric(vertical: 16),
                       decoration: BoxDecoration(color: c.surface, borderRadius: BorderRadius.circular(24), border: Border.all(color: c.border)),
-                      child: Icon(Icons.music_note_rounded, size: 96, color: c.accent),
+                      child: Icon(Icons.music_note_rounded, size: 96, color: accent),
                     ),
                   ),
                   Padding(
@@ -105,18 +106,18 @@ class _MusicScreenState extends State<MusicScreen> {
                   const SizedBox(height: 8),
                   if (failed)
                     CannotPlay(
-                      accent: c.accent,
+                      accent: accent,
                       unsupported: !state.players.supported,
                       onOpenWith: state.openWith.supported ? () => unawaited(state.openWith.open(m)) : null,
                     )
                   else
                     PlayerControls(
                       player: p,
-                      accent: c.accent,
+                      accent: accent,
                       onPrevious: _index > 0 ? () => unawaited(_open(_index - 1)) : null,
                       onNext: _index < widget.items.length - 1 ? () => unawaited(_open(_index + 1)) : null,
                     ),
-                  Padding(padding: const EdgeInsets.fromLTRB(14, 8, 14, 0), child: MediaSelectButton(entry: m, accent: c.accent)),
+                  Padding(padding: const EdgeInsets.fromLTRB(14, 8, 14, 0), child: MediaSelectButton(entry: m, accent: accent)),
                 ],
               );
             },

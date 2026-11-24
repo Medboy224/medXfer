@@ -4,7 +4,9 @@
 library;
 
 import 'media/media_player.dart';
+import 'media/resume_points.dart';
 import 'platform/open_with.dart';
+import 'platform/screen_controls.dart';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -57,13 +59,16 @@ class AppState extends ChangeNotifier {
     this.library = const NoLibrary(),
     this.players = const NoMediaPlayers(),
     this.openWith = const NoOpenWith(),
+    this.screen = const NoScreenControls(),
+    SettingsStore? resumeStore,
     HistoryStore? history,
     AppSettings? settings,
     this.desktop = false,
   }) : connection = Connection(core, network: network, hotspot: hotspot),
        cable = CableWatch(cable),
        firewall = FirewallWatch(firewall),
-       settings = settings ?? AppSettings() {
+       settings = settings ?? AppSettings(),
+       resume = ResumePoints(store: resumeStore) {
     receiveFolders = ReceiveFolders(settings: this.settings, storage: storage, folders: folders);
     // Created now, not on first use: they listen to the core from its first event.
     transfers = Transfers(
@@ -74,7 +79,9 @@ class AppState extends ChangeNotifier {
       // The folder chosen in the settings, else the default (decisions J2 and J16, WP-B.10).
       placeFor: receiveFolders.placeFor,
     );
-    explorer = Explorer(library);
+    explorer = Explorer(library)..applyPrefs(this.settings.explorerPrefs);
+    // Kept at each change: a pinch makes one per number of columns it passes, saved quietly.
+    explorer.onPrefs = () => this.settings.explorerPrefs = explorer.prefs;
     keeper = BackgroundKeeper(background: background, connection: connection, transfers: transfers);
     transfers.addListener(_keepAwake);
     webShare.addListener(_keepAwake);
@@ -125,10 +132,20 @@ class AppState extends ChangeNotifier {
   final Awake awake;
   bool _awake = false;
 
+  /// A video playing: the screen stays on too (WP-8.2), by the same flag as a transfer's, so that
+  /// neither turns it off under the other.
+  bool _playing = false;
+
+  void playing(bool on) {
+    if (on == _playing) return;
+    _playing = on;
+    _keepAwake();
+  }
+
   void _keepAwake() {
     final a = transfers.active;
     // A guest session too: a phone gone to sleep would take its network away from the guest.
-    final want = (a != null && a.stage != Stage.done) || webShare.active;
+    final want = (a != null && a.stage != Stage.done) || webShare.active || _playing;
     if (want == _awake) return;
     _awake = want;
     unawaited(awake.keep(want));
@@ -174,6 +191,12 @@ class AppState extends ChangeNotifier {
   /// The players of videos and songs (WP-8.2, D8), and another app for what they do not read.
   final MediaPlayers players;
   final OpenWith openWith;
+
+  /// The brightness and the media volume the video player's gestures change.
+  final ScreenControls screen;
+
+  /// Where each video was left.
+  final ResumePoints resume;
 
   /// Files and folders chosen on a desktop; the received folder opened.
   final FilePicker filePicker;

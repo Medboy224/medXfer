@@ -14,14 +14,15 @@ abstract interface class SettingsStore {
   Future<void> save(Map<String, Object?> values);
 }
 
-/// settings.json in the application's data folder.
+/// settings.json in the application's data folder; [name], another file beside it.
 class FileSettingsStore implements SettingsStore {
-  FileSettingsStore(this.dir);
+  FileSettingsStore(this.dir, {this.name = 'settings.json'});
 
   /// The data folder, given once known (the platform tells it asynchronously).
   final Future<String> Function() dir;
+  final String name;
 
-  Future<File> _file() async => File('${await dir()}${Platform.pathSeparator}settings.json');
+  Future<File> _file() async => File('${await dir()}${Platform.pathSeparator}$name');
 
   @override
   Future<Map<String, Object?>> load() async {
@@ -69,6 +70,9 @@ class AppSettings extends ChangeNotifier {
   String _receiveDir = '';
   bool _sortByType = true;
   String _deviceName = '';
+  bool _autoplay = true;
+  bool _underNotch = true;
+  Map<String, Object?> _explorer = const {};
 
   ThemeChoice get theme => _theme;
   Accent get accent => _accent;
@@ -86,7 +90,40 @@ class AppSettings extends ChangeNotifier {
     if (m['receive_dir'] is String) _receiveDir = m['receive_dir'] as String;
     if (m['sort_by_type'] is bool) _sortByType = m['sort_by_type'] as bool;
     if (m['device_name'] is String) _deviceName = m['device_name'] as String;
+    if (m['video_autoplay'] is bool) _autoplay = m['video_autoplay'] as bool;
+    if (m['video_under_notch'] is bool) _underNotch = m['video_under_notch'] as bool;
+    final ex = m['explorer'];
+    if (ex is Map) _explorer = Map<String, Object?>.from(ex);
     notifyListeners();
+  }
+
+  /// The video player goes on with the next video at the end of one (« Lecture automatique »,
+  /// WP-8.2, mockup 24).
+  bool get videoAutoplay => _autoplay;
+
+  set videoAutoplay(bool value) {
+    if (value == _autoplay) return;
+    _autoplay = value;
+    _changed();
+  }
+
+  /// The explorer's layouts and orders, kind by kind (Explorer.prefs).
+  Map<String, Object?> get explorerPrefs => _explorer;
+
+  /// Saved without a word to the listeners: nothing on screen follows from it, and the whole app
+  /// listens to the settings.
+  set explorerPrefs(Map<String, Object?> value) {
+    _explorer = value;
+    _save();
+  }
+
+  /// The video drawn under the camera's notch too (« Afficher sous l'encoche »).
+  bool get videoUnderNotch => _underNotch;
+
+  set videoUnderNotch(bool value) {
+    if (value == _underNotch) return;
+    _underNotch = value;
+    _changed();
   }
 
   set theme(ThemeChoice value) {
@@ -143,6 +180,10 @@ class AppSettings extends ChangeNotifier {
 
   void _changed() {
     notifyListeners();
+    _save();
+  }
+
+  void _save() {
     final store = _store;
     if (store == null) return;
     final values = {
@@ -152,6 +193,9 @@ class AppSettings extends ChangeNotifier {
       'receive_dir': _receiveDir,
       'sort_by_type': _sortByType,
       'device_name': _deviceName,
+      'video_autoplay': _autoplay,
+      'video_under_notch': _underNotch,
+      'explorer': _explorer,
     };
     // Not saved: still applied until the app closes.
     _saving = _saving.then((_) => store.save(values)).catchError((Object _) {});

@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -165,6 +166,51 @@ class MainActivity : FlutterActivity() {
                         }
                         result.success(null)
                     }
+                    // The video player's gestures (WP-8.2, mockup 26): this window's brightness,
+                    // given back to the system's (null) as the player closes; the media volume,
+                    // set without the system's bar (the player shows its own).
+                    "windowBrightness" -> {
+                        val own = window.attributes.screenBrightness
+                        result.success(if (own >= 0f) own.toDouble() else systemBrightness())
+                    }
+                    "setWindowBrightness" -> {
+                        val value = call.argument<Double>("value")
+                        window.attributes = window.attributes.also {
+                            it.screenBrightness = value?.toFloat()?.coerceIn(0.01f, 1f) ?: WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                        }
+                        result.success(null)
+                    }
+                    "mediaVolume" -> {
+                        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+                        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        result.success(if (max > 0) audio.getStreamVolume(AudioManager.STREAM_MUSIC).toDouble() / max else 0.0)
+                    }
+                    "setMediaVolume" -> {
+                        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+                        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        val value = (call.argument<Double>("value") ?: 0.0).coerceIn(0.0, 1.0)
+                        try {
+                            audio.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(value * max).toInt(), 0)
+                        } catch (_: SecurityException) {
+                            // « Ne pas déranger » may refuse it: the video plays on.
+                        }
+                        result.success(null)
+                    }
+                    // « Afficher sous l'encoche » (WP-8.2): the window over the camera's notch,
+                    // or beside it; given back (null) as the player closes.
+                    "setUnderNotch" -> {
+                        if (Build.VERSION.SDK_INT >= 28) {
+                            val v = call.argument<Double>("value")
+                            window.attributes = window.attributes.also {
+                                it.layoutInDisplayCutoutMode = when (v) {
+                                    null -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                                    0.0 -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
+                                    else -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                                }
+                            }
+                        }
+                        result.success(null)
+                    }
                     // A QR code read by the app's camera screen (QrScanActivity.kt); null: back.
                     "scanQr" -> {
                         scanAnswer?.invoke(null)
@@ -186,6 +232,7 @@ class MainActivity : FlutterActivity() {
                         call.argument<String>("kind") ?: "images", call.argument<Int>("offset") ?: 0, call.argument<Int>("limit") ?: 200,
                         call.argument<String>("sort") ?: "date", call.argument<Boolean>("descending") ?: true, call.argument<String>("search") ?: "",
                     ) { v, e -> reply(result, v, e) }
+                    "libMediaAt" -> library.mediaAt(call.argument<String>("kind") ?: "images", call.argument<List<String>>("paths") ?: emptyList()) { v, e -> reply(result, v, e) }
                     "libThumbnail" -> library.thumbnail(call.argument<String>("kind") ?: "images", (call.argument<Number>("id") ?: 0).toLong(), call.argument<Int>("size") ?: 256) { v, e -> reply(result, v, e) }
                     "libPrepareSharp" -> {
                         library.prepareSharp(call.argument<Int>("height") ?: 0, call.argument<Int>("width") ?: 0, call.argument<Boolean>("on") == true)
@@ -211,6 +258,13 @@ class MainActivity : FlutterActivity() {
     }
 
     private var permissionAnswer: ((Boolean) -> Unit)? = null
+
+    // The system's brightness, from 0 to 1, where the window sets none of its own.
+    private fun systemBrightness(): Double = try {
+        Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255.0
+    } catch (_: Exception) {
+        0.5
+    }
 
     private fun <T> reply(result: MethodChannel.Result, value: T?, error: String?) {
         if (error != null) result.error("library", error, null) else result.success(value)

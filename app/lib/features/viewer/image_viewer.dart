@@ -21,7 +21,6 @@ import '../../app.dart';
 import '../../l10n/app_localizations.dart';
 import '../../library/explorer.dart';
 import '../../platform/library.dart';
-import '../../theme.dart';
 import '../../widgets/v4.dart';
 import '../explorer/explorer_tabs.dart' show LibraryImage, gridDecodePx, sharpSize;
 import '../explorer/grid_layout.dart' show GridLayout;
@@ -211,10 +210,10 @@ class _ImageViewerState extends State<ImageViewer> {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
-    final c = context.colors;
+    final accent = playerAccent(context);
     final m = _items[_index];
     return Theme(
-      data: ThemeData.dark(useMaterial3: true).copyWith(colorScheme: ColorScheme.dark(primary: c.accent)),
+      data: ThemeData.dark(useMaterial3: true).copyWith(colorScheme: ColorScheme.dark(primary: accent)),
       // Transparent: the black behind is the route's, gone at once when it closes, the grid
       // seen behind the photo flying back to its tile (openMedia).
       child: PopScope(
@@ -302,9 +301,9 @@ class _ImageViewerState extends State<ImageViewer> {
                               padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
                               child: Text(mediaDetails(context, m), key: const Key('image-info'), style: const TextStyle(color: Colors.white70, fontSize: 12)),
                             ),
-                          _Strip(items: _items, pages: _pages, index: _index, accent: c.accent),
+                          _Strip(items: _items, pages: _pages, index: _index, accent: accent),
                           const SizedBox(height: 10),
-                          Center(child: _Actions(entry: m, accent: c.accent, info: _info, onInfo: () => setState(() => _info = !_info))),
+                          Center(child: _Actions(entry: m, accent: accent, info: _info, onInfo: () => setState(() => _info = !_info))),
                         ],
                       ),
                     ),

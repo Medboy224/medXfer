@@ -94,10 +94,39 @@ class Explorer extends ChangeNotifier {
   /// The order and search of a kind of media.
   MediaOrder order(MediaKind k) => _orders[k]!;
 
+  /// Told each time the user changes a layout or an order, for the app to keep them (asked on
+  /// 24 November 2026: they came back to their defaults at each start).
+  VoidCallback? onPrefs;
+
+  /// The layouts and orders, as kept: per kind, columns, list, sort and direction (the search,
+  /// not).
+  Map<String, Object?> get prefs => {
+    for (final k in MediaKind.values)
+      k.name: {'columns': _columns[k], 'list': _asList[k], 'sort': _orders[k]!.sort.name, 'descending': _orders[k]!.descending},
+  };
+
+  /// The layouts and orders kept, put back before the lists load; what is missing or unknown keeps
+  /// its default.
+  void applyPrefs(Map<String, Object?> prefs) {
+    for (final k in MediaKind.values) {
+      final p = prefs[k.name];
+      if (p is! Map) continue;
+      final c = p['columns'];
+      if (c is int) _columns[k] = c.clamp(minColumns, maxColumns);
+      final l = p['list'];
+      if (l is bool) _asList[k] = l;
+      final sort = MediaSort.values.where((s) => s.name == p['sort']).firstOrNull;
+      final d = p['descending'];
+      _orders[k] = _orders[k]!.copyWith(sort: sort, descending: d is bool ? d : null);
+    }
+  }
+
   /// A new order or search: the list loads again from its start, in that order.
   void setOrder(MediaKind k, MediaOrder o) {
     if (_orders[k] == o) return;
+    final kept = _orders[k]!.sort != o.sort || _orders[k]!.descending != o.descending;
     _orders[k] = o;
+    if (kept) onPrefs?.call();
     _media[k] = MediaList();
     notifyListeners();
     unawaited(more(k));
@@ -119,6 +148,7 @@ class Explorer extends ChangeNotifier {
     if (c == _columns[k] && l == _asList[k]) return;
     _columns[k] = c;
     _asList[k] = l;
+    onPrefs?.call();
     if (!quiet) notifyListeners();
   }
 

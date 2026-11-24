@@ -20,6 +20,7 @@ import 'platform/library.dart';
 import 'platform/hotspot.dart';
 import 'platform/network.dart';
 import 'platform/open_folder.dart';
+import 'platform/screen_controls.dart';
 import 'platform/storage.dart';
 import 'platform/native_qr_scanner.dart';
 import 'settings.dart';
@@ -49,6 +50,8 @@ Future<void> main() async {
     library: systemLibrary(),
     players: systemMediaPlayers(),
     openWith: systemOpenWith(),
+    screen: systemScreenControls(),
+    resumeStore: FileSettingsStore(const SystemFolders().dataDir, name: 'resume.json'),
     desktop: Platform.isWindows || Platform.isLinux || Platform.isMacOS,
   );
   state.start();

@@ -30,8 +30,16 @@ Future<void> openMedia(BuildContext context, List<MediaEntry> items, int index, 
         ),
 );
 
+/// The players' accent: the bright one of the accent chosen, whatever the theme, the players
+/// being dark. In the light theme, they took its deep one, dull on black (24 November 2026).
+Color playerAccent(BuildContext context) => AppScope.of(context).state.settings.accent.bright;
+
 /// The tag of a photo flying between its tile and the viewer.
-Object mediaHeroTag(MediaEntry m) => 'media-hero-${m.kind.name}-${m.id}';
+Object mediaHeroTag(MediaEntry m) => heroTagOf(m.kind, m.path);
+
+/// By its path: the grid knows a photo's id, the Files tab only its path (its photos flew to and
+/// from nowhere, 24 November 2026).
+Object heroTagOf(MediaKind kind, String path) => 'media-hero-${kind.name}-$path';
 
 /// How a photo flies between its tile and the viewer: moving from the first frame, slowing into
 /// place. Flutter flies its heroes on [Curves.fastOutSlowIn], which starts slowly: the photo
@@ -88,7 +96,12 @@ class _PhotoRoute extends PageRouteBuilder<void> {
               fit: StackFit.expand,
               children: [
                 if (black > 0) ColoredBox(key: const Key('photo-backdrop'), color: Colors.black.withValues(alpha: black)),
-                child!,
+                // Leaving, what does not fly fades: a photo whose tile is not on the screen (a row of
+                // the Files tab scrolled away) vanished at once at the end.
+                KeyedSubtree(
+                  key: const ValueKey('photo-page'),
+                  child: Opacity(opacity: leaving ? animation.value : 1, child: child),
+                ),
               ],
             );
           },

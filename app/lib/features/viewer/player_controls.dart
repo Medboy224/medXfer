@@ -110,10 +110,13 @@ class _PlayerControlsState extends State<PlayerControls> {
 
 /// It does not play here: said, with another app to try.
 class CannotPlay extends StatelessWidget {
-  const CannotPlay({super.key, required this.onOpenWith, required this.accent, this.unsupported = false});
+  const CannotPlay({super.key, required this.onOpenWith, required this.accent, this.unsupported = false, this.detail});
 
   final VoidCallback? onOpenWith;
   final Color accent;
+
+  /// What the engine said, small: to know what to mend (24 November 2026).
+  final String? detail;
 
   /// No player on this device yet (rather than a format it does not read).
   final bool unsupported;
@@ -134,6 +137,10 @@ class CannotPlay extends StatelessWidget {
           if (!unsupported) ...[
             const SizedBox(height: 6),
             Text(l.cannotPlayHint, style: const TextStyle(fontSize: 13, color: Colors.white70)),
+            if (detail != null) ...[
+              const SizedBox(height: 6),
+              Text(l.cannotPlayDetail(detail!), key: const Key('cannot-play-detail'), maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.white54)),
+            ],
           ],
           if (onOpenWith != null) ...[
             const SizedBox(height: 10),

@@ -14,16 +14,21 @@ import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
 import 'package:medxfer/features/explorer/explorer_tabs.dart' show gridDecodePx;
 import 'package:medxfer/features/explorer/gallery_toolbar.dart';
+import 'package:medxfer/library/explorer.dart';
 import 'package:medxfer/library/selection.dart';
 import 'package:medxfer/media/media_player.dart';
+import 'package:medxfer/media/two_engines.dart';
+import 'package:medxfer/media/video_player_adapter.dart' show shownSize;
 import 'package:medxfer/platform/open_with.dart';
 import 'package:medxfer/platform/app_exit.dart';
+import 'package:medxfer/platform/screen_controls.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/platform/folders.dart';
 import 'package:medxfer/widgets/v4.dart';
 import 'package:medxfer/platform/library.dart';
 import 'package:medxfer/platform/storage.dart';
 import 'package:medxfer/settings.dart';
+import 'package:medxfer/theme.dart';
 import 'package:medxfer/transfer/history.dart';
 
 class _TestFolders implements Folders {
@@ -116,6 +121,17 @@ class _Library implements Library {
   @override
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size) async => thumbs ? Uint8List.fromList(_png) : null;
 
+  /// Asked by path: the photos the library knows (those of the fake folder « DCIM »).
+  final mediaAsked = <List<String>>[];
+  @override
+  Future<List<MediaEntry>> mediaAt(MediaKind kind, List<String> paths) async {
+    mediaAsked.add(paths);
+    return [
+      for (final p in paths)
+        if (p.endsWith('known.jpg')) MediaEntry(id: 77, kind: kind, name: 'known.jpg', path: p, size: 1),
+    ];
+  }
+
   /// The sharp images asked: (id, px).
   final sharpAsked = <(int, int)>[];
 
@@ -143,6 +159,13 @@ class _Library implements Library {
   @override
   Future<List<FileEntry>> listDir(String path) async => path == storageRoot
       ? const [FileEntry(name: 'DCIM', path: '/storage/emulated/0/DCIM', dir: true, size: 0)]
+      : path.endsWith('/DCIM')
+      ? const [
+          FileEntry(name: 'known.jpg', path: '/storage/emulated/0/DCIM/known.jpg', dir: false, size: 10),
+          FileEntry(name: 'clip.mp4', path: '/storage/emulated/0/DCIM/clip.mp4', dir: false, size: 20),
+          FileEntry(name: 'other.jpg', path: '/storage/emulated/0/DCIM/other.jpg', dir: false, size: 30),
+          FileEntry(name: 'notes.txt', path: '/storage/emulated/0/DCIM/notes.txt', dir: false, size: 40),
+        ]
       : const [];
   @override
   Future<Uint8List?> fileThumbnail(String path, int px) async => null;
@@ -183,15 +206,31 @@ _Exits _watchExits() {
   return exits;
 }
 
-/// A player that remembers what it was asked; [fail] makes every one refuse its media.
+/// A player that remembers what it was asked; [fail] makes every one refuse its media. [tracks]:
+/// each file carries two sound tracks and subtitles; [picture] false: a video plays without it.
 class _FakePlayer extends MediaPlayer {
-  _FakePlayer(this.fail);
+  _FakePlayer(this.fail, {this.tracks = false, this.picture = true, this.name = 'fake'});
 
   final String? fail;
+  final bool tracks, picture;
+  final String name;
   final opened = <int>[];
-  bool _ready = false, _playing = false, _finished = false;
-  double _volume = 1;
+  bool _ready = false, _playing = false, _finished = false, _looping = false, disposed = false;
+  double _volume = 1, _speed = 1;
   Duration _position = Duration.zero;
+  String? _audio, _subtitles;
+
+  /// How the picture was last asked to fit.
+  BoxFit? fit;
+
+  String? _late;
+
+  /// Fails once open, as it starts to play.
+  void breakDown(String why) {
+    _late = why;
+    _playing = false;
+    notifyListeners();
+  }
 
   /// Plays it to its end.
   void finish() {
@@ -206,7 +245,57 @@ class _FakePlayer extends MediaPlayer {
     _ready = fail == null;
     _playing = false;
     _finished = false;
+    _position = Duration.zero;
+    _audio = tracks ? 'a1' : null;
+    _subtitles = null;
     notifyListeners();
+  }
+
+  @override
+  double get speed => _speed;
+  @override
+  Future<void> setSpeed(double speed) async {
+    _speed = speed;
+    notifyListeners();
+  }
+
+  @override
+  bool get looping => _looping;
+  @override
+  Future<void> setLooping(bool on) async {
+    _looping = on;
+    notifyListeners();
+  }
+
+  @override
+  List<MediaTrack> get audioTracks => tracks ? const [MediaTrack('a1', 'Français'), MediaTrack('a2', 'English')] : const [];
+  @override
+  List<MediaTrack> get subtitleTracks => tracks ? const [MediaTrack('s1', 'Français')] : const [];
+  @override
+  String? get audioTrack => _audio;
+  @override
+  String? get subtitleTrack => _subtitles;
+  @override
+  Future<void> setAudioTrack(String id) async {
+    _audio = id;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> setSubtitleTrack(String? id) async {
+    _subtitles = id;
+    notifyListeners();
+  }
+
+  @override
+  String get subtitle => _subtitles == null ? '' : 'Bonjour.';
+  @override
+  String get engine => name;
+
+  @override
+  void dispose() {
+    disposed = true;
+    super.dispose();
   }
 
   @override
@@ -222,9 +311,9 @@ class _FakePlayer extends MediaPlayer {
   @override
   double get volume => _volume;
   @override
-  double get aspect => 16 / 9;
+  double get aspect => picture ? 16 / 9 : 0;
   @override
-  String? get error => fail;
+  String? get error => fail ?? _late;
   @override
   Future<void> play() async {
     _playing = true;
@@ -250,20 +339,43 @@ class _FakePlayer extends MediaPlayer {
   }
 
   @override
-  Widget view() => const ColoredBox(color: Colors.blue);
+  Widget view({BoxFit fit = BoxFit.contain}) {
+    this.fit = fit;
+    return const ColoredBox(color: Colors.blue);
+  }
 }
 
 class _FakePlayers implements MediaPlayers {
-  _FakePlayers({this.fail});
+  _FakePlayers({this.fail, this.tracks = false});
 
   final String? fail;
+  final bool tracks;
   final made = <_FakePlayer>[];
 
   @override
   bool get supported => true;
 
   @override
-  MediaPlayer create() => _FakePlayer(fail)..also(made.add);
+  MediaPlayer create() => _FakePlayer(fail, tracks: tracks)..also(made.add);
+}
+
+/// The brightness and the media volume, as the player's gestures set them.
+class _FakeScreen implements ScreenControls {
+  final brightnessSet = <double?>[];
+  final volumeSet = <double>[];
+
+  @override
+  bool get supported => true;
+  @override
+  Future<double?> brightness() async => 0.5;
+  @override
+  Future<void> setBrightness(double? value) async => brightnessSet.add(value);
+  @override
+  Future<double?> volume() async => 0.4;
+  @override
+  Future<void> setVolume(double value) async => volumeSet.add(value);
+  @override
+  Future<void> setUnderNotch(bool? under) async {}
 }
 
 extension<T> on T {
@@ -271,6 +383,17 @@ extension<T> on T {
     f(this);
     return this;
   }
+}
+
+/// The Videos tab, then [id]'s player: its fake player, playing.
+Future<_FakePlayer> _openVideo(WidgetTester tester, _FakePlayers players, {int id = 101}) async {
+  await tester.ensureVisible(find.text('Vidéos'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Vidéos'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(ValueKey('open-$id')));
+  await tester.pumpAndSettle();
+  return players.made.last;
 }
 
 class _FakeOpenWith implements OpenWith {
@@ -293,7 +416,13 @@ class _FakeOpenWith implements OpenWith {
   }
 }
 
-Future<(FakeCore, AppState)> _app(WidgetTester tester, _Library library, {MediaPlayers players = const NoMediaPlayers(), OpenWith openWith = const NoOpenWith()}) async {
+Future<(FakeCore, AppState)> _app(
+  WidgetTester tester,
+  _Library library, {
+  MediaPlayers players = const NoMediaPlayers(),
+  OpenWith openWith = const NoOpenWith(),
+  ScreenControls screen = const NoScreenControls(),
+}) async {
   final core = FakeCore()..on('get_status', (_) => const FakeAnswer(replies: [CoreEvent('status', data: {'device_name': 'Galaxy'})]));
   final state = AppState(
     core: core,
@@ -303,6 +432,7 @@ Future<(FakeCore, AppState)> _app(WidgetTester tester, _Library library, {MediaP
     history: MemoryHistoryStore(),
     players: players,
     openWith: openWith,
+    screen: screen,
   );
   tester.platformDispatcher.localesTestValue = [const Locale('fr')];
   addTearDown(tester.platformDispatcher.clearLocalesTestValue);
@@ -1033,7 +1163,7 @@ void main() {
     await _app(tester, _Library(photos: 90));
     await tester.tap(find.text('Photos'));
     await tester.pumpAndSettle();
-    Finder tileOf(int id) => find.byWidgetPredicate((w) => w is Hero && w.tag == 'media-hero-images-$id');
+    Finder tileOf(int id) => find.byWidgetPredicate((w) => w is Hero && w.tag == 'media-hero-images-/storage/emulated/0/DCIM/Camera/IMG_$id.jpg');
     expect(tileOf(85), findsNothing, reason: 'far down the grid, not built');
     await tester.tap(find.byKey(const ValueKey('open-1')));
     await tester.pumpAndSettle();
@@ -1193,6 +1323,473 @@ void main() {
     await tester.tap(find.text('Ouvrir avec une autre application'));
     await tester.pump();
     expect(openWith.opened, [101]);
+  });
+
+  testWidgets('23 November: playing, the commands go after 3 s; a touch on the picture brings them back', (tester) async {
+    final players = _FakePlayers();
+    await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    expect(find.byKey(const Key('player-play')), findsOneWidget);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump();
+    expect(find.byKey(const Key('player-play')), findsNothing, reason: 'hidden while it plays');
+    await tester.tap(find.byKey(const Key('video-surface')));
+    await tester.pump(const Duration(milliseconds: 300)); // a single touch: no second one came
+    expect(find.byKey(const Key('player-play')), findsOneWidget);
+    expect(p.playing, isTrue);
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets('23 November: two touches at the right, +10 s; one more, 10 s again; at the left, back', (tester) async {
+    final players = _FakePlayers();
+    await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    await tester.pump(const Duration(seconds: 4)); // the commands gone: the picture alone
+    final r = tester.getRect(find.byKey(const Key('video-surface')));
+    Future<void> touch(Offset at) async {
+      await tester.tapAt(at);
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    final right = Offset(r.left + r.width * 0.8, r.center.dy), left = Offset(r.left + r.width * 0.2, r.center.dy);
+    await touch(right);
+    await touch(right);
+    expect(p.position, const Duration(seconds: 10));
+    expect(find.text('+10 s'), findsOneWidget);
+    await touch(right);
+    expect(p.position, const Duration(seconds: 20), reason: 'each touch of the run, 10 s more');
+    expect(find.text('+20 s'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 1)); // the run over
+    expect(find.byKey(const Key('video-skip')), findsNothing);
+    await touch(left);
+    await touch(left);
+    expect(p.position, const Duration(seconds: 10));
+    expect(find.text('−10 s'), findsOneWidget);
+    expect(find.byKey(const Key('player-play')), findsNothing, reason: 'the touches that seek do not bring the commands');
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('24 November: two touches in the middle pause, and play again', (tester) async {
+    final players = _FakePlayers();
+    await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    await tester.pump(const Duration(seconds: 4));
+    final center = tester.getCenter(find.byKey(const Key('video-surface')));
+    Future<void> twice() async {
+      await tester.tapAt(center);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tapAt(center);
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    await twice();
+    expect(p.playing, isFalse);
+    expect(p.position, Duration.zero, reason: 'no seeking in the middle');
+    await tester.pump(const Duration(seconds: 1));
+    await twice();
+    expect(p.playing, isTrue);
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets("24 November: « Format de l'image »: whole, filled, stretched, 16:9, 4:3; under the notch", (tester) async {
+    final players = _FakePlayers();
+    final (_, state) = await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    await tester.tap(find.byKey(const Key('player-menu')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('video-menu-picture')));
+    await tester.pump();
+    final fits = {'crop': BoxFit.cover, 'stretch': BoxFit.fill, 'wide': BoxFit.fill, 'tv': BoxFit.fill, 'fit': BoxFit.contain};
+    for (final e in fits.entries) {
+      await tester.tap(find.byKey(Key('video-picture-${e.key}')));
+      await tester.pump();
+      expect(p.fit, e.value, reason: e.key);
+    }
+    await tester.tap(find.byKey(const Key('video-picture-tv')));
+    await tester.pump();
+    expect(find.byWidgetPredicate((w) => w is AspectRatio && w.aspectRatio == 4 / 3), findsOneWidget);
+    expect(state.settings.videoUnderNotch, isTrue);
+    await tester.tap(find.byKey(const Key('video-under-notch')));
+    await tester.pump();
+    expect(state.settings.videoUnderNotch, isFalse);
+    await tester.binding.handlePopRoute();
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets('24 November: where it is, remembered as it plays, not only as it closes', (tester) async {
+    final players = _FakePlayers();
+    final (_, state) = await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    await p.seek(const Duration(seconds: 25));
+    await tester.pump(const Duration(seconds: 6));
+    expect(await state.resume.of(state.explorer.media(MediaKind.video).items.first), const Duration(seconds: 25));
+  });
+
+  testWidgets("24 November: unreadable, the engine's reason under the message", (tester) async {
+    await _app(tester, _Library(videos: 1), players: _FakePlayers(fail: 'Failed to recognize file format.'));
+    await tester.ensureVisible(find.text('Vidéos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Vidéos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-101')));
+    await tester.pumpAndSettle();
+    expect(find.text('Raison : Failed to recognize file format.'), findsOneWidget);
+  });
+
+  testWidgets('24 November: a finger kept on the bar past 3 s: the commands stay, and the large time goes once it lifts', (tester) async {
+    final players = _FakePlayers();
+    await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    final bar = tester.getRect(find.byKey(const Key('player-seek')));
+    final finger = await tester.startGesture(Offset(bar.left + 30, bar.center.dy));
+    for (var i = 1; i <= 6; i++) {
+      await finger.moveBy(const Offset(30, 0));
+      await tester.pump(const Duration(milliseconds: 800));
+    }
+    expect(find.byKey(const Key('player-seek')), findsOneWidget, reason: 'not hidden under the finger');
+    expect(find.byKey(const Key('video-seek-label')), findsOneWidget);
+    await finger.up();
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.byKey(const Key('video-seek-label')), findsNothing);
+    expect(p.position, greaterThan(Duration.zero));
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  test('24 November: the size a picture takes, laid out rather than scaled', () {
+    const video = Size(1920, 1080), screen = Size(800, 400);
+    expect(shownSize(BoxFit.contain, video, screen), const Size(711.1111111111111, 400));
+    expect(shownSize(BoxFit.cover, video, screen).width, 800);
+    expect(shownSize(BoxFit.fill, video, screen), screen);
+  });
+
+  testWidgets('24 November: upright, the bar takes the width, the volume bar 240 at most, the name on two lines', (tester) async {
+    final players = _FakePlayers();
+    final screen = _FakeScreen();
+    await _app(tester, _Library(videos: 3), players: players, screen: screen);
+    await _openVideo(tester, players);
+    final width = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+    expect(tester.getSize(find.byKey(const Key('player-seek'))).width, greaterThan(width * 0.6));
+    final name = tester.widget<Text>(find.text('film-1.mp4'));
+    expect(name.maxLines, 2);
+    await tester.pump(const Duration(seconds: 4));
+    final r = tester.getRect(find.byKey(const Key('video-surface')));
+    final finger = await tester.startGesture(Offset(r.left + r.width * 0.75, r.center.dy));
+    for (var i = 1; i <= 6; i++) {
+      await finger.moveBy(const Offset(0, -20));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(tester.getSize(find.byKey(const Key('video-level'))).height, lessThanOrEqualTo(240));
+    await finger.up();
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets('24 November: closing, the picture goes at once, before the page fades out', (tester) async {
+    final players = _FakePlayers();
+    await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    expect(find.byKey(const ValueKey('layer-picture')), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('layer-picture')), findsNothing);
+    expect(p.playing, isFalse);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('video-surface')), findsNothing);
+  });
+
+  testWidgets('24 November: in Files, ⤢ opens a photo among the photos of its folder, the queue made from them', (tester) async {
+    final library = _Library();
+    await _app(tester, library);
+    await tester.ensureVisible(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fichiers'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('file-DCIM')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('play-notes.txt')), findsNothing, reason: 'a text is no media');
+    expect(find.byKey(const ValueKey('play-clip.mp4')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('play-other.jpg')));
+    await tester.pumpAndSettle();
+    expect(library.mediaAsked.single, ['/storage/emulated/0/DCIM/known.jpg', '/storage/emulated/0/DCIM/other.jpg'], reason: 'the photos of the folder, in its order');
+    expect(find.byKey(const Key('image-pages')), findsOneWidget);
+    expect(find.text('2 / 2'), findsOneWidget, reason: 'the second photo of two: the video and the text left out');
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(find.byKey(const Key('photo-flying')), findsOneWidget, reason: 'back to its row, flying');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('image-pages')), findsNothing);
+  });
+
+  test('24 November: the layouts and orders, kept and given back at the next start', () async {
+    final store = MemorySettingsStore();
+    final settings = AppSettings(store: store);
+    final explorer = Explorer(_Library());
+    explorer.onPrefs = () => settings.explorerPrefs = explorer.prefs;
+    explorer.setLayout(MediaKind.images, columns: 5);
+    explorer.setLayout(MediaKind.video, asList: true);
+    explorer.setOrder(MediaKind.audio, const MediaOrder(sort: MediaSort.name, descending: false));
+    await settings.saved;
+    final again = AppSettings(store: store);
+    await again.load();
+    final next = Explorer(_Library())..applyPrefs(again.explorerPrefs);
+    expect(next.columns(MediaKind.images), 5);
+    expect(next.asList(MediaKind.video), isTrue);
+    expect(next.order(MediaKind.audio).sort, MediaSort.name);
+    expect(next.order(MediaKind.audio).descending, isFalse);
+    expect(next.order(MediaKind.images).search, '');
+  });
+
+  testWidgets('24 November: in the light theme too, the player takes the bright accent chosen', (tester) async {
+    final players = _FakePlayers();
+    final (_, state) = await _app(tester, _Library(videos: 3), players: players);
+    state.settings.theme = ThemeChoice.light;
+    state.settings.accent = accents[2];
+    await tester.pumpAndSettle();
+    await _openVideo(tester, players);
+    final play = tester.widget<IconButton>(find.byKey(const Key('player-play')));
+    expect(play.style!.backgroundColor!.resolve({}), accents[2].bright);
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets('23 November: sliding along the picture moves in the video, its time shown large', (tester) async {
+    final players = _FakePlayers();
+    await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    await tester.pump(const Duration(seconds: 4));
+    final r = tester.getRect(find.byKey(const Key('video-surface')));
+    final finger = await tester.startGesture(r.center);
+    for (var i = 1; i <= 10; i++) {
+      await finger.moveBy(Offset(r.width / 20, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(find.byKey(const Key('video-seek-label')), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 200)); // a seek every 150 ms at most
+    expect(p.position, greaterThan(const Duration(seconds: 10)), reason: 'the picture follows the finger (24 November)');
+    await finger.up();
+    await tester.pump();
+    // Half the width, for a video of a minute (under two: the width is all of it).
+    expect(p.position.inSeconds, inInclusiveRange(27, 31));
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets('23 November: up and down, the volume at the right, the brightness at the left, given back at the end', (tester) async {
+    final players = _FakePlayers();
+    final screen = _FakeScreen();
+    await _app(tester, _Library(videos: 3), players: players, screen: screen);
+    await _openVideo(tester, players);
+    await tester.pump(const Duration(seconds: 4));
+    final r = tester.getRect(find.byKey(const Key('video-surface')));
+    Future<void> slideUp(double x) async {
+      final finger = await tester.startGesture(Offset(r.left + r.width * x, r.center.dy));
+      for (var i = 1; i <= 8; i++) {
+        await finger.moveBy(const Offset(0, -20));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(find.byKey(const Key('video-level')), findsOneWidget);
+      await finger.up();
+      await tester.pump();
+    }
+
+    await slideUp(0.75);
+    expect(screen.volumeSet.last, greaterThan(0.4), reason: 'louder than it was');
+    expect(screen.brightnessSet, isEmpty);
+    await slideUp(0.25);
+    expect(screen.brightnessSet.last, greaterThan(0.5));
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(screen.brightnessSet.last, isNull, reason: "the system's brightness again once the player closes");
+  });
+
+  testWidgets("23 November: nothing starts at the sides, where Android's back gesture begins", (tester) async {
+    final players = _FakePlayers();
+    final screen = _FakeScreen();
+    await _app(tester, _Library(videos: 3), players: players, screen: screen);
+    tester.view.systemGestureInsets = const FakeViewPadding(left: 30 * 2.75, right: 30 * 2.75);
+    addTearDown(tester.view.resetSystemGestureInsets);
+    final p = await _openVideo(tester, players);
+    await tester.pump(const Duration(seconds: 4));
+    final r = tester.getRect(find.byKey(const Key('video-surface')));
+    for (final at in [Offset(r.right - 8, r.center.dy), Offset(r.left + 8, r.center.dy)]) {
+      final finger = await tester.startGesture(at);
+      for (var i = 1; i <= 8; i++) {
+        await finger.moveBy(Offset(at.dx < r.center.dx ? 20 : -20, -10));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await finger.up();
+      await tester.pump();
+    }
+    expect(screen.volumeSet, isEmpty);
+    expect(screen.brightnessSet, isEmpty);
+    expect(p.position, Duration.zero);
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets('23 November: held, ×2 until the finger lifts; pinched, the picture fills the screen', (tester) async {
+    final players = _FakePlayers();
+    await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    await tester.pump(const Duration(seconds: 4));
+    final center = tester.getCenter(find.byKey(const Key('video-surface')));
+    final finger = await tester.startGesture(center);
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(p.speed, 2);
+    expect(find.byKey(const Key('video-fast')), findsOneWidget);
+    await finger.up();
+    await tester.pump();
+    expect(p.speed, 1);
+
+    expect(p.fit, BoxFit.contain);
+    final a = await tester.startGesture(center - const Offset(40, 0), pointer: 31);
+    final b = await tester.startGesture(center + const Offset(40, 0), pointer: 32);
+    for (var i = 1; i <= 8; i++) {
+      await a.moveBy(const Offset(-12, 0));
+      await b.moveBy(const Offset(12, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await a.up();
+    await b.up();
+    await tester.pump();
+    expect(p.fit, BoxFit.cover);
+    expect(find.text("Remplir l'écran"), findsOneWidget);
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets('23 November: the menu ⋮ sets the speed; back closes it, the video stays', (tester) async {
+    final players = _FakePlayers();
+    await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    await tester.tap(find.byKey(const Key('player-menu')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('video-menu-speed')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('video-speed-1.5')));
+    await tester.pump();
+    expect(p.speed, 1.5);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('video-panel')), findsNothing);
+    expect(find.byKey(const Key('video-surface')), findsOneWidget, reason: 'the player still open');
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets('23 November: a file with subtitles and two sound tracks: CC shows them, the sound track is chosen', (tester) async {
+    final players = _FakePlayers(tracks: true);
+    await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    expect(find.byKey(const Key('video-subtitle')), findsNothing);
+    await tester.tap(find.byKey(const Key('player-subtitles')));
+    await tester.pump();
+    expect(p.subtitleTrack, 's1');
+    expect(find.text('Bonjour.'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('player-subtitles')));
+    await tester.pump();
+    expect(p.subtitleTrack, isNull);
+    expect(find.byKey(const Key('video-subtitle')), findsNothing);
+    await tester.tap(find.byKey(const Key('player-audio')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('video-track-a2')));
+    await tester.pump();
+    expect(p.audioTrack, 'a2');
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets('23 November: a video goes on where it was left, « Recommencer » at hand', (tester) async {
+    final players = _FakePlayers();
+    await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    await p.seek(const Duration(seconds: 30));
+    await tester.tap(find.byKey(const Key('player-next')));
+    await tester.pumpAndSettle();
+    expect(p.opened, [101, 102]);
+    expect(find.byKey(const Key('video-resume')), findsNothing, reason: 'never seen: from its start');
+    await tester.tap(find.byKey(const Key('player-previous')));
+    await tester.pumpAndSettle();
+    expect(p.opened, [101, 102, 101]);
+    expect(p.position, const Duration(seconds: 30));
+    expect(find.text('Reprise à 0:30'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('video-restart')));
+    await tester.pump();
+    expect(p.position, Duration.zero);
+    await tester.pump(const Duration(seconds: 6));
+  });
+
+  testWidgets('23 November: at the end of a video, the next one; autoplay off, it stays', (tester) async {
+    final players = _FakePlayers();
+    final (_, state) = await _app(tester, _Library(videos: 3), players: players);
+    final p = await _openVideo(tester, players);
+    p.finish();
+    await tester.pumpAndSettle();
+    expect(p.opened, [101, 102]);
+    await tester.tap(find.byKey(const Key('player-up-next')));
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('video-autoplay')));
+    await tester.pump();
+    expect(state.settings.videoAutoplay, isFalse);
+    await tester.tap(find.byKey(const Key('video-panel-scrim')), warnIfMissed: false);
+    await tester.pump();
+    p.finish();
+    await tester.pumpAndSettle();
+    expect(p.opened, [101, 102]);
+    expect(find.byKey(const Key('player-play')), findsOneWidget, reason: 'the commands, to go on by hand');
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets('23 November: turned sideways, one row: « Sélectionner » and the tracks, ⏮ ⏯ ⏭ in the middle, picture, turn, next', (tester) async {
+    final players = _FakePlayers(tracks: true);
+    await _app(tester, _Library(videos: 3), players: players);
+    await _openVideo(tester, players);
+    tester.view.physicalSize = const Size(2400, 1080);
+    await tester.pump();
+    for (final key in ['media-select', 'player-subtitles', 'player-audio', 'player-previous', 'player-play', 'player-next', 'player-picture', 'player-rotate', 'player-up-next']) {
+      expect(find.byKey(Key(key)), findsOneWidget, reason: key);
+    }
+    final play = tester.getCenter(find.byKey(const Key('player-play')));
+    expect(play.dx, closeTo(2400 / 2.75 / 2, 2), reason: 'in the middle');
+    expect(tester.getCenter(find.byKey(const Key('player-rotate'))).dy, closeTo(play.dy, 2), reason: 'one row');
+    await tester.tap(find.byKey(const Key('player-menu')));
+    await tester.pump();
+    expect(tester.getRect(find.byKey(const Key('video-panel'))).right, closeTo(2400 / 2.75, 1), reason: 'the menu at the side');
+    expect(tester.takeException(), isNull);
+    await tester.binding.handlePopRoute();
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  test('23 November: two engines: ExoPlayer first; libmpv for an AVI, a failure, or a video without its picture', () async {
+    MediaEntry video(String name) => MediaEntry(id: 1, kind: MediaKind.video, name: name, path: '/v/$name', size: 1);
+    var systemFails = false, systemBlind = false;
+    final made = <_FakePlayer>[];
+    final player = TwoEngines(
+      system: () => _FakePlayer(systemFails ? 'codec' : null, picture: !systemBlind, name: 'ExoPlayer')..also(made.add),
+      wide: () => _FakePlayer(null, name: 'libmpv')..also(made.add),
+    );
+    await player.open(video('a.mp4'));
+    expect(player.engine, 'ExoPlayer');
+    await player.setSpeed(1.5);
+    await player.open(video('b.AVI'));
+    expect(player.engine, 'libmpv', reason: 'read by libmpv straight away');
+    expect(made.first.disposed, isTrue, reason: 'one engine at a time');
+    expect(player.speed, 1.5, reason: 'the speed kept from one file to the next');
+    systemFails = true;
+    await player.open(video('c.mp4'));
+    expect(player.engine, 'libmpv', reason: 'ExoPlayer failed');
+    expect(player.error, isNull);
+    systemFails = false;
+    systemBlind = true;
+    await player.open(video('d.mp4'));
+    expect(player.engine, 'libmpv', reason: 'ExoPlayer played it without its picture');
+    systemBlind = false;
+    await player.open(video('e.mp4'));
+    expect(player.engine, 'ExoPlayer');
+    // Failing as it starts to play (24 November): libmpv goes on from there.
+    await made.last.seek(const Duration(seconds: 12));
+    made.last.breakDown('decoder');
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    expect(player.engine, 'libmpv');
+    expect(player.error, isNull);
+    expect(player.position, const Duration(seconds: 12));
+    expect(player.playing, isTrue);
+    player.dispose();
   });
 
   testWidgets('WP-8.2: ▶ plays a song; at its end, the next one', (tester) async {

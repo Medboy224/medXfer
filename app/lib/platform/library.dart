@@ -130,6 +130,10 @@ abstract interface class Library {
 
   /// One page, in [order] (newest first by default).
   Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200, MediaOrder order = const MediaOrder()});
+
+  /// The media of [kind] at these [paths], those the system's library knows (in no order): a
+  /// queue made from a folder of the Files tab.
+  Future<List<MediaEntry>> mediaAt(MediaKind kind, List<String> paths);
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size);
 
   /// A tile's image, [height] px tall (less for a wide one, at most [width] px wide), in its
@@ -179,6 +183,8 @@ class NoLibrary implements Library {
   Future<Uint8List?> appIcon(String package, int size) async => null;
   @override
   Future<List<MediaEntry>> media(MediaKind kind, {int offset = 0, int limit = 200, MediaOrder order = const MediaOrder()}) async => const [];
+  @override
+  Future<List<MediaEntry>> mediaAt(MediaKind kind, List<String> paths) async => const [];
   @override
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size) async => null;
   @override
@@ -269,6 +275,12 @@ class AndroidLibrary implements Library {
   ];
 
   @override
+  Future<List<MediaEntry>> mediaAt(MediaKind kind, List<String> paths) async => [
+    for (final m in await platformChannel.invokeListMethod<Map<Object?, Object?>>('libMediaAt', {'kind': kind.name, 'paths': paths}) ?? const [])
+      MediaEntry.fromMap(kind, m),
+  ];
+
+  @override
   Future<Uint8List?> thumbnail(MediaKind kind, int id, int size) =>
       platformChannel.invokeMethod<Uint8List>('libThumbnail', {'kind': kind.name, 'id': id, 'size': size});
 
@@ -323,3 +335,15 @@ class AndroidLibrary implements Library {
 }
 
 Library systemLibrary() => Platform.isAndroid ? const AndroidLibrary() : const NoLibrary();
+
+/// The kind of media a file is, by its name; null for any other file (the Files tab).
+MediaKind? mediaKindOf(String name) {
+  final dot = name.lastIndexOf('.');
+  if (dot < 0) return null;
+  return switch (name.substring(dot + 1).toLowerCase()) {
+    'jpg' || 'jpeg' || 'png' || 'webp' || 'gif' || 'heic' || 'heif' || 'bmp' || 'avif' => MediaKind.images,
+    'mp4' || 'mkv' || 'avi' || 'mov' || '3gp' || 'webm' || 'wmv' || 'flv' || 'm4v' || 'ts' || 'mpg' || 'mpeg' || 'divx' || 'asf' || 'vob' || 'ogv' => MediaKind.video,
+    'mp3' || 'm4a' || 'aac' || 'flac' || 'ogg' || 'opus' || 'wav' || 'wma' || 'amr' || 'mka' || 'ape' || 'ac3' => MediaKind.audio,
+    _ => null,
+  };
+}

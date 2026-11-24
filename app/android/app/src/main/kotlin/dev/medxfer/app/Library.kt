@@ -171,8 +171,36 @@ class Library(private val activity: Activity) {
             putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, limit)
             putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, offset)
         }
+        rows(activity.contentResolver.query(uri, columns.toTypedArray(), args, null))
+    }, done)
+
+    /**
+     * The media of [kind] at these [paths], as [media] gives them: the queue of a folder of the
+     * Files tab (24 November 2026). Those MediaStore does not know are left out.
+     */
+    fun mediaAt(kind: String, paths: List<String>, done: (List<Map<String, Any?>>?, String?) -> Unit) = later({
+        val uri = collection(kind)
+        val album = if (kind == "audio") MediaStore.Audio.Media.ALBUM else MediaStore.MediaColumns.BUCKET_DISPLAY_NAME
+        @Suppress("DEPRECATION")
+        val columns = mutableListOf(
+            MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATA,
+            MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, album,
+        )
+        if (kind != "images") columns.add(MediaStore.MediaColumns.DURATION)
+        if (kind != "audio") columns.addAll(listOf(MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT, MediaStore.MediaColumns.ORIENTATION))
         val out = mutableListOf<Map<String, Any?>>()
-        activity.contentResolver.query(uri, columns.toTypedArray(), args, null)?.use { c ->
+        // SQLite takes at most 999 arguments: by pieces.
+        for (part in paths.chunked(500)) {
+            @Suppress("DEPRECATION")
+            val where = "${MediaStore.MediaColumns.DATA} IN (${part.joinToString(",") { "?" }})"
+            out.addAll(rows(activity.contentResolver.query(uri, columns.toTypedArray(), where, part.toTypedArray(), null)))
+        }
+        out
+    }, done)
+
+    private fun rows(cursor: android.database.Cursor?): List<Map<String, Any?>> {
+        val out = mutableListOf<Map<String, Any?>>()
+        cursor?.use { c ->
             val wi = c.getColumnIndex(MediaStore.MediaColumns.WIDTH)
             val hi = c.getColumnIndex(MediaStore.MediaColumns.HEIGHT)
             val oi = c.getColumnIndex(MediaStore.MediaColumns.ORIENTATION)
@@ -194,8 +222,8 @@ class Library(private val activity: Activity) {
                 ))
             }
         }
-        out
-    }, done)
+        return out
+    }
 
     /** A media's thumbnail as JPEG, decoded at the size shown (UI-1). */
     fun thumbnail(kind: String, id: Long, size: Int, done: (ByteArray?, String?) -> Unit) = later({
