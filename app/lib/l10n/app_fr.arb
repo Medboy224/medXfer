@@ -509,5 +509,6 @@
   "keyNeighbour": "fichier voisin",
   "keyVolume": "volume",
   "keyFullScreen": "plein écran",
-  "cannotShowImage": "Cette image ne s'affiche pas ici"
+  "cannotShowImage": "Cette image ne s'affiche pas ici",
+  "needsLibmpv": "Pour lire les vidéos et la musique, installez la bibliothèque libmpv de votre système : « sudo apt install libmpv2 » (libmpv1 sur Ubuntu 22.04 et Zorin 17), puis relancez medXfer."
 }

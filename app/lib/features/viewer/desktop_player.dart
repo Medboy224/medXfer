@@ -370,7 +370,16 @@ class _DesktopPlayerState extends State<DesktopPlayer> {
         const SizedBox(height: 12),
         Text(l.cannotPlayComputer, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
         const SizedBox(height: 6),
-        Text(l.cannotPlayDetail(detail), textAlign: TextAlign.center, style: const TextStyle(color: _muted, fontSize: 13)),
+        // Linux without the system's libmpv: which package to install, not a code.
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Text(
+            detail == noLibmpv ? l.needsLibmpv : l.cannotPlayDetail(detail),
+            key: const Key('cannot-play-detail'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: _muted, fontSize: 13),
+          ),
+        ),
         const SizedBox(height: 16),
         if (state.openWith.supported)
           FilledButton(onPressed: () => unawaited(state.openWith.openFile(_m.path, mimeOf(_m))), child: Text(l.openWithOther)),

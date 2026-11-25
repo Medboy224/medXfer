@@ -1,4 +1,5 @@
-/// The second engine on Android (decided on 23 November 2026): libmpv, through media_kit (MIT).
+/// libmpv through media_kit (MIT): the second engine on Android (decided on 23 November 2026),
+/// the only one on Linux, on the system's own libmpv (D8, WP-8.2b).
 /// Its libmpv and FFmpeg are built LGPL v3, without GPL parts (read in the library itself:
 /// --disable-gpl --disable-nonfree, -Dgpl=false). It reads what the phone's own decoders do not:
 /// the AVI in Xvid that ExoPlayer played with its sound and a black screen, WMV, FLV, Dolby,
@@ -225,5 +226,24 @@ class MediaKitAdapter extends MediaPlayer {
     }
     unawaited(_player.dispose());
     super.dispose();
+  }
+}
+
+/// Linux (D8, WP-8.2b): media_kit on the system's libmpv, never shipped (the .deb depends on it).
+/// Without it, the app still starts (linux/mpv_relay): a player says which package to install.
+class LinuxMediaPlayers implements MediaPlayers {
+  const LinuxMediaPlayers();
+
+  @override
+  bool get supported => true;
+
+  @override
+  MediaPlayer create() {
+    try {
+      return MediaKitAdapter();
+    } on Object catch (e) {
+      debugPrint('media_kit: no libmpv: $e');
+      return UnavailablePlayer(noLibmpv);
+    }
   }
 }

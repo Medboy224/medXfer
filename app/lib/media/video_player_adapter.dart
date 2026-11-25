@@ -159,11 +159,13 @@ class WindowsMediaPlayers implements MediaPlayers {
   MediaPlayer create() => VideoPlayerAdapter();
 }
 
-/// This system's players: Android and Windows; Linux next (media_kit on the system's libmpv).
+/// This system's players: Android, Windows, Linux.
 MediaPlayers systemMediaPlayers() => Platform.isAndroid
     ? const AndroidMediaPlayers()
     : Platform.isWindows
     ? const WindowsMediaPlayers()
+    : Platform.isLinux
+    ? const LinuxMediaPlayers()
     : const NoMediaPlayers();
 
 /// The size a picture of [size] takes in [box]: whole ([BoxFit.contain]), covering it

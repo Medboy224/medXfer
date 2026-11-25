@@ -72,6 +72,9 @@ class MediaTrack {
   final String label;
 }
 
+/// The error of a player made where the system's libmpv is missing (Linux, WP-8.2b).
+const noLibmpv = 'no-libmpv';
+
 /// Makes the players of this system.
 abstract interface class MediaPlayers {
   /// False where no adapter plays yet: the screens say so.
@@ -88,10 +91,16 @@ class NoMediaPlayers implements MediaPlayers {
   bool get supported => false;
 
   @override
-  MediaPlayer create() => _Unsupported();
+  MediaPlayer create() => UnavailablePlayer('unsupported');
 }
 
-class _Unsupported extends MediaPlayer {
+/// A player that cannot play here, and says why in [error] ('unsupported': no adapter on this
+/// system; [noLibmpv]: Linux without the system's libmpv).
+class UnavailablePlayer extends MediaPlayer {
+  UnavailablePlayer(this._why);
+
+  final String _why;
+
   @override
   Future<void> open(MediaEntry m) async => notifyListeners();
   @override
@@ -109,7 +118,7 @@ class _Unsupported extends MediaPlayer {
   @override
   double get aspect => 0;
   @override
-  String? get error => 'unsupported';
+  String? get error => _why;
   @override
   Future<void> play() async {}
   @override
