@@ -21,6 +21,7 @@ import '../../connection/connection.dart';
 import '../../l10n/app_localizations.dart';
 import '../../library/desktop_picks.dart';
 import '../../library/selection.dart';
+import '../../platform/library.dart';
 import '../../theme.dart';
 import '../../widgets/dashed_box.dart';
 import '../../widgets/drop_zone.dart';
@@ -29,6 +30,8 @@ import '../connect/ble_nearby.dart';
 import '../connect/connect_screen.dart';
 import '../connect/dialogs.dart';
 import '../connect/hotspot_screen.dart';
+import '../viewer/open_media.dart';
+import '../viewer/pdf_screen.dart' show isPdf;
 import '../webshare/web_share_screen.dart';
 
 class SendPage extends StatefulWidget {
@@ -214,6 +217,13 @@ class _Pick extends StatelessWidget {
                           ),
                         ),
                         Text(p.kind == PickKind.folder && p.size == 0 ? '…' : formatBytes(context, p.size), style: TextStyle(fontSize: 13, color: c.muted)),
+                        if (_opener(context, picks, p) case final open?)
+                          IconButton(
+                            key: ValueKey('basket-open-$i'),
+                            tooltip: (mediaKindOf(p.name) == MediaKind.audio ? l.listenThis : l.openThis)(p.name),
+                            icon: Icon(mediaKindOf(p.name) == MediaKind.audio ? Icons.play_arrow_rounded : Icons.open_in_full_rounded, size: 20, color: c.text),
+                            onPressed: open,
+                          ),
                         IconButton(
                           key: ValueKey('basket-remove-$i'),
                           tooltip: l.removeOne,
@@ -259,6 +269,25 @@ class _Pick extends StatelessWidget {
       ],
     );
   }
+}
+
+/// What ⤢ does on a row of the basket (WP-8.2b): a photo, a video or a song in the player, among
+/// those of its kind in the basket, in their order; a PDF in the system's app for PDFs, as a
+/// double click would (no reader of PDF on a computer yet); nothing for a folder or another file.
+VoidCallback? _opener(BuildContext context, List<Pick> picks, Pick p) {
+  if (p.kind == PickKind.folder) return null;
+  final state = AppScope.of(context, listen: false).state;
+  // The system's file manager given a file opens it in its app (explorer.exe, xdg-open).
+  if (isPdf(p.name)) return state.folderOpener.supported ? () => unawaited(state.folderOpener.open(p.path)) : null;
+  final kind = mediaKindOf(p.name);
+  if (kind == null || (kind != MediaKind.images && !state.players.supported)) return null;
+  return () {
+    final same = [for (final x in picks) if (x.kind != PickKind.folder && mediaKindOf(x.name) == kind) x];
+    final items = [
+      for (final (i, x) in same.indexed) MediaEntry(id: -1 - i, kind: kind, name: x.name, path: x.path, size: x.size),
+    ];
+    unawaited(openMedia(context, items, same.indexWhere((x) => x.path == p.path)));
+  };
 }
 
 /// The right column, the phone's way of connecting: the device connected; those of the same

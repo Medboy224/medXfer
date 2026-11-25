@@ -13,6 +13,7 @@ import '../../library/explorer.dart';
 import '../../platform/library.dart';
 import '../../widgets/format.dart';
 import '../../widgets/v4.dart';
+import 'desktop_player.dart';
 import 'image_viewer.dart';
 import 'music_screen.dart';
 import 'video_screen.dart';
@@ -20,7 +21,10 @@ import 'video_screen.dart';
 /// Opens the player of [items] at [index]: images, videos or music, by its kind. [onLeave]: the
 /// photo shown as the viewer of photos closes; [from]: where its tiles are.
 Future<void> openMedia(BuildContext context, List<MediaEntry> items, int index, {ValueChanged<MediaEntry>? onLeave, HeroFrom from = HeroFrom.grid}) => Navigator.of(context).push(
-  items[index].kind == MediaKind.images
+  // A computer: one window for the three, at the keyboard and the mouse (mockup 23, WP-8.2b).
+  AppScope.of(context, listen: false).state.desktop
+      ? MaterialPageRoute<void>(builder: (_) => DesktopPlayer(items: items, index: index))
+      : items[index].kind == MediaKind.images
       ? _PhotoRoute(ImageViewer(items: items, index: index, onLeave: onLeave, from: from))
       : MaterialPageRoute<void>(
           builder: (_) => switch (items[index].kind) {

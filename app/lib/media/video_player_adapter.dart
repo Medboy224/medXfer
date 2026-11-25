@@ -1,6 +1,6 @@
-/// The Android adapter of [MediaPlayer] (decision D8): Flutter's own `video_player` (BSD-3),
-/// on ExoPlayer (Media3, Apache 2.0) under Android. It plays videos and songs alike, read from
-/// their `content://` address.
+/// The adapter of [MediaPlayer] on Flutter's own `video_player` (BSD-3, decision D8): on
+/// ExoPlayer (Media3, Apache 2.0) under Android, read from their `content://` address; on Media
+/// Foundation under Windows (`video_player_win`), read by their path. Videos and songs alike.
 library;
 
 import 'dart:io';
@@ -33,8 +33,8 @@ class VideoPlayerAdapter extends MediaPlayer {
     // Only for a picture that is there: a song, or a video without one, made the plugin's surface
     // throw « sendInitialized called with no video playing », and the app close (24 November
     // 2026). Android knows a video's size when it has a picture.
-    final view = m.kind == MediaKind.video && m.width > 0 && m.height > 0 ? VideoViewType.platformView : VideoViewType.textureView;
-    final c = m.id < 0
+    final view = Platform.isAndroid && m.kind == MediaKind.video && m.width > 0 && m.height > 0 ? VideoViewType.platformView : VideoViewType.textureView;
+    final c = m.id < 0 || !Platform.isAndroid
         ? VideoPlayerController.file(File(m.path), viewType: view)
         : VideoPlayerController.contentUri(contentUriOf(m), viewType: view);
     _c = c;
@@ -147,8 +147,24 @@ class AndroidMediaPlayers implements MediaPlayers {
   MediaPlayer create() => TwoEngines(system: VideoPlayerAdapter.new, wide: MediaKitAdapter.new);
 }
 
-/// This system's players: Android now; Windows and Linux in WP-8.2b.
-MediaPlayers systemMediaPlayers() => Platform.isAndroid ? const AndroidMediaPlayers() : const NoMediaPlayers();
+/// Windows: Media Foundation alone (D8): media_kit there would ship a libmpv of 2023, from a
+/// build project archived since, under a licence written nowhere.
+class WindowsMediaPlayers implements MediaPlayers {
+  const WindowsMediaPlayers();
+
+  @override
+  bool get supported => true;
+
+  @override
+  MediaPlayer create() => VideoPlayerAdapter();
+}
+
+/// This system's players: Android and Windows; Linux next (media_kit on the system's libmpv).
+MediaPlayers systemMediaPlayers() => Platform.isAndroid
+    ? const AndroidMediaPlayers()
+    : Platform.isWindows
+    ? const WindowsMediaPlayers()
+    : const NoMediaPlayers();
 
 /// The size a picture of [size] takes in [box]: whole ([BoxFit.contain]), covering it
 /// ([BoxFit.cover], cropped by the caller), or stretched to it ([BoxFit.fill]).

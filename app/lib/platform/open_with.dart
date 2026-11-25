@@ -89,4 +89,46 @@ class AndroidOpenWith implements OpenWith {
   }
 }
 
-OpenWith systemOpenWith() => Platform.isAndroid ? const AndroidOpenWith() : const NoOpenWith();
+/// Windows and Linux (WP-8.2b): « Ouvrir avec… », the file given as one argument, never a command
+/// built from text. Windows asks which app (OpenWith.exe, its own « Ouvrir avec » window; through
+/// rundll32, a path with spaces came quoted and nothing opened, real test of 25 November 2026);
+/// Linux opens it in the app the desktop gives its kind. No sharing sheet on a computer.
+class DesktopOpenWith implements OpenWith {
+  const DesktopOpenWith();
+
+  @override
+  bool get supported => true;
+
+  @override
+  Future<bool> open(MediaEntry m) => openFile(m.path, mimeOf(m));
+
+  @override
+  Future<bool> share(MediaEntry m) async => false;
+
+  @override
+  Future<bool> openFile(String path, String mime) async {
+    if (path.isEmpty) return false;
+    try {
+      if (Platform.isWindows) {
+        final windows = Platform.environment['SystemRoot'] ?? r'C:\Windows';
+        final chooser = '$windows\\System32\\OpenWith.exe';
+        // No chooser (an old Windows): its app for that kind, as a double click would.
+        await Process.start(File(chooser).existsSync() ? chooser : 'explorer.exe', [path], mode: ProcessStartMode.detached);
+      } else {
+        await Process.start(Platform.isMacOS ? 'open' : 'xdg-open', [path], mode: ProcessStartMode.detached);
+      }
+      return true;
+    } on Object {
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> shareFile(String path, String mime) async => false;
+}
+
+OpenWith systemOpenWith() => Platform.isAndroid
+    ? const AndroidOpenWith()
+    : Platform.isWindows || Platform.isLinux || Platform.isMacOS
+    ? const DesktopOpenWith()
+    : const NoOpenWith();
