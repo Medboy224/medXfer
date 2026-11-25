@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -252,14 +253,52 @@ func (s *DiscoveryServer) startProbes(ctx context.Context, addr string) {
 		defer close(done)
 		defer stop()
 		defer listener.Close()
+		slots := make(chan struct{}, maxProbeConns)
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
 				return
 			}
-			go s.answerProbe(conn)
+			select {
+			case slots <- struct{}{}:
+				go func() {
+					defer func() { <-slots }()
+					s.answerProbe(conn)
+				}()
+			default:
+				conn.Close()
+			}
 		}
 	}()
+}
+
+// maxProbeBytes bounds a probe's query and a peer's answer: a name, tags and addresses fit in
+// far less, and a peer is not trusted to stop (#307).
+const maxProbeBytes = 4 << 10
+
+// maxProbeConns bounds the probes answered at once, each holding a goroutine until its read
+// deadline; past it, a connection is closed at once (#307).
+const maxProbeConns = 32
+
+var errProbeTooLarge = errors.New("discovery: probe too large")
+
+// readQuery reads a probe's query, never past maxProbeBytes; none (empty) if it does not fit.
+func readQuery(r io.Reader) DiscoveryQuery {
+	var q DiscoveryQuery
+	_ = json.NewDecoder(io.LimitReader(r, maxProbeBytes)).Decode(&q)
+	return q
+}
+
+// readProbe reads a peer's answer, to its end but never past maxProbeBytes.
+func readProbe(r io.Reader) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, maxProbeBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxProbeBytes {
+		return nil, errProbeTooLarge
+	}
+	return b, nil
 }
 
 // answerProbe answers one probe and closes its connection.
@@ -274,9 +313,8 @@ func (s *DiscoveryServer) answerProbe(c net.Conn) {
 	}
 
 	// Read optional client query with pairing code
-	var query DiscoveryQuery
 	_ = c.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
-	_ = json.NewDecoder(c).Decode(&query)
+	query := readQuery(c)
 
 	respPeer := s.answer(query, activeIP)
 	data, err := json.Marshal(respPeer)
@@ -350,7 +388,7 @@ func sweepPeers() []Peer {
 		defer conn.Close()
 
 		_ = conn.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
-		respBytes, err := io.ReadAll(conn)
+		respBytes, err := readProbe(conn)
 		if err != nil {
 			return
 		}
