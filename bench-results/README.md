@@ -2,6 +2,32 @@
 
 Les mesures sur appareils réels (bible §17.4, DEV-21) sont gardées ici pour comparer les appareils et les versions. Chaque fichier `matrix-<appareil>-<système>-<date>.json` est la sortie de `xfer bench matrix` côté **receveur**.
 
+## 25 novembre 2026 — R-0 : `syncfs` sur le stockage partagé d'Android (#302)
+
+**But :** savoir si `syncfs` rend vraiment durables les petits fichiers reçus dans le stockage partagé d'Android, qui passe par FUSE (lot R-0 du plan de revue, décision R3). Sortie brute : [`r0-syncfs-a57-20261125.txt`](r0-syncfs-a57-20261125.txt).
+
+**Méthode :**
+- Galaxy A57 (Android 16), un programme Go jetable compilé pour Android, lancé dans Termux par SSH.
+- Deux dossiers : `/storage/emulated/0/Download/…` (FUSE, `f_type` 0x65735546) et le dossier interne de Termux (f2fs, monté avec `fsync_mode=nobarrier`).
+- Pour chaque mesure, la mémoire en attente d'écriture (`Dirty` + `Writeback` de `/proc/meminfo`) est relevée avant et après. Une synchronisation qui n'écrit rien revient tout de suite et la laisse où elle était.
+- Trois passages. Tout fichier écrit est supprimé avant l'étape suivante.
+
+**Résultats** (médianes des trois passages) :
+
+| Mesure | Stockage partagé (FUSE) | Dossier interne (f2fs) |
+|---|---|---|
+| `syncfs` après 256 Mio | 0,0 ms, erreur `ENOENT`, ~58 Mo toujours en attente | 77 ms, ~0,3 Mo en attente |
+| `fsync` du fichier de 256 Mio | 93 ms, écrit | 59 ms, écrit |
+| `syncfs` après 500 fichiers de 16 Kio | 0,0 ms, ~10 Mo toujours en attente | 74 ms, écrit |
+| `fsync` des 500 fichiers, l'un après l'autre | 1 030 ms (~2 ms par fichier), écrit | 178 ms, écrit |
+| `fsync` des 500 fichiers, 8 à la fois | 164 ms (~0,33 ms par fichier), écrit | — |
+
+**Conclusions :**
+- **Sur FUSE, `syncfs` n'écrit rien.** Sur l'A57, il renvoie `ENOENT`. Sur un noyau sans `syncfs` pour FUSE (avant Linux 5.14), il renverrait un succès sans rien écrire : à mesurer sur le TECNO BF6 quand il sera branché.
+- **Aujourd'hui, sur l'A57, les fichiers reçus restent durables**, mais lentement. `Batch.Flush` passe au `fsync` de chaque fichier quand `syncfs` échoue, l'un après l'autre (~2 ms par fichier).
+- **Le gain des lots du 13 octobre (0,37 à 0,73 ms par fichier)** a été mesuré dans le dossier interne de Termux. Il ne s'est jamais appliqué au dossier de réception de l'application, qui est sur FUSE.
+- **Pour R-3 (décision R3)** : sur FUSE, détecté par `statfs`, ne pas appeler `syncfs` ; faire le `fsync` de chaque fichier, 8 à la fois. C'est 6 fois plus rapide que le repli actuel, et durable.
+
 ## 13 octobre 2026 — valeurs par défaut (WP-4.9, D8 du plan J4b)
 
 **Conditions de mesure :**
