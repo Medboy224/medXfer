@@ -10,11 +10,14 @@ import 'dart:ui' as ui;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:intl/intl.dart';
 
 import '../../app.dart';
 import '../../l10n/app_localizations.dart';
 import '../../library/explorer.dart';
+import '../viewer/open_media.dart';
+import '../viewer/pdf_screen.dart';
 import 'grid_layout.dart';
 import '../../platform/library.dart';
 import '../../theme.dart';
@@ -68,11 +71,29 @@ class _LibraryImageState extends State<LibraryImage> {
   bool _keptAsked = false; // the sharp image made already asked, no answer yet: the first waits
   ImageStream? _sharpStream;
   ImageStreamListener? _sharpListener;
+  ImageProvider? _first; // the first image as decoded for [_firstBytes] at [_firstPx]
+  Uint8List? _firstBytes;
+  int _firstPx = 0;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _explorer = AppScope.of(context, listen: false).state.explorer;
+  }
+
+  /// [bytes] decoded at [px], the decoding started at once. Left to [Image], it waited until a
+  /// fling slowed down (Flutter puts off decoding while a list moves fast): the tiles flung past
+  /// stayed empty, up to 60 % of the grid, and filled 5 to 10 frames after (filmed at 60 frames
+  /// a second, 23 November 2026). A thumbnail decodes in a few ms, off the main thread.
+  ImageProvider _decoded(Uint8List bytes, int px) {
+    final known = _first;
+    if (known != null && identical(bytes, _firstBytes) && px == _firstPx) return known;
+    final first = ResizeImage(MemoryImage(bytes), width: px); // Image.memory's own key
+    _first = first;
+    _firstBytes = bytes;
+    _firstPx = px;
+    unawaited(precacheImage(first, context, onError: (_, _) {}));
+    return first;
   }
 
   void _fetch(int px) {
@@ -212,12 +233,12 @@ class _LibraryImageState extends State<LibraryImage> {
           // The sharp one is coming (read, or decoding): the first only if it is at hand already.
           final first = _explorer.cached(widget.cacheKey);
           if (first == null) return widget.placeholder ?? ColoredBox(color: context.colors.chip);
-          return Image.memory(first, fit: widget.fit, cacheWidth: px, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
+          return Image(image: _decoded(first, px), fit: widget.fit, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
         }
         _fetch(px);
         final bytes = _bytes;
         if (bytes == null) return widget.placeholder ?? ColoredBox(color: context.colors.chip);
-        return Image.memory(bytes, fit: widget.fit, cacheWidth: px, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
+        return Image(image: _decoded(bytes, px), fit: widget.fit, gaplessPlayback: true, filterQuality: FilterQuality.medium, excludeFromSemantics: true);
       },
     );
   }
@@ -527,6 +548,24 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
   GridLayout _layoutOf(int columns) => _layouts[columns] ??= columns <= Explorer.minColumns
       ? GridLayout.mosaic(groups: _groups, headers: _headers, width: _box.width, aspects: _aspects, gap: _gap, header: _headerHeight)
       : GridLayout.squares(groups: _groups, headers: _headers, width: _box.width, columns: columns, gap: _gap, header: _headerHeight);
+
+  // The photos as the grid shows them (an album chosen, or all).
+  List<MediaEntry> _shownItems = const [];
+
+  /// [m] brought into view, if out of it: the viewer of photos closes on it, and it flies back
+  /// into its tile (swiped far from where it opened, it flew to nothing, 23 November 2026).
+  void _reveal(MediaEntry m) {
+    if (!mounted || !_scroll.hasClients || _box.isEmpty) return;
+    var i = _shownItems.indexWhere((x) => identical(x, m));
+    if (i < 0) i = _shownItems.indexWhere((x) => x.id == m.id);
+    if (i < 0) return;
+    final top = _top(i, _shownColumns, _shownList);
+    final h = _shownList ? (_rows.extent(i) ?? _rowHeight) : _layoutOf(_shownColumns).rectOf(i).height;
+    final p = _scroll.position;
+    final view = p.viewportDimension;
+    if (top >= p.pixels && top + h <= p.pixels + view - 96) return; // in view, above the floating bar
+    p.jumpTo((top - (view - h) / 2).clamp(p.minScrollExtent, p.maxScrollExtent).toDouble());
+  }
 
   // The photo under the fingers, its height in each layout: how much a step zooms. Square tiles
   // go by the ratio of their columns; the mosaic's rows each have their height.
@@ -911,6 +950,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
         if (!pinching && _shownColumns != 0 && (_shownColumns != columns || _shownList != asList) && _startSpread == null) {
           _keep(_shownColumns, _shownList, columns, asList, 0);
         }
+        _shownItems = items;
         _groups = asList ? [items.length] : [for (final d in days) d.$2.length];
         _headers = byDay && !asList;
         if (!pinching) {
@@ -949,6 +989,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                     if (layoutsKey != _layoutsKey) {
                       _layoutsKey = layoutsKey;
                       _layouts.clear();
+                      _lines.clear();
                       _aspects = [for (final m in items) m.aspect];
                     }
                     Widget view(ScrollController controller, int cols, Key key) => _TileColumns(
@@ -968,10 +1009,7 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                             ),
                           )
                         else
-                          for (final (g, day) in days.indexed) ...[
-                            if (byDay) SliverToBoxAdapter(child: SizedBox(height: _headerHeight, child: _DayHeader(day: day.$1, items: day.$2))),
-                            if (cols <= Explorer.minColumns) _mosaic(items, _layoutOf(cols), g) else _grid(day.$2, cols),
-                          ],
+                          _lined(items, days, cols),
                         SliverToBoxAdapter(child: SizedBox(height: bottomRoom(context))),
                       ],
                     ),
@@ -1015,40 +1053,52 @@ class _MediaGridState extends State<_MediaGrid> with AutomaticKeepAliveClientMix
                 ),
               ),
             ),
-            if (list.loading) LinearProgressIndicator(minHeight: 2, color: c.muted),
+            // Its room kept: come and gone at each page of photos, it changed the grid's height,
+            // which was built again whole, twice a page (TECNO BF6, 24 November 2026).
+            SizedBox(height: 2, child: list.loading ? LinearProgressIndicator(minHeight: 2, color: c.muted) : null),
           ],
         );
       },
     );
   }
 
-  Widget _grid(List<MediaEntry> items, int columns) => SliverGrid(
-    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: columns, mainAxisSpacing: _gap, crossAxisSpacing: _gap),
-    delegate: SliverChildBuilderDelegate((context, i) => _tiles[items[i]] ??= _MediaTile(kind: widget.kind, entry: items[i]), childCount: items.length),
-  );
-
-  /// A day of the mosaic ([GridLayout.mosaic]): its rows, each its photos at their places.
-  Widget _mosaic(List<MediaEntry> items, GridLayout layout, int group) {
-    final rows = layout.groupRows[group];
-    return SliverVariedExtentList.builder(
-      itemCount: rows.length,
-      itemExtentBuilder: (r, _) => r < rows.length ? rows[r].height + _gap : null,
-      itemBuilder: (context, r) {
-        final row = rows[r];
+  /// The grid as one list of lines, each day's header then its rows, built only as they come
+  /// into view. One sliver per day built every day's header at each change, the whole library's
+  /// (a page of photos loaded, a pick): half a second to a second on a modest phone (TECNO BF6,
+  /// measured on 24 November 2026). The same places as [GridLayout]'s, to the pixel.
+  Widget _lined(List<MediaEntry> items, List<(DateTime, List<MediaEntry>)> days, int columns) {
+    final layout = _layoutOf(columns);
+    final lines = _linesOf(columns, layout);
+    return SliverVariedExtentList(
+      itemExtentBuilder: (i, _) => i < lines.length ? lines.extent[i] : null,
+      delegate: _ExactLength(childCount: lines.length, total: lines.total, (context, i) {
+        final first = lines.first[i];
+        if (first < 0) {
+          final day = days[lines.group[i]];
+          return SizedBox(height: _headerHeight, child: _DayHeader(day: day.$1, items: day.$2));
+        }
         return Stack(
           children: [
-            for (var k = row.first; k < row.first + row.count; k++)
+            for (var k = first; k < first + lines.count[i]; k++)
               Positioned(
                 left: layout.rectOf(k).left,
                 top: 0,
                 width: layout.rectOf(k).width,
-                height: row.height,
+                height: layout.rectOf(k).height,
                 child: _tiles[items[k]] ??= _MediaTile(kind: widget.kind, entry: items[k]),
               ),
           ],
         );
-      },
+      }),
     );
+  }
+
+  final _lines = <int, _Lines>{};
+
+  _Lines _linesOf(int columns, GridLayout layout) {
+    final had = _lines[columns];
+    if (had != null && identical(had.layout, layout)) return had;
+    return _lines[columns] = _Lines(layout, _groups, headers: _headers, header: _headerHeight, gap: _gap, columns: columns);
   }
 
   /// The media by day, in the order shown: what « Tout ce jour » picks.
@@ -1248,6 +1298,61 @@ class _PinchPainter extends CustomPainter {
 }
 
 /// A day's name, and « Tout ce jour » with its square box.
+/// A grid's lines, in order: each day's header (if [headers]), then its rows of photos, each
+/// line's height and, for a row, its photos ([first], [count]); [first] is -1 for a header.
+class _Lines {
+  _Lines(this.layout, List<int> groups, {required bool headers, required double header, required double gap, required int columns}) {
+    var start = 0;
+    for (var g = 0; g < groups.length; g++) {
+      final n = groups[g];
+      if (headers) _add(g, -1, 0, header);
+      if (layout.isMosaic) {
+        for (final r in layout.groupRows[g]) {
+          _add(g, r.first, r.count, r.height + gap);
+        }
+      } else {
+        // Square tiles: a gap under each row but a day's last ([GridLayout.squares]).
+        final rows = (n + columns - 1) ~/ columns;
+        for (var r = 0; r < rows; r++) {
+          final f = start + r * columns;
+          _add(g, f, math.min(columns, start + n - f), layout.rectOf(f).height + (r < rows - 1 ? gap : 0));
+        }
+      }
+      start += n;
+    }
+  }
+
+  final GridLayout layout;
+  final group = <int>[];
+  final first = <int>[];
+  final count = <int>[];
+  final extent = <double>[];
+
+  int get length => extent.length;
+
+  /// All the lines' height.
+  double total = 0;
+
+  void _add(int g, int f, int c, double e) {
+    group.add(g);
+    first.add(f);
+    count.add(c);
+    extent.add(e);
+    total += e;
+  }
+}
+
+/// Lines whose whole length is known: Flutter guesses it from those built, too short where a
+/// day's header (52 px) is among them, and the grid stopped short of a photo brought into view.
+class _ExactLength extends SliverChildBuilderDelegate {
+  _ExactLength(super.builder, {required super.childCount, required this.total});
+
+  final double total;
+
+  @override
+  double? estimateMaxScrollOffset(int firstIndex, int lastIndex, double leadingScrollOffset, double trailingScrollOffset) => total;
+}
+
 class _DayHeader extends StatelessWidget {
   const _DayHeader({required this.day, required this.items});
 
@@ -1326,14 +1431,16 @@ class _MediaTile extends StatelessWidget {
     final m = entry;
     final pick = Explorer.pickMedia(m);
     final on = state.selection.contains(pick.path);
-    // One node for the accessibility: its name, picked or not, and the tap (its badges and image
-    // said nothing more, and cost a node each at every pinch's end).
+    final l = AppLocalizations.of(context);
+    // One node for the accessibility: its name, picked or not, the tap, and « Ouvrir » (its
+    // badges and image said nothing more, and cost a node each at every pinch's end).
     return Semantics(
       button: true,
       toggled: on,
       label: m.name,
       excludeSemantics: true,
       onTap: () => state.selection.toggle(pick),
+      customSemanticsActions: {CustomSemanticsAction(label: l.openThis(m.name)): () => _openFromExplorer(context, m)},
       child: GestureDetector(
         key: ValueKey('media-${m.id}'),
         onTap: () => state.selection.toggle(pick),
@@ -1346,7 +1453,11 @@ class _MediaTile extends StatelessWidget {
           child: Stack(
           fit: StackFit.expand,
           children: [
-            LibraryImage(
+            _HeroOf(
+              kind: m.kind,
+              path: m.path,
+              from: HeroFrom.grid,
+              child: LibraryImage(
               cacheKey: '${kind.name}:${m.id}',
               decodePx: gridDecodePx(context),
               load: (px) => state.library.thumbnail(kind, m.id, px),
@@ -1358,6 +1469,7 @@ class _MediaTile extends StatelessWidget {
                 final size = sharpSize(context);
                 return state.library.sharpThumbnail(m, height: size.height, width: size.width, keptOnly: true);
               },
+            ),
             ),
             if (on) _ByColumns((columns) => DecoratedBox(decoration: BoxDecoration(border: Border.all(color: c.strong, width: columns >= 5 ? 2 : 3)))),
             if (kind == MediaKind.video)
@@ -1378,6 +1490,14 @@ class _MediaTile extends StatelessWidget {
                 ),
               ),
             Positioned(right: 5, top: 5, child: _Decor(child: _ByColumns((columns) => PickBox(on: on, onImage: true, size: columns >= 5 ? 18 : 22)))),
+            // ⤢ opens it, touching it elsewhere picks it: no doubt which (D9, mockup 19).
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: _Decor(
+                child: _OpenButton(key: ValueKey('open-${m.id}'), label: l.openThis(m.name), onImage: true, onOpen: () => _openFromExplorer(context, m)),
+              ),
+            ),
           ],
         ),
         ),
@@ -1397,8 +1517,8 @@ class _MediaRow extends StatelessWidget {
   static const detailStyle = TextStyle(fontSize: 12, fontFeatures: tabular);
 
   /// Across a row, all but the name: the list's padding (16), the row's (12), the thumbnail and
-  /// its gap (66), the box and its gaps (34).
-  static const besideName = 128.0;
+  /// its gap (66), the box, its gap and ⤢ (74).
+  static const besideName = 168.0; // with ⤢ at the end (44 px), WP-8.2
 
   /// A row's height for the height of its name and details.
   static double heightFor(double text) => math.max(56.0, text).ceilToDouble() + 12 + 2;
@@ -1456,7 +1576,7 @@ class _MediaRow extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   PickBox(on: on, size: 22),
-                  const SizedBox(width: 4),
+                  _OpenButton(key: ValueKey('open-${m.id}'), label: AppLocalizations.of(context).openThis(m.name), onOpen: () => _openFromExplorer(context, m)),
                 ],
               ),
             ),
@@ -1534,12 +1654,7 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
                         padding: const EdgeInsets.all(8),
                         child: Row(
                           children: [
-                            Container(
-                              width: 56,
-                              height: 56,
-                              decoration: BoxDecoration(color: c.section, borderRadius: BorderRadius.circular(10)),
-                              child: Icon(Icons.music_note_rounded, size: 30, color: c.accent),
-                            ),
+                            PickBox(on: on, size: 22),
                             const SizedBox(width: 12),
                             Expanded(
                               child: Column(
@@ -1556,9 +1671,12 @@ class _MusicListState extends State<_MusicList> with AutomaticKeepAliveClientMix
                                 ],
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            PickBox(on: on, size: 22),
-                            const SizedBox(width: 4),
+                            _OpenButton(
+                              key: ValueKey('open-${m.id}'),
+                              label: l.listenThis(m.name),
+                              icon: Icons.play_arrow_rounded,
+                              onOpen: () => _openFromExplorer(context, m),
+                            ),
                           ],
                         ),
                       ),
@@ -1747,7 +1865,11 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
                   key: ValueKey('files-list:${ex.dir}'), // a new folder opens at its top
                   padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
                   itemCount: entries.length,
-                  itemBuilder: (context, i) => _FileRow(entry: entries[i], onOpen: () => unawaited(ex.open(entries[i].path))),
+                  itemBuilder: (context, i) => _FileRow(
+                    entry: entries[i],
+                    onOpen: () => unawaited(ex.open(entries[i].path)),
+                    onPlay: _openerOf(context, entries, entries[i]),
+                  ),
                 ),
         ),
       ],
@@ -1769,18 +1891,89 @@ class _FilesTabState extends State<FilesTab> with AutomaticKeepAliveClientMixin 
         key: ValueKey('files-${cat.name}'),
         padding: EdgeInsets.fromLTRB(8, 0, 8, bottomRoom(context)),
         itemCount: list.items.length,
-        itemBuilder: (context, i) => _FileRow(entry: list.items[i], showFolder: true),
+        itemBuilder: (context, i) => _FileRow(
+          entry: list.items[i],
+          showFolder: true,
+          onPlay: _openerOf(context, list.items, list.items[i]),
+        ),
       ),
     );
   }
 }
 
+/// What ⤢ (▶ for a song) does on a row of the Files tab: a PDF in the PDF reader (WP-8.2,
+/// mockups 27 and 28), a media in its player; nothing for the rest.
+VoidCallback? _openerOf(BuildContext context, List<FileEntry> shown, FileEntry e) {
+  if (e.dir) return null;
+  if (isPdf(e.name)) return AppScope.of(context).state.pdf.supported ? () => unawaited(openPdf(context, e)) : null;
+  return mediaKindOf(e.name) == null ? null : () => unawaited(_openFromFiles(context, shown, e));
+}
+
+/// Opens a photo, a video or a song of the Files tab in its player, among the files of its kind
+/// [shown] with it, in their order: its folder, or its category, makes the queue (asked on 24
+/// November 2026). The system's library gives each its id, for its thumbnail and its address; one
+/// it does not know is read by its path (an id below 0).
+Future<void> _openFromFiles(BuildContext context, List<FileEntry> shown, FileEntry e) async {
+  final kind = mediaKindOf(e.name);
+  if (kind == null) return;
+  final library = AppScope.of(context, listen: false).state.library;
+  var around = [for (final f in shown) if (!f.dir && mediaKindOf(f.name) == kind) f];
+  // At most 300 around it: a folder of thousands is a long way to go anyway.
+  var at = around.indexWhere((f) => f.path == e.path);
+  if (around.length > 300) {
+    final from = (at - 150).clamp(0, around.length - 300);
+    around = around.sublist(from, from + 300);
+    at -= from;
+  }
+  List<MediaEntry> known;
+  try {
+    known = await library.mediaAt(kind, [for (final f in around) f.path]);
+  } on Object {
+    known = const [];
+  }
+  final byPath = {for (final m in known) m.path: m};
+  final items = [
+    for (final (i, f) in around.indexed) byPath[f.path] ?? MediaEntry(id: -1 - i, kind: kind, name: f.name, path: f.path, size: f.size, modified: f.modified),
+  ];
+  if (!context.mounted || at < 0) return;
+  // A photo the library does not know comes without its proportions: it flew to the whole
+  // screen, cropped, then shrank into place. Its row's thumbnail gives them, turned as shown.
+  final opened = items[at];
+  if (kind == MediaKind.images && opened.aspect <= 0) {
+    final bytes = AppScope.of(context, listen: false).state.explorer.cached('file:${opened.path}');
+    if (bytes != null) {
+      try {
+        final image = await decodeImageFromList(bytes);
+        items[at] = MediaEntry(
+          id: opened.id,
+          kind: kind,
+          name: opened.name,
+          path: opened.path,
+          size: opened.size,
+          modified: opened.modified,
+          width: image.width,
+          height: image.height,
+        );
+        image.dispose();
+      } on Object {
+        // Shown without: it fills the screen as it flies.
+      }
+    }
+    if (!context.mounted) return;
+  }
+  await openMedia(context, items, at, from: HeroFrom.files);
+}
+
 /// One file or folder: its thumbnail or icon, name, size; a box to pick it.
 class _FileRow extends StatelessWidget {
-  const _FileRow({required this.entry, this.onOpen, this.showFolder = false});
+  const _FileRow({required this.entry, this.onOpen, this.onPlay, this.showFolder = false});
 
   final FileEntry entry;
   final VoidCallback? onOpen;
+
+  /// A photo, a video or a song: its player, opened by ⤢ (▶ for a song); touching the row
+  /// still picks it.
+  final VoidCallback? onPlay;
 
   /// In a category, where the file is.
   final bool showFolder;
@@ -1831,7 +2024,13 @@ class _FileRow extends StatelessWidget {
                         child: thumbed
                             ? ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
-                                child: LibraryImage(cacheKey: 'file:${e.path}', load: (px) => state.library.fileThumbnail(e.path, px), placeholder: Center(child: icon)),
+                                // A photo flies from here to its viewer, and back.
+                                child: _HeroOf(
+                                  kind: mediaKindOf(e.name) ?? MediaKind.video,
+                                  path: e.path,
+                                  from: HeroFrom.files,
+                                  child: LibraryImage(cacheKey: 'file:${e.path}', load: (px) => state.library.fileThumbnail(e.path, px), placeholder: Center(child: icon)),
+                                ),
                               )
                             : icon,
                       ),
@@ -1853,6 +2052,13 @@ class _FileRow extends StatelessWidget {
                 ),
               ),
             ),
+            if (onPlay != null)
+              _OpenButton(
+                key: ValueKey('play-${e.name}'),
+                label: (mediaKindOf(e.name) == MediaKind.audio ? l.listenThis : l.openThis)(e.name),
+                icon: mediaKindOf(e.name) == MediaKind.audio ? Icons.play_arrow_rounded : Icons.open_in_full_rounded,
+                onOpen: onPlay!,
+              ),
             Semantics(
               button: true,
               toggled: on,
@@ -1909,6 +2115,83 @@ class _RowHeights {
       out[i + 1] = out[i] + h;
     }
     tops = out;
+  }
+}
+
+/// A photo's tile as it flies to the viewer and back: the tile's own image, cropped to the rect
+/// as it grows into the photo's shape (videos open their player without it).
+class _HeroOf extends StatelessWidget {
+  const _HeroOf({required this.kind, required this.path, required this.from, required this.child});
+
+  final MediaKind kind;
+  final String path;
+  final HeroFrom from;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (kind != MediaKind.images) return child;
+    return Hero(
+      tag: heroTagOf(kind, path, from),
+      createRectTween: mediaRectTween, // closing: the flight lands here, on its curve
+      // Closing, the viewer's own flies back: its photo whole, which this tile may show cropped
+      // (beyond the mosaic's proportions). Opening, Flutter takes the viewer's by itself.
+      flightShuttleBuilder: (context, animation, direction, from, to) {
+        final viewer = direction == HeroFlightDirection.pop ? (from.widget as Hero).flightShuttleBuilder : null;
+        if (viewer != null) return viewer(context, animation, direction, from, to);
+        return ((direction == HeroFlightDirection.push ? from : to).widget as Hero).child;
+      },
+      child: child,
+    );
+  }
+}
+
+/// Opens the player of [m], among the media of its kind as the explorer holds them.
+void _openFromExplorer(BuildContext context, MediaEntry m) {
+  final items = AppScope.of(context, listen: false).state.explorer.media(m.kind).items;
+  var i = items.indexWhere((x) => identical(x, m));
+  if (i < 0) i = items.indexWhere((x) => x.id == m.id);
+  // The grid brings the photo the viewer closes on into view, for it to fly back into its tile.
+  final grid = context.findAncestorStateOfType<_MediaGridState>();
+  if (i >= 0) unawaited(openMedia(context, List.of(items), i, onLeave: grid?._reveal));
+}
+
+/// ⤢ (▶ for a song): opens the player; 44 px to touch, a 30 px round on a picture.
+class _OpenButton extends StatelessWidget {
+  const _OpenButton({super.key, required this.label, required this.onOpen, this.icon = Icons.open_in_full_rounded, this.onImage = false});
+
+  final String label;
+  final VoidCallback onOpen;
+  final IconData icon;
+
+  /// Over a photo: white on a dark round, readable on any picture.
+  final bool onImage;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Semantics(
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onOpen,
+        child: SizedBox.square(
+          dimension: 44,
+          child: Center(
+            child: Container(
+              width: onImage ? 30 : 36,
+              height: onImage ? 30 : 36,
+              decoration: onImage
+                  ? BoxDecoration(color: Colors.black.withValues(alpha: 0.55), shape: BoxShape.circle, border: Border.all(color: Colors.white.withValues(alpha: 0.85), width: 1.5))
+                  : BoxDecoration(color: c.surface, shape: BoxShape.circle),
+              child: Icon(icon, size: onImage ? 16 : 20, color: onImage ? Colors.white : c.accent),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

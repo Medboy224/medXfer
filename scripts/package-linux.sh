@@ -57,6 +57,12 @@ deps="$stage/$name/DEPENDANCES.txt"
       printf '%s\n' libegl1 libgl1 libgles2 libgl1-mesa-dri
     } | sort -u | sed 's/^/  /'
   fi
+  # Videos and songs (WP-8.2b, D8): the system's libmpv, never in the package. Not among the
+  # packages above: medXfer starts without it (app/linux/mpv_relay), which the fresh test checks.
+  echo
+  echo "Facultatif, pour lire les vidéos et la musique : la libmpv du système"
+  echo "  (apt install libmpv2 ; libmpv1 sur Ubuntu 22.04 et Zorin 17). Sans elle, medXfer"
+  echo "  démarre et ouvre les images ; les vidéos et la musique disent quoi installer."
 } > "$deps"
 
 mkdir -p "$out"

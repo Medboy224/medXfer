@@ -1,12 +1,18 @@
 // The desktop layout (mockup « 10. Bureau ») on the fake core: the side menu and its pages,
 // files and folders chosen together, and the connection beside them (WP-B.8, 27 October).
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:medxfer/app.dart';
 import 'package:medxfer/app_state.dart';
 import 'package:medxfer/connection/connection.dart';
 import 'package:medxfer/core/core.dart';
 import 'package:medxfer/core/fake_core.dart';
+import 'package:medxfer/media/media_player.dart';
+import 'package:medxfer/platform/library.dart';
+import 'package:medxfer/platform/open_folder.dart';
+import 'package:medxfer/platform/open_with.dart';
 import 'package:medxfer/platform/cable.dart';
 import 'package:medxfer/platform/file_picker.dart';
 import 'package:medxfer/platform/firewall.dart';
@@ -40,6 +46,108 @@ class _Picker implements FilePicker {
   @override
   Future<void> close(List<OpenFile> files) async {}
 }
+
+/// A video or a song of the basket, played (WP-8.2b): what was asked of it.
+class _Player extends MediaPlayer {
+  _Player(this.log);
+  final List<String> log;
+  MediaEntry? _m;
+  bool _playing = false;
+  Duration _at = Duration.zero;
+  double _volume = 1;
+
+  @override
+  Future<void> open(MediaEntry m) async {
+    _m = m;
+    _at = Duration.zero;
+    log.add('open ${m.name}');
+    notifyListeners();
+  }
+
+  @override
+  bool get ready => _m != null;
+  @override
+  bool get playing => _playing;
+  @override
+  bool get finished => false;
+  @override
+  Duration get position => _at;
+  @override
+  Duration get duration => const Duration(minutes: 3);
+  @override
+  double get volume => _volume;
+  @override
+  double get aspect => 16 / 9;
+  @override
+  String? get error => null;
+  @override
+  Future<void> play() async {
+    _playing = true;
+    log.add('play');
+    notifyListeners();
+  }
+
+  @override
+  Future<void> pause() async {
+    _playing = false;
+    log.add('pause');
+    notifyListeners();
+  }
+
+  @override
+  Future<void> seek(Duration to) async {
+    _at = to;
+    log.add('seek ${to.inSeconds}');
+    notifyListeners();
+  }
+
+  @override
+  Future<void> setVolume(double volume) async {
+    _volume = volume;
+    log.add('volume ${(volume * 10).round()}');
+    notifyListeners();
+  }
+
+  @override
+  Widget view({BoxFit fit = BoxFit.contain}) => const SizedBox.expand(key: Key('video-view'));
+}
+
+class _Players implements MediaPlayers {
+  final log = <String>[];
+  @override
+  bool get supported => true;
+  @override
+  MediaPlayer create() => _Player(log);
+}
+
+class _OpenWith implements OpenWith {
+  final files = <String>[];
+  @override
+  bool get supported => true;
+  @override
+  Future<bool> open(MediaEntry m) async => openFile(m.path, mimeOf(m));
+  @override
+  Future<bool> share(MediaEntry m) async => false;
+  @override
+  Future<bool> openFile(String path, String mime) async {
+    files.add('$path $mime');
+    return true;
+  }
+
+  @override
+  Future<bool> shareFile(String path, String mime) async => false;
+}
+
+/// The system's file manager: what it was given to open.
+class _Opener implements FolderOpener {
+  final opened = <String>[];
+  @override
+  bool get supported => true;
+  @override
+  Future<void> open(String folder) async => opened.add(folder);
+}
+
+const _media = ['/home/a/plage.jpg', '/home/a/concert.mp4', '/home/a/mariage.mp4', '/home/a/chanson.mp3', '/home/a/rapport.pdf', '/home/a/notes.txt'];
 
 const _file = '/home/a/rapport.pdf';
 const _folder = '/home/a/Vacances 2026';
@@ -160,11 +268,18 @@ Future<AppState> _app(
   Hotspot hotspot = const NoHotspot(),
   CableLink cable = const NoCableLink(),
   Firewall firewall = const NoFirewall(),
+  List<String> files = const [_file],
+  MediaPlayers players = const NoMediaPlayers(),
+  OpenWith openWith = const NoOpenWith(),
+  FolderOpener folderOpener = const NoFolderOpener(),
 }) async {
   final state = AppState(
     core: core,
     folders: const _TestFolders(),
-    filePicker: const _Picker([_file], _folder),
+    filePicker: _Picker(files, _folder),
+    players: players,
+    openWith: openWith,
+    folderOpener: folderOpener,
     history: MemoryHistoryStore(),
     desktop: true,
     hotspot: hotspot,
@@ -190,6 +305,86 @@ Future<void> _frames(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('WP-8.2b: ⤢ on the basket\'s photos, videos, songs and PDF; a video played at the keyboard, its neighbour by Ctrl →', (tester) async {
+    final players = _Players();
+    final opener = _Opener();
+    await _app(tester, _core(), files: _media, players: players, openWith: _OpenWith(), folderOpener: opener);
+    await tester.tap(find.byKey(const Key('pick-files')));
+    await tester.pumpAndSettle();
+    for (final i in [0, 1, 2, 3, 4]) {
+      expect(find.byKey(ValueKey('basket-open-$i')), findsOneWidget, reason: _media[i]);
+    }
+    expect(find.byKey(const ValueKey('basket-open-5')), findsNothing, reason: 'a text: nothing to open it with here');
+
+    // The PDF: the system's app for PDFs, as a double click (no reader of PDF on a computer yet;
+    // through the « Ouvrir avec » window, nothing opened, real test of 25 November 2026).
+    await tester.tap(find.byKey(const ValueKey('basket-open-4')));
+    await tester.pump();
+    expect(opener.opened, ['/home/a/rapport.pdf']);
+
+    // The second video: among the two videos of the basket.
+    await tester.tap(find.byKey(const ValueKey('basket-open-2')));
+    await tester.pumpAndSettle();
+    expect(find.text('mariage.mp4'), findsOneWidget);
+    expect(find.textContaining('2 / 2'), findsOneWidget);
+    expect(players.log, ['open mariage.mp4', 'play']);
+    expect(find.byKey(const Key('video-view')), findsOneWidget);
+    expect(find.text('Espace'), findsOneWidget, reason: 'the keys, written below');
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    expect(players.log.last, 'pause');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(players.log.last, 'seek 5');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(players.log.last, 'volume 9');
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(find.text('concert.mp4'), findsOneWidget, reason: 'its neighbour');
+    expect(find.textContaining('1 / 2'), findsOneWidget);
+
+    // F: the whole window; Échap leaves it, then closes.
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+    await tester.pump();
+    expect(find.byKey(const Key('player-close')), findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(find.byKey(const Key('player-close')), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('drop-card')), findsOneWidget, reason: 'back to the Accueil');
+  });
+
+  testWidgets('WP-8.2b: a photo of the basket, zoomed by the wheel; Espace takes it out of the selection, as « Sélectionner »', (tester) async {
+    final state = await _app(tester, _core(), files: _media, players: _Players(), openWith: _OpenWith());
+    await tester.tap(find.byKey(const Key('pick-files')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('basket-open-0')));
+    await tester.pumpAndSettle();
+    expect(find.text('plage.jpg'), findsOneWidget);
+    expect(find.textContaining('Ajusté à la fenêtre'), findsOneWidget);
+    expect(find.byKey(const Key('desktop-play')), findsNothing, reason: 'a photo has no controls');
+    expect(state.selection.contains('/home/a/plage.jpg'), isTrue);
+
+    final at = tester.getCenter(find.byKey(const ValueKey('desktop-photo-/home/a/plage.jpg')));
+    final pointer = TestPointer(1, PointerDeviceKind.mouse);
+    await tester.sendEventToBinding(pointer.hover(at));
+    await tester.sendEventToBinding(pointer.scroll(const Offset(0, -300)));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Ajusté à la fenêtre'), findsNothing, reason: 'zoomed in');
+    await tester.sendKeyEvent(LogicalKeyboardKey.digit0);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Ajusté à la fenêtre'), findsOneWidget, reason: '0: back to the window');
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump();
+    expect(state.selection.contains('/home/a/plage.jpg'), isFalse);
+  });
+
   testWidgets('the side menu: this computer, and its pages', (tester) async {
     await _app(tester, _core());
     expect(find.byKey(const Key('side-menu')), findsOneWidget);

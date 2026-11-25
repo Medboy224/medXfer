@@ -1,3 +1,6 @@
+import 'media/pdf_document.dart';
+import 'media/video_player_adapter.dart';
+import 'platform/open_with.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -18,6 +21,7 @@ import 'platform/library.dart';
 import 'platform/hotspot.dart';
 import 'platform/network.dart';
 import 'platform/open_folder.dart';
+import 'platform/screen_controls.dart';
 import 'platform/storage.dart';
 import 'platform/native_qr_scanner.dart';
 import 'settings.dart';
@@ -45,6 +49,11 @@ Future<void> main() async {
     storage: systemReceiveStorage(),
     background: systemBackground(),
     library: systemLibrary(),
+    players: systemMediaPlayers(),
+    openWith: systemOpenWith(),
+    screen: systemScreenControls(),
+    pdf: systemPdfReader(),
+    resumeStore: FileSettingsStore(const SystemFolders().dataDir, name: 'resume.json'),
     desktop: Platform.isWindows || Platform.isLinux || Platform.isMacOS,
   );
   state.start();

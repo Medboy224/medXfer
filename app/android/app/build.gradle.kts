@@ -51,6 +51,9 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            // libmpv comes for x86 too (media_kit_libs_android_video): medXfer has no core, and
+            // Flutter no engine, for it.
+            excludes += "lib/x86/**"
         }
     }
 

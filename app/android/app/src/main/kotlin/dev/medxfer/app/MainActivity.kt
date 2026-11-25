@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -14,6 +15,7 @@ import android.util.Log
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterShellArgs
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONObject
 
@@ -32,6 +34,7 @@ class MainActivity : FlutterActivity() {
     private val network by lazy { Network(this) }
     private val storage by lazy { Storage(this) }
     private val library by lazy { Library(this) }
+    private val pdf by lazy { PdfDocs(this) }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -85,6 +88,32 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                     "openFolder" -> result.success(storage.openFolder(call.argument<String>("path") ?: ""))
+                    // « Ouvrir avec une autre application » (WP-8.2): the chooser, the file read
+                    // through its content:// address, the permission to read it given with it.
+                    // Partager (WP-8.2): the system's share sheet, the file given by its content:// address.
+                    "shareMedia" -> {
+                        val send = Intent(Intent.ACTION_SEND)
+                            .setType(call.argument<String>("mime") ?: "*/*")
+                            .putExtra(Intent.EXTRA_STREAM, android.net.Uri.parse(call.argument<String>("uri") ?: ""))
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        result.success(try {
+                            startActivity(Intent.createChooser(send, null))
+                            true
+                        } catch (e: Exception) {
+                            false
+                        })
+                    }
+                    "openWith" -> {
+                        val view = Intent(Intent.ACTION_VIEW)
+                            .setDataAndType(android.net.Uri.parse(call.argument<String>("uri") ?: ""), call.argument<String>("mime") ?: "*/*")
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        result.success(try {
+                            startActivity(Intent.createChooser(view, null))
+                            true
+                        } catch (e: Exception) {
+                            false
+                        })
+                    }
                     // The interfaces the core cannot list by itself (DISC-10), the multicast lock (DISC-03).
                     "networkInterfaces" -> result.success(network.interfaces())
                     "multicast" -> { network.multicast(call.argument<Boolean>("on") == true); result.success(null) }
@@ -139,6 +168,51 @@ class MainActivity : FlutterActivity() {
                         }
                         result.success(null)
                     }
+                    // The video player's gestures (WP-8.2, mockup 26): this window's brightness,
+                    // given back to the system's (null) as the player closes; the media volume,
+                    // set without the system's bar (the player shows its own).
+                    "windowBrightness" -> {
+                        val own = window.attributes.screenBrightness
+                        result.success(if (own >= 0f) own.toDouble() else systemBrightness())
+                    }
+                    "setWindowBrightness" -> {
+                        val value = call.argument<Double>("value")
+                        window.attributes = window.attributes.also {
+                            it.screenBrightness = value?.toFloat()?.coerceIn(0.01f, 1f) ?: WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                        }
+                        result.success(null)
+                    }
+                    "mediaVolume" -> {
+                        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+                        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        result.success(if (max > 0) audio.getStreamVolume(AudioManager.STREAM_MUSIC).toDouble() / max else 0.0)
+                    }
+                    "setMediaVolume" -> {
+                        val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+                        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        val value = (call.argument<Double>("value") ?: 0.0).coerceIn(0.0, 1.0)
+                        try {
+                            audio.setStreamVolume(AudioManager.STREAM_MUSIC, Math.round(value * max).toInt(), 0)
+                        } catch (_: SecurityException) {
+                            // « Ne pas déranger » may refuse it: the video plays on.
+                        }
+                        result.success(null)
+                    }
+                    // « Afficher sous l'encoche » (WP-8.2): the window over the camera's notch,
+                    // or beside it; given back (null) as the player closes.
+                    "setUnderNotch" -> {
+                        if (Build.VERSION.SDK_INT >= 28) {
+                            val v = call.argument<Double>("value")
+                            window.attributes = window.attributes.also {
+                                it.layoutInDisplayCutoutMode = when (v) {
+                                    null -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                                    0.0 -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
+                                    else -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                                }
+                            }
+                        }
+                        result.success(null)
+                    }
                     // A QR code read by the app's camera screen (QrScanActivity.kt); null: back.
                     "scanQr" -> {
                         scanAnswer?.invoke(null)
@@ -160,6 +234,7 @@ class MainActivity : FlutterActivity() {
                         call.argument<String>("kind") ?: "images", call.argument<Int>("offset") ?: 0, call.argument<Int>("limit") ?: 200,
                         call.argument<String>("sort") ?: "date", call.argument<Boolean>("descending") ?: true, call.argument<String>("search") ?: "",
                     ) { v, e -> reply(result, v, e) }
+                    "libMediaAt" -> library.mediaAt(call.argument<String>("kind") ?: "images", call.argument<List<String>>("paths") ?: emptyList()) { v, e -> reply(result, v, e) }
                     "libThumbnail" -> library.thumbnail(call.argument<String>("kind") ?: "images", (call.argument<Number>("id") ?: 0).toLong(), call.argument<Int>("size") ?: 256) { v, e -> reply(result, v, e) }
                     "libPrepareSharp" -> {
                         library.prepareSharp(call.argument<Int>("height") ?: 0, call.argument<Int>("width") ?: 0, call.argument<Boolean>("on") == true)
@@ -170,6 +245,20 @@ class MainActivity : FlutterActivity() {
                         call.argument<Int>("height") ?: 256, call.argument<Int>("width") ?: 256,
                         (call.argument<Number>("modified") ?: 0).toLong(), call.argument<Boolean>("keptOnly") == true,
                     ) { v, e -> reply(result, v, e) }
+                    "libDecodePhoto" -> library.decodePhoto(call.argument<String>("path") ?: "", call.argument<Int>("width") ?: 1080, call.argument<Int>("height") ?: 1920) { v, e -> reply(result, v, e) }
+                    "libContentUri" -> library.contentUri(call.argument<String>("path") ?: "") { v, e -> reply(result, v, e) }
+                    // The PDF reader (WP-8.2): Android's renderer, one thread per document.
+                    "pdfOpen" -> pdf.open(call.argument<String>("path") ?: "") { v, e ->
+                        if (e == PdfDocs.PROTECTED) result.error("protected", e, null) else reply(result, v, e)
+                    }
+                    "pdfRender" -> pdf.render(
+                        call.argument<Int>("id") ?: 0, call.argument<Int>("page") ?: 0, call.argument<Int>("width") ?: 1080,
+                        call.argument<Int>("left") ?: 0, call.argument<Int>("top") ?: 0, call.argument<Int>("w") ?: 0, call.argument<Int>("h") ?: 0,
+                    ) { v, e -> reply(result, v, e) }
+                    "pdfClose" -> {
+                        pdf.close(call.argument<Int>("id") ?: 0)
+                        result.success(null)
+                    }
                     "libFileThumb" -> library.fileThumbnail(call.argument<String>("path") ?: "", call.argument<Int>("size") ?: 128) { v, e -> reply(result, v, e) }
                     "libDirSize" -> library.dirSize(call.argument<String>("path") ?: "") { v, e -> reply(result, v, e) }
                     "libFiles" -> library.files(call.argument<String>("category") ?: "documents", call.argument<Int>("offset") ?: 0, call.argument<Int>("limit") ?: 200) { v, e -> reply(result, v, e) }
@@ -185,6 +274,13 @@ class MainActivity : FlutterActivity() {
     }
 
     private var permissionAnswer: ((Boolean) -> Unit)? = null
+
+    // The system's brightness, from 0 to 1, where the window sets none of its own.
+    private fun systemBrightness(): Double = try {
+        Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255.0
+    } catch (_: Exception) {
+        0.5
+    }
 
     private fun <T> reply(result: MethodChannel.Result, value: T?, error: String?) {
         if (error != null) result.error("library", error, null) else result.success(value)
@@ -299,6 +395,15 @@ class MainActivity : FlutterActivity() {
 
     private var pendingProbe: Intent? = null
 
+    // Skia where Impeller would draw through OpenGL ES (Renderer.kt): before the engine starts.
+    override fun getFlutterShellArgs(): FlutterShellArgs {
+        val args = super.getFlutterShellArgs()
+        val skia = Renderer.skiaBecause(this)
+        Log.i("medxfer", if (skia == null) "renderer: Impeller" else "renderer: Skia ($skia)")
+        if (skia != null) args.add(FlutterShellArgs.ARG_DISABLE_IMPELLER)
+        return args
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingProbe = intent
@@ -306,6 +411,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         library.unwatch()
+        pdf.closeAll()
         super.onDestroy()
     }
 

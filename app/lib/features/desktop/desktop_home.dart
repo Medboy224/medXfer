@@ -68,7 +68,7 @@ class _DesktopHomeState extends State<DesktopHome> {
     });
     // The devices come and go: look again every 5 s, a scan lasting 2 s.
     _rescan = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (!_c.scanning) unawaited(_c.scan());
+      if (!_c.scanRunning) unawaited(_c.scan(quiet: true));
     });
   }
 

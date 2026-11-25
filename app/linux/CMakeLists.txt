@@ -55,7 +55,16 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
 
 # Application build; see runner/CMakeLists.txt.
+# Videos and songs (plan J8, WP-8.2b, decision D8): media_kit on the system's libmpv, never
+# shipped. Its video plugin is built in full, and linked to medXfer's relay rather than to libmpv
+# (mpv_relay/): the app starts without libmpv, and runs with libmpv.so.1 or libmpv.so.2.
+set(MEDIA_KIT_LIBS_AVAILABLE ON)
+add_subdirectory(mpv_relay)
+
 add_subdirectory("runner")
+# Loaded with the program (its own lib/, by $ORIGIN/lib): the plugin, loaded after, finds it
+# there. Linked although the program calls nothing of it.
+target_link_libraries(${BINARY_NAME} PRIVATE "-Wl,--no-as-needed" medxfer_mpv "-Wl,--as-needed")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
@@ -73,6 +82,9 @@ set_target_properties(${BINARY_NAME}
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)
+if(TARGET media_kit_video_plugin)
+  add_dependencies(media_kit_video_plugin medxfer_mpv)
+endif()
 
 
 # === Installation ===
@@ -98,6 +110,9 @@ install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)
+
+install(FILES "$<TARGET_FILE:medxfer_mpv>" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
 foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})

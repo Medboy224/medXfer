@@ -1,5 +1,7 @@
 #include "my_application.h"
 
+#include <clocale>
+
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
@@ -22,6 +24,10 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+  // libmpv (videos and songs, WP-8.2b) refuses to start unless numbers are written the C way:
+  // GTK took the user's locale at its start (a decimal comma in French), and the app closed
+  // as a video opened (Zorin 17, 25 November 2026). Numbers only; the rest stays the user's.
+  setlocale(LC_NUMERIC, "C");
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 

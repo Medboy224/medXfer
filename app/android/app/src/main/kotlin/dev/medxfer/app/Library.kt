@@ -1,6 +1,7 @@
 package dev.medxfer.app
 
 import android.app.Activity
+import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -9,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.ImageDecoder
 import android.graphics.Matrix
+import android.graphics.Point
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.pdf.PdfRenderer
 import android.media.ThumbnailUtils
@@ -169,8 +171,48 @@ class Library(private val activity: Activity) {
             putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, limit)
             putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, offset)
         }
+        rows(activity.contentResolver.query(uri, columns.toTypedArray(), args, null))
+    }, done)
+
+    /**
+     * The media of [kind] at these [paths], as [media] gives them: the queue of a folder of the
+     * Files tab (24 November 2026). Those MediaStore does not know are left out.
+     */
+    fun mediaAt(kind: String, paths: List<String>, done: (List<Map<String, Any?>>?, String?) -> Unit) = later({
+        val uri = collection(kind)
+        val album = if (kind == "audio") MediaStore.Audio.Media.ALBUM else MediaStore.MediaColumns.BUCKET_DISPLAY_NAME
+        @Suppress("DEPRECATION")
+        val columns = mutableListOf(
+            MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATA,
+            MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, album,
+        )
+        if (kind != "images") columns.add(MediaStore.MediaColumns.DURATION)
+        if (kind != "audio") columns.addAll(listOf(MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT, MediaStore.MediaColumns.ORIENTATION))
         val out = mutableListOf<Map<String, Any?>>()
-        activity.contentResolver.query(uri, columns.toTypedArray(), args, null)?.use { c ->
+        // SQLite takes at most 999 arguments: by pieces.
+        for (part in paths.chunked(500)) {
+            @Suppress("DEPRECATION")
+            val where = "${MediaStore.MediaColumns.DATA} IN (${part.joinToString(",") { "?" }})"
+            out.addAll(rows(activity.contentResolver.query(uri, columns.toTypedArray(), where, part.toTypedArray(), null)))
+        }
+        out
+    }, done)
+
+    /**
+     * A file's content:// address by its path, for another app to read it (« Ouvrir avec »,
+     * « Partager »): MediaStore's, which knows the files of the shared storage; null if not.
+     */
+    fun contentUri(path: String, done: (String?, String?) -> Unit) = later({
+        val files = MediaStore.Files.getContentUri("external")
+        @Suppress("DEPRECATION")
+        activity.contentResolver.query(files, arrayOf(MediaStore.MediaColumns._ID), "${MediaStore.MediaColumns.DATA} = ?", arrayOf(path), null)?.use { c ->
+            if (c.moveToFirst()) ContentUris.withAppendedId(files, c.getLong(0)).toString() else null
+        }
+    }, done)
+
+    private fun rows(cursor: android.database.Cursor?): List<Map<String, Any?>> {
+        val out = mutableListOf<Map<String, Any?>>()
+        cursor?.use { c ->
             val wi = c.getColumnIndex(MediaStore.MediaColumns.WIDTH)
             val hi = c.getColumnIndex(MediaStore.MediaColumns.HEIGHT)
             val oi = c.getColumnIndex(MediaStore.MediaColumns.ORIENTATION)
@@ -192,14 +234,26 @@ class Library(private val activity: Activity) {
                 ))
             }
         }
-        out
-    }, done)
+        return out
+    }
 
     /** A media's thumbnail as JPEG, decoded at the size shown (UI-1). */
     fun thumbnail(kind: String, id: Long, size: Int, done: (ByteArray?, String?) -> Unit) = later({
         val uri = ContentUris.withAppendedId(collection(kind), id)
-        jpeg(activity.contentResolver.loadThumbnail(uri, Size(size, size), null))
+        keptThumbnail(uri, size) ?: jpeg(activity.contentResolver.loadThumbnail(uri, Size(size, size), null))
     }, done)
+
+    /**
+     * Android's own thumbnail as MediaStore keeps it, its bytes read whole: neither decoded nor
+     * encoded again here (about 10 ms each, and a long swipe through the photos showed black
+     * thumbnails, real test of 23 November 2026). Null when Android gives none that way.
+     */
+    private fun keptThumbnail(uri: Uri, size: Int): ByteArray? = try {
+        val opts = android.os.Bundle().apply { putParcelable(ContentResolver.EXTRA_SIZE, Point(size, size)) }
+        activity.contentResolver.openTypedAssetFile(uri, "image/*", opts, null)?.use { afd -> afd.createInputStream().use { it.readBytes() } }
+    } catch (e: Exception) {
+        null
+    }
 
     // Quality 90: a few tens of kilobytes. Android's thumbnails stop at about 270 px on their
     // short side, whatever is asked (measured on the A57, 23 November 2026): see sharpThumbnail.
@@ -375,6 +429,31 @@ class Library(private val activity: Activity) {
             f.delete()
         }
     }
+
+    /**
+     * A photo Flutter would decode through Android on its own drawing thread (HEIC, HEIF, AVIF):
+     * decoded here instead, on a worker, at least [width] x [height] px (halved while that holds),
+     * as JPEG. Flutter's own way froze the screen 0.3 s as a HEIC photo flew open (filmed at 120
+     * frames a second, 24 November 2026).
+     */
+    fun decodePhoto(path: String, width: Int, height: Int, done: (ByteArray?, String?) -> Unit) = later({
+        val bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(File(path))) { decoder, info, _ ->
+            // By the long and the short sides: the same whichever way the photo is turned.
+            val long = maxOf(info.size.width, info.size.height).toDouble()
+            val short = minOf(info.size.width, info.size.height).toDouble()
+            val wantLong = maxOf(width, height).coerceAtLeast(1)
+            val wantShort = minOf(width, height).coerceAtLeast(1)
+            var sample = 1
+            while (long / (sample * 2) >= wantLong && short / (sample * 2) >= wantShort) sample *= 2
+            decoder.setTargetSampleSize(sample)
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+        }
+        try {
+            jpeg(bitmap, 92)
+        } finally {
+            bitmap.recycle()
+        }
+    }, done)
 
     /** A file's thumbnail by its kind: image, video, PDF (first page), APK (its icon); else null. */
     fun fileThumbnail(path: String, size: Int, done: (ByteArray?, String?) -> Unit) = later({
