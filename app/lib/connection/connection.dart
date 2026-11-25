@@ -380,6 +380,7 @@ class Connection extends ChangeNotifier {
 
   List<NearbyDevice> _nearby = const [];
   bool _scanning = false;
+  bool _quietScan = false;
   QrInvitation? _invitation;
   ShownPin? _pin;
   ShownPin? _askedPin;
@@ -458,7 +459,13 @@ class Connection extends ChangeNotifier {
   }
 
   List<NearbyDevice> get nearby => _nearby;
-  bool get scanning => _scanning;
+  /// A search shown: its spinner, « Recherche… ». The quiet ones, every 5 s, are not: the
+  /// spinner turned on and on, and the window was drawn again at every frame for it (93 % of a
+  /// core on Windows at rest, 42 % on Zorin, measured on 25 November 2026).
+  bool get scanning => _scanning && !_quietScan;
+
+  /// A search running, shown or not.
+  bool get scanRunning => _scanning;
   QrInvitation? get invitation => _invitation;
 
   /// The PIN this device shows on the Connect screen.
@@ -819,8 +826,10 @@ class Connection extends ChangeNotifier {
     await _call('pair_pin_show', {if (remember) 'trust': true});
   }
 
-  Future<void> scan() async {
+  /// Looks for the devices around; [quiet]: without showing it (the regular ones).
+  Future<void> scan({bool quiet = false}) async {
     _scanning = true;
+    _quietScan = quiet;
     notifyListeners();
     // The list stays as it was if no answer comes: the spinner stops all the same.
     _scanLimit?.cancel();

@@ -41,7 +41,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
     unawaited(_c.openConnect());
     // The devices come and go: look again every 5 s, a scan lasting 2 s, while the screen is open.
     _rescan = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (!_c.scanning) unawaited(_c.scan());
+      if (!_c.scanRunning) unawaited(_c.scan(quiet: true));
     });
   }
 
