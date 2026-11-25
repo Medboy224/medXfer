@@ -66,7 +66,10 @@ Sur le Galaxy A57, faite par l'IA par SSH dans Termux, à la demande du dévelop
 | `fsync` du même fichier | Même dossier | La référence |
 | `syncfs` après la même écriture | Dossier interne de l'application (ext4 ou f2fs) | La durée attendue d'une vraie synchronisation |
 
-**Fait le 25 novembre** (`bench-results/README.md`) : sur FUSE, `syncfs` n'écrit rien. Sur l'A57, il renvoie `ENOENT`, et le repli de `Batch.Flush` fait le `fsync` de chaque fichier l'un après l'autre (~2 ms par fichier). Faits 8 à la fois, ces `fsync` prennent ~0,33 ms par fichier. R3 s'applique donc en R-3. Reste à mesurer le TECNO BF6 (noyau plus ancien, où `syncfs` pourrait réussir sans rien écrire).
+**Fait le 25 novembre** (`bench-results/README.md`) : sur FUSE, `syncfs` n'écrit rien.
+- Sur l'A57, il renvoie `ENOENT`, et le repli de `Batch.Flush` fait le `fsync` de chaque fichier l'un après l'autre (~2 ms par fichier) : durable, mais lent.
+- Sur le TECNO BF6 (noyau 5.4), **il renvoie un succès sans rien écrire** : les fichiers sont renommés sans être durables. #302 est reproduit.
+- Faits 8 à la fois, ces `fsync` prennent ~0,33 ms par fichier (A57) et ~0,5 ms (TECNO). R3 s'applique donc en R-3, sans se fier au retour de `syncfs` sur FUSE.
 
 ### Lot R-1 — Sécurité et vie privée · M
 
