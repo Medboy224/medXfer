@@ -234,6 +234,7 @@ func (s *DaemonServer) acceptPIN(conn *securechan.Conn, ch *session.Channel, msg
 	if shown == nil {
 		demand.Close() // a PIN serves one pairing (PAIR-02)
 	}
+	name = CleanDeviceName(name) // read by the pairing package, not by readFromPeer (#309)
 	if err := s.touchTrust(fp, name, ip); err != nil {
 		s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": "could not save the trusted device: " + err.Error()}))
 	}

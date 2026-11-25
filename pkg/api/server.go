@@ -597,7 +597,7 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 
 		// Read incoming authentication / handshake message with 5s deadline
 		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		msg, err := ch.Read()
+		msg, err := readFromPeer(ch)
 		_ = conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			ch.Close()
@@ -673,7 +673,7 @@ func (s *DaemonServer) listenToSession(sess *session.Channel) {
 	silence := sessionSilence.get()
 	for {
 		_ = sess.SetReadDeadline(time.Now().Add(silence)) // the peer pings (pingSession)
-		msg, err := sess.Read()
+		msg, err := readFromPeer(sess)
 		if err != nil {
 			sess.Close() // the peer sees it at once, and the side that dialed dials again
 			s.mu.Lock()

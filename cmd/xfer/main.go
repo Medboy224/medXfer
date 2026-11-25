@@ -358,7 +358,7 @@ func handleNode() {
 		}
 		go func(c *session.Channel) {
 			for {
-				m, err := c.Read()
+				m, err := readPeer(c)
 				if err != nil {
 					disconnectChan <- c
 					return
@@ -415,7 +415,7 @@ func handleNode() {
 
 			// Read incoming pairing authentication message (5s timeout)
 			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-			msg, err := ch.Read()
+			msg, err := readPeer(ch)
 			_ = conn.SetReadDeadline(time.Time{})
 			if err != nil {
 				ch.Close()
@@ -479,7 +479,7 @@ func handleNode() {
 					pinDemand.Close() // a PIN serves one pairing (PAIR-02)
 				}
 				_ = conn.SetDeadline(time.Time{})
-				msg.DeviceName = name // sent only after both confirmations (PAIR-07)
+				msg.DeviceName = api.CleanDeviceName(name) // sent only after both confirmations (PAIR-07); #309
 				offer = shown != nil && offerTrustOnPair.Load()
 			case msg.Secret != "":
 				var ok bool
@@ -802,7 +802,7 @@ func handleNode() {
 					}
 					_ = ch.Send(req)
 					_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-					resp, err = ch.Read()
+					resp, err = readPeer(ch)
 					_ = conn.SetReadDeadline(time.Time{})
 					if err == nil && qr == nil && resp.Type == pairing.TypeReject && resp.Code == pairing.CodePINRequired {
 						fmt.Println("[*] This node trusts that device, but it no longer trusts this node: that gives nothing (pairing by PIN).")
@@ -849,7 +849,7 @@ func handleNode() {
 						break
 					}
 					_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-					resp, err = ch.Read()
+					resp, err = readPeer(ch)
 					_ = conn.SetDeadline(time.Time{})
 				}
 				if err != nil || resp.Type != "pair_accept" {
@@ -1852,4 +1852,12 @@ func printUsage() {
 		"  ./xfer-android-arm64 node                      -> Interactive CLI (scan, pair, send, recv)\n" +
 		"  ./xfer-android-arm64 share /sdcard/video.mp4   -> Web Share with a QR code\n" +
 		"==================================================\n")
+}
+
+// readPeer reads a message from a peer, the device name it carries cleaned as the daemon does
+// (#309): it is printed here.
+func readPeer(ch *session.Channel) (session.Message, error) {
+	msg, err := ch.Read()
+	msg.DeviceName = api.CleanDeviceName(msg.DeviceName)
+	return msg, err
 }
