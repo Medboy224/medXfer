@@ -82,7 +82,7 @@ Résultat archivé dans `bench-results/`, puis décision R3.
 | #313 **S** | `sniffing` du Web Share sans plafond de connexions, 10 s chacune | Plafond, comme `LIM-01` | 64 connexions muettes n'empêchent pas un invité |
 | #313 | `ifconfig` lancé sans délai | Délai, comme `arp` (audit, Top 9) | Commande bloquée : l'appelant revient |
 
-`/security-review` sur la PR. Bible : `DISC-11` (§3).
+Une revue de sécurité sur la PR (`/security-review` sous Claude Code). Bible : `DISC-11` (§3).
 
 ### Lot R-2 — Sessions et confiance · M
 
@@ -178,7 +178,7 @@ Sans ce lot, le rapport par étape de WP-8.4 désignerait le mauvais goulot.
 - **Les optimisations (#310, #312) :** WP-8.5, après la mesure.
 - **`pkg/pake` :** gelé jusqu'à G4.
 - **#283 :** son propre lot (R6).
-- **La réécriture des commentaires existants :** seulement quand on touche la fonction (`CLAUDE.md`).
+- **La réécriture des commentaires existants :** seulement quand on touche la fonction (`AGENTS.md`).
 
 ## 5. Risques
 
