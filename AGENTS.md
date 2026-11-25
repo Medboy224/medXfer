@@ -79,6 +79,7 @@ Une plateforme égale un adaptateur. Une décision (quel réseau, quelle bande, 
    - Une PR reste **sous 600 lignes modifiées**, hors tests et golden. Au-delà, découpe le lot en plusieurs PR et propose le découpage avant d'écrire.
 2. **Les commits** suivent la forme `type(portée) : WP-x.y, ce qui change`, en français, avec le WP quand il y en a un.
    - Types : `feat`, `fix`, `perf`, `test`, `docs`, `ci`, `build`, `refactor`.
+   - Un commit écrit avec une IA se termine par sa ligne `Co-Authored-By:`, et rien d'autre. **Aucun lien vers une session ou une conversation** (`Claude-Session:` ou autre), ni dans les commits, ni dans les descriptions et commentaires de PR : le dépôt est public.
    - Le corps, en puces, dit le pourquoi, la mesure et l'essai réel. **C'est là que va l'histoire**, pas dans le code.
 3. **Pas de correction en passant.** Un constat hors du lot devient une issue, que tu signales.
 4. **Une correction commence par un test qui échoue.** La PR montre ce test en échec sur l'ancien code, puis en succès. Un défaut non reproduit est dit tel quel (« préventif »), jamais présenté comme corrigé.
