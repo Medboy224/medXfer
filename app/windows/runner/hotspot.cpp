@@ -145,11 +145,15 @@ winrt::fire_and_forget TurnWifiOn(std::function<void(bool on)> done) {
   done(on);
 }
 
-WifiDirectHotspot::~WifiDirectHotspot() { Stop(); }
+WifiDirectHotspot::~WifiDirectHotspot() {
+  *alive_ = false;
+  Stop();
+}
 
 winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string passphrase, Started done) {
   Stop();
   const uint64_t generation = generation_;
+  auto alive = alive_;
   // The window's thread: each wait leaves it and comes back to it, and the phones' requests are
   // accepted there.
   ui_.emplace();
@@ -159,9 +163,7 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
   // Windows' reason when it aborts the group (WiFiDirectError), given by its StatusChanged event
   // only, on a thread of its own.
   auto aborted_why = std::make_shared<std::atomic<int32_t>>(-1);
-  // Gives up: the publisher stopped, the listener let go (unless a Stop did, and maybe a new
-  // Start since), the error told.
-  auto fail = [&](const std::string& code, const std::string& message) {
+  auto stop_publisher = [&]() {
     if (publisher) {
       try {
         if (status_token.value != 0) publisher.StatusChanged(status_token);
@@ -169,10 +171,15 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
       } catch (const winrt::hresult_error&) {
       }
     }
-    if (generation == generation_) Stop();
+  };
+  // Gives up: the publisher stopped, the listener let go (unless a Stop did, and maybe a new
+  // Start since), the error told.
+  auto fail = [&](const std::string& code, const std::string& message) {
+    stop_publisher();
+    if (*alive && generation == generation_) Stop();
     fprintf(stderr, "hotspot: not started, %s (%s)\n", code.c_str(), message.c_str());
     fflush(stderr);
-    done(HotspotError{code, message}, HotspotInterface{});
+    if (*alive) done(HotspotError{code, message}, HotspotInterface{});
   };
   try {
     publisher = WiFiDirectAdvertisementPublisher();
@@ -187,8 +194,8 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
     // Listening before the start, so that no request comes before it.
     WiFiDirectConnectionListener listener;
     requested_ = listener.ConnectionRequested(
-        [this](const WiFiDirectConnectionListener&, const WiFiDirectConnectionRequestedEventArgs& args) {
-          Accept(args.GetConnectionRequest());
+        [this, alive](const WiFiDirectConnectionListener&, const WiFiDirectConnectionRequestedEventArgs& args) {
+          if (*alive) Accept(args.GetConnectionRequest());
         });
     listener_ = listener;
     status_token = publisher.StatusChanged(
@@ -200,8 +207,16 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
     // Off the window's thread too: Windows takes 0.2 to 1.4 s to start the group, the window
     // frozen as long when it waited there (real test of 30 October 2026).
     co_await winrt::resume_background();
+    if (!*alive) {
+      stop_publisher();
+      co_return;
+    }
     publisher.Start();
     co_await ui;
+    if (!*alive) {
+      stop_publisher();
+      co_return;
+    }
     if (generation != generation_) {
       fail("stopped", "stopped");
       co_return;
@@ -217,8 +232,16 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
         // The event may come a moment after the status: waited for, briefly.
         for (int j = 0; j < 10 && aborted_why->load() < 0; ++j) {
           co_await winrt::resume_after(std::chrono::milliseconds(20));
+          if (!*alive) {
+            stop_publisher();
+            co_return;
+          }
         }
         co_await ui;
+        if (!*alive) {
+          stop_publisher();
+          co_return;
+        }
         switch (static_cast<WiFiDirectError>(aborted_why->load())) {
           case WiFiDirectError::RadioNotAvailable:
             fail("radio_off", "the Wi-Fi Direct group was aborted: radio not available");
@@ -235,6 +258,10 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
       if (started) break;
       co_await winrt::resume_after(std::chrono::milliseconds(50));
       co_await ui;
+      if (!*alive) {
+        stop_publisher();
+        co_return;
+      }
       if (generation != generation_) {
         fail("stopped", "stopped");
         co_return;
@@ -254,6 +281,10 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
       if ((group && !IsLinkLocal(group->address)) || (!group && i == 40)) break;
       co_await winrt::resume_after(std::chrono::milliseconds(100));
       co_await ui;
+      if (!*alive) {
+        stop_publisher();
+        co_return;
+      }
       if (generation != generation_) {
         fail("stopped", "stopped");
         co_return;
@@ -282,6 +313,7 @@ winrt::fire_and_forget WifiDirectHotspot::Start(std::string ssid, std::string pa
 }
 
 winrt::fire_and_forget WifiDirectHotspot::Accept(WiFiDirectConnectionRequest request) {
+  auto alive = alive_;
   auto name = winrt::to_string(request.DeviceInformation().Name());
   // As Microsoft's Wi-Fi Direct sample does it: on the window's thread ("FromIdAsync needs to be
   // called from the UI thread"), without pairing for a client of the legacy settings. Then all
@@ -289,13 +321,20 @@ winrt::fire_and_forget WifiDirectHotspot::Accept(WiFiDirectConnectionRequest req
   // test of 29 October 2026, once Windows served the addresses.
   if (!ui_) co_return;
   co_await *ui_;
+  if (!*alive) co_return;
   try {
     WiFiDirectDevice device = co_await WiFiDirectDevice::FromIdAsync(request.DeviceInformation().Id());
+    if (!*alive) {
+      if (device) device.Close();
+      co_return;
+    }
     if (!device) {
       fprintf(stderr, "hotspot: %s not accepted\n", name.c_str());
       fflush(stderr);
     } else if (publisher_) {
       accepted_.push_back(device);
+    } else {
+      device.Close();
     }
   } catch (const winrt::hresult_error& e) {
     fprintf(stderr, "hotspot: %s not accepted: 0x%08X %s\n", name.c_str(), static_cast<unsigned>(e.code()),

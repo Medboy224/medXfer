@@ -707,6 +707,7 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
   std::optional<std::string> error;
   std::vector<uint8_t> answer;
   co_await resume_background();
+  if (!*alive) co_return;
   const char* step = "device";  // where an exception came from
   // Kept in c for Disconnect to close; false once it did, the object then closed here.
   auto keep = [this, &c](auto&& set) {
@@ -716,9 +717,23 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
     return true;
   };
   GattCharacteristic ch{nullptr};
-  const uint64_t address = std::stoull(device, nullptr, 16);
+  uint64_t address = 0;
+  bool valid_address = false;
+  // Held links ("BluetoothLE#...") never use GATT client addresses: if dropped concurrently,
+  // stoull would throw std::invalid_argument outside try and invoke std::terminate().
+  if (device.find('#') == std::string::npos) {
+    try {
+      size_t parsed = 0;
+      address = std::stoull(device, &parsed, 16);
+      valid_address = !device.empty() && parsed == device.size();
+    } catch (const std::exception&) {
+      valid_address = false;
+    }
+  }
   int type = -1;  // not seen: Windows guesses
-  {
+  if (!valid_address) {
+    error = device.find('#') != std::string::npos ? "disconnected" : "invalid_device";
+  } else {
     std::lock_guard<std::mutex> lock(mu_);
     ch = c->characteristic;
     auto t = address_type_.find(address);
@@ -734,9 +749,9 @@ fire_and_forget Ble::Exchange(std::string device, std::vector<uint8_t> message, 
     steps += std::string(" ") + name + " " + std::to_string(now - mark);
     mark = now;
   };
-  bool connecting = !ch;
+  bool connecting = valid_address && !ch;
   try {
-    if (!ch) {
+    if (!error && !ch) {
       // As advertised: without its type, Windows takes the address for a public one unless it
       // still knows it, and a phone's is random.
       BluetoothLEDevice dev = type >= 0 ? co_await BluetoothLEDevice::FromBluetoothAddressAsync(address, static_cast<BluetoothAddressType>(type))

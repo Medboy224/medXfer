@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -78,6 +79,7 @@ class WifiDirectHotspot {
   winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionListener listener_{nullptr};
   winrt::event_token requested_{};
   std::optional<winrt::apartment_context> ui_;
+  std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
   std::vector<winrt::Windows::Devices::WiFiDirect::WiFiDirectDevice> accepted_;
 };
 

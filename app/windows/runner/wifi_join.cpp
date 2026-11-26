@@ -252,18 +252,24 @@ WifiBandMask OwnWifiBands() {
   return m;
 }
 
-WifiJoin::~WifiJoin() { Leave(); }
+WifiJoin::~WifiJoin() {
+  *alive_ = false;
+  Leave();
+}
 
 winrt::fire_and_forget WifiJoin::Join(std::string ssid, std::string passphrase, int security, char band,
                                       std::function<void(std::optional<std::string> error, JoinedNetwork joined)> done) {
   winrt::apartment_context ui;
   Leave();
+  auto alive = alive_;
+  const uint64_t my_gen = ++gen_;
   std::wstring profile = Wide("medXfer " + ssid);
   std::wstring previous;
   GUID card{};
   std::optional<std::string> error;
   JoinedNetwork joined;
   co_await winrt::resume_background();
+  if (!*alive || gen_.load() != my_gen) co_return;
   {
     Wlan wlan;
     auto found = wlan.Card();
@@ -286,13 +292,24 @@ winrt::fire_and_forget WifiJoin::Join(std::string ssid, std::string passphrase, 
         int attempts = 0;
         ConnectWithin(wlan, card, profile, ssid, std::chrono::steady_clock::now() + std::chrono::seconds(20), attempts);
         std::fprintf(stderr, "wifi: join %s, %d attempt(s)\n", wlan.Connected(card) == profile ? "done" : "failed", attempts);
+        if (!*alive || gen_.load() != my_gen) {
+          WlanDeleteProfile(wlan.get(), &card, profile.c_str(), nullptr);
+          if (!previous.empty()) wlan.Connect(card, previous);
+          co_return;
+        }
         if (wlan.Connected(card) != profile) {
           error = "join_failed";
         } else {
           auto until = std::chrono::steady_clock::now() + std::chrono::seconds(15);
           std::optional<JoinedNetwork> got;
-          while (!(got = AddressOf(card)) && std::chrono::steady_clock::now() < until) {
+          while (*alive && gen_.load() == my_gen && !(got = AddressOf(card)) && std::chrono::steady_clock::now() < until) {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
+          }
+          if (!*alive || gen_.load() != my_gen) {
+            WlanDisconnect(wlan.get(), &card, nullptr);
+            WlanDeleteProfile(wlan.get(), &card, profile.c_str(), nullptr);
+            if (!previous.empty()) wlan.Connect(card, previous);
+            co_return;
           }
           if (!got) {
             error = "no_address";
@@ -309,6 +326,19 @@ winrt::fire_and_forget WifiJoin::Join(std::string ssid, std::string passphrase, 
     }
   }
   co_await ui;
+  if (!*alive) co_return;
+  if (gen_.load() != my_gen) {
+    if (!error) {
+      Wlan wlan;
+      if (wlan.get()) {
+        WlanDisconnect(wlan.get(), &card, nullptr);
+        WlanDeleteProfile(wlan.get(), &card, profile.c_str(), nullptr);
+        if (!previous.empty()) wlan.Connect(card, previous);
+      }
+    }
+    done("cancelled", JoinedNetwork{});
+    co_return;
+  }
   if (!error) {
     profile_ = profile;
     ssid_ = ssid;
@@ -320,32 +350,43 @@ winrt::fire_and_forget WifiJoin::Join(std::string ssid, std::string passphrase, 
 
 winrt::fire_and_forget WifiJoin::Rejoin(std::function<void(bool joined)> done) {
   winrt::apartment_context ui;
+  auto alive = alive_;
+  const uint64_t my_gen = ++gen_;
   const std::wstring profile = profile_;
   const std::string ssid = ssid_;
   const GUID card = card_;
   bool joined = false;
   if (!profile.empty()) {
     co_await winrt::resume_background();
+    if (!*alive || gen_.load() != my_gen) co_return;
     Wlan wlan;
     if (wlan.get() && wlan.RadioOn(card)) {
       using clock = std::chrono::steady_clock;
       if (wlan.Connected(card) != profile) {
         int attempts = 0;
         joined = ConnectWithin(wlan, card, profile, ssid, clock::now() + std::chrono::seconds(15), attempts);
-        if (joined) {
+        if (joined && *alive && gen_.load() == my_gen) {
           auto until = clock::now() + std::chrono::seconds(10);
-          while (!AddressOf(card) && clock::now() < until) std::this_thread::sleep_for(std::chrono::milliseconds(250));
-          joined = AddressOf(card).has_value();
+          while (*alive && gen_.load() == my_gen && !AddressOf(card) && clock::now() < until) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+          }
+          joined = *alive && gen_.load() == my_gen && AddressOf(card).has_value();
         }
         std::fprintf(stderr, "wifi: rejoin %s, %d attempt(s)\n", joined ? "done" : "failed", attempts);
       }
     }
     co_await ui;
+    if (!*alive) co_return;
+    if (gen_.load() != my_gen) {
+      done(false);
+      co_return;
+    }
   }
   done(joined);
 }
 
 void WifiJoin::Leave() {
+  ++gen_;
   if (profile_.empty()) return;
   Wlan wlan;
   if (wlan.get()) {

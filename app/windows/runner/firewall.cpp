@@ -62,6 +62,10 @@ struct ProgramRules {
   long allow_tcp = 0, allow_udp = 0, block = 0;
 };
 
+bool AllPorts(BSTR ports) {
+  return !ports || !ports[0] || wcscmp(ports, L"*") == 0;
+}
+
 ProgramRules RulesOf(INetFwPolicy2* policy, const std::wstring& self) {
   ProgramRules out;
   ComPtr<INetFwRules> rules;
@@ -77,6 +81,7 @@ ProgramRules RulesOf(INetFwPolicy2* policy, const std::wstring& self) {
     ComPtr<INetFwRule> rule;
     if (v.vt == VT_DISPATCH && v.pdispVal && SUCCEEDED(v.pdispVal->QueryInterface(IID_PPV_ARGS(&rule)))) {
       BSTR app = nullptr;
+      BSTR ports = nullptr;
       VARIANT_BOOL enabled = VARIANT_FALSE;
       NET_FW_RULE_DIRECTION direction = NET_FW_RULE_DIR_OUT;
       NET_FW_ACTION action = NET_FW_ACTION_BLOCK;
@@ -86,15 +91,19 @@ ProgramRules RulesOf(INetFwPolicy2* policy, const std::wstring& self) {
           SUCCEEDED(rule->get_Direction(&direction)) && direction == NET_FW_RULE_DIR_IN &&
           SUCCEEDED(rule->get_Action(&action)) && SUCCEEDED(rule->get_Profiles(&profiles)) &&
           SUCCEEDED(rule->get_Protocol(&protocol))) {
+        const bool all_ports = SUCCEEDED(rule->get_LocalPorts(&ports)) && AllPorts(ports);
         const bool tcp = protocol == NET_FW_IP_PROTOCOL_TCP || protocol == NET_FW_IP_PROTOCOL_ANY;
         const bool udp = protocol == NET_FW_IP_PROTOCOL_UDP || protocol == NET_FW_IP_PROTOCOL_ANY;
         if (action == NET_FW_ACTION_ALLOW) {
-          if (tcp) out.allow_tcp |= profiles;
-          if (udp) out.allow_udp |= profiles;
+          if (all_ports) {
+            if (tcp) out.allow_tcp |= profiles;
+            if (udp) out.allow_udp |= profiles;
+          }
         } else if (tcp || udp) {
           out.block |= profiles;
         }
       }
+      if (ports) SysFreeString(ports);
       if (app) SysFreeString(app);
     }
     VariantClear(&v);
