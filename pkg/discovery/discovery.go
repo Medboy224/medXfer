@@ -248,10 +248,20 @@ func (s *DiscoveryServer) startProbes(ctx context.Context, addr string) {
 	s.mu.Lock()
 	s.probes = done
 	s.mu.Unlock()
-	stop := context.AfterFunc(ctx, func() { listener.Close() })
+	afterDone := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(afterDone)
+		_ = listener.Close()
+	})
 	go func() {
 		defer close(done)
-		defer stop()
+		// stop() does not wait for an already-running AfterFunc: wait for listener.Close()
+		// to finish releasing the socket before unblocking the next startProbes() (#331).
+		defer func() {
+			if !stop() {
+				<-afterDone
+			}
+		}()
 		defer listener.Close()
 		slots := make(chan struct{}, maxProbeConns)
 		for {
