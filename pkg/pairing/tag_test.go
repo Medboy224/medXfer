@@ -69,7 +69,7 @@ func TestRecognizeAfterMutualTrust(t *testing.T) {
 	}
 
 	now := time.Now()
-	tagsA := AnnounceTags(a.Trust, a.Identity.Fingerprint, now)
+	tagsA := AnnounceTags(a.Trust, a.Identity, now)
 	if len(tagsA) != MaxTags || !slices.Contains(tagsA, Tag(ka, a.Identity.Fingerprint, TagPeriodOf(now))) {
 		t.Fatalf("a announces %v", tagsA)
 	}
@@ -93,7 +93,7 @@ func TestRecognizeAfterMutualTrust(t *testing.T) {
 	if _, err := a.Trust.Forget(b.Identity.Fingerprint); err != nil {
 		t.Fatal(err)
 	}
-	if tags := AnnounceTags(a.Trust, a.Identity.Fingerprint, now); slices.Contains(tags, Tag(ka, a.Identity.Fingerprint, TagPeriodOf(now))) {
+	if tags := AnnounceTags(a.Trust, a.Identity, now); slices.Contains(tags, Tag(ka, a.Identity.Fingerprint, TagPeriodOf(now))) {
 		t.Fatalf("a still announces b's tag: %v", tags)
 	}
 	// b forgets a: it no longer recognizes it, even from old tags.
@@ -144,7 +144,7 @@ func TestAnnounceTagsBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	tags := AnnounceTags(a.Trust, a.Identity.Fingerprint, now)
+	tags := AnnounceTags(a.Trust, a.Identity, now)
 	if len(tags) != MaxTags {
 		t.Fatalf("%d tags, want %d", len(tags), MaxTags)
 	}

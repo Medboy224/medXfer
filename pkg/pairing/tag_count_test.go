@@ -25,7 +25,7 @@ func TestAnnounceTagsAlwaysMaxTags(t *testing.T) {
 			}
 			real = append(real, Tag(key, a.Identity.Fingerprint, TagPeriodOf(now)))
 		}
-		tags := AnnounceTags(a.Trust, a.Identity.Fingerprint, now)
+		tags := AnnounceTags(a.Trust, a.Identity, now)
 		if len(tags) != MaxTags {
 			t.Fatalf("%d trusted devices: %d tags, want %d", n, len(tags), MaxTags)
 		}
@@ -44,10 +44,10 @@ func TestAnnounceTagsAlwaysMaxTags(t *testing.T) {
 		if !slices.IsSorted(tags) {
 			t.Fatalf("%d trusted devices: not sorted, the order could tell the real ones", n)
 		}
-		if again := AnnounceTags(a.Trust, a.Identity.Fingerprint, now.Add(time.Minute)); !slices.Equal(again, tags) {
+		if again := AnnounceTags(a.Trust, a.Identity, now.Add(time.Minute)); !slices.Equal(again, tags) {
 			t.Fatalf("%d trusted devices: changed within the period", n)
 		}
-		for _, tag := range AnnounceTags(a.Trust, a.Identity.Fingerprint, now.Add(TagPeriod)) {
+		for _, tag := range AnnounceTags(a.Trust, a.Identity, now.Add(TagPeriod)) {
 			if seen[tag] {
 				t.Fatalf("%d trusted devices: a tag kept into the next period", n)
 			}
@@ -60,7 +60,7 @@ func TestRecognizeNextPeriod(t *testing.T) {
 	a, b := device(t, "a"), device(t, "b")
 	trustThrough(t, a, b)
 	now := time.Now()
-	ahead := AnnounceTags(a.Trust, a.Identity.Fingerprint, now.Add(TagPeriod))
+	ahead := AnnounceTags(a.Trust, a.Identity, now.Add(TagPeriod))
 	if p, ok := Recognize(b.Trust, ahead, now); !ok || p.Fingerprint != a.Identity.Fingerprint {
 		t.Fatal("an announcer one period ahead is not recognized")
 	}

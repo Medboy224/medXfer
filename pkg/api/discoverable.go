@@ -140,5 +140,5 @@ func (s *DaemonServer) announceTags() []string {
 	if id == nil {
 		return nil
 	}
-	return pairing.AnnounceTags(trust, id.Fingerprint, time.Now())
+	return pairing.AnnounceTags(trust, id, time.Now())
 }
