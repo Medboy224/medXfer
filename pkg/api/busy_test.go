@@ -86,3 +86,16 @@ func TestPINTypedDuringAnotherTransferIsRefused(t *testing.T) {
 		t.Fatalf("pairing: %v; the session of the transfer was replaced: %v", err, peer != third)
 	}
 }
+
+// PAIR-13: busy is told only to a device this user authorized (a trusted key, a QR code, a PIN,
+// BLE). An unknown device gets the answer it gets without a transfer: it learns nothing of one.
+func TestBusyIsToldOnlyToAnAuthorizedDevice(t *testing.T) {
+	s, n := startOwnIdentity(t, "Laptop")
+	s.mu.Lock()
+	s.activeTransferID, s.trustPeer = "t1", identity.Fingerprint{1}
+	s.mu.Unlock()
+	got := <-pairRequest(t, n.PeerAddr(), testPeerChan(t), session.Message{}, 5*time.Second)
+	if got.Type != "pair_reject" || got.Code != codePINRequired {
+		t.Fatalf("an unknown device got %s with the code %q, want %q as without a transfer", got.Type, got.Code, codePINRequired)
+	}
+}

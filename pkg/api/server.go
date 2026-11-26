@@ -613,17 +613,6 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 		s.mu.RUnlock()
 
 		ip, fp := ch.RemoteIP(), conn.PeerFingerprint()
-		if s.busyWith(fp) { // before any PIN is used (PAIR-13)
-			reject := session.Message{Type: "pair_reject", FileName: errBusyElsewhere.Error(), Code: codeBusy}
-			if known, changed := s.keyChanged(ip, fp); changed && msg.Type == "pair_request" && msg.Secret == "" {
-				// Another key at a trusted device's address: refused and reported, as without a transfer (ID-05).
-				s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": keyChangedError(ip, known, fp).Error()}))
-				reject = session.Message{Type: "pair_reject", FileName: errKeyChanged.Error()}
-			}
-			_ = ch.Send(reject)
-			ch.Close()
-			return
-		}
 		var offer, mutual bool
 		switch msg.Type {
 		case pairing.TypePIN, pairing.TypePINWanted: // path P2: the PIN shown, or one on demand
@@ -637,6 +626,10 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 			if !s.ble.auth.Take(fp) {
 				_ = ch.Send(session.Message{Type: "pair_reject", FileName: pairing.ErrRefused.Error()})
 				s.Broadcast(NewEvent("pair_failed", map[string]string{}))
+				ch.Close()
+				return
+			}
+			if s.refuseBusy(ch, fp) {
 				ch.Close()
 				return
 			}
@@ -658,6 +651,10 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 					reject.Code = codePINRequired
 				}
 				_ = ch.Send(reject)
+				ch.Close()
+				return
+			}
+			if s.refuseBusy(ch, fp) {
 				ch.Close()
 				return
 			}
@@ -892,6 +889,17 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			_ = sess.Send(session.Unsupported(msg.Type))
 		}
 	}
+}
+
+// refuseBusy refuses, with busy, the session of fp while a transfer runs with another device
+// (PAIR-13). Called once the user's authorisation is proven (a trusted key, a QR code, a PIN,
+// BLE): an unknown device learns nothing of a transfer.
+func (s *DaemonServer) refuseBusy(ch *session.Channel, fp identity.Fingerprint) bool {
+	if !s.busyWith(fp) {
+		return false
+	}
+	_ = ch.Send(session.Message{Type: "pair_reject", FileName: errBusyElsewhere.Error(), Code: codeBusy})
+	return true
 }
 
 // forThisTransfer reports whether id, named by the peer's pause, resume, skip or cancel, is the
