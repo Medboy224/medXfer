@@ -398,11 +398,7 @@ func handleNode() {
 	go func() {
 		control := nodeHub.Control()
 		go func() { _ = nodeHub.Serve(nodeLn) }()
-		for {
-			c, err := control.Accept()
-			if err != nil {
-				return
-			}
+		acceptEach(control, func(c net.Conn) {
 			conn := c.(*securechan.Conn) // already secure: the hub ran the handshake
 
 			ch := session.NewChannel(conn)
@@ -410,7 +406,7 @@ func handleNode() {
 			if current.Load() != nil {
 				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "node already paired with another device"})
 				ch.Close()
-				continue
+				return
 			}
 
 			// Read incoming pairing authentication message (5s timeout)
@@ -419,13 +415,13 @@ func handleNode() {
 			_ = conn.SetReadDeadline(time.Time{})
 			if err != nil {
 				ch.Close()
-				continue
+				return
 			}
 
 			if msg.Type != "pair_request" && msg.Type != pairing.TypePIN && msg.Type != pairing.TypePINWanted {
 				_ = ch.Send(session.Message{Type: "pair_reject", FileName: "pair_request expected"})
 				ch.Close()
-				continue
+				return
 			}
 
 			// ID-05: a trusted device's address presenting another key is refused.
@@ -435,7 +431,7 @@ func handleNode() {
 				ch.Close()
 				fmt.Printf("\n%s\n", keyChangedAlert(known, peerIP, peerFP))
 				printPrompt()
-				continue
+				return
 			}
 			// The pairing code, if any, is ignored (WP-3.6b). A PIN (shown, or on demand) or a QR
 			// code's secret admits a device for the session; a device of mutual trust needs
@@ -466,14 +462,14 @@ func handleNode() {
 				}
 				if errors.Is(err, pairing.ErrNoPINTyped) {
 					ch.Close()
-					continue
+					return
 				}
 				if err != nil {
 					_ = ch.Send(session.Message{Type: pairing.TypeReject, FileName: pairing.ErrRefused.Error()}) // PAIR-07
 					ch.Close()
 					fmt.Printf("\n[-] PIN pairing attempt from %s refused.\n", peerIP)
 					printPrompt()
-					continue
+					return
 				}
 				if shown == nil {
 					pinDemand.Close() // a PIN serves one pairing (PAIR-02)
@@ -488,7 +484,7 @@ func handleNode() {
 					ch.Close()
 					fmt.Printf("\n[-] Pairing attempt from %s refused: wrong or expired QR code.\n", peerIP)
 					printPrompt()
-					continue
+					return
 				}
 			case pairing.Mutual(nodeTrust, peerFP, msg.TrustsYou):
 				mutual = true
@@ -502,7 +498,7 @@ func handleNode() {
 				_ = ch.Send(session.Message{Type: "pair_reject", FileName: pairing.ErrPINRequired.Error(), Code: pairing.CodePINRequired})
 				ch.Close()
 				printPrompt()
-				continue
+				return
 			}
 			_ = ch.Send(session.Message{
 				Type:       "pair_accept",
@@ -514,7 +510,7 @@ func handleNode() {
 				devLabel = "Remote Node"
 			}
 			incomingChan <- incomingPairing{ch: ch, fp: peerFP, name: devLabel, ip: peerIP, mutual: mutual, offer: offer}
-		}
+		})
 	}()
 
 	printPrompt = func() {
