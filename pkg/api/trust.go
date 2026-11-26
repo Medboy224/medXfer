@@ -31,6 +31,10 @@ const pairReplyTimeout = 15 * time.Second
 // QR code is needed (PAIR-12).
 const codePINRequired = "pin_required"
 
+// codeBusy is the pair_reject code of a device that transfers with another one (PAIR-13): the
+// device that dialed stops, and an action_error carries it to the user who connected.
+const codeBusy = "busy"
+
 // PairShowPayload asks for a QR code; trust offers mutual trust once paired (PAIR-10).
 type PairShowPayload struct {
 	Trust bool `json:"trust,omitempty"`
@@ -53,8 +57,17 @@ var (
 	errPINRequired = errors.New("a PIN or a QR code is needed to pair with this device")
 	// errPINNeeded: the other device shows a PIN on demand; pin_needed tells the user to type
 	// it with pair_pin. Not an error for the user.
-	errPINNeeded = errors.New("type the PIN shown on the other device")
+	errPINNeeded     = errors.New("type the PIN shown on the other device")
+	errBusyElsewhere = errors.New("the device is transferring with another device")
 )
+
+// busyWith reports whether a transfer runs with another device than fp: a session of fp would
+// end it (PAIR-13, #298). The same device that comes back keeps its transfer.
+func (s *DaemonServer) busyWith(fp identity.Fingerprint) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activeTransferID != "" && s.trustPeer != fp
+}
 
 // keyChanged implements ID-05: ip is the last address of a trusted device, and the key seen
 // there now is another one.

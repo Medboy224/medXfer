@@ -609,6 +609,11 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 		s.mu.RUnlock()
 
 		ip, fp := ch.RemoteIP(), conn.PeerFingerprint()
+		if s.busyWith(fp) { // before any PIN is used (PAIR-13)
+			_ = ch.Send(session.Message{Type: "pair_reject", FileName: errBusyElsewhere.Error(), Code: codeBusy})
+			ch.Close()
+			return
+		}
 		var offer, mutual bool
 		switch msg.Type {
 		case pairing.TypePIN, pairing.TypePINWanted: // path P2: the PIN shown, or one on demand
