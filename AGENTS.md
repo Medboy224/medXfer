@@ -74,6 +74,11 @@ Une plateforme égale un adaptateur. Une décision (quel réseau, quelle bande, 
 
 ## Flux de travail (feuille de route §5)
 
+0. **Orchestration GitHub et travail en parallèle (multi-agents).**
+   - Avant de modifier un fichier, vérifie `git status --short`, la branche courante et les issues/PR actives (`gh issue list`, `gh pr list`) : **n'empile jamais un nouveau lot sur la branche d'un autre agent**.
+   - Un agent = un lot = une branche propre depuis `main` (ou un `git worktree` dédié / espace isolé) et des fichiers disjoints des autres lots ouverts.
+   - Si le travail touche plus d'un domaine indépendant, propose ou utilise une décomposition en lots parallèles (une issue GitHub par lot, PR sous 600 lignes hors tests) plutôt qu'un gros patch monolithique.
+   - Remplis systématiquement les sections de `.github/pull_request_template.md` et rattache chaque PR à son issue (`Closes #NNN`).
 1. **Un lot, une branche, une PR.**
    - Branches : `feat/…`, `fix/…`, `docs/…`, `test/…`, `ci/…`.
    - Une PR reste **sous 600 lignes modifiées**, hors tests et golden. Au-delà, découpe le lot en plusieurs PR et propose le découpage avant d'écrire.
