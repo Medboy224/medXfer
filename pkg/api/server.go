@@ -819,6 +819,9 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		s.takeOffer(msg)
 
 	case "pause", "resume": // the whole transfer, or one item of it (D6)
+		if !s.forThisTransfer(msg.TransferID) {
+			return
+		}
 		if msg.Item != nil {
 			s.itemAction(msg.Type, *msg.Item, true, "")
 		} else {
@@ -826,12 +829,14 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		}
 
 	case "skip": // D6
-		if msg.Item != nil {
+		if msg.Item != nil && s.forThisTransfer(msg.TransferID) {
 			s.itemAction(itemSkip, *msg.Item, true, "")
 		}
 
 	case "cancel":
-		s.cancelTransfer(true, "")
+		if s.forThisTransfer(msg.TransferID) {
+			s.cancelTransfer(true, "")
+		}
 
 	case "reject":
 		s.mu.Lock()
@@ -877,6 +882,21 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			_ = sess.Send(session.Unsupported(msg.Type))
 		}
 	}
+}
+
+// forThisTransfer reports whether id, named by the peer's pause, resume, skip or cancel, is the
+// transfer in progress or the offer waiting: a late one names a transfer that ended (#313). One
+// without an id (xfer, older versions) applies, as accept, complete and failed do.
+func (s *DaemonServer) forThisTransfer(id string) bool {
+	if id == "" {
+		return true
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return id == s.activeTransferID ||
+		(s.lastOffered != nil && id == s.lastOffered.offer.TransferID) ||
+		(s.pendingOffer != nil && id == s.pendingOffer.TransferID) ||
+		(s.incomingOffer != nil && id == s.incomingOffer.TransferID)
 }
 
 func (s *DaemonServer) parseCollisionPolicy(p string) store.Policy {
