@@ -32,6 +32,7 @@ class WifiDirectGroup(context: Context) {
     /** A group created here and not stopped since: only that one is removed, never another app's. */
     var running = false
         private set
+    private var generation = 0
 
     /** Creates the group; band: "5", "2" or "auto". done gets its description, or an error. */
     @SuppressLint("MissingPermission") // NEARBY_WIFI_DEVICES is asked before (hotspotPermission)
@@ -53,14 +54,16 @@ class WifiDirectGroup(context: Context) {
             )
             .build()
         running = false
+        val gen = ++generation
         try {
             // A group of an earlier run, the app stopped in between, would refuse the new one
             // ("busy"): removed when it is medXfer's. Another app's stays, and the local
             // hotspot is taken instead.
             m.requestGroupInfo(ch) { g: WifiP2pGroup? ->
+                if (gen != generation) return@requestGroupInfo
                 val ours = g != null && g.isGroupOwner && g.networkName?.endsWith("-medXfer") == true
                 if (ours) m.removeGroup(ch, null)
-                main.postDelayed({ create(m, ch, config, done) }, if (ours) 500 else 0)
+                main.postDelayed({ if (gen == generation) create(m, ch, config, done, gen) }, if (ours) 500 else 0)
             }
         } catch (e: SecurityException) {
             done(null, "permission:" + (e.message ?: "denied"))
@@ -68,23 +71,30 @@ class WifiDirectGroup(context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    private fun create(m: WifiP2pManager, ch: WifiP2pManager.Channel, config: WifiP2pConfig, done: (Map<String, Any?>?, String?) -> Unit) {
+    private fun create(m: WifiP2pManager, ch: WifiP2pManager.Channel, config: WifiP2pConfig, done: (Map<String, Any?>?, String?) -> Unit, gen: Int) {
         try {
             m.createGroup(ch, config, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
+                    if (gen != generation) {
+                        m.removeGroup(ch, null)
+                        return
+                    }
                     running = true
                     // The group, its frequency and address come a moment after.
-                    main.postDelayed({ describe(done, tries = 8) }, 1500)
+                    main.postDelayed({ if (gen == generation) describe(done, tries = 8, gen = gen) }, 1500)
                 }
 
-                override fun onFailure(reason: Int) = done(null, "failed:" + reasonName(reason))
+                override fun onFailure(reason: Int) {
+                    if (gen == generation) done(null, "failed:" + reasonName(reason))
+                }
             })
         } catch (e: SecurityException) {
-            done(null, "permission:" + (e.message ?: "denied"))
+            if (gen == generation) done(null, "permission:" + (e.message ?: "denied"))
         }
     }
 
     fun stop(done: () -> Unit) {
+        generation++
         val m = manager
         val ch = channel
         if (!running || m == null || ch == null) return done()
@@ -131,9 +141,11 @@ class WifiDirectGroup(context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    private fun describe(done: (Map<String, Any?>?, String?) -> Unit, tries: Int) {
-        val again = { main.postDelayed({ describe(done, tries - 1) }, 500); Unit }
+    private fun describe(done: (Map<String, Any?>?, String?) -> Unit, tries: Int, gen: Int) {
+        if (gen != generation) return
+        val again = { main.postDelayed({ describe(done, tries - 1, gen) }, 500); Unit }
         manager!!.requestGroupInfo(channel!!) { g: WifiP2pGroup? ->
+            if (gen != generation) return@requestGroupInfo
             if (g == null || !g.isGroupOwner) {
                 if (tries > 1) return@requestGroupInfo again()
                 running = false
