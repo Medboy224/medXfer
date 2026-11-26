@@ -201,11 +201,17 @@ func (t *TrustTalk) writeLocked() error {
 	}
 	p := t.peer
 	p.TagKey = t.tagKey
-	if old, ok := t.store.Get(p.Fingerprint); ok {
-		p.AutoAccept, p.AddedAt, p.Renamed = old.AutoAccept, old.AddedAt, old.Renamed
-		if p.Alias == "" || old.Renamed {
-			p.Alias = old.Alias
+	found, err := t.store.Update(p.Fingerprint, func(old *identity.Peer) bool { // the entry as the file holds it (#303)
+		q := p
+		q.AutoAccept, q.AddedAt, q.Renamed = old.AutoAccept, old.AddedAt, old.Renamed
+		if q.Alias == "" || old.Renamed {
+			q.Alias = old.Alias
 		}
+		*old = q
+		return true
+	})
+	if err != nil || found {
+		return err
 	}
 	return t.store.Add(p)
 }

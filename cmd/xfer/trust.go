@@ -106,9 +106,15 @@ func runTrust(w io.Writer, dir string, args []string) error {
 			return fmt.Errorf("give a name")
 		}
 		// Kept on this device only; the name the device sends no longer replaces it (N6).
-		p.Alias, p.Renamed = name, true
-		if err := ts.Add(p); err != nil {
+		found, err := ts.Update(p.Fingerprint, func(p *identity.Peer) bool {
+			p.Alias, p.Renamed = name, true
+			return true
+		})
+		if err != nil {
 			return err
+		}
+		if !found { // forgotten meanwhile, by another process
+			return fmt.Errorf("%s is no longer trusted", p.Fingerprint.Short())
 		}
 		fmt.Fprintf(w, "%s is now shown as '%s' (on this device only).\n", p.Fingerprint.Short(), name)
 		return nil

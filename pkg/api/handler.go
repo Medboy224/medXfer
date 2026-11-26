@@ -240,8 +240,12 @@ func pairFailed(target string, err error, id string) EventMessage {
 	msg := fmt.Sprintf("failed to pair with %s: %v", target, err)
 	journalf("log WARN %s", msg)
 	data := map[string]string{"error": msg, "target": target}
-	if transfer.DialFailed(err) {
+	var rej *rejectedError
+	switch {
+	case transfer.DialFailed(err):
 		data["code"] = codeUnreachable
+	case errors.As(err, &rej) && rej.code == codeBusy:
+		data["code"] = codeBusy
 	}
 	return NewEvent("action_error", data, id)
 }

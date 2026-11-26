@@ -97,8 +97,14 @@ func (s *DaemonServer) handleTrustRename(rs Responder, req RequestMessage) {
 		err = errors.New("give a name")
 	}
 	if err == nil {
-		peer.Alias, peer.Renamed = name, true
-		err = ts.Add(peer)
+		var found bool
+		found, err = ts.Update(peer.Fingerprint, func(p *identity.Peer) bool {
+			p.Alias, p.Renamed = name, true
+			return true
+		})
+		if err == nil && !found { // forgotten meanwhile, by another process
+			err = errors.New("this device is no longer trusted")
+		}
 	}
 	if err != nil {
 		rs.Reply(NewEvent("action_error", map[string]string{"error": err.Error()}, req.ID))

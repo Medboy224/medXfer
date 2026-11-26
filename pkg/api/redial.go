@@ -18,8 +18,8 @@ import (
 )
 
 var (
-	redialEvery = 3 * time.Second  // between two attempts: well within LIM-01's 60 a minute
-	redialFor   = 10 * time.Minute // then the user decides
+	redialEvery = newDuration(3 * time.Second) // between two attempts: well within LIM-01's 60 a minute; read while a test may change it
+	redialFor   = 10 * time.Minute             // then the user decides
 )
 
 // dialedFor remembers target as the address of the session ch, which this side dialed.
@@ -48,7 +48,7 @@ func (s *DaemonServer) redial(ctx context.Context, target string, fp identity.Fi
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(redialEvery):
+		case <-time.After(redialEvery.get()):
 		}
 		err := s.redialOnce(ctx, target, fp)
 		var rej *rejectedError
@@ -78,7 +78,7 @@ func (s *DaemonServer) redialOnce(ctx context.Context, target string, fp identit
 		return nil
 	}
 	ch := session.NewChannel(conn)
-	if err := ch.Send(session.Message{Type: "pair_request", DeviceName: name, TrustsYou: s.declares(fp)}); err != nil {
+	if err := ch.Send(session.Message{Type: "pair_request", DeviceName: name, TrustsYou: s.declares(fp), Redial: true}); err != nil {
 		ch.Close()
 		return err
 	}

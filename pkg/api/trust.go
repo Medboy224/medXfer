@@ -31,6 +31,18 @@ const pairReplyTimeout = 15 * time.Second
 // QR code is needed (PAIR-12).
 const codePINRequired = "pin_required"
 
+// codeBusy is the pair_reject code of a device that transfers with another one, or that has a
+// session with another one when a redial comes (PAIR-13): the device that dialed stops, and an
+// action_error carries it to the user who connected.
+const codeBusy = "busy"
+
+// codeReplaced is the code of the disconnect a session gets when the user chose another device's
+// (PAIR-13): the device told does not dial again.
+const codeReplaced = "replaced"
+
+// reasonReplaced is the reason of the disconnected event a device replaced gets.
+const reasonReplaced = "the other device connected to another device"
+
 // PairShowPayload asks for a QR code; trust offers mutual trust once paired (PAIR-10).
 type PairShowPayload struct {
 	Trust bool `json:"trust,omitempty"`
@@ -53,8 +65,21 @@ var (
 	errPINRequired = errors.New("a PIN or a QR code is needed to pair with this device")
 	// errPINNeeded: the other device shows a PIN on demand; pin_needed tells the user to type
 	// it with pair_pin. Not an error for the user.
-	errPINNeeded = errors.New("type the PIN shown on the other device")
+	errPINNeeded     = errors.New("type the PIN shown on the other device")
+	errBusyElsewhere = errors.New("the device is transferring with another device")
 )
+
+// busyWith reports whether a session of fp would take another device's (PAIR-13, #298): one
+// with a transfer, or any for a redial, which is no user's choice. The same device that comes
+// back keeps its session and its transfer.
+func (s *DaemonServer) busyWith(fp identity.Fingerprint, redial bool) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.trustPeer == fp {
+		return false
+	}
+	return s.activeTransferID != "" || (redial && s.activeSession != nil)
+}
 
 // keyChanged implements ID-05: ip is the last address of a trusted device, and the key seen
 // there now is another one.
@@ -96,15 +121,17 @@ func (s *DaemonServer) touchTrust(fp identity.Fingerprint, name, ip string) erro
 	if ts == nil {
 		return nil
 	}
-	p, ok := ts.Get(fp)
-	if !ok || (p.LastAddress == ip && (name == "" || p.Alias == name || p.Renamed)) {
-		return nil
-	}
-	p.LastAddress = ip
-	if name != "" && !p.Renamed {
-		p.Alias = name
-	}
-	return ts.Add(p)
+	_, err := ts.Update(fp, func(p *identity.Peer) bool {
+		if p.LastAddress == ip && (name == "" || p.Alias == name || p.Renamed) {
+			return false
+		}
+		p.LastAddress = ip
+		if name != "" && !p.Renamed {
+			p.Alias = name
+		}
+		return true
+	})
+	return err
 }
 
 // declares is what this device tells peer in trusts_you (PAIR-09).
@@ -362,10 +389,16 @@ func (s *DaemonServer) startSession(ch *session.Channel, fp identity.Fingerprint
 	}
 	s.isReconnecting = false
 	s.stopRedial() // the new session's side that dialed says so after (dialedFor)
-	if s.activeSession != nil && s.activeSession != ch {
-		s.activeSession.Close()
+	if old := s.activeSession; old != nil && old != ch {
 		if s.trustPeer != fp { // another device: the old one's transfers end with it (§3.7, #156)
 			s.dropTransfers()
+			// Told, it does not dial again: else both took the session in turn (PAIR-13).
+			go func() {
+				_ = old.Send(session.Message{Type: "disconnect", Code: codeReplaced})
+				old.Close()
+			}()
+		} else {
+			old.Close()
 		}
 	}
 	samePeer := s.trustPeer == fp

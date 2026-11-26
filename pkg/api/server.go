@@ -218,6 +218,9 @@ func (s *DaemonServer) StartNode() error {
 	return s.startErr
 }
 
+// listenNode opens the single port; tests replace it.
+var listenNode = func(addr string) (net.Listener, error) { return net.Listen("tcp4", addr) }
+
 func (s *DaemonServer) startNode() error {
 	if err := s.loadIdentity(); err != nil {
 		return err
@@ -225,19 +228,20 @@ func (s *DaemonServer) startNode() error {
 
 	// 1. Start Node Pairing TCP Listener (port 18887 or fallback)
 	nodePort := 18887
-	ln, err := net.Listen("tcp4", "0.0.0.0:18887")
+	ln, err := listenNode("0.0.0.0:18887")
 	if err != nil {
-		ln, err = net.Listen("tcp4", "0.0.0.0:0")
+		ln, err = listenNode("0.0.0.0:0")
 	}
-	if err == nil {
-		s.mu.Lock()
-		s.nodeLn = ln
-		s.mu.Unlock()
-		if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
-			nodePort = tcpAddr.Port
-		}
-		s.startHub(ln)
+	if err != nil { // never a node silent without an error (#313)
+		return fmt.Errorf("no port to listen on, 18887 nor another: %w", err)
 	}
+	s.mu.Lock()
+	s.nodeLn = ln
+	s.mu.Unlock()
+	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
+		nodePort = tcpAddr.Port
+	}
+	s.startHub(ln)
 
 	// 2. Start Discovery Broadcast Server
 	discOffer := &discovery.TransferOffer{} // no name: DISC-06
@@ -625,6 +629,10 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 				ch.Close()
 				return
 			}
+			if s.refuseBusy(ch, fp, false) {
+				ch.Close()
+				return
+			}
 			// The PIN or the pair's key proved the user's authorisation, as for a PIN (ID-05, #217).
 			s.addressTaken(ip, fp)
 			mutual = s.mutual(fp, msg.TrustsYou)
@@ -643,6 +651,10 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 					reject.Code = codePINRequired
 				}
 				_ = ch.Send(reject)
+				ch.Close()
+				return
+			}
+			if s.refuseBusy(ch, fp, msg.Redial) {
 				ch.Close()
 				return
 			}
@@ -677,7 +689,8 @@ func (s *DaemonServer) listenToSession(sess *session.Channel) {
 		if err != nil {
 			sess.Close() // the peer sees it at once, and the side that dialed dials again
 			s.mu.Lock()
-			if s.activeSession == sess {
+			lost := s.activeSession == sess // else replaced or ended: nothing comes back (PAIR-13)
+			if lost {
 				s.activeSession = nil
 				s.isReconnecting = true
 				if s.sessionGraceTimer != nil {
@@ -702,7 +715,9 @@ func (s *DaemonServer) listenToSession(sess *session.Channel) {
 				}
 			}
 			s.mu.Unlock()
-			s.Broadcast(NewEvent("reconnecting", map[string]string{"message": "Connection lost. Waiting for peer to reconnect (15s grace period)..."}))
+			if lost {
+				s.Broadcast(NewEvent("reconnecting", map[string]string{"message": "Connection lost. Waiting for peer to reconnect (15s grace period)..."}))
+			}
 			return
 		}
 
@@ -780,7 +795,11 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		s.pairedDeviceName = ""
 		s.dropTransfers()
 		s.mu.Unlock()
-		s.Broadcast(NewEvent("disconnected", map[string]string{"reason": "peer requested disconnect"}))
+		reason := "peer requested disconnect"
+		if msg.Code == codeReplaced {
+			reason = reasonReplaced
+		}
+		s.Broadcast(NewEvent("disconnected", map[string]string{"reason": reason}))
 
 	case "bench_ping", "bench_burst_req":
 		s.mu.RLock()
@@ -814,6 +833,9 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		s.takeOffer(msg)
 
 	case "pause", "resume": // the whole transfer, or one item of it (D6)
+		if !s.forThisTransfer(msg.TransferID) {
+			return
+		}
 		if msg.Item != nil {
 			s.itemAction(msg.Type, *msg.Item, true, "")
 		} else {
@@ -821,12 +843,14 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		}
 
 	case "skip": // D6
-		if msg.Item != nil {
+		if msg.Item != nil && s.forThisTransfer(msg.TransferID) {
 			s.itemAction(itemSkip, *msg.Item, true, "")
 		}
 
 	case "cancel":
-		s.cancelTransfer(true, "")
+		if s.forThisTransfer(msg.TransferID) {
+			s.cancelTransfer(true, "")
+		}
 
 	case "reject":
 		s.mu.Lock()
@@ -872,6 +896,32 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 			_ = sess.Send(session.Unsupported(msg.Type))
 		}
 	}
+}
+
+// refuseBusy refuses, with busy, the session of fp that would take another device's (busyWith,
+// PAIR-13). Called once the user's authorisation is proven (a trusted key, a QR code, a PIN,
+// BLE): an unknown device learns nothing of a transfer.
+func (s *DaemonServer) refuseBusy(ch *session.Channel, fp identity.Fingerprint, redial bool) bool {
+	if !s.busyWith(fp, redial) {
+		return false
+	}
+	_ = ch.Send(session.Message{Type: "pair_reject", FileName: errBusyElsewhere.Error(), Code: codeBusy})
+	return true
+}
+
+// forThisTransfer reports whether id, named by the peer's pause, resume, skip or cancel, is the
+// transfer in progress or the offer waiting: a late one names a transfer that ended (#313). One
+// without an id (xfer, older versions) applies, as accept, complete and failed do.
+func (s *DaemonServer) forThisTransfer(id string) bool {
+	if id == "" {
+		return true
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return id == s.activeTransferID ||
+		(s.lastOffered != nil && id == s.lastOffered.offer.TransferID) ||
+		(s.pendingOffer != nil && id == s.pendingOffer.TransferID) ||
+		(s.incomingOffer != nil && id == s.incomingOffer.TransferID)
 }
 
 func (s *DaemonServer) parseCollisionPolicy(p string) store.Policy {
