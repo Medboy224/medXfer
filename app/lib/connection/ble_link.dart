@@ -128,11 +128,11 @@ class BleLink extends ChangeNotifier {
   static List<Duration> retrySoonAfter = const [Duration(seconds: 1), Duration(seconds: 2)];
   Timer? _nextTry;
 
-  /// This device waits for the phones' links rather than connect to them (J8): a computer. A
+  /// This device waits for the phones' links rather than connect to them (J8): a desktop. A
   /// phone paired with it left its requests unanswered 20 to 50 s; over the phone's link, its
   /// calls were answered in 60 to 180 ms (probe of 18 November 2026). A phone's advertisement
   /// whose link never comes is recognized the old way after [holdWithin].
-  static bool waitsForHolds = !Platform.isAndroid;
+  static bool waitsForHolds = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
   static Duration holdWithin = const Duration(seconds: 8);
   static Duration holdsHeardWithin = const Duration(milliseconds: 600);
   static const _minWait = Duration(milliseconds: 50);
@@ -383,7 +383,7 @@ class BleLink extends ChangeNotifier {
   /// link came after it was seen is that phone, recognized over it; none in [holdWithin], it
   /// is recognized the old way.
   bool _waitsForLink(BleDevice d, DateTime now) {
-    if (!waitsForHolds || d.held) return false;
+    if (!waitsForHolds || _scanOnly || d.held) return false;
     if (!d.holds) {
       // Its scan response, which says whether it holds, comes a moment after its advertisement.
       final heard = d.firstSeen.add(holdsHeardWithin);
@@ -457,8 +457,10 @@ class BleLink extends ChangeNotifier {
       await _answer(m.conn, request, own);
     }
     if (r['network'] case final Map<String, Object?> network) {
-      // The other created its network: join it, then connect (BLE-10).
-      unawaited(_joinAndConnect(network, '${r['fingerprint']}', trusted: _servedTrusted[m.conn] ?? false));
+      // Skip joining a BLE-created network if a LAN session or pairing attempt is already active.
+      if (connection.session == null && connection.connecting == null) {
+        unawaited(_joinAndConnect(network, '${r['fingerprint']}', trusted: _servedTrusted[m.conn] ?? false, clientSide: false));
+      }
     }
   }
 
@@ -469,12 +471,16 @@ class BleLink extends ChangeNotifier {
     var outcome = (request['outcome'] as num?)?.toInt() ?? 3;
     Map<String, Object?>? network;
     if (outcome == 1) {
-      final net = await connection.networkForBle(fiveGhz: ((request['band'] as num?)?.toInt() ?? 0) == _band5);
-      _mark(net == null ? 'no network' : 'network ${net.band?.name ?? 'created'}');
-      if (net?.ssid == null || net?.address == null) {
-        outcome = 3; // none could be created: said, rather than a network that is not there
+      if (connection.session != null || connection.connecting != null) {
+        outcome = 3;
       } else {
-        network = _networkOf(net!);
+        final net = await connection.networkForBle(fiveGhz: ((request['band'] as num?)?.toInt() ?? 0) == _band5);
+        _mark(net == null ? 'no network' : 'network ${net.band?.name ?? 'created'}');
+        if (net?.ssid == null || net?.address == null) {
+          outcome = 3; // none could be created: said, rather than a network that is not there
+        } else {
+          network = _networkOf(net!);
+        }
       }
     }
     final r = await _step('ble_server', {'conn': conn, 'step': 'answer', 'outcome': outcome, 'network': ?network});
@@ -592,6 +598,7 @@ class BleLink extends ChangeNotifier {
   /// dropped, it fails, `far` when the signal is weak.
   Future<void> connect(BleDevice d) async {
     if (_stage != BleStage.idle && _stage != BleStage.failed) return;
+    if (connection.session != null || connection.connecting != null) return;
     _target = d;
     _clock = null;
     _startClock('touched');
@@ -691,21 +698,27 @@ class BleLink extends ChangeNotifier {
   }
 
   /// Joins the network the other device created, then opens the session on it.
-  Future<void> _joinAndConnect(Map<String, Object?> network, String fingerprint, {required bool trusted}) async {
+  Future<void> _joinAndConnect(Map<String, Object?> network, String fingerprint, {required bool trusted, bool clientSide = true}) async {
     final n = LinkNetwork(
       ssid: '${network['ssid']}',
       passphrase: '${network['passphrase']}',
       security: (network['security'] as num?)?.toInt() ?? 1,
       band: (network['band'] as num?)?.toInt() == _band5 ? WifiBand.ghz5 : WifiBand.ghz24,
     );
-    if (!await connection.joinForBle(n)) return _set(BleStage.failed, 'join');
+    if (!await connection.joinForBle(n)) {
+      if (clientSide) _set(BleStage.failed, 'join');
+      return;
+    }
     _mark('joined ${n.band?.name}');
     final addrs = [for (final a in (network['addrs'] as List?) ?? const []) '$a'];
     final ip = addrs.firstWhere((a) => !a.contains(':'), orElse: () => addrs.isEmpty ? '' : addrs.first);
     final port = (network['port'] as num?)?.toInt() ?? 0;
-    if (ip.isEmpty || port == 0) return _set(BleStage.failed, 'join');
+    if (ip.isEmpty || port == 0) {
+      if (clientSide) _set(BleStage.failed, 'join');
+      return;
+    }
     await connection.pairAfterBle(ip, port, fingerprint, trusted: trusted);
-    _set(BleStage.idle);
+    if (clientSide) _set(BleStage.idle);
   }
 
   /// Gives up the exchange this device started.

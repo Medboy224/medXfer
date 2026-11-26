@@ -85,6 +85,7 @@ class AppState extends ChangeNotifier {
     // Kept at each change: a pinch makes one per number of columns it passes, saved quietly.
     explorer.onPrefs = () => this.settings.explorerPrefs = explorer.prefs;
     keeper = BackgroundKeeper(background: background, connection: connection, transfers: transfers);
+    connection.addListener(_watchHotspot);
     transfers.addListener(_keepAwake);
     webShare.addListener(_keepAwake);
     // This device's network serves the browser share as long as it runs, then goes.
@@ -151,6 +152,14 @@ class AppState extends ChangeNotifier {
     if (want == _awake) return;
     _awake = want;
     unawaited(awake.keep(want));
+  }
+
+  bool _hadHotspot = false;
+
+  void _watchHotspot() {
+    final has = connection.myHotspot != null;
+    if (has && !_hadHotspot && firewall.firewall is! NoFirewall) unawaited(firewall.check());
+    _hadHotspot = has;
   }
 
   bool _webShareRan = false;
@@ -299,6 +308,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _events?.cancel();
+    connection.removeListener(_watchHotspot);
     transfers.removeListener(_keepAwake);
     if (_awake) unawaited(awake.keep(false));
     bleLink.dispose();

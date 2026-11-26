@@ -132,3 +132,22 @@ func TestIsCellular(t *testing.T) {
 		}
 	}
 }
+
+func TestScoreInterfacePriorities(t *testing.T) {
+	if s := scoreInterface("usb0", net.ParseIP("192.168.42.5")); s <= scoreInterface("rmnet_data0", net.ParseIP("10.0.0.5")) {
+		t.Fatalf("usb0 score %d should exceed cellular", s)
+	}
+	if s := scoreInterface("usb0", net.ParseIP("10.209.151.174")); s < 100 {
+		t.Fatalf("usb0 private score = %d, want >= 100", s)
+	}
+	if s := scoreInterface("ncm0", net.ParseIP("10.209.151.174")); s < 100 {
+		t.Fatalf("ncm0 private score = %d, want >= 100", s)
+	}
+	for _, ifc := range []struct {
+		name, ip string
+	}{{"swlan0", "10.46.56.232"}, {"ap0", "192.168.43.1"}, {"p2p-wlan0-0", "192.168.49.1"}} {
+		if scoreInterface(ifc.name, net.ParseIP(ifc.ip)) <= scoreInterface("vmnet8", net.ParseIP("192.168.10.1")) {
+			t.Fatalf("%s (%s) should outrank virtual bridge", ifc.name, ifc.ip)
+		}
+	}
+}

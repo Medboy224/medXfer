@@ -150,3 +150,33 @@ func TestBLERecognizeAStranger(t *testing.T) {
 		t.Fatalf("recognized %v, the instance %s", peer, a.instance())
 	}
 }
+
+// BLE-05 / WP-D.4: capability arbitration across Android (3,3), Windows (1,3), and iOS-like (0,3) profiles.
+func TestBLEAsymmetricBandArbitration(t *testing.T) {
+	cases := []struct {
+		name                  string
+		initCreate, initJoin  int
+		respCreate, respJoin  int
+		wantOutcome, wantBand float64
+	}{
+		{"windows_to_android_5ghz", 1, 3, 3, 3, 1, 2},
+		{"ios_to_android_5ghz", 0, 3, 3, 3, 1, 2},
+		{"windows_to_ios_role_inversion_24ghz", 1, 3, 0, 3, 2, 1},
+		{"ios_to_windows_24ghz", 0, 3, 1, 3, 1, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, na := startOwnIdentity(t, "Responder")
+			_, nb := startOwnIdentity(t, "Initiator")
+			pin := askPINByBLE(t, na, nb)
+			out := bleStep(t, nb, "ble_client", map[string]any{"conn": "c1", "step": "pin", "pin": pin})
+			in := bleStep(t, na, "ble_server", map[string]any{"conn": "s1", "step": "message", "data": out["data"], "create": tc.respCreate, "join": tc.respJoin})
+			out = bleStep(t, nb, "ble_client", map[string]any{"conn": "c1", "step": "pin_reply", "data": in["data"], "create": tc.initCreate, "join": tc.initJoin})
+			in = bleStep(t, na, "ble_server", map[string]any{"conn": "s1", "step": "message", "data": out["data"], "create": tc.respCreate, "join": tc.respJoin})
+			req, _ := in["request"].(map[string]any)
+			if req == nil || req["outcome"] != tc.wantOutcome || req["band"] != tc.wantBand {
+				t.Fatalf("got request=%v, want outcome=%.0f band=%.0f", req, tc.wantOutcome, tc.wantBand)
+			}
+		})
+	}
+}

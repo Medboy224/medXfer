@@ -16,7 +16,7 @@ import 'dart:typed_data';
 
 /// Who got which address: one per device (its hardware address), within the server's subnet.
 class DhcpLeases {
-  DhcpLeases({required this.server, required this.prefix, this.size = 200});
+  DhcpLeases({required this.server, required this.prefix, this.size = 200, this.wrap = false});
 
   /// The server's address, the group's.
   final InternetAddress server;
@@ -24,6 +24,9 @@ class DhcpLeases {
 
   /// How many addresses, after the server's.
   final int size;
+
+  /// Whether to wrap around inside the subnet when the server's address is near the top.
+  final bool wrap;
 
   final _byMac = <String, int>{};
 
@@ -38,11 +41,14 @@ class DhcpLeases {
     final had = _byMac[mac];
     if (had != null) return had;
     final taken = _byMac.values.toSet();
+    final net = _serverInt & _mask;
+    final hostMask = ~_mask & 0xFFFFFFFF;
+    final startHost = _serverInt & hostMask;
     for (var i = 1; i <= size; i++) {
-      final a = (_serverInt + i) & 0xFFFFFFFF;
-      final host = a & ~_mask & 0xFFFFFFFF;
-      // Not the subnet's own address nor its broadcast, nor a .0 or .255 some stacks refuse.
-      if ((a & _mask) != (_serverInt & _mask) || host == 0 || host == (~_mask & 0xFFFFFFFF)) continue;
+      final a = wrap && hostMask > 0 ? (net | ((startHost + i) & hostMask)) : ((_serverInt + i) & 0xFFFFFFFF);
+      final host = a & hostMask;
+      // Not the subnet's own address, server, or broadcast, nor a .0/.255 some stacks refuse.
+      if ((a & _mask) != net || host == 0 || host == hostMask || a == _serverInt) continue;
       if ((a & 0xFF) == 0 || (a & 0xFF) == 0xFF || taken.contains(a)) continue;
       return _byMac[mac] = a;
     }
@@ -155,7 +161,7 @@ class DhcpServer {
   static Future<DhcpServer> start(InternetAddress server, int prefix) async {
     final socket = await RawDatagramSocket.bind(server, 67);
     socket.broadcastEnabled = true;
-    final s = DhcpServer._(socket, DhcpLeases(server: server, prefix: prefix));
+    final s = DhcpServer._(socket, DhcpLeases(server: server, prefix: prefix, wrap: true));
     socket.listen((event) {
       if (event != RawSocketEvent.read) return;
       final d = socket.receive();

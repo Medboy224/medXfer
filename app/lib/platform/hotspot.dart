@@ -199,14 +199,22 @@ class AndroidHotspot implements Hotspot {
     var wifiOff = false;
     try {
       final group = HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>('groupStart', {'band': fiveGhz ? '5' : '2'}))!);
-      _group = true;
-      return group;
+      if (group.address != null && group.address!.isNotEmpty) {
+        _group = true;
+        return group;
+      }
+      await channel.invokeMethod<void>('groupStop');
     } on PlatformException catch (e) {
       // No Wi-Fi Direct, Wi-Fi off, or the radio busy: the local hotspot needs none of them.
       wifiOff = fiveGhz && e.message == 'wifi_off';
     }
     _group = false;
-    return HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>('hotspotStart'))!, wifiOff: wifiOff);
+    final local = HotspotInfo.fromMap((await channel.invokeMethod<Map<Object?, Object?>>('hotspotStart'))!, wifiOff: wifiOff);
+    if (local.address == null || local.address!.isEmpty) {
+      await channel.invokeMethod<void>('hotspotStop');
+      throw PlatformException(code: 'hotspot', message: 'no_address');
+    }
+    return local;
   }
 
   @override
@@ -330,6 +338,8 @@ class WindowsHotspot implements Hotspot {
 
   @override
   Future<HotspotInfo> start({bool fiveGhz = true}) async {
+    _closeDhcp?.call();
+    _closeDhcp = null;
     final net = drawNetwork();
     final group = (await channel.invokeMapMethod<String, Object?>('start', {'ssid': net.ssid, 'passphrase': net.passphrase}))!;
     final address = '${group['address']}';

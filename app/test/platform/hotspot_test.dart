@@ -226,6 +226,23 @@ void main() {
       await AndroidHotspot(channel: channel).openWifiPanel(always: true);
       expect(calls, ['openWifiPanel {always: true}']);
     });
+
+    test('groupStart without an IPv4 address stops the group and falls back to LocalHotspot', () async {
+      const noAddrChannel = MethodChannel('test/android-hotspot-no-addr');
+      final log = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(noAddrChannel, (call) async {
+        log.add(call.method);
+        return switch (call.method) {
+          'groupStart' => {'ssid': 'DIRECT-KQ-medXfer', 'passphrase': 'secret', 'security': 1, 'frequency': 5180, 'address': null},
+          'hotspotStart' => {'ssid': 'AndroidShare_1732', 'passphrase': 'secret', 'security': 2, 'address': '10.46.56.232'},
+          _ => null,
+        };
+      });
+      addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(noAddrChannel, null));
+      final info = await AndroidHotspot(channel: noAddrChannel).start();
+      expect((info.ssid, info.address), ('AndroidShare_1732', '10.46.56.232'));
+      expect(log, ['groupStart', 'groupStop', 'hotspotStart']);
+    });
   });
 
   test('WP-D.4: the band of a frequency', () {

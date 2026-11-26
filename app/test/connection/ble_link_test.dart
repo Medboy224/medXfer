@@ -750,4 +750,98 @@ void main() {
     expect(hellos(), hasLength(3), reason: 'the third failure waits retryAfter');
     expect(link.devices, isEmpty);
   });
+
+  test('Central-only PC (scanOnly): skips 8 s holdWithin wait and completes role inversion', () async {
+    final waits = BleLink.waitsForHolds;
+    final within = BleLink.holdWithin;
+    BleLink.waitsForHolds = true;
+    BleLink.holdWithin = const Duration(seconds: 8);
+    addTearDown(() {
+      BleLink.waitsForHolds = waits;
+      BleLink.holdWithin = within;
+    });
+    radio.canAdvertise = false;
+    radio.bands = (create: 1, join: 3);
+    _client(core, {
+      'recognize': {'suffix': '6e2a', 'trusted': false},
+      'pin_ready': {'ready': true},
+      'reply': {'fingerprint': 'FPB', 'outcome': 2, 'band': 1},
+      'ack': {'done': true},
+    });
+    await link.start();
+    expect(link.scanOnly, isTrue);
+    radio.add(const BleSeen('46:90', -55, holds: true));
+    await _settle();
+    expect(link.devices.map((d) => d.name), ['medXfer-6e2a']);
+    await link.connect(link.devices.single);
+    await link.typePin('123456');
+    expect(hotspot.starts, [false]);
+    expect(link.stage, BleStage.waiting);
+  });
+
+  test('iOS capability profile (create=0, join=3): lets peer host 5 GHz and joins', () async {
+    final waits = BleLink.waitsForHolds;
+    BleLink.waitsForHolds = false;
+    addTearDown(() => BleLink.waitsForHolds = waits);
+    radio.bands = (create: 0, join: 3);
+    _client(core, {
+      'recognize': {'suffix': 'ab12', 'trusted': true, 'fingerprint': 'FPA', 'alias': 'Android'},
+      'reply': {
+        'fingerprint': 'FPA',
+        'outcome': 1,
+        'band': 2,
+        'network': {
+          'ssid': 'DIRECT-KQ-medXfer',
+          'passphrase': 'K3PQ8Z2MXA7D',
+          'security': 1,
+          'band': 2,
+          'port': 18887,
+          'addrs': ['192.168.49.1'],
+        },
+      },
+    });
+    core.on('pair', (_) => const FakeAnswer());
+    await link.start();
+    radio.add(const BleSeen('33:33', -40));
+    await _settle();
+    await link.connect(link.devices.single);
+    final trusted = steps('ble_client').firstWhere((p) => p['step'] == 'trusted');
+    expect((trusted['create'], trusted['join']), (0, 3));
+    expect(hotspot.joins, ['DIRECT-KQ-medXfer WifiBand.ghz5']);
+    expect(steps('pair').single, {'ip': '192.168.49.1', 'port': 18887});
+  });
+
+  test('LAN + BLE race guard: active LAN connecting blocks BLE connect, hotspot creation, and BLE join', () async {
+    core.on('pair', (_) => const FakeAnswer());
+    _client(core, {
+      'recognize': {'suffix': 'ab12', 'trusted': true, 'fingerprint': 'FPA', 'alias': 'Phone'},
+    });
+    await link.start();
+    radio.add(const BleSeen('33:33', -40));
+    await _settle();
+    final peer = link.devices.single;
+
+    await connection.pairWith(const NearbyDevice(name: 'Phone', ip: '192.168.1.30', port: 18887));
+    expect(connection.connecting, '192.168.1.30');
+    await link.connect(peer);
+    expect(steps('ble_client').where((p) => p['step'] == 'trusted'), isEmpty);
+
+    core.on(
+      'ble_server',
+      (p) => switch (p['step']) {
+        'message' => _reply('ble_server', {
+          'conn': 'aa',
+          'request': {'fingerprint': 'FPB', 'trusted': true, 'create': 1, 'join': 3, 'outcome': 1, 'band': 2},
+          'network': {'ssid': 'Net', 'passphrase': 'secret', 'security': 1, 'band': 2, 'port': 18887, 'addrs': ['192.168.49.1']},
+        }),
+        'answer' => _reply('ble_server', {'conn': 'aa', 'data': base64Encode([7])}),
+        _ => const FakeAnswer(),
+      },
+    );
+    radio.add(BleMessage('aa', Uint8List.fromList([1, 2])));
+    await _settle();
+    expect(hotspot.starts, isEmpty);
+    expect(hotspot.joins, isEmpty);
+    expect(steps('ble_server').last['outcome'], 3);
+  });
 }
