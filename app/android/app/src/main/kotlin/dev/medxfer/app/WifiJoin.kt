@@ -33,6 +33,14 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
     private var generation = 0
     private var retryCount = 0
     private var retryTask: Runnable? = null
+    private var pending: ((Map<String, Any?>?, String?) -> Unit)? = null
+
+    private fun resolve(gen: Int, data: Map<String, Any?>?, error: String?) {
+        if (gen != generation) return
+        val cb = pending ?: return
+        pending = null
+        cb(data, error)
+    }
 
     /** The joined network's handle, for the core's sockets; 0 when none. */
     val network: Long get() = joined?.networkHandle ?: 0L
@@ -58,20 +66,22 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
             .setNetworkSpecifier(spec)
             .build()
         request = r
-        ask(r, done, generation)
+        pending = done
+        ask(r, hasInitial = true, gen = generation)
     }
 
-    // first: the join's answer; null when asking again after a loss.
-    private fun ask(r: NetworkRequest, first: ((Map<String, Any?>?, String?) -> Unit)?, gen: Int) {
+    // hasInitial: resolves the initial join's MethodChannel callback; false on reconnects after onLost.
+    private fun ask(r: NetworkRequest, hasInitial: Boolean, gen: Int) {
         if (gen != generation) return
-        var answered = false
         var fallbackAddress: Runnable? = null
-        fun deliver(address: String?) {
-            if (answered || first == null || gen != generation) return
-            answered = true
+        fun cancelFallback() {
             fallbackAddress?.let { main.removeCallbacks(it) }
             fallbackAddress = null
-            first(mapOf("address" to address, "interfaces" to LocalHotspot.interfaces()), null)
+        }
+        fun deliver(address: String?) {
+            if (!hasInitial || gen != generation) return
+            cancelFallback()
+            resolve(gen, mapOf("address" to address, "interfaces" to LocalHotspot.interfaces()), null)
         }
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = main.post {
@@ -79,12 +89,12 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
                 retryCount = 0
                 cm.bindProcessToNetwork(network)
                 joined = network
-                if (first == null) return@post changed()
+                if (!hasInitial) return@post changed()
                 val address = cm.getLinkProperties(network)?.linkAddresses
                     ?.firstOrNull { it.address is java.net.Inet4Address }?.address?.hostAddress
                 if (address != null) {
                     deliver(address)
-                } else if (!answered && fallbackAddress == null) {
+                } else if (pending != null && fallbackAddress == null) {
                     val wait = Runnable { deliver(null) }
                     fallbackAddress = wait
                     main.postDelayed(wait, 2_000L)
@@ -92,7 +102,7 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
             }.let { }
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) = main.post {
-                if (gen != generation || first == null || answered || joined != network) return@post
+                if (gen != generation || !hasInitial || pending == null || joined != network) return@post
                 val address = linkProperties.linkAddresses
                     .firstOrNull { it.address is java.net.Inet4Address }?.address?.hostAddress ?: return@post
                 deliver(address)
@@ -100,18 +110,14 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
 
             override fun onUnavailable() = main.post {
                 if (gen != generation) return@post
-                fallbackAddress?.let { main.removeCallbacks(it) }
-                fallbackAddress = null
-                if (first != null && !answered) {
-                    answered = true
-                    first(null, "unavailable") // refused by the user, or not found
-                }
+                cancelFallback()
+                if (hasInitial) resolve(gen, null, "unavailable") // refused by the user, or not found
             }.let { }
 
             override fun onLost(network: Network) = main.post {
                 if (gen != generation || callback !== this) return@post
-                fallbackAddress?.let { main.removeCallbacks(it) }
-                fallbackAddress = null
+                cancelFallback()
+                if (hasInitial && pending != null) resolve(gen, null, "lost")
                 cm.bindProcessToNetwork(null)
                 joined = null
                 changed()
@@ -120,7 +126,7 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
                 if (retryCount >= MAX_RETRIES) return@post
                 val delay = minOf(8_000L, 500L shl minOf(retryCount, 4))
                 retryCount++
-                val task = Runnable { ask(again, null, gen) }
+                val task = Runnable { ask(again, hasInitial = false, gen = gen) }
                 retryTask?.let { main.removeCallbacks(it) }
                 retryTask = task
                 main.postDelayed(task, delay)
@@ -132,6 +138,8 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
 
     fun leave() {
         generation++
+        val prev = pending
+        pending = null
         retryTask?.let { main.removeCallbacks(it) }
         retryTask = null
         retryCount = 0
@@ -140,6 +148,7 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
         callback = null
         joined = null
         cm.bindProcessToNetwork(null)
+        prev?.invoke(null, "cancelled")
     }
 
     companion object {

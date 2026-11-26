@@ -16,16 +16,30 @@ class LocalHotspot(private val context: Context) {
     private val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
     private var reservation: WifiManager.LocalOnlyHotspotReservation? = null
     private var generation = 0
+    private var pending: ((Map<String, Any?>?, String?) -> Unit)? = null
 
     val running: Boolean get() = reservation != null
 
-    /** Starts the hotspot; done gets its description, or an error ("failed:<reason>"). */
-    fun start(done: (Map<String, Any?>?, String?) -> Unit) = start(done, attempts = 8, gen = ++generation)
+    private fun resolve(gen: Int, data: Map<String, Any?>?, error: String?) {
+        if (gen != generation) return
+        val cb = pending ?: return
+        pending = null
+        cb(data, error)
+    }
 
-    private fun start(done: (Map<String, Any?>?, String?) -> Unit, attempts: Int, gen: Int) {
+    /** Starts the hotspot; done gets its description, or an error ("failed:<reason>"). */
+    fun start(done: (Map<String, Any?>?, String?) -> Unit) {
+        val prev = pending
+        pending = done
+        val gen = ++generation
+        prev?.invoke(null, "stopped")
+        start(attempts = 8, gen = gen)
+    }
+
+    private fun start(attempts: Int, gen: Int) {
         if (gen != generation) return
         if (reservation != null) {
-            done(describe(reservation!!), null)
+            resolve(gen, describe(reservation!!), null)
             return
         }
         val before = ipv4Addresses().keys
@@ -39,25 +53,25 @@ class LocalHotspot(private val context: Context) {
                     }
                     reservation = r
                     // The hotspot's own address appears a moment after it starts.
-                    main.postDelayed({ describeOnceAddressed(r, before, done, tries = 8, gen = gen) }, 1500)
+                    main.postDelayed({ describeOnceAddressed(r, before, tries = 8, gen = gen) }, 1500)
                 }
 
                 override fun onStopped() {
-                    reservation = null
+                    if (gen == generation) reservation = null
                 }
 
                 override fun onFailed(reason: Int) {
-                    reservation = null
                     if (gen != generation) return
+                    reservation = null
                     // Android refuses a start for a while, now and then: just after a stop, or
                     // while the app is not yet in the foreground (probe of WP-B.7: up to ~20 s).
                     // ERROR_INCOMPATIBLE_MODE also means "the system hotspot is on": then the
                     // attempts run out and the user is told.
                     if (reason == ERROR_INCOMPATIBLE_MODE && attempts > 1) {
-                        main.postDelayed({ start(done, attempts - 1, gen) }, 2500)
+                        main.postDelayed({ start(attempts - 1, gen) }, 2500)
                         return
                     }
-                    done(null, "failed:" + when (reason) {
+                    resolve(gen, null, "failed:" + when (reason) {
                         ERROR_NO_CHANNEL -> "no_channel"
                         ERROR_GENERIC -> "generic"
                         ERROR_INCOMPATIBLE_MODE -> "incompatible_mode" // e.g. the system hotspot is on
@@ -67,27 +81,30 @@ class LocalHotspot(private val context: Context) {
                 }
             }, main)
         } catch (e: SecurityException) {
-            if (gen == generation) done(null, "permission:" + (e.message ?: "denied"))
+            resolve(gen, null, "permission:" + (e.message ?: "denied"))
         } catch (e: IllegalStateException) {
-            if (gen == generation) done(null, "state:" + (e.message ?: "busy"))
+            resolve(gen, null, "state:" + (e.message ?: "busy"))
         }
     }
 
     fun stop() {
         generation++
+        val prev = pending
+        pending = null
         reservation?.close()
         reservation = null
+        prev?.invoke(null, "stopped")
     }
 
     // The description once the hotspot has its address, which a slow phone gives later.
-    private fun describeOnceAddressed(r: WifiManager.LocalOnlyHotspotReservation, before: Set<String>, done: (Map<String, Any?>?, String?) -> Unit, tries: Int, gen: Int) {
+    private fun describeOnceAddressed(r: WifiManager.LocalOnlyHotspotReservation, before: Set<String>, tries: Int, gen: Int) {
         if (gen != generation) return
         val d = describe(r, before)
         if (d["address"] == null && tries > 1 && reservation === r) {
-            Handler(Looper.getMainLooper()).postDelayed({ describeOnceAddressed(r, before, done, tries - 1, gen) }, 500)
+            Handler(Looper.getMainLooper()).postDelayed({ describeOnceAddressed(r, before, tries - 1, gen) }, 500)
             return
         }
-        if (gen == generation) done(d, null)
+        resolve(gen, d, null)
     }
 
     private fun describe(r: WifiManager.LocalOnlyHotspotReservation, before: Set<String> = emptySet()): Map<String, Any?> {
