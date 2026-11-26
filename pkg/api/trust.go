@@ -407,6 +407,7 @@ func (s *DaemonServer) startSession(ch *session.Channel, fp identity.Fingerprint
 	s.trustTalk = pairing.NewTrustTalk(s.trust, s.identity.Fingerprint, identity.Peer{Fingerprint: fp, Alias: name, LastAddress: ip})
 	s.trustPeer = fp
 	s.trustOffered = time.Time{}
+	s.unsupported = nil // another session, maybe another version: told again (#306)
 	active := s.activeTransferID
 	s.mu.Unlock()
 	if samePeer {
