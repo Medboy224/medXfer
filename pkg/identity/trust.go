@@ -59,11 +59,13 @@ type TrustStore struct {
 }
 
 // fileStamp tells whether a file changed since it was read. An atomic write makes a new file:
-// its identity (os.SameFile) tells it even with the same size and date.
+// its identity (os.SameFile) and, on Unix, its change time tell it even with the same size and
+// date.
 type fileStamp struct {
-	info os.FileInfo // nil: no file
-	mod  time.Time
-	size int64
+	info   os.FileInfo // nil: no file
+	mod    time.Time
+	change time.Time
+	size   int64
 }
 
 func stampOf(path string) fileStamp {
@@ -72,14 +74,14 @@ func stampOf(path string) fileStamp {
 		return fileStamp{}
 	}
 	os.SameFile(fi, fi) // reads the file's identity now: Windows reads it at the first use
-	return fileStamp{info: fi, mod: fi.ModTime(), size: fi.Size()}
+	return fileStamp{info: fi, mod: fi.ModTime(), change: changeTime(fi), size: fi.Size()}
 }
 
 func (a fileStamp) same(b fileStamp) bool {
 	if a.info == nil || b.info == nil {
 		return a.info == b.info
 	}
-	return os.SameFile(a.info, b.info) && a.size == b.size && a.mod.Equal(b.mod)
+	return os.SameFile(a.info, b.info) && a.size == b.size && a.mod.Equal(b.mod) && a.change.Equal(b.change)
 }
 
 // OpenTrustStore reads path. A missing file is an empty list.
