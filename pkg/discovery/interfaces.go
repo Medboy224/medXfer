@@ -64,6 +64,7 @@ func scoreInterface(name string, ip net.IP) int {
 	if strings.HasPrefix(lower, "ap") || strings.HasPrefix(lower, "softap") ||
 		strings.HasPrefix(lower, "wlan") || strings.HasPrefix(lower, "swlan") ||
 		strings.HasPrefix(lower, "tether") || strings.HasPrefix(lower, "rndis") ||
+		strings.HasPrefix(lower, "usb") || strings.HasPrefix(lower, "ncm") ||
 		strings.HasPrefix(lower, "eth") || strings.HasPrefix(lower, "en") ||
 		strings.HasPrefix(lower, "wl") {
 		score += 30

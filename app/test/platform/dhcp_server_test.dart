@@ -90,4 +90,10 @@ void main() {
     final wide = DhcpLeases(server: InternetAddress('10.42.0.254'), prefix: 24, size: 3);
     expect(wide.leaseFor('a'), isNull, reason: '.255 is the broadcast, the range ends there');
   });
+
+  test('wrap-around allocation serves valid /16 leases near the top of the APIPA block', () {
+    final leases = DhcpLeases(server: InternetAddress('169.254.255.254'), prefix: 16, wrap: true);
+    expect(leases.leaseFor('a'), (169 << 24) | (254 << 16) | (0 << 8) | 1);
+    expect(leases.leaseFor('b'), (169 << 24) | (254 << 16) | (0 << 8) | 2);
+  });
 }
