@@ -180,3 +180,33 @@ func TestReplacedFileOfSameSizeAndDateIsSeen(t *testing.T) {
 		t.Fatal("a replaced file of the same size and date was not read again")
 	}
 }
+
+// #303: a Forget whose write fails is kept by this process, and written by its next change: the
+// device does not come back, in memory nor in the file.
+func TestFailedForgetIsKept(t *testing.T) {
+	path := filepath.Join(t.TempDir(), TrustFile)
+	ts, err := OpenTrustStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ts.Add(Peer{Fingerprint: fp(1), Alias: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	old, tries := renameFile, renameTries
+	renameFile, renameTries = func(string, string) error { return os.ErrPermission }, []time.Duration{0}
+	_, err = ts.Forget(fp(1))
+	renameFile, renameTries = old, tries
+	if err == nil {
+		t.Fatal("the write was refused, yet Forget succeeded")
+	}
+	if err := ts.Add(Peer{Fingerprint: fp(2), Alias: "B"}); err != nil { // the next change, as a reconnection's
+		t.Fatal(err)
+	}
+	again, err := OpenTrustStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts.Contains(fp(1)) || again.Contains(fp(1)) {
+		t.Fatalf("the device forgotten came back: here %v, in the file %v", ts.Contains(fp(1)), again.Contains(fp(1)))
+	}
+}

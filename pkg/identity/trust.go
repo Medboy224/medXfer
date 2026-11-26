@@ -53,6 +53,9 @@ type TrustStore struct {
 	mu    sync.Mutex
 	peers map[Fingerprint]Peer
 	stamp fileStamp // trusted.json as last read or written here
+	// forgotten: devices forgotten here whose write failed. They stay out of the list, and the
+	// next write writes them out (ID-06).
+	forgotten map[Fingerprint]bool
 }
 
 // fileStamp tells whether a file changed since it was read. An atomic write makes a new file:
@@ -85,7 +88,7 @@ func OpenTrustStore(path string) (*TrustStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &TrustStore{path: path, peers: peers, stamp: stamp}, nil
+	return &TrustStore{path: path, peers: peers, stamp: stamp, forgotten: map[Fingerprint]bool{}}, nil
 }
 
 // readTrust reads the list in path, and its stamp, taken before: a write in between is seen at
@@ -125,8 +128,22 @@ func (t *TrustStore) refreshLocked() {
 		return
 	}
 	if peers, stamp, err := readTrust(t.path); err == nil {
+		t.withoutForgotten(peers)
 		t.peers, t.stamp = peers, stamp
 	}
+}
+
+// withoutForgotten takes out of peers the devices forgotten here and not written yet; it
+// reports whether there were any.
+func (t *TrustStore) withoutForgotten(peers map[Fingerprint]Peer) bool {
+	found := false
+	for fp := range t.forgotten {
+		if _, ok := peers[fp]; ok {
+			delete(peers, fp)
+			found = true
+		}
+	}
+	return found
 }
 
 // change applies apply to the list as the file holds it now, under the file's lock, and saves
@@ -143,15 +160,23 @@ func (t *TrustStore) change(apply func(peers map[Fingerprint]Peer) bool) error {
 	if err != nil {
 		return err
 	}
+	unwritten := t.withoutForgotten(peers)
 	t.peers, t.stamp = peers, stamp
 	next := maps.Clone(peers)
-	if !apply(next) {
+	changed := apply(next)
+	for fp := range t.forgotten {
+		if _, again := next[fp]; again { // trusted again since
+			delete(t.forgotten, fp)
+		}
+	}
+	if !changed && !unwritten {
 		return nil
 	}
 	if err := saveTrust(t.path, next); err != nil {
 		return err
 	}
 	t.peers, t.stamp = next, stampOf(t.path)
+	clear(t.forgotten)
 	return nil
 }
 
@@ -277,10 +302,11 @@ func (t *TrustStore) Forget(fp Fingerprint) (bool, error) {
 		delete(peers, fp)
 		return found
 	})
-	if err != nil { // trust ends here even when the file cannot say so
+	if err != nil { // trust ends here even when the file cannot say so; the next write says it
 		t.mu.Lock()
 		_, found = t.peers[fp]
 		delete(t.peers, fp)
+		t.forgotten[fp] = true
 		t.mu.Unlock()
 		return found, err
 	}
