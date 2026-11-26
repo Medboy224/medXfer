@@ -1,6 +1,7 @@
 package api
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 )
 
 // DISC-11 in the core: peers_list names a device of mutual trust by its tag, and announces this
-// device's own tags; an address alone names no one.
+// device's own tags, MaxTags of them; an address alone names no one.
 func TestRecognizeByTag(t *testing.T) {
 	s, _ := startOwnIdentity(t, "Laptop")
 	other, err := identity.LoadOrCreate(t.TempDir())
@@ -31,7 +32,7 @@ func TestRecognizeByTag(t *testing.T) {
 	if got[0].TrustedAlias != "Galaxy A57" || got[1].TrustedAlias != "" {
 		t.Fatalf("recognized: %q, %q", got[0].TrustedAlias, got[1].TrustedAlias)
 	}
-	if tags := s.announceTags(); len(tags) != 1 || tags[0] != pairing.Tag(key, s.identity.Fingerprint, pairing.TagPeriodOf(time.Now())) {
+	if tags := s.announceTags(); len(tags) != pairing.MaxTags || !slices.Contains(tags, pairing.Tag(key, s.identity.Fingerprint, pairing.TagPeriodOf(time.Now()))) {
 		t.Fatalf("announced tags %v", tags)
 	}
 }

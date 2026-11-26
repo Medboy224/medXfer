@@ -23,16 +23,21 @@ const (
 )
 
 // maxTags bounds the tags read from one announcement, and their length: what comes from the
-// network is checked (the tags themselves are pkg/pairing's).
+// network is checked (the tags themselves are pkg/pairing's). maxMergedTags bounds those of one
+// device merged from its sightings: a lagging announcement and the current one, each full (#308).
 const (
-	maxTags   = 16
-	maxTagLen = 32
+	maxTags       = 16
+	maxMergedTags = 2 * maxTags
+	maxTagLen     = 32
 )
 
-// dedupTags drops repeated tags, keeping their order.
-func dedupTags(in []string) []string {
+// dedupTags keeps the first max distinct tags, in their order.
+func dedupTags(in []string, max int) []string {
 	var out []string
 	for _, t := range in {
+		if len(out) == max {
+			break
+		}
 		if !slices.Contains(out, t) {
 			out = append(out, t)
 		}
@@ -155,7 +160,7 @@ func merge(seen []Found, pf *pathFinder) Found {
 	var tags []string
 	best := map[string]Found{} // by local interface; "" outside our subnets
 	for _, f := range seen {
-		tags = append(tags, f.Tags...)
+		tags = append(tags, cleanTags(f.Tags)...)
 		key := pf.iface(f.IP)
 		if old, ok := best[key]; !ok || better(f, old) {
 			best[key] = f
@@ -174,7 +179,7 @@ func merge(seen []Found, pf *pathFinder) Found {
 	sortPaths(paths)
 	f := byIP[paths[0].IP]
 	if len(seen) > 1 {
-		f.Tags = cleanTags(dedupTags(tags))
+		f.Tags = dedupTags(tags, maxMergedTags)
 	}
 	f.Paths = paths
 	return f

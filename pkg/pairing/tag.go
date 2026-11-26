@@ -2,6 +2,7 @@ package pairing
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/binary"
@@ -73,29 +74,61 @@ func tagged(store *identity.TrustStore) []identity.Peer {
 	return out
 }
 
-// AnnounceTags are the tags this device (self) announces at now: one per trusted device with a
-// recognition key, MaxTags at most.
+// AnnounceTags are the tags this device (self) announces at now: always MaxTags, one per trusted
+// device with a recognition key (the most recently trusted first, MaxTags at most), completed by
+// tags of the same shape that no device can recognize, then sorted. Neither their number nor their
+// order tells how many devices this one trusts (#308).
 func AnnounceTags(store *identity.TrustStore, self identity.Fingerprint, now time.Time) []string {
 	period := TagPeriodOf(now)
-	var tags []string
+	tags := make([]string, 0, MaxTags)
 	for _, p := range tagged(store) {
 		if len(tags) == MaxTags {
 			break
 		}
 		tags = append(tags, Tag(p.TagKey, self, period))
 	}
+	for i := 0; len(tags) < MaxTags; i++ {
+		if pad := padTag(self, period, i); !slices.Contains(tags, pad) {
+			tags = append(tags, pad)
+		}
+	}
+	slices.Sort(tags)
 	return tags
 }
 
-// Recognize returns the trusted device that announced one of tags, at now or in the period
-// before (clocks a little apart, N3).
+// padKey draws the tags that complete an announcement: unpredictable, as it is random for this
+// process, and the same within a period, so that watching the announcements change does not tell
+// them from the real ones.
+var padKey = func() []byte {
+	k := make([]byte, tagKeySize)
+	_, _ = rand.Read(k) // never fails (crypto/rand)
+	return k
+}()
+
+// padLabel opens the HMAC input of a completing tag.
+const padLabel = "medXfer-pad-v1"
+
+// padTag is the i-th completing tag of self during period.
+func padTag(self identity.Fingerprint, period int64, i int) string {
+	m := hmac.New(sha256.New, padKey)
+	m.Write([]byte(padLabel))
+	m.Write(self[:])
+	var p [16]byte
+	binary.BigEndian.PutUint64(p[:8], uint64(period))
+	binary.BigEndian.PutUint64(p[8:], uint64(i))
+	m.Write(p[:])
+	return strings.ToLower(tagEncoding.EncodeToString(m.Sum(nil)[:8]))
+}
+
+// Recognize returns the trusted device that announced one of tags, at now, in the period before
+// or in the one after (clocks a little apart, N3).
 func Recognize(store *identity.TrustStore, tags []string, now time.Time) (identity.Peer, bool) {
 	if len(tags) == 0 {
 		return identity.Peer{}, false
 	}
 	period := TagPeriodOf(now)
 	for _, p := range tagged(store) {
-		for _, at := range []int64{period, period - 1} {
+		for _, at := range []int64{period, period - 1, period + 1} {
 			if slices.Contains(tags, Tag(p.TagKey, p.Fingerprint, at)) {
 				return p, true
 			}
