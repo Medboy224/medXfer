@@ -105,9 +105,9 @@ func TestBusyIsToldOnlyToAnAuthorizedDevice(t *testing.T) {
 // PAIR-13: an automatic redial does not take the session another device has, transfer or not:
 // it is refused with busy, which ends it.
 func TestRedialDoesNotTakeAnotherSession(t *testing.T) {
-	every := redialEvery
-	redialEvery = time.Hour // b dials again below, once c has a's session
-	t.Cleanup(func() { redialEvery = every })
+	every := redialEvery.get()
+	redialEvery.set(time.Hour) // b dials again below, once c has a's session
+	t.Cleanup(func() { redialEvery.set(every) })
 	a, na, b, nb := trustedPair(t) // b dialed a
 	cutSession(t, b)
 	nb.WaitEvent("reconnecting", 0)
@@ -136,7 +136,7 @@ func TestReplacedDeviceIsTold(t *testing.T) {
 	_, nc := startOwnIdentity(t, "Tablet")
 	pairByQR(t, na, nc, false) // c scans a's QR code: the user's choice
 	nb.WaitEvent("disconnected", 5*time.Second)
-	if e, ok := nb.TryWaitFor(func(e testkit.Event) bool { return e.Event == "paired" || e.Event == "reconnecting" }, 10*redialEvery); ok {
+	if e, ok := nb.TryWaitFor(func(e testkit.Event) bool { return e.Event == "paired" || e.Event == "reconnecting" }, 10*redialEvery.get()); ok {
 		t.Fatalf("the device replaced got %s after disconnected", e.Event)
 	}
 }

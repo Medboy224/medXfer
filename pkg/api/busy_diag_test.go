@@ -17,9 +17,9 @@ import (
 // another device is refused with the code busy, which ends its attempts. The transfer goes on to
 // its end, with the session it runs on.
 func TestRedialDuringAnotherTransferIsRefused(t *testing.T) {
-	every := redialEvery
-	redialEvery = time.Hour // b dials again below, once a transfers with c
-	t.Cleanup(func() { redialEvery = every })
+	every := redialEvery.get()
+	redialEvery.set(time.Hour) // b dials again below, once a transfers with c
+	t.Cleanup(func() { redialEvery.set(every) })
 	testkit.Throttle(t, 1<<20)
 
 	a, na, b, nb := trustedPair(t) // b dialed a

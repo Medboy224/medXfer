@@ -9,9 +9,9 @@ import (
 
 // fastRedial shortens the wait between two attempts to dial a lost session again.
 func fastRedial(t *testing.T) {
-	every := redialEvery
-	redialEvery = 100 * time.Millisecond
-	t.Cleanup(func() { redialEvery = every })
+	every := redialEvery.get()
+	redialEvery.set(100 * time.Millisecond)
+	t.Cleanup(func() { redialEvery.set(every) })
 }
 
 // trustedPair pairs b with a by a's QR code (b dials) and makes them devices of mutual trust.
@@ -69,7 +69,7 @@ func TestDisconnectIsNotDialedAgain(t *testing.T) {
 	_, na, _, nb := trustedPair(t)
 	nb.Request("disconnect", nil)
 	na.WaitEvent("disconnected", 0)
-	if _, ok := nb.TryWaitFor(func(e testkit.Event) bool { return e.Event == "paired" }, 10*redialEvery); ok {
+	if _, ok := nb.TryWaitFor(func(e testkit.Event) bool { return e.Event == "paired" }, 10*redialEvery.get()); ok {
 		t.Fatal("a disconnect asked by the user was dialed again")
 	}
 }
@@ -82,10 +82,10 @@ func TestUntrustedSessionIsNotDialedAgain(t *testing.T) {
 	pairByQR(t, na, nb, false)
 	cutSession(t, b)
 	nb.WaitEvent("reconnecting", 0)
-	if _, ok := nb.TryWaitFor(func(e testkit.Event) bool { return e.Event == "paired" }, 10*redialEvery); ok {
+	if _, ok := nb.TryWaitFor(func(e testkit.Event) bool { return e.Event == "paired" }, 10*redialEvery.get()); ok {
 		t.Fatal("a session without mutual trust was dialed again")
 	}
-	if _, ok := na.TryWaitFor(func(e testkit.Event) bool { return e.Event == "pin_requested" }, redialEvery); ok {
+	if _, ok := na.TryWaitFor(func(e testkit.Event) bool { return e.Event == "pin_requested" }, redialEvery.get()); ok {
 		t.Fatal("the other device was asked for a PIN")
 	}
 }
