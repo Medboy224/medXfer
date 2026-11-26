@@ -218,6 +218,9 @@ func (s *DaemonServer) StartNode() error {
 	return s.startErr
 }
 
+// listenNode opens the single port; tests replace it.
+var listenNode = func(addr string) (net.Listener, error) { return net.Listen("tcp4", addr) }
+
 func (s *DaemonServer) startNode() error {
 	if err := s.loadIdentity(); err != nil {
 		return err
@@ -225,19 +228,20 @@ func (s *DaemonServer) startNode() error {
 
 	// 1. Start Node Pairing TCP Listener (port 18887 or fallback)
 	nodePort := 18887
-	ln, err := net.Listen("tcp4", "0.0.0.0:18887")
+	ln, err := listenNode("0.0.0.0:18887")
 	if err != nil {
-		ln, err = net.Listen("tcp4", "0.0.0.0:0")
+		ln, err = listenNode("0.0.0.0:0")
 	}
-	if err == nil {
-		s.mu.Lock()
-		s.nodeLn = ln
-		s.mu.Unlock()
-		if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
-			nodePort = tcpAddr.Port
-		}
-		s.startHub(ln)
+	if err != nil { // never a node silent without an error (#313)
+		return fmt.Errorf("no port to listen on, 18887 nor another: %w", err)
 	}
+	s.mu.Lock()
+	s.nodeLn = ln
+	s.mu.Unlock()
+	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
+		nodePort = tcpAddr.Port
+	}
+	s.startHub(ln)
 
 	// 2. Start Discovery Broadcast Server
 	discOffer := &discovery.TransferOffer{} // no name: DISC-06
