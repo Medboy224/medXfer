@@ -69,15 +69,17 @@ func touchPeer(ts *identity.TrustStore, fp identity.Fingerprint, name, ip string
 	if ts == nil {
 		return nil
 	}
-	p, ok := ts.Get(fp)
-	if !ok || (p.LastAddress == ip && (name == "" || p.Alias == name || p.Renamed)) {
-		return nil
-	}
-	p.LastAddress = ip
-	if name != "" && !p.Renamed { // a name the user gave stays (xfer trust rename)
-		p.Alias = name
-	}
-	return ts.Add(p)
+	_, err := ts.Update(fp, func(p *identity.Peer) bool {
+		if p.LastAddress == ip && (name == "" || p.Alias == name || p.Renamed) {
+			return false
+		}
+		p.LastAddress = ip
+		if name != "" && !p.Renamed { // a name the user gave stays (xfer trust rename)
+			p.Alias = name
+		}
+		return true
+	})
+	return err
 }
 
 // nodeInvitation is the QR code shown by `pair --show` in xfer node (WP-3.6b): its secret

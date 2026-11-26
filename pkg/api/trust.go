@@ -109,15 +109,17 @@ func (s *DaemonServer) touchTrust(fp identity.Fingerprint, name, ip string) erro
 	if ts == nil {
 		return nil
 	}
-	p, ok := ts.Get(fp)
-	if !ok || (p.LastAddress == ip && (name == "" || p.Alias == name || p.Renamed)) {
-		return nil
-	}
-	p.LastAddress = ip
-	if name != "" && !p.Renamed {
-		p.Alias = name
-	}
-	return ts.Add(p)
+	_, err := ts.Update(fp, func(p *identity.Peer) bool {
+		if p.LastAddress == ip && (name == "" || p.Alias == name || p.Renamed) {
+			return false
+		}
+		p.LastAddress = ip
+		if name != "" && !p.Renamed {
+			p.Alias = name
+		}
+		return true
+	})
+	return err
 }
 
 // declares is what this device tells peer in trusts_you (PAIR-09).
