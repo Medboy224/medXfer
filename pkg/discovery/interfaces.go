@@ -107,16 +107,30 @@ func usable(iface net.Interface) bool {
 	return !isVirtual(strings.ToLower(iface.Name))
 }
 
+// ifconfigTimeout bounds the ifconfig runs of one enumeration, as arpTimeout does arp (#313).
+const ifconfigTimeout = 2 * time.Second
+
+// ifconfigCommand runs one ifconfig; tests replace it.
+var ifconfigCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return command(ctx, name, args...).CombinedOutput()
+}
+
 // parseIfconfigTargets tries to run ifconfig to discover interfaces when netlink is blocked by SELinux (e.g. Termux on Android 11+)
 func parseIfconfigTargets() []NetworkTarget {
 	var targets []NetworkTarget
 
 	var out []byte
 	var err error
+	ctx, cancel := context.WithTimeout(context.Background(), ifconfigTimeout)
+	defer cancel()
+	run := ifconfigCommand
+	ifconfig := func(name string, args ...string) ([]byte, error) {
+		return bounded(ctx, func(ctx context.Context) ([]byte, error) { return run(ctx, name, args...) })
+	}
 
 	// 1. Try running ifconfig via /system/bin/sh (bypasses Android SELinux exec restrictions)
 	if _, shErr := os.Stat("/system/bin/sh"); shErr == nil {
-		out, err = command(context.Background(), "/system/bin/sh", "-c", "ifconfig").CombinedOutput()
+		out, err = ifconfig("/system/bin/sh", "-c", "ifconfig")
 	}
 
 	// 2. Fallback to direct candidate execution if /system/bin/sh failed or returned no output
@@ -138,7 +152,7 @@ func parseIfconfigTargets() []NetworkTarget {
 		if cmdPath == "" {
 			cmdPath = "ifconfig"
 		}
-		out, err = command(context.Background(), cmdPath).CombinedOutput()
+		out, err = ifconfig(cmdPath)
 	}
 
 	if err != nil && len(out) == 0 {
@@ -423,13 +437,19 @@ func hasProcARP() bool { _, err := os.Stat("/proc/net/arp"); return err == nil }
 func runARP() ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), arpTimeout)
 	defer cancel()
+	return bounded(ctx, arpCommand)
+}
+
+// bounded returns run's result, or ctx's error once ctx is done: a command whose child keeps its
+// output open would hold its caller past the kill.
+func bounded(ctx context.Context, run func(context.Context) ([]byte, error)) ([]byte, error) {
 	type result struct {
 		out []byte
 		err error
 	}
 	done := make(chan result, 1)
 	go func() {
-		out, err := arpCommand(ctx)
+		out, err := run(ctx)
 		done <- result{out, err}
 	}()
 	select {

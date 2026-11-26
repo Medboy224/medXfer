@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
 	"strconv"
@@ -311,7 +310,7 @@ func probePeerForCode(ctx context.Context, ip, expectedCode string, timeout time
 	_, _ = conn.Write(append(queryBytes, '\n'))
 
 	_ = conn.SetReadDeadline(time.Now().Add(timeout))
-	respBytes, err := io.ReadAll(conn)
+	respBytes, err := readProbe(conn)
 	if err != nil || len(respBytes) == 0 {
 		return nil
 	}

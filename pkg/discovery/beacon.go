@@ -12,6 +12,9 @@ import (
 // beaconEvery is the pace of the fallback beacon: one every 2 s at most (DISC-04).
 const beaconEvery = 2 * time.Second
 
+// beaconReadSize is the buffer a beacon is read into: a full one (maxTags tags) fits.
+const beaconReadSize = 2048
+
 // beaconMsg is the fallback beacon: the TXT of the mDNS announcement, plus the name and port
 // that DNS-SD carries elsewhere (DISC-04). No address: the receiver takes the sender's.
 type beaconMsg struct {
@@ -94,7 +97,7 @@ func (b beaconDiscoverer) Browse(ctx context.Context, timeout time.Duration) ([]
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Now()) })
 	defer stop()
 	var found []Found
-	buf := make([]byte, 2048)
+	buf := make([]byte, beaconReadSize)
 	for {
 		n, src, err := conn.ReadFromUDP(buf)
 		if err != nil {

@@ -135,6 +135,11 @@ func (s *Session) handleUploadRequest(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "bad_name")
 			return
 		}
+		// Checked before adding: a sum past the quota could overflow and come back under it (#299).
+		if f.Size > s.maxBytes()-up.total {
+			writeError(w, http.StatusRequestEntityTooLarge, "quota")
+			return
+		}
 		up.files = append(up.files, &upFile{Name: name, Size: f.Size})
 		up.total += f.Size
 	}

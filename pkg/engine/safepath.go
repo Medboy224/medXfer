@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"unicode"
 )
 
 var (
@@ -45,6 +46,8 @@ func safeRelPath(p string, windowsRules bool) (string, error) {
 			return "", fmt.Errorf("%w: component too long in %q", ErrBadPath, p)
 		case hasControlChar(c):
 			return "", fmt.Errorf("%w: control character in %q", ErrBadPath, p)
+		case hasBidiControl(c): // the name shown would not be the real one (#313)
+			return "", fmt.Errorf("%w: bidi formatting in %q", ErrBadPath, p)
 		case windowsRules && strings.ContainsAny(c, `:*?"<>|`): // ':' also blocks NTFS alternate streams
 			return "", fmt.Errorf("%w: reserved character in %q", ErrBadPath, p)
 		case windowsRules && (strings.HasSuffix(c, ".") || strings.HasSuffix(c, " ")):
@@ -65,8 +68,15 @@ func hasControlChar(s string) bool {
 	return false
 }
 
-// isWindowsReserved reports device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9),
-// with or without extension: "con.txt" and "NUL.tar.gz" are reserved too.
+// hasBidiControl reports the bidi formatting characters, which reorder what follows them on
+// screen: "facture\u202efdp.exe" shows as "factureexe.pdf".
+func hasBidiControl(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return unicode.Is(unicode.Bidi_Control, r) }) >= 0
+}
+
+// isWindowsReserved reports device names (CON, PRN, AUX, NUL, CONIN$, CONOUT$, COM1-9 and
+// LPT1-9, with the superscripts \u00b9 \u00b2 \u00b3 too), with or without extension: "con.txt"
+// and "NUL.tar.gz" are reserved too.
 func isWindowsReserved(c string) bool {
 	base := c
 	if i := strings.IndexByte(base, '.'); i >= 0 {
@@ -74,11 +84,15 @@ func isWindowsReserved(c string) bool {
 	}
 	base = strings.ToUpper(strings.TrimRight(base, " "))
 	switch base {
-	case "CON", "PRN", "AUX", "NUL":
+	case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
 		return true
 	}
-	if len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) {
-		return base[3] >= '1' && base[3] <= '9'
+	if !strings.HasPrefix(base, "COM") && !strings.HasPrefix(base, "LPT") {
+		return false
+	}
+	switch base[3:] {
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9", "\u00b9", "\u00b2", "\u00b3":
+		return true
 	}
 	return false
 }

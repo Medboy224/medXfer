@@ -170,10 +170,15 @@ func BenchmarkDisk(dir string, sizeBytes int64) (*DiskBenchResult, error) {
 	}, nil
 }
 
-// RunNetworkBurstServer starts an in-memory TCP drain listener on the specified port (or 0 for dynamic port).
-// It accepts one connection, reads sizeBytes (or until EOF/timeout), closes the connection, and reports speed.
-func RunNetworkBurstServer(port int, sizeBytes int64, timeout time.Duration) (int, func() (float64, error), error) {
-	listener, err := net.Listen("tcp4", fmt.Sprintf(":%d", port))
+// RunNetworkBurstServer starts an in-memory TCP drain listener on bind, at a port of its own.
+// It accepts one connection from peer, reads sizeBytes (or until EOF/timeout), closes the
+// connection, and reports speed. A connection from any other address is closed unread.
+func RunNetworkBurstServer(bind, peer string, sizeBytes int64, timeout time.Duration) (int, func() (float64, error), error) {
+	peerIP := net.ParseIP(peer)
+	if peerIP == nil {
+		return 0, nil, fmt.Errorf("net bench: no peer address (%q)", peer)
+	}
+	listener, err := net.Listen("tcp4", net.JoinHostPort(bind, "0"))
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to listen for net bench: %w", err)
 	}
@@ -187,7 +192,7 @@ func RunNetworkBurstServer(port int, sizeBytes int64, timeout time.Duration) (in
 			_ = tcpL.SetDeadline(time.Now().Add(timeout))
 		}
 
-		conn, err := listener.Accept()
+		conn, err := acceptFrom(listener, peerIP)
 		if err != nil {
 			return 0, fmt.Errorf("failed to accept net bench conn: %w", err)
 		}
@@ -227,6 +232,20 @@ func RunNetworkBurstServer(port int, sizeBytes int64, timeout time.Duration) (in
 	}
 
 	return actualPort, waitFn, nil
+}
+
+// acceptFrom is the first connection of ln that comes from peer; the others are closed.
+func acceptFrom(ln net.Listener, peer net.IP) (net.Conn, error) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return nil, err
+		}
+		if a, ok := conn.RemoteAddr().(*net.TCPAddr); ok && a.IP.Equal(peer) {
+			return conn, nil
+		}
+		_ = conn.Close()
+	}
 }
 
 // RunNetworkBurstClient connects to targetAddr and pushes sizeBytes of memory buffer at maximum speed.

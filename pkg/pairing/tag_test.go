@@ -1,6 +1,7 @@
 package pairing
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -68,8 +69,8 @@ func TestRecognizeAfterMutualTrust(t *testing.T) {
 	}
 
 	now := time.Now()
-	tagsA := AnnounceTags(a.Trust, a.Identity.Fingerprint, now)
-	if len(tagsA) != 1 || !ValidTag(tagsA[0]) {
+	tagsA := AnnounceTags(a.Trust, a.Identity, now)
+	if len(tagsA) != MaxTags || !slices.Contains(tagsA, Tag(ka, a.Identity.Fingerprint, TagPeriodOf(now))) {
 		t.Fatalf("a announces %v", tagsA)
 	}
 	if p, ok := Recognize(b.Trust, tagsA, now); !ok || p.Fingerprint != a.Identity.Fingerprint || p.Alias != "a" {
@@ -92,8 +93,8 @@ func TestRecognizeAfterMutualTrust(t *testing.T) {
 	if _, err := a.Trust.Forget(b.Identity.Fingerprint); err != nil {
 		t.Fatal(err)
 	}
-	if tags := AnnounceTags(a.Trust, a.Identity.Fingerprint, now); len(tags) != 0 {
-		t.Fatalf("a still announces %v", tags)
+	if tags := AnnounceTags(a.Trust, a.Identity, now); slices.Contains(tags, Tag(ka, a.Identity.Fingerprint, TagPeriodOf(now))) {
+		t.Fatalf("a still announces b's tag: %v", tags)
 	}
 	// b forgets a: it no longer recognizes it, even from old tags.
 	if _, err := b.Trust.Forget(a.Identity.Fingerprint); err != nil {
@@ -123,8 +124,8 @@ func TestBothOfferShareOneTagKey(t *testing.T) {
 	}
 }
 
-// An announcement carries MaxTags tags at most, for the most recently trusted devices; an entry
-// without a key (written before DISC-11) gives no tag.
+// An announcement carries real tags for MaxTags trusted devices at most, the most recently
+// trusted; an entry without a key (written before DISC-11) gives no tag.
 func TestAnnounceTagsBound(t *testing.T) {
 	a := device(t, "a")
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
@@ -143,13 +144,13 @@ func TestAnnounceTagsBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	tags := AnnounceTags(a.Trust, a.Identity.Fingerprint, now)
+	tags := AnnounceTags(a.Trust, a.Identity, now)
 	if len(tags) != MaxTags {
 		t.Fatalf("%d tags, want %d", len(tags), MaxTags)
 	}
 	p, _ := a.Trust.Get(newest)
-	if tags[0] != Tag(p.TagKey, a.Identity.Fingerprint, TagPeriodOf(now)) {
-		t.Fatal("the most recently trusted device does not come first")
+	if !slices.Contains(tags, Tag(p.TagKey, a.Identity.Fingerprint, TagPeriodOf(now))) {
+		t.Fatal("the most recently trusted device has no tag")
 	}
 }
 

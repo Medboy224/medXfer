@@ -584,7 +584,11 @@ func (s *DaemonServer) handleTestNetwork(rs Responder, req RequestMessage) {
 		case readyMsg := <-s.benchBurstAckChan:
 			if readyMsg.Type == "bench_burst_ready" && readyMsg.DataPort > 0 {
 				targetAddr := net.JoinHostPort(remoteIP, strconv.Itoa(int(readyMsg.DataPort)))
-				clientSpeed, cErr := engine.RunNetworkBurstClient(targetAddr, sizeBytes, 4*time.Second)
+				granted := sizeBytes // the other device may grant less (maxBenchBurst)
+				if g := readyMsg.BenchSize; g > 0 && g < granted {
+					granted = g
+				}
+				clientSpeed, cErr := engine.RunNetworkBurstClient(targetAddr, granted, 4*time.Second)
 				if cErr == nil {
 					throughput = clientSpeed
 				}

@@ -7,20 +7,29 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 )
 
+// maxSniffing bounds the connections being sniffed. When full, the oldest is closed for the new
+// one: a browser writes at once and a mute connection never, so mute connections cannot keep a
+// guest out (#313).
+const maxSniffing = 32
+
 // sniffing is the session's port as the guest's browser reaches it. A TLS connection goes on to
 // the HTTPS server. A guest who typed the address without "https://" arrives in plain HTTP: it
 // is answered with a redirect to the page in HTTPS, never with Go's « Client sent an HTTP
-// request to an HTTPS server » (real test of 10 November 2026, Edge on the PC).
+// request to an HTTPS server ».
 type sniffing struct {
 	net.Listener
 	target string // https://<addr>:<port>/s
 	conns  chan net.Conn
 	done   chan struct{}
 	once   sync.Once
+
+	mu      sync.Mutex
+	sniffed []net.Conn // being sniffed, oldest first; maxSniffing at most
 }
 
 func newSniffing(ln net.Listener, target string) *sniffing {
@@ -36,12 +45,34 @@ func (l *sniffing) loop() {
 			_ = l.Close()
 			return
 		}
+		l.hold(c)
 		go l.sniff(c) // never the next Accept waiting on a slow client
+	}
+}
+
+// hold counts c among the connections sniffed, closing the oldest when there are maxSniffing.
+func (l *sniffing) hold(c net.Conn) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.sniffed) == maxSniffing {
+		_ = l.sniffed[0].Close()
+		l.sniffed = slices.Delete(l.sniffed, 0, 1)
+	}
+	l.sniffed = append(l.sniffed, c)
+}
+
+// release ends c's count; it may already be over.
+func (l *sniffing) release(c net.Conn) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if i := slices.Index(l.sniffed, c); i >= 0 {
+		l.sniffed = slices.Delete(l.sniffed, i, i+1)
 	}
 }
 
 // sniff reads the connection's first byte: 0x16 opens a TLS handshake.
 func (l *sniffing) sniff(c net.Conn) {
+	defer l.release(c)
 	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 	var first [1]byte
 	if _, err := io.ReadFull(c, first[:]); err != nil {
@@ -50,6 +81,7 @@ func (l *sniffing) sniff(c net.Conn) {
 	}
 	_ = c.SetReadDeadline(time.Time{})
 	if first[0] == 0x16 {
+		l.release(c) // the HTTPS server's from now on (WEB-08)
 		select {
 		case l.conns <- &peeked{Conn: c, first: first[0]}:
 		case <-l.done:

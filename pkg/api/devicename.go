@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/Medboy224/medXfer/pkg/session"
 )
 
 // The device's name (lot « Noms des appareils de confiance », N5): what the other device records
@@ -18,11 +20,12 @@ import (
 // MaxDeviceNameLen bounds a device name, in characters.
 const MaxDeviceNameLen = 64
 
-// CleanDeviceName trims name and drops control characters; "" if nothing is left, cut to
-// MaxDeviceNameLen characters.
+// CleanDeviceName trims name and drops control and bidi formatting characters (which reverse
+// what follows them on screen); "" if nothing is left, cut to MaxDeviceNameLen characters. It is
+// applied to this device's name and to every name received from a peer (#309).
 func CleanDeviceName(name string) string {
 	name = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
 			return -1
 		}
 		return r
@@ -93,4 +96,12 @@ func SetDeviceName(name string) error {
 	cfg := LoadConfig("", "")
 	cfg.DeviceName = name
 	return SaveConfig(cfg)
+}
+
+// readFromPeer reads a message from a peer, the device name it carries cleaned as this device's
+// own (#309): every name received is shown, logged and kept as an alias.
+func readFromPeer(ch *session.Channel) (session.Message, error) {
+	msg, err := ch.Read()
+	msg.DeviceName = CleanDeviceName(msg.DeviceName)
+	return msg, err
 }

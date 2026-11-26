@@ -182,6 +182,16 @@ func TestUploadRules(t *testing.T) {
 	}
 }
 
+// #299: announced sizes whose sum overflows an int64 are refused, not wrapped under the quota.
+func TestUploadSizesOverflow(t *testing.T) {
+	_, g, _ := startGuest(t, Options{ReceiveDir: t.TempDir(), MaxBytes: 1 << 20})
+	huge := int64(1) << 62
+	code, m := g.announce(UploadFile{"a", huge}, UploadFile{"b", huge}, UploadFile{"c", huge})
+	if code != http.StatusRequestEntityTooLarge || m["error"] != "quota" {
+		t.Fatalf("three files of 2^62 bytes under a 1 MiB quota: %d %v", code, m)
+	}
+}
+
 // #157 (2b): a chunk past the size announced cancels the upload; nothing incomplete stays.
 func TestUploadTooBig(t *testing.T) {
 	dir := t.TempDir()

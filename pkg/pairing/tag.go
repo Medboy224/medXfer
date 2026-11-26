@@ -2,6 +2,7 @@ package pairing
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/binary"
@@ -73,29 +74,63 @@ func tagged(store *identity.TrustStore) []identity.Peer {
 	return out
 }
 
-// AnnounceTags are the tags this device (self) announces at now: one per trusted device with a
-// recognition key, MaxTags at most.
-func AnnounceTags(store *identity.TrustStore, self identity.Fingerprint, now time.Time) []string {
+// AnnounceTags are the tags this device (self) announces at now: always MaxTags, one per trusted
+// device with a recognition key (the most recently trusted first, MaxTags at most), completed by
+// tags of the same shape that no device can recognize, then sorted. Neither their number nor their
+// order tells how many devices this one trusts (#308).
+func AnnounceTags(store *identity.TrustStore, self *identity.Identity, now time.Time) []string {
 	period := TagPeriodOf(now)
-	var tags []string
+	tags := make([]string, 0, MaxTags)
 	for _, p := range tagged(store) {
 		if len(tags) == MaxTags {
 			break
 		}
-		tags = append(tags, Tag(p.TagKey, self, period))
+		tags = append(tags, Tag(p.TagKey, self.Fingerprint, period))
 	}
+	key := padKeyOf(self)
+	for i := 0; len(tags) < MaxTags; i++ {
+		if pad := padTag(key, period, i); !slices.Contains(tags, pad) {
+			tags = append(tags, pad)
+		}
+	}
+	slices.Sort(tags)
 	return tags
 }
 
-// Recognize returns the trusted device that announced one of tags, at now or in the period
-// before (clocks a little apart, N3).
+// padLabel names the key of the completing tags among the keys drawn from the device's.
+const padLabel = "medXfer-pad-v1"
+
+// padKeyOf is the key of self's completing tags. Drawn from its private key, it is secret and the
+// same at every launch: a restart within a period changes no tag, so the tags that stay are not
+// told apart as the real ones. Without it, a key of this call only.
+func padKeyOf(self *identity.Identity) []byte {
+	if k, err := self.DerivedKey(padLabel); err == nil {
+		return k
+	}
+	k := make([]byte, tagKeySize)
+	_, _ = rand.Read(k) // never fails (crypto/rand)
+	return k
+}
+
+// padTag is the i-th completing tag during period, under key.
+func padTag(key []byte, period int64, i int) string {
+	m := hmac.New(sha256.New, key)
+	var p [16]byte
+	binary.BigEndian.PutUint64(p[:8], uint64(period))
+	binary.BigEndian.PutUint64(p[8:], uint64(i))
+	m.Write(p[:])
+	return strings.ToLower(tagEncoding.EncodeToString(m.Sum(nil)[:8]))
+}
+
+// Recognize returns the trusted device that announced one of tags, at now, in the period before
+// or in the one after (clocks a little apart, N3).
 func Recognize(store *identity.TrustStore, tags []string, now time.Time) (identity.Peer, bool) {
 	if len(tags) == 0 {
 		return identity.Peer{}, false
 	}
 	period := TagPeriodOf(now)
 	for _, p := range tagged(store) {
-		for _, at := range []int64{period, period - 1} {
+		for _, at := range []int64{period, period - 1, period + 1} {
 			if slices.Contains(tags, Tag(p.TagKey, p.Fingerprint, at)) {
 				return p, true
 			}

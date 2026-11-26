@@ -327,7 +327,7 @@ func (e *rejectedError) Error() string { return e.reason }
 func (s *DaemonServer) finishOutgoing(ch *session.Channel, connPeer *securechan.Conn, fp identity.Fingerprint, host string,
 	offer bool, reqID string) (*session.Channel, error) {
 	_ = connPeer.SetReadDeadline(time.Now().Add(pairReplyTimeout))
-	resp, err := ch.Read()
+	resp, err := readFromPeer(ch)
 	_ = connPeer.SetDeadline(time.Time{})
 	if err != nil || resp.Type != "pair_accept" {
 		ch.Close()

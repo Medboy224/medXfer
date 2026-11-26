@@ -241,6 +241,15 @@ func (c *Channel) RemoteIP() string {
 	return "Unknown"
 }
 
+// LocalIP is this device's address of the channel; "" when there is no connection.
+func (c *Channel) LocalIP() string {
+	if c.conn == nil {
+		return ""
+	}
+	host, _, _ := net.SplitHostPort(c.conn.LocalAddr().String())
+	return host
+}
+
 // IsEncrypted returns true if the underlying transport is secured with TLS.
 func (c *Channel) IsEncrypted() bool {
 	_, ok := c.conn.(interface{ ConnectionState() tls.ConnectionState })

@@ -24,11 +24,15 @@ func TestSafeRelPath(t *testing.T) {
 		"", "/abs", `\abs`, "../x", `..\x`, "a/../../x", "a/./b", "a//b",
 		"a/b/..", "a/", "a\x00b", "a\x01b", "a\nb",
 		strings.Repeat("x", 256), strings.Repeat("a/", 512) + "b",
+		// #313: bidi formatting shows another name than the real one ("facture\u202efdp.exe"
+		// reads as "factureexe.pdf").
+		"facture\u202efdp.exe", "a\u2066b", "dir/a\u200fb",
 	}
 	// Windows-only rules (decision D0-1): valid elsewhere, rejected when the receiver runs Windows.
 	// Drive prefixes ("C:x", `C:\x`) are harmless names on Linux/Android; on Windows ':' blocks them.
 	windowsOnly := []string{"CON", "con.txt", "NUL.tar.gz", "com1", "LPT9.log", "x.", "x ", "dir/x./f",
-		"ab:c", "a:b", "C:x", "c:/x", `C:\x`, "c:notes.txt", "a*b", "a?b", "a<b", `a"b`, "a|b"}
+		"ab:c", "a:b", "C:x", "c:/x", `C:\x`, "c:notes.txt", "a*b", "a?b", "a<b", `a"b`, "a|b",
+		"CONIN$", "conout$.txt", "COM\u00b9", "COM\u00b2", "lpt\u00b3.log"} // #313: console, superscript ports
 	windowsOK := []string{"CONSOLE.txt", "COM0", "LPT10", "nul_file", "con-tract.pdf"}
 
 	for _, win := range []bool{false, true} {

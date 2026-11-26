@@ -36,7 +36,7 @@ func listedName(ts *identity.TrustStore, p discovery.Peer) string {
 }
 
 // announceTagsOf gives the recognition tags a device announces, read at each announcement.
-func announceTagsOf(ts *identity.TrustStore, self identity.Fingerprint) func() []string {
+func announceTagsOf(ts *identity.TrustStore, self *identity.Identity) func() []string {
 	return func() []string { return pairing.AnnounceTags(ts, self, time.Now()) }
 }
 

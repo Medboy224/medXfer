@@ -41,7 +41,7 @@ func TestBenchmarkDisk(t *testing.T) {
 func TestNetworkBurst(t *testing.T) {
 	testSize := int64(8 * 1024 * 1024) // 8 MB
 
-	port, waitFn, err := RunNetworkBurstServer(0, testSize, 2*1000000000)
+	port, waitFn, err := RunNetworkBurstServer("127.0.0.1", "127.0.0.1", testSize, 2*1000000000)
 	if err != nil {
 		t.Fatalf("failed to start server: %v", err)
 	}
