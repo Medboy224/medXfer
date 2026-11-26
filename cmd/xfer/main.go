@@ -1074,9 +1074,9 @@ func handleNode() {
 				fmt.Printf("\n[-] The peer could not handle a message: %s (%s)\n", msg.Error, msg.Code)
 				printPrompt()
 
-			default: // bible §8.2: an unknown type gets error{code: unsupported}
+			default:
 				if activeSession != nil {
-					_ = activeSession.Send(session.Unsupported(msg.Type))
+					answerUnknown(activeSession, msg)
 				}
 			}
 

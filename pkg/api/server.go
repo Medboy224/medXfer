@@ -61,8 +61,10 @@ type DaemonServer struct {
 	// (redial); redialCancel stops that.
 	redialTo     string
 	redialCancel context.CancelFunc
-	httpPort     int
-	webShare     webShareHost // the guest session of Web Share, if any (J7)
+	// unsupported: the peer's unsupported answers logged this session, by message (#306).
+	unsupported map[string]bool
+	httpPort    int
+	webShare    webShareHost // the guest session of Web Share, if any (J7)
 
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -883,6 +885,9 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		if msg.Code == session.CodeUnsupported && msg.Error == session.Unsupported(session.TypePing).Error {
 			return // a peer without pings: its answer shows it is there
 		}
+		if msg.Code == session.CodeUnsupported && !s.firstUnsupported(msg.Error) {
+			return // once per message type and session: an older peer answers each progress
+		}
 		s.Broadcast(NewEvent("log", map[string]string{
 			"level":   "WARN",
 			"message": fmt.Sprintf("peer error %s: %s", msg.Code, msg.Error),
@@ -906,6 +911,21 @@ func (s *DaemonServer) refuseBusy(ch *session.Channel, fp identity.Fingerprint, 
 		return false
 	}
 	_ = ch.Send(session.Message{Type: "pair_reject", FileName: errBusyElsewhere.Error(), Code: codeBusy})
+	return true
+}
+
+// firstUnsupported reports whether the peer's unsupported answer what is the first of this
+// session, and remembers it.
+func (s *DaemonServer) firstUnsupported(what string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.unsupported[what] {
+		return false
+	}
+	if s.unsupported == nil {
+		s.unsupported = map[string]bool{}
+	}
+	s.unsupported[what] = true
 	return true
 }
 
