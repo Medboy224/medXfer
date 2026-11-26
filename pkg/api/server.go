@@ -614,7 +614,13 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 
 		ip, fp := ch.RemoteIP(), conn.PeerFingerprint()
 		if s.busyWith(fp) { // before any PIN is used (PAIR-13)
-			_ = ch.Send(session.Message{Type: "pair_reject", FileName: errBusyElsewhere.Error(), Code: codeBusy})
+			reject := session.Message{Type: "pair_reject", FileName: errBusyElsewhere.Error(), Code: codeBusy}
+			if known, changed := s.keyChanged(ip, fp); changed && msg.Type == "pair_request" && msg.Secret == "" {
+				// Another key at a trusted device's address: refused and reported, as without a transfer (ID-05).
+				s.Broadcast(NewEvent("log", map[string]string{"level": "WARN", "message": keyChangedError(ip, known, fp).Error()}))
+				reject = session.Message{Type: "pair_reject", FileName: errKeyChanged.Error()}
+			}
+			_ = ch.Send(reject)
 			ch.Close()
 			return
 		}
