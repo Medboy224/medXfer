@@ -40,25 +40,25 @@ Statuts de vérification :
 | #310 à #312 | Pistes de vitesse et de mesure | 📏 |
 | #313, #314 | Points mineurs : robustesse, CLI, code mort, couverture | 📖 ; code mort signalé par staticcheck |
 
-## 1. Décisions à prendre
+## 1. Décisions
 
-Ce sont des propositions : le développeur tranche avant le lot concerné.
+Tranchées par le développeur le 25 novembre 2026, toutes comme proposées, sauf R6, avancée avant la bêta.
 
-| # | Question | Proposition | Raison |
+| # | Question | Décision | Raison |
 |---|---|---|---|
-| R1 | #298 : une session entrante pendant un transfert avec un autre appareil ? | ❓ **Refuser avec un code `busy`**, que l'appelant traite comme la fin de son rappel. Le même appareil qui revient garde son transfert (D2 de l'audit). | `xfer node` refuse déjà. Demander à l'utilisateur ferait apparaître une question pendant un transfert, souvent sans personne devant l'écran. |
-| R2 | #297 : les événements d'un fichier sans la file complète ? | ❓ **Schéma v6** : l'événement d'un fichier ne porte que `item_index`, l'état et l'erreur ; la file complète seulement à l'offre, à l'acceptation et à la fin. L'application applique le changement d'un élément. La même PR met à jour le golden et l'application. | La seule correction qui rende le coût linéaire. Le schéma change, d'où la décision. |
-| R3 | #302 : que faire si `syncfs` ne fait rien sous FUSE ? | ❓ Selon R-0 : sur FUSE (`statfs`, `FUSE_SUPER_MAGIC`), un `fsync` par fichier en parallèle ; `syncfs` gardé ailleurs. Sans confirmation, rien ne change. | Le gain des lots (bible §9.6) ne vaut que si la durabilité tient. |
-| R4 | #303 : comment `xfer trust` atteint-il un processus en cours ? | ❓ **Relire le fichier avant chaque écriture**, sous un verrou de fichier, et le recharger quand sa date change. | Marche pour la CLI comme pour l'application, sans canal entre processus. |
-| R5 | #308 : comment cacher le nombre d'étiquettes ? | ❓ Compléter à 16 étiquettes aléatoires de même forme, tirées à chaque période, dans un ordre mélangé, comme la réponse BLE. Accepter aussi la période suivante. | Le format reste le même pour le receveur. Il faut vérifier que l'annonce tient dans un paquet mDNS. |
-| R6 | #283 dans ce lot ? | ❓ **Non** : un lot « Préparation G4 » à part, avant l'envoi du dossier. | Il change le format des étiquettes BLE et le dossier G4, et une partie touche `pkg/pake`, gelé (A3 de l'audit). |
-| R7 | Les outils de R-6 dans la CI ? | ❓ Oui, en avertissement d'abord, puis bloquants une fois le code propre. | staticcheck a trouvé du code mort ; govulncheck n'a jamais tourné ; la bible s'est écartée du code deux fois (audit, #308). |
+| R1 | #298 : une session entrante pendant un transfert avec un autre appareil ? | ✅ **Refuser avec un code `busy`**, que l'appelant traite comme la fin de son rappel. Le même appareil qui revient garde son transfert (D2 de l'audit). | `xfer node` refuse déjà. Demander à l'utilisateur ferait apparaître une question pendant un transfert, souvent sans personne devant l'écran. |
+| R2 | #297 : les événements d'un fichier sans la file complète ? | ✅ **Schéma v6** : l'événement d'un fichier ne porte que `item_index`, l'état et l'erreur ; la file complète seulement à l'offre, à l'acceptation et à la fin. L'application applique le changement d'un élément. La même PR met à jour le golden et l'application. | La seule correction qui rende le coût linéaire. Le schéma change, d'où la décision. |
+| R3 | #302 : que faire si `syncfs` ne fait rien sous FUSE ? | ✅ **Mesurer d'abord (R-0)**, puis selon le résultat : sur FUSE (`statfs`, `FUSE_SUPER_MAGIC`), un `fsync` par fichier en parallèle ; `syncfs` gardé ailleurs. Sans confirmation, rien ne change. | Le gain des lots (bible §9.6) ne vaut que si la durabilité tient. |
+| R4 | #303 : comment `xfer trust` atteint-il un processus en cours ? | ✅ **Relire le fichier avant chaque écriture**, sous un verrou de fichier, et le recharger quand sa date change. | Marche pour la CLI comme pour l'application, sans canal entre processus. |
+| R5 | #308 : comment cacher le nombre d'étiquettes ? | ✅ Compléter à 16 étiquettes aléatoires de même forme, tirées à chaque période, dans un ordre mélangé, comme la réponse BLE. Accepter aussi la période suivante. | Le format reste le même pour le receveur. Il faut vérifier que l'annonce tient dans un paquet mDNS. |
+| R6 | #283 dans ce lot ? | ✅ **Non** : un lot « Préparation G4 » à part, juste après ce lot et **avant la bêta** (donc aussi avant l'envoi du dossier). | Il change le format des étiquettes BLE et le dossier G4, et une partie touche `pkg/pake`, gelé (A3 de l'audit). Avant la bêta : les testeurs ne sont pas exposés au suivi par BLE. |
+| R7 | Les outils de R-6 dans la CI ? | ✅ Oui, en avertissement d'abord, puis bloquants une fois le code propre. | staticcheck a trouvé du code mort ; govulncheck n'a jamais tourné ; la bible s'est écartée du code deux fois (audit, #308). |
 
 ## 2. Les lots
 
 ### Lot R-0 — Mesure sur l'appareil · S · 🔎
 
-Fait par le développeur, sur le Galaxy A57. Le protocole vient de #302 :
+Sur le Galaxy A57, faite par l'IA par SSH dans Termux, à la demande du développeur (25 novembre). Le protocole vient de #302 :
 
 | Mesure | Où | Ce qui conclut |
 |---|---|---|
@@ -66,7 +66,10 @@ Fait par le développeur, sur le Galaxy A57. Le protocole vient de #302 :
 | `fsync` du même fichier | Même dossier | La référence |
 | `syncfs` après la même écriture | Dossier interne de l'application (ext4 ou f2fs) | La durée attendue d'une vraie synchronisation |
 
-Résultat archivé dans `bench-results/`, puis décision R3.
+**Fait le 25 novembre** (`bench-results/README.md`) : sur FUSE, `syncfs` n'écrit rien.
+- Sur l'A57, il renvoie `ENOENT`, et le repli de `Batch.Flush` fait le `fsync` de chaque fichier l'un après l'autre (~2 ms par fichier) : durable, mais lent.
+- Sur le TECNO BF6 (noyau 5.4), **il renvoie un succès sans rien écrire** : les fichiers sont renommés sans être durables. #302 est reproduit.
+- Faits 8 à la fois, ces `fsync` prennent ~0,33 ms par fichier (A57) et ~0,5 ms (TECNO). R3 s'applique donc en R-3, sans se fier au retour de `syncfs` sur FUSE.
 
 ### Lot R-1 — Sécurité et vie privée · M
 
@@ -156,7 +159,7 @@ Sans ce lot, le rapport par étape de WP-8.4 désignerait le mauvais goulot.
 | #313 | Cinq PIN faux terminent la session Web Share | **WP-8.7**, l'écran de l'hôte le dit |
 | #314 | Code mort et hérité : `secureEq`, `isLocalNetworkIP`, `getFreePort`, champs de `TransferStats` et `session.Message`, `DialPeer`, PIN et jeton de `NewDaemonServerAt` | **Jalon de dette, après la bêta** |
 | #314 | Version « 1.0.0 » écrite en dur | **WP-8.8** (version 0.9.0, D7 du plan J8) |
-| #283 | Suivi par BLE avec un défi répété ; borne de 18 essais du PIN à la demande | **Lot « Préparation G4 »** (décision R6) |
+| #283 | Suivi par BLE avec un défi répété ; borne de 18 essais du PIN à la demande | **Lot « Préparation G4 »**, avant la bêta (décision R6) |
 
 ### Écartés
 

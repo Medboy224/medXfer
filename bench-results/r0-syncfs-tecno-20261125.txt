@@ -1,0 +1,38 @@
+== /sdcard/Download/medxfer-r0  f_type=0x65735546 (FUSE: true)
+ run 1
+  syncfs after 256 MiB         0.0 ms   dirty+writeback   67044 kB ->   67164 kB
+  fsync after 256 MiB        322.8 ms   dirty+writeback   67248 kB ->     692 kB
+  syncfs, 500 x 16 KiB         0.0 ms   dirty+writeback    4500 kB ->    4500 kB
+  fsync each, 500 files     1645.9 ms   dirty+writeback    6776 kB ->     184 kB
+  fsync, 8 at once           261.0 ms   dirty+writeback    8660 kB ->     868 kB
+ run 2
+  syncfs after 256 MiB         0.0 ms   dirty+writeback   63108 kB ->   62932 kB
+  fsync after 256 MiB        287.0 ms   dirty+writeback   60480 kB ->     548 kB
+  syncfs, 500 x 16 KiB         0.0 ms   dirty+writeback   10284 kB ->   10284 kB
+  fsync each, 500 files     1598.3 ms   dirty+writeback    6620 kB ->     652 kB
+  fsync, 8 at once           241.7 ms   dirty+writeback    6592 kB ->     556 kB
+ run 3
+  syncfs after 256 MiB         0.0 ms   dirty+writeback   63468 kB ->   63304 kB
+  fsync after 256 MiB        311.9 ms   dirty+writeback   63312 kB ->     648 kB
+  syncfs, 500 x 16 KiB         0.0 ms   dirty+writeback    4996 kB ->    4996 kB
+  fsync each, 500 files     1670.3 ms   dirty+writeback    6568 kB ->     564 kB
+  fsync, 8 at once           269.6 ms   dirty+writeback    8368 kB ->     596 kB
+== /data/local/tmp/medxfer-r0  f_type=0xfffffffff2f52010 (FUSE: false)
+ run 1
+  syncfs after 256 MiB       339.9 ms   dirty+writeback   65372 kB ->       4 kB
+  fsync after 256 MiB        300.4 ms   dirty+writeback   65396 kB ->     684 kB
+  syncfs, 500 x 16 KiB        97.5 ms   dirty+writeback    9868 kB ->      32 kB
+  fsync each, 500 files      667.3 ms   dirty+writeback   10020 kB ->     248 kB
+  fsync, 8 at once           140.5 ms   dirty+writeback   10004 kB ->     740 kB
+ run 2
+  syncfs after 256 MiB       341.8 ms   dirty+writeback   67680 kB ->      96 kB
+  fsync after 256 MiB        298.7 ms   dirty+writeback   61832 kB ->     788 kB
+  syncfs, 500 x 16 KiB       107.6 ms   dirty+writeback    9872 kB ->     132 kB
+  fsync each, 500 files      590.7 ms   dirty+writeback    9908 kB ->     156 kB
+  fsync, 8 at once           182.4 ms   dirty+writeback   10004 kB ->     604 kB
+ run 3
+  syncfs after 256 MiB       296.5 ms   dirty+writeback   60968 kB ->       4 kB
+  fsync after 256 MiB        288.4 ms   dirty+writeback   61428 kB ->     656 kB
+  syncfs, 500 x 16 KiB        99.9 ms   dirty+writeback    9884 kB ->      36 kB
+  fsync each, 500 files      665.4 ms   dirty+writeback    9988 kB ->     284 kB
+  fsync, 8 at once           194.0 ms   dirty+writeback    9896 kB ->     460 kB

@@ -1,0 +1,50 @@
+== /storage/emulated/0/Download/medxfer-r0  f_type=0x65735546 (FUSE: true)
+ run 1
+  syncfs after 256 MiB         0.2 ms   dirty+writeback   60740 kB ->   58460 kB
+  syncfs: no such file or directory
+  fsync after 256 MiB         81.6 ms   dirty+writeback   60004 kB ->     720 kB
+  syncfs, 500 x 16 KiB         0.0 ms   dirty+writeback   11132 kB ->   11132 kB
+  fsync each, 500 files      989.4 ms   dirty+writeback    8104 kB ->    1008 kB
+ run 2
+  syncfs after 256 MiB         0.0 ms   dirty+writeback   57844 kB ->   56932 kB
+  syncfs: no such file or directory
+  fsync after 256 MiB         92.8 ms   dirty+writeback   62484 kB ->    1188 kB
+  syncfs, 500 x 16 KiB         0.0 ms   dirty+writeback    9748 kB ->    9748 kB
+  fsync each, 500 files     1093.7 ms   dirty+writeback    8312 kB ->     524 kB
+ run 3
+  syncfs after 256 MiB         0.0 ms   dirty+writeback   58928 kB ->   57332 kB
+  syncfs: no such file or directory
+  fsync after 256 MiB         93.3 ms   dirty+writeback   62304 kB ->    1328 kB
+  syncfs, 500 x 16 KiB         0.0 ms   dirty+writeback   10340 kB ->   10340 kB
+  fsync each, 500 files      888.6 ms   dirty+writeback    9800 kB ->    1076 kB
+== /data/data/com.termux/files/home/medxfer-r0  f_type=0xf2f52010 (FUSE: false)
+ run 1
+  syncfs after 256 MiB        82.7 ms   dirty+writeback   61252 kB ->     256 kB
+  fsync after 256 MiB         55.8 ms   dirty+writeback   56740 kB ->    1084 kB
+  syncfs, 500 x 16 KiB        73.9 ms   dirty+writeback   14128 kB ->     144 kB
+  fsync each, 500 files      209.2 ms   dirty+writeback   10008 kB ->      72 kB
+ run 2
+  syncfs after 256 MiB        77.4 ms   dirty+writeback   63676 kB ->     324 kB
+  fsync after 256 MiB         62.0 ms   dirty+writeback   62756 kB ->     736 kB
+  syncfs, 500 x 16 KiB        63.4 ms   dirty+writeback   10076 kB ->     292 kB
+  fsync each, 500 files      178.4 ms   dirty+writeback    9952 kB ->     420 kB
+ run 3
+  syncfs after 256 MiB        63.7 ms   dirty+writeback   57168 kB ->     548 kB
+  fsync after 256 MiB         59.2 ms   dirty+writeback   64004 kB ->    1596 kB
+  syncfs, 500 x 16 KiB        90.7 ms   dirty+writeback   10488 kB ->     648 kB
+  fsync each, 500 files      175.7 ms   dirty+writeback   10368 kB ->     944 kB
+ls: cannot access '/storage/emulated/0/Download/medxfer-r0': No such file or directory
+ls: cannot access '/data/data/com.termux/files/home/medxfer-r0': No such file or directory
+== /storage/emulated/0/Download/medxfer-r0  f_type=0x65735546 (FUSE: true)
+ run 1
+  syncfs, 500 x 16 KiB         0.0 ms   dirty+writeback    8200 kB ->    8200 kB
+  fsync each, 500 files      949.6 ms   dirty+writeback    8424 kB ->    1332 kB
+  fsync, 8 at once           158.4 ms   dirty+writeback   10908 kB ->    1968 kB
+ run 2
+  syncfs, 500 x 16 KiB         0.0 ms   dirty+writeback   10300 kB ->   10300 kB
+  fsync each, 500 files     1057.4 ms   dirty+writeback    7488 kB ->     492 kB
+  fsync, 8 at once           163.7 ms   dirty+writeback   12480 kB ->    4356 kB
+ run 3
+  syncfs, 500 x 16 KiB         0.0 ms   dirty+writeback    8476 kB ->    8476 kB
+  fsync each, 500 files     1030.3 ms   dirty+writeback    8548 kB ->     420 kB
+  fsync, 8 at once           168.0 ms   dirty+writeback    8592 kB ->    1940 kB
