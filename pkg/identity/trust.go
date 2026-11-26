@@ -55,11 +55,12 @@ type TrustStore struct {
 	stamp fileStamp // trusted.json as last read or written here
 }
 
-// fileStamp tells whether a file changed since it was read.
+// fileStamp tells whether a file changed since it was read. An atomic write makes a new file:
+// its identity (os.SameFile) tells it even with the same size and date.
 type fileStamp struct {
+	info os.FileInfo // nil: no file
 	mod  time.Time
 	size int64
-	ok   bool // the file existed
 }
 
 func stampOf(path string) fileStamp {
@@ -67,11 +68,15 @@ func stampOf(path string) fileStamp {
 	if err != nil {
 		return fileStamp{}
 	}
-	return fileStamp{mod: fi.ModTime(), size: fi.Size(), ok: true}
+	os.SameFile(fi, fi) // reads the file's identity now: Windows reads it at the first use
+	return fileStamp{info: fi, mod: fi.ModTime(), size: fi.Size()}
 }
 
 func (a fileStamp) same(b fileStamp) bool {
-	return a.ok == b.ok && a.size == b.size && a.mod.Equal(b.mod)
+	if a.info == nil || b.info == nil {
+		return a.info == b.info
+	}
+	return os.SameFile(a.info, b.info) && a.size == b.size && a.mod.Equal(b.mod)
 }
 
 // OpenTrustStore reads path. A missing file is an empty list.
@@ -272,8 +277,12 @@ func (t *TrustStore) Forget(fp Fingerprint) (bool, error) {
 		delete(peers, fp)
 		return found
 	})
-	if err != nil {
-		return false, err
+	if err != nil { // trust ends here even when the file cannot say so
+		t.mu.Lock()
+		_, found = t.peers[fp]
+		delete(t.peers, fp)
+		t.mu.Unlock()
+		return found, err
 	}
 	return found, nil
 }

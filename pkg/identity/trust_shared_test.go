@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // fp is a fingerprint for tests: n in its first bytes.
@@ -119,5 +120,63 @@ func TestTrustStoreHelper(t *testing.T) {
 		if err := ts.Add(Peer{Fingerprint: fp(i + 10), Alias: "d" + strconv.Itoa(i)}); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// #303: a Forget on a file that cannot be read fails, but this process stops trusting the
+// device at once: trust ends here even when the file cannot say so.
+func TestForgetOnUnreadableFileEndsTrustHere(t *testing.T) {
+	path := filepath.Join(t.TempDir(), TrustFile)
+	ts, err := OpenTrustStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ts.Add(Peer{Fingerprint: fp(1), Alias: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":1,"peers":[{"finger`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ts.Forget(fp(1)); err == nil {
+		t.Fatal("Forget wrote over a file it cannot read")
+	}
+	if ts.Contains(fp(1)) {
+		t.Fatal("the device is still trusted after Forget")
+	}
+}
+
+// #303: another process's write is seen even with the same size and date, as an atomic write
+// makes a new file.
+func TestReplacedFileOfSameSizeAndDateIsSeen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), TrustFile)
+	daemon, err := OpenTrustStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := daemon.Add(Peer{Fingerprint: fp(1), Alias: "A", AddedAt: time.Unix(1, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli, err := OpenTrustStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cli.Forget(fp(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Add(Peer{Fingerprint: fp(2), Alias: "B", AddedAt: time.Unix(1, 0).UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.Stat(path); after.Size() != before.Size() {
+		t.Fatalf("sizes %d and %d: the test needs the same size", before.Size(), after.Size())
+	}
+	if daemon.Contains(fp(1)) || !daemon.Contains(fp(2)) {
+		t.Fatal("a replaced file of the same size and date was not read again")
 	}
 }
