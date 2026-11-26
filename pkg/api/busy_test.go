@@ -128,14 +128,15 @@ func TestRedialDoesNotTakeAnotherSession(t *testing.T) {
 }
 
 // PAIR-13: a session the user chose replaces another device's, which is told: it shows
-// disconnected, and does not dial again (the devices took the session from each other every 3 s).
+// disconnected, and neither dials again (the devices took the session from each other every 3 s)
+// nor says it reconnects (the app then waited for a session that never came back).
 func TestReplacedDeviceIsTold(t *testing.T) {
 	fastRedial(t)
 	_, na, _, nb := trustedPair(t) // b dialed a
 	_, nc := startOwnIdentity(t, "Tablet")
 	pairByQR(t, na, nc, false) // c scans a's QR code: the user's choice
 	nb.WaitEvent("disconnected", 5*time.Second)
-	if _, ok := nb.TryWaitFor(func(e testkit.Event) bool { return e.Event == "paired" }, 10*redialEvery); ok {
-		t.Fatal("the device replaced dialed again")
+	if e, ok := nb.TryWaitFor(func(e testkit.Event) bool { return e.Event == "paired" || e.Event == "reconnecting" }, 10*redialEvery); ok {
+		t.Fatalf("the device replaced got %s after disconnected", e.Event)
 	}
 }

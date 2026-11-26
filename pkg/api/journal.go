@@ -83,7 +83,8 @@ func journalEvent(evt EventMessage) {
 // journalReason is reason when it is one of this core's own, "other" else.
 func journalReason(reason string) string {
 	switch reason {
-	case "user requested disconnect", "peer requested disconnect", "connection timed out", "pairing rejected by peer":
+	case "user requested disconnect", "peer requested disconnect", "connection timed out", "pairing rejected by peer",
+		reasonReplaced:
 		return reason
 	}
 	return "other"

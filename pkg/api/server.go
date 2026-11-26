@@ -689,7 +689,8 @@ func (s *DaemonServer) listenToSession(sess *session.Channel) {
 		if err != nil {
 			sess.Close() // the peer sees it at once, and the side that dialed dials again
 			s.mu.Lock()
-			if s.activeSession == sess {
+			lost := s.activeSession == sess // else replaced or ended: nothing comes back (PAIR-13)
+			if lost {
 				s.activeSession = nil
 				s.isReconnecting = true
 				if s.sessionGraceTimer != nil {
@@ -714,7 +715,9 @@ func (s *DaemonServer) listenToSession(sess *session.Channel) {
 				}
 			}
 			s.mu.Unlock()
-			s.Broadcast(NewEvent("reconnecting", map[string]string{"message": "Connection lost. Waiting for peer to reconnect (15s grace period)..."}))
+			if lost {
+				s.Broadcast(NewEvent("reconnecting", map[string]string{"message": "Connection lost. Waiting for peer to reconnect (15s grace period)..."}))
+			}
 			return
 		}
 
@@ -794,7 +797,7 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		s.mu.Unlock()
 		reason := "peer requested disconnect"
 		if msg.Code == codeReplaced {
-			reason = "the other device connected to another device"
+			reason = reasonReplaced
 		}
 		s.Broadcast(NewEvent("disconnected", map[string]string{"reason": reason}))
 

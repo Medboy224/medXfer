@@ -40,6 +40,9 @@ const codeBusy = "busy"
 // (PAIR-13): the device told does not dial again.
 const codeReplaced = "replaced"
 
+// reasonReplaced is the reason of the disconnected event a device replaced gets.
+const reasonReplaced = "the other device connected to another device"
+
 // PairShowPayload asks for a QR code; trust offers mutual trust once paired (PAIR-10).
 type PairShowPayload struct {
 	Trust bool `json:"trust,omitempty"`
