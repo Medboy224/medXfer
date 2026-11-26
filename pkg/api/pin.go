@@ -233,7 +233,7 @@ func (s *DaemonServer) acceptPIN(conn *securechan.Conn, ch *session.Channel, msg
 	if shown == nil {
 		demand.Close() // a PIN serves one pairing (PAIR-02)
 	}
-	if s.refuseBusy(ch, fp) { // once the PIN is proven, even typed minutes later (PAIR-13)
+	if s.refuseBusy(ch, fp, false) { // once the PIN is proven, even typed minutes later (PAIR-13)
 		return "", false, false
 	}
 	s.addressTaken(ip, fp)

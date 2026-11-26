@@ -63,6 +63,7 @@ type Message struct {
 	Share       []byte               `json:"share,omitempty"`       // PIN pairing: this side's PAKE share
 	Confirm     []byte               `json:"confirm,omitempty"`     // PIN pairing: this side's key confirmation
 	TrustsYou   bool                 `json:"trusts_you,omitempty"`  // pairing: the sender has the peer in its trusted list (PAIR-09)
+	Redial      bool                 `json:"redial,omitempty"`      // pair_request: a lost session dialed again by itself, not the user's choice (PAIR-13)
 	TrustOffer  bool                 `json:"trust_offer,omitempty"` // one-shot pairing: the sender wants mutual trust; the negotiation follows pair_accept (PAIR-10)
 	TagKey      []byte               `json:"tag_key,omitempty"`     // trust_commit: the pair's recognition key (DISC-11)
 	FileName    string               `json:"file_name,omitempty"`

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/session"
+	"github.com/Medboy224/medXfer/pkg/testkit"
 )
 
 // PAIR-13: the user who connected to a device that transfers with another one learns it by the
@@ -97,5 +99,43 @@ func TestBusyIsToldOnlyToAnAuthorizedDevice(t *testing.T) {
 	got := <-pairRequest(t, n.PeerAddr(), testPeerChan(t), session.Message{}, 5*time.Second)
 	if got.Type != "pair_reject" || got.Code != codePINRequired {
 		t.Fatalf("an unknown device got %s with the code %q, want %q as without a transfer", got.Type, got.Code, codePINRequired)
+	}
+}
+
+// PAIR-13: an automatic redial does not take the session another device has, transfer or not:
+// it is refused with busy, which ends it.
+func TestRedialDoesNotTakeAnotherSession(t *testing.T) {
+	every := redialEvery
+	redialEvery = time.Hour // b dials again below, once c has a's session
+	t.Cleanup(func() { redialEvery = every })
+	a, na, b, nb := trustedPair(t) // b dialed a
+	cutSession(t, b)
+	nb.WaitEvent("reconnecting", 0)
+	c, nc := startOwnIdentity(t, "Tablet")
+	pairByQR(t, na, nc, false)
+
+	err := b.redialOnce(context.Background(), na.PeerAddr(), a.identity.Fingerprint)
+	var rej *rejectedError
+	if !errors.As(err, &rej) || rej.code != codeBusy {
+		t.Fatalf("b dialed a again while c had its session: %v; want a refusal with the code %q", err, codeBusy)
+	}
+	a.mu.RLock()
+	peer := a.trustPeer
+	a.mu.RUnlock()
+	if peer != c.identity.Fingerprint {
+		t.Fatal("a's session is no longer c's")
+	}
+}
+
+// PAIR-13: a session the user chose replaces another device's, which is told: it shows
+// disconnected, and does not dial again (the devices took the session from each other every 3 s).
+func TestReplacedDeviceIsTold(t *testing.T) {
+	fastRedial(t)
+	_, na, _, nb := trustedPair(t) // b dialed a
+	_, nc := startOwnIdentity(t, "Tablet")
+	pairByQR(t, na, nc, false) // c scans a's QR code: the user's choice
+	nb.WaitEvent("disconnected", 5*time.Second)
+	if _, ok := nb.TryWaitFor(func(e testkit.Event) bool { return e.Event == "paired" }, 10*redialEvery); ok {
+		t.Fatal("the device replaced dialed again")
 	}
 }

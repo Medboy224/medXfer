@@ -629,7 +629,7 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 				ch.Close()
 				return
 			}
-			if s.refuseBusy(ch, fp) {
+			if s.refuseBusy(ch, fp, false) {
 				ch.Close()
 				return
 			}
@@ -654,7 +654,7 @@ func (s *DaemonServer) acceptPairing(conn *securechan.Conn) {
 				ch.Close()
 				return
 			}
-			if s.refuseBusy(ch, fp) {
+			if s.refuseBusy(ch, fp, msg.Redial) {
 				ch.Close()
 				return
 			}
@@ -792,7 +792,11 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 		s.pairedDeviceName = ""
 		s.dropTransfers()
 		s.mu.Unlock()
-		s.Broadcast(NewEvent("disconnected", map[string]string{"reason": "peer requested disconnect"}))
+		reason := "peer requested disconnect"
+		if msg.Code == codeReplaced {
+			reason = "the other device connected to another device"
+		}
+		s.Broadcast(NewEvent("disconnected", map[string]string{"reason": reason}))
 
 	case "bench_ping", "bench_burst_req":
 		s.mu.RLock()
@@ -891,11 +895,11 @@ func (s *DaemonServer) handleSessionMessage(msg session.Message) {
 	}
 }
 
-// refuseBusy refuses, with busy, the session of fp while a transfer runs with another device
-// (PAIR-13). Called once the user's authorisation is proven (a trusted key, a QR code, a PIN,
+// refuseBusy refuses, with busy, the session of fp that would take another device's (busyWith,
+// PAIR-13). Called once the user's authorisation is proven (a trusted key, a QR code, a PIN,
 // BLE): an unknown device learns nothing of a transfer.
-func (s *DaemonServer) refuseBusy(ch *session.Channel, fp identity.Fingerprint) bool {
-	if !s.busyWith(fp) {
+func (s *DaemonServer) refuseBusy(ch *session.Channel, fp identity.Fingerprint, redial bool) bool {
+	if !s.busyWith(fp, redial) {
 		return false
 	}
 	_ = ch.Send(session.Message{Type: "pair_reject", FileName: errBusyElsewhere.Error(), Code: codeBusy})

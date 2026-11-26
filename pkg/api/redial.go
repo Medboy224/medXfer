@@ -78,7 +78,7 @@ func (s *DaemonServer) redialOnce(ctx context.Context, target string, fp identit
 		return nil
 	}
 	ch := session.NewChannel(conn)
-	if err := ch.Send(session.Message{Type: "pair_request", DeviceName: name, TrustsYou: s.declares(fp)}); err != nil {
+	if err := ch.Send(session.Message{Type: "pair_request", DeviceName: name, TrustsYou: s.declares(fp), Redial: true}); err != nil {
 		ch.Close()
 		return err
 	}
