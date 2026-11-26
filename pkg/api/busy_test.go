@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Medboy224/medXfer/pkg/identity"
+	"github.com/Medboy224/medXfer/pkg/pairing"
 	"github.com/Medboy224/medXfer/pkg/session"
 )
 
@@ -45,4 +48,41 @@ func TestChangedKeyIsReportedDuringATransfer(t *testing.T) {
 		}
 	}
 	t.Fatal("the changed key was not reported")
+}
+
+// PAIR-13: a PIN on demand may be typed up to two minutes after the request, on the same
+// connection. A transfer with another device that began meanwhile keeps its session: the PIN
+// typed gets busy.
+func TestPINTypedDuringAnotherTransferIsRefused(t *testing.T) {
+	s, n := startOwnIdentity(t, "Laptop")
+	dir := t.TempDir()
+	id, err := identity.LoadOrCreate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts, err := identity.OpenTrustStore(filepath.Join(dir, identity.TrustFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	third := identity.Fingerprint{1}
+	typed := func() (string, error) {
+		var asked struct {
+			PIN string `json:"pin"`
+		}
+		if err := n.WaitEvent("pin_requested", 0).Decode(&asked); err != nil {
+			return "", err
+		}
+		s.mu.Lock() // the user types; meanwhile a transfer with a third device begins
+		s.activeTransferID, s.trustPeer = "t1", third
+		s.mu.Unlock()
+		return asked.PIN, nil
+	}
+	_, err = pairing.JoinPINOnDemand(context.Background(), n.PeerAddr(), typed,
+		pairing.Options{Identity: id, Trust: ts, DeviceName: "Phone"})
+	s.mu.RLock()
+	peer := s.trustPeer
+	s.mu.RUnlock()
+	if err == nil || peer != third {
+		t.Fatalf("pairing: %v; the session of the transfer was replaced: %v", err, peer != third)
+	}
 }
