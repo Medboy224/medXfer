@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "actions": [
     "ble_client",
     "ble_server",

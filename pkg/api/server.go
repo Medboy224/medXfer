@@ -1041,25 +1041,47 @@ func ReportsDir() string {
 	return filepath.Join(filepath.Dir(GetConfigFilePath()), "reports")
 }
 
-// FinishTransferTracker compiles the final diagnostic summary report and saves it in
-// ReportsDir. The report carries no file name, IP or host name (DEV-05).
+// saveReport writes a transfer's report to disk; tests slow it down.
+var saveReport = diag.SaveReport
+
+// FinishTransferTracker closes the transfer's measures and saves their report in ReportsDir;
+// measures closed already give the last report. The report carries no file name, IP or host
+// name (DEV-05).
 func (s *DaemonServer) FinishTransferTracker(outcome string) *TransferSummaryReport {
+	if report := s.closeTracker(outcome); report != nil {
+		s.writeReport(report)
+		return report
+	}
 	s.trackerMu.Lock()
+	defer s.trackerMu.Unlock()
+	return s.lastSummaryReport
+}
+
+// closeTracker closes the transfer's measures and returns their report, nil if they were
+// closed already. It writes nothing: a caller under s.mu writes the report once it lets go
+// (writeReport), or every action would wait for the disk (#313).
+func (s *DaemonServer) closeTracker(outcome string) *TransferSummaryReport {
+	s.trackerMu.Lock()
+	defer s.trackerMu.Unlock()
 	if s.activeTracker == nil {
-		defer s.trackerMu.Unlock()
-		return s.lastSummaryReport
+		return nil
 	}
 	s.activeTracker.Finish(outcome)
 	report := s.activeTracker.GenerateReport(diag.ReportOptions{})
 	s.lastSummaryReport = report
 	s.activeTracker = nil
 	s.closedTrackerID = s.trackerID
-	s.trackerMu.Unlock()
+	return report
+}
 
-	if _, err := diag.SaveReport(filepath.Join(s.dataDir, "reports"), report, maxSavedReports); err != nil {
+// writeReport saves a report closeTracker gave; nil does nothing.
+func (s *DaemonServer) writeReport(report *TransferSummaryReport) {
+	if report == nil {
+		return
+	}
+	if _, err := saveReport(filepath.Join(s.dataDir, "reports"), report, maxSavedReports); err != nil {
 		log.Printf("[diag] could not save the transfer report: %v", err)
 	}
-	return report
 }
 
 // GetLastSummaryReport returns the latest completed transfer report

@@ -59,12 +59,9 @@ void main() {
     expect(a.items[1].bytes, 50);
     expect(a.items[1].status, ItemStatus.transferring);
 
-    t.take(CoreEvent('item_completed', data: {
-      'item_index': 0,
-      'items': [_q(0, 'Vacances/a.jpg', 100, 'completed'), _q(1, 'Vacances/b.jpg', 200, 'transferring')],
-    }));
+    t.take(const CoreEvent('item_completed', data: {'item_index': 0, 'status': 'completed'}));
     expect(t.active!.items[0].status, ItemStatus.completed);
-    expect(t.active!.items[1].bytes, 50, reason: 'the bytes seen stay when the queue comes again');
+    expect(t.active!.items[1].bytes, 50, reason: 'the other files stay as they were');
 
     t.take(CoreEvent('transfer_complete', data: {
       'message': 'Receiver confirmed transfer complete',
@@ -77,6 +74,31 @@ void main() {
     expect((h.direction, h.device, h.files, h.bytes, h.outcome, h.name, h.folder), (Direction.sent, 'PC du salon', 2, 300, Outcome.completed, 'Vacances', ''));
     t.dismiss();
     expect(t.active, isNull);
+  });
+
+  // #297: an item's event carries its index and status, not the whole queue.
+  test("an item's event changes that file alone", () {
+    final (_, t, _) = _model();
+    t.take(CoreEvent('batch_offered', data: {
+      'summary': 'x',
+      'total_files': 3,
+      'total_bytes': 30,
+      'items': [_q(0, 'a', 10, 'pending'), _q(1, 'b', 10, 'pending'), _q(2, 'c', 10, 'pending')],
+    }));
+    t.take(const CoreEvent('transfer_accepted', data: {}));
+    List<ItemStatus> statuses() => [for (final i in t.active!.items) i.status];
+    for (final (event, index, status, want) in [
+      ('batch_item_transferring', 0, 'transferring', [ItemStatus.transferring, ItemStatus.pending, ItemStatus.pending]),
+      ('item_completed', 0, 'completed', [ItemStatus.completed, ItemStatus.pending, ItemStatus.pending]),
+      ('file_paused', 1, 'paused', [ItemStatus.completed, ItemStatus.paused, ItemStatus.pending]),
+      ('file_resumed', 1, 'pending', [ItemStatus.completed, ItemStatus.pending, ItemStatus.pending]),
+      ('file_skipped', 2, 'skipped', [ItemStatus.completed, ItemStatus.pending, ItemStatus.skipped]),
+      ('item_failed', 1, 'failed', [ItemStatus.completed, ItemStatus.failed, ItemStatus.skipped]),
+    ]) {
+      t.take(CoreEvent(event, data: {'item_index': index, 'status': status}));
+      expect(statuses(), want, reason: event);
+    }
+    expect(t.active!.items[0].bytes, 10, reason: 'a completed file has all its bytes');
   });
 
   test('a skipped file: done, but partial', () async {
@@ -294,11 +316,7 @@ void main() {
       'total_bytes': 2,
       'items': [_q(0, 'a', 1, 'pending'), _q(1, 'b', 1, 'pending')],
     }));
-    t.take(CoreEvent('item_failed', data: {
-      'item_index': 1,
-      'error': 'permission denied',
-      'items': [_q(0, 'a', 1, 'pending'), _q(1, 'b', 1, 'failed')],
-    }));
+    t.take(const CoreEvent('item_failed', data: {'item_index': 1, 'status': 'failed', 'error': 'permission denied'}));
     t.take(const CoreEvent('disk_full', data: {'save_dir': '/x'}));
     await _settle();
     expect(notices.first, isA<FileError>());
