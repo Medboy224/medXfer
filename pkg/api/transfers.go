@@ -602,7 +602,7 @@ func (s *DaemonServer) peerFailed(msg session.Message) {
 		return // over already, or another one
 	}
 	id := s.activeTransferID
-	s.FinishTransferTracker(diag.OutcomeFailed) // before the cancel ends the run (see serveAccepted)
+	report := s.closeTracker(diag.OutcomeFailed) // before the cancel ends the run (see serveAccepted)
 	if s.transferCancel != nil {
 		s.transferCancel()
 		s.transferCancel = nil
@@ -611,6 +611,7 @@ func (s *DaemonServer) peerFailed(msg session.Message) {
 	s.activeTransferID = ""
 	s.isPaused = false
 	s.mu.Unlock()
+	s.writeReport(report)
 	data := map[string]string{"transfer_id": id, "error": msg.Error, "by": "peer"}
 	if msg.Code != "" {
 		data["code"] = msg.Code
@@ -636,7 +637,7 @@ func (s *DaemonServer) completeSent(id string) {
 		s.endedTransferID = ""
 	}
 	s.sentCompletedID = id
-	s.FinishTransferTracker(diag.OutcomeCompleted) // before the cancel ends the run (see serveAccepted)
+	report := s.closeTracker(diag.OutcomeCompleted) // before the cancel ends the run (see serveAccepted)
 	if s.transferCancel != nil {
 		s.transferCancel()
 		s.transferCancel = nil
@@ -646,6 +647,7 @@ func (s *DaemonServer) completeSent(id string) {
 	}
 	items := s.queue()
 	s.mu.Unlock()
+	s.writeReport(report)
 	s.broadcastTransferComplete(map[string]interface{}{
 		"message": "Receiver confirmed transfer complete",
 		"items":   items,
@@ -761,8 +763,9 @@ func (s *DaemonServer) pauseAll(pause, fromPeer bool, reqID string) {
 func (s *DaemonServer) cancelTransfer(fromPeer bool, reqID string) {
 	s.mu.Lock()
 	s.isPaused = false
+	var report *TransferSummaryReport
 	if s.transferCancel != nil {
-		s.FinishTransferTracker(diag.OutcomeCanceled) // before the cancel ends the run
+		report = s.closeTracker(diag.OutcomeCanceled) // before the cancel ends the run
 		s.transferCancel()
 		s.transferCancel = nil
 	}
@@ -773,6 +776,7 @@ func (s *DaemonServer) cancelTransfer(fromPeer bool, reqID string) {
 	s.lastOffered = nil
 	sess := s.activeSession
 	s.mu.Unlock()
+	s.writeReport(report)
 
 	if fromPeer {
 		s.Broadcast(NewEvent("transfer_canceled", map[string]string{"message": "Transfer canceled by peer"}))
