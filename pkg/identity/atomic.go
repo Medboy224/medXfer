@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+// WriteFileAtomic replaces path with data so that a crash leaves either the old or the new
+// content, never a mix: the settings (config.json) are written so too (#313).
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	return writeFileAtomic(path, data, perm)
+}
+
 // writeFileAtomic replaces path with data so that a crash leaves either the old or the new
 // content, never a mix (ID-04): temporary file in the same directory, fsync, rename, then
 // fsync of the directory where the system supports it.
