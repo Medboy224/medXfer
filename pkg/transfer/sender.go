@@ -133,6 +133,10 @@ func (s *Sender) Serve(ctx context.Context, ln net.Listener) error {
 			}
 			return err
 		}
+		if s.streams.Load() >= MaxWorkers { // LIM-07: each holds about 6 MiB of buffers (#313)
+			c.Close()
+			continue
+		}
 		connsMu.Lock()
 		conns[c] = struct{}{}
 		connsMu.Unlock()

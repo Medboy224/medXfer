@@ -898,7 +898,7 @@ Valeurs par défaut ; toutes sont des paramètres (règle R4).
 | `LIM-04` | Charge `CONTROL` | 1 Mio |
 | `LIM-05` | Éléments par offre / taille JSON du manifeste | 100 000 / 16 Mio |
 | `LIM-06` | Longueur d'un chemin / d'un composant | 1024 / 255 octets |
-| `LIM-07` | Flux de données par transfert | 1 à 8 |
+| `LIM-07` | Flux de données par transfert | 1 à 8 ; l'émetteur ferme aussitôt toute connexion de données au-delà de 8, chacune tenant environ 6 Mio de tampons (lot Revue R-3, #313 : `TestSenderRefusesConnectionsOverMaxWorkers`) |
 | `LIM-08` | Transferts actifs simultanés par appareil de confiance | 1 (les autres attendent) |
 
 ---
