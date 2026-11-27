@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -375,11 +376,30 @@ func (s *Session) handleChunk(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"received": f.received})
 }
 
+// syncFile makes a received file's data durable before it gets its name, as pkg/store does
+// (STO-01): after a power loss, a file shown as received is never empty (#313). Tests replace it.
+var syncFile = func(f *os.File) error { return f.Sync() }
+
+// syncDir makes a rename in dir durable on Unix. Windows cannot open a folder for fsync; NTFS
+// journals the rename itself.
+func syncDir(dir string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+}
+
 // complete closes a file received in full and gives it a free name: "name.ext", else
 // "name (1).ext" and so on, never over a file already there (#157, 2a). The last file ends the
 // upload (#157, 2c: the ticket lives until then). Its lock is held.
 func (s *Session) complete(up *upload, index int) error {
 	f := up.files[index]
+	if err := syncFile(f.f); err != nil {
+		return err
+	}
 	if err := f.f.Close(); err != nil {
 		return err
 	}
@@ -402,6 +422,7 @@ func (s *Session) complete(up *upload, index int) error {
 			return err
 		}
 		f.final = final
+		syncDir(filepath.Dir(final))
 		break
 	}
 	s.emit(Event{Kind: "upload_file_done", Data: map[string]any{"ticket": up.ticket, "index": index, "name": filepath.Base(f.final), "path": f.final, "size": f.Size}})
