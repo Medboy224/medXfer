@@ -19,6 +19,11 @@ Dans la liste, un appareil inconnu apparaît sous un nom générique (`medXfer-3
 
 Pour recevoir dans un autre dossier : `xfer recv … --out DOSSIER`.
 
+Dans un script, sans personne pour répondre :
+- `xfer recv … --auto-accept` télécharge sans demander. La confiance mutuelle, elle, se demande toujours.
+- Sans cette option, une question restée sans réponse vaut **non** : pas de terminal, ou rien de tapé en 60 s.
+- Une commande `send`, `recv` ou `node` qui échoue sort avec le code 1.
+
 ## 2. Pourquoi parfois un PIN, parfois rien ?
 
 medXfer ne transfère qu'entre appareils qui se sont **reconnus**. Un appareil vu pour la première fois se reconnaît par un **QR code** ou un **PIN**, jamais autrement : personne n'a à comparer de longues empreintes à l'œil.
@@ -84,7 +89,10 @@ Si l'autre côté refuse, la commande le dit, et rien n'est enregistré.
 - `pair <n>` : appairer l'appareil n° n de la liste. L'autre appareil affiche un PIN (« it must type this PIN »), que vous tapez ici. `pair <ip>`, `pair <ip:port>` et `pair <code>` marchent aussi. Avec un appareil de confiance mutuelle, pas de PIN ;
 - `pair --show` : afficher un QR code pour l'autre appareil ; `pair --pin` : afficher un PIN à l'avance ;
 - `trust` : proposer la confiance mutuelle à l'appareil appairé ; `--trust` sur `pair` fait de même dès l'appairage ;
-- `send <fichier>`, `stop`, `disconnect`, `exit`.
+- `send <fichier> [autres…]` : un chemin qui contient des espaces se met entre guillemets, par exemple `send "Mes documents/x.pdf"` ;
+- `stop`, `disconnect`, `exit`.
+
+`xfer node` reçoit dans le dossier de téléchargement configuré, qu'il affiche au démarrage (« Receives in »).
 
 Si un autre medXfer occupe déjà le port 18887 sur l'appareil (un autre `xfer node`, `xfer share`), `xfer node` le signale et prend un autre port. L'adresse affichée avec le PIN ou le QR code contient alors ce port : c'est elle qu'il faut taper.
 

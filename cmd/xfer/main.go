@@ -244,7 +244,7 @@ func handleNode() error {
 	fmt.Println("   pair <medxfer://> - Pair with the device that shows a QR code [--trust]")
 	fmt.Println("   pair --pin        - Show a PIN for the other device [--trust]")
 	fmt.Println("   trust             - Offer mutual trust to the paired device: no PIN next time")
-	fmt.Println("   send <filepath>   - Send file/folder to paired device")
+	fmt.Println("   send <path>...    - Send files/folders to paired device (\"a b\" for spaces)")
 	fmt.Println("   stop              - Cancel an active transfer gracefully")
 	fmt.Println("   disconnect        - End pairing session")
 	fmt.Println("   exit              - Shutdown node")
@@ -1839,9 +1839,10 @@ func printUsage() {
 		"  xfer recv [pairing_code]                       (Via 6-digit code or discovery; both confirm)\n" +
 		"  xfer recv --ip <addr>                          (Direct connect by IP)\n" +
 		"  xfer send --pin <path> | xfer recv --pin HOST  (A PIN instead of the QR code)\n" +
+		"  xfer recv --auto-accept ...                    (Download without asking, for scripts)\n" +
 		"  xfer report show|compare|list [--json]         (Transfer diagnostic reports)\n" +
 		"  xfer ctl [--script scenario.jsonl]             (Drive an embedded daemon with JSON lines)\n" +
-		"  xfer bench disk|net [...]                      (Disk and network benchmarks)\n" +
+		"  xfer bench disk|net|ladder|matrix [...]        (Disk, network and transfer benchmarks)\n" +
 		"  xfer bundle [-o FILE.zip]                      (Diagnostic bundle for a bug report)\n" +
 		"  xfer id                                        (This device's fingerprint)\n" +
 		"  xfer trust list|forget|rename <fingerprint>    (Trusted devices)\n" +
@@ -1849,8 +1850,9 @@ func printUsage() {
 		"  xfer pair --show | xfer pair <medxfer://...>   (Pair two devices by QR code)\n" +
 		"  xfer pair --pin | xfer pair --pin HOST[:PORT]  (Pair two devices by PIN)\n" +
 		"\n" +
+		"A failed send, recv or node exits with code 1.\n" +
+		"\n" +
 		"Examples on Android / Termux:\n" +
-		"  ./xfer-android-arm64 daemon                    -> Starts Web UI on http://localhost:19999\n" +
 		"  ./xfer-android-arm64 node                      -> Interactive CLI (scan, pair, send, recv)\n" +
 		"  ./xfer-android-arm64 share /sdcard/video.mp4   -> Web Share with a QR code\n" +
 		"==================================================\n")
