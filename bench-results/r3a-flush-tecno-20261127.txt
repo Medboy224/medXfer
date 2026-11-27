@@ -1,0 +1,18 @@
+R-3a, #302 : temps de Batch.Flush sur le stockage partagé (FUSE) du TECNO BF6
+Android 12, noyau 5.4.210-android12, armeabi-v7a (32 bits). Binaire de test de pkg/store (branche
+fix/revue-r3a-stockage), lancé par adb shell dans /data/local/tmp, dossier
+MEDXFER_TEST_FUSE_DIR=/sdcard/Download/medxfer-r3a (statfs : 0x65735546, FUSE). 200 fichiers de 16 Kio
+par lot, un bloc chacun. Trois passages, 27/11/2026.
+
+TestOnFUSEDetectsSharedStorage : PASS (stockage partagé reconnu comme FUSE, /data/local/tmp non)
+
+syncfs          200 files of 16 KiB: 3.937s, 19.68 ms a file (syncfs answers: <nil>)
+fsync per file  200 files of 16 KiB: 4.341s, 21.71 ms a file (syncfs answers: <nil>)
+syncfs          200 files of 16 KiB: 3.517s, 17.59 ms a file (syncfs answers: <nil>)
+fsync per file  200 files of 16 KiB: 3.943s, 19.71 ms a file (syncfs answers: <nil>)
+syncfs          200 files of 16 KiB: 4.314s, 21.57 ms a file (syncfs answers: <nil>)
+fsync per file  200 files of 16 KiB: 4.446s, 22.23 ms a file (syncfs answers: <nil>)
+
+« syncfs » : l'ancien chemin. Sur ce téléphone, syncfs répond succès sans rien écrire (R-0) : aucun
+fichier n'était rendu durable.
+« fsync per file » : le nouveau chemin sur FUSE (fsync de chaque fichier, 8 à la fois).

@@ -4,7 +4,7 @@ Les mesures sur appareils réels (bible §17.4, DEV-21) sont gardées ici pour c
 
 ## 27 novembre 2026 — R-3a : lots de petits fichiers sur FUSE, `fsync` par fichier (#302)
 
-**But :** mesurer, sur les mêmes téléphones qu'en R-0, ce que coûte le nouveau chemin des lots sur le stockage partagé d'Android (FUSE). Ce chemin fait un `fsync` par fichier, 8 à la fois, au lieu de se fier à `syncfs`. Sorties brutes : [`r3a-flush-a57-20261127.txt`](r3a-flush-a57-20261127.txt).
+**But :** mesurer, sur les mêmes téléphones qu'en R-0, ce que coûte le nouveau chemin des lots sur le stockage partagé d'Android (FUSE). Ce chemin fait un `fsync` par fichier, 8 à la fois, au lieu de se fier à `syncfs`. Sorties brutes : [`r3a-flush-a57-20261127.txt`](r3a-flush-a57-20261127.txt), [`r3a-flush-tecno-20261127.txt`](r3a-flush-tecno-20261127.txt).
 
 **Méthode :**
 - Le binaire de test de `pkg/store` est compilé pour Android et lancé par `adb shell`, avec `MEDXFER_TEST_FUSE_DIR` sur un dossier de `/sdcard/Download`.
@@ -18,8 +18,16 @@ Les mesures sur appareils réels (bible §17.4, DEV-21) sont gardées ici pour c
 | ancien (`syncfs`, repli un par un) | 8,44 ; 8,58 ; 7,80 |
 | nouveau (`fsync` par fichier, 8 à la fois) | 8,03 ; 8,72 ; 8,89 |
 
+**Résultats sur le TECNO BF6** (Android 12, noyau 5.4, 32 bits) :
+
+| Chemin | ms par fichier (3 passages) |
+|---|---|
+| ancien (`syncfs`, qui y répond « succès » sans rien écrire) | 19,68 ; 17,59 ; 21,57 |
+| nouveau (`fsync` par fichier, 8 à la fois) | 21,71 ; 19,71 ; 22,23 |
+
 **Lecture :**
-- Les deux chemins prennent le même temps, à la dispersion près.
+- Sur l'A57, les deux chemins prennent le même temps, à la dispersion près. Sur le TECNO, le nouveau coûte environ 1 à 2 ms de plus par fichier (5 à 10 %) : c'est le prix d'une durabilité réelle, l'ancien n'écrivant rien.
+- Le TECNO est 2 à 2,5 fois plus lent que l'A57 sur ces petits fichiers.
 - L'ancien chemin ne rendait pourtant rien durable : `syncfs` y a répondu « succès », et aucun fichier n'était synchronisé. R-0 a montré qu'un `syncfs` sur FUSE n'écrit rien. Le nouveau chemin rend les fichiers durables sans surcoût mesurable.
 - Le temps d'un petit fichier sur FUSE est donc surtout ailleurs que dans la synchronisation, qui ne pèse qu'environ 0,3 à 0,5 ms par fichier en R-0 : fermeture, renommage, dossier. C'est à mesurer à part.
 
