@@ -1,0 +1,17 @@
+R-3a, #302 : temps de Batch.Flush sur le stockage partagé (FUSE) du Galaxy A57
+Android 16, noyau 6.12.38-android16, arm64. Binaire de test de pkg/store (branche fix/revue-r3a-stockage),
+lancé par adb shell dans /data/local/tmp, dossier MEDXFER_TEST_FUSE_DIR=/sdcard/Download/medxfer-r3a
+(statfs : 0x65735546, FUSE). 200 fichiers de 16 Kio par lot, un bloc chacun. Trois passages, 27/11/2026.
+
+TestOnFUSEDetectsSharedStorage : PASS (stockage partagé reconnu comme FUSE, /data/local/tmp non)
+
+syncfs          200 files of 16 KiB: 1.688s, 8.44 ms a file (syncfs answers: <nil>)
+fsync per file  200 files of 16 KiB: 1.606s, 8.03 ms a file (syncfs answers: no such file or directory)
+syncfs          200 files of 16 KiB: 1.717s, 8.58 ms a file (syncfs answers: <nil>)
+fsync per file  200 files of 16 KiB: 1.743s, 8.72 ms a file (syncfs answers: no such file or directory)
+syncfs          200 files of 16 KiB: 1.559s, 7.80 ms a file (syncfs answers: <nil>)
+fsync per file  200 files of 16 KiB: 1.778s, 8.89 ms a file (syncfs answers: no such file or directory)
+
+« syncfs » : l'ancien chemin (syncfs, puis fsync de chaque fichier l'un après l'autre s'il échoue).
+« fsync per file » : le nouveau chemin sur FUSE (fsync de chaque fichier, 8 à la fois, sans syncfs).
+« syncfs answers » : la réponse d'un syncfs appelé après le lot ; un succès ne prouve rien sur FUSE (R-0).

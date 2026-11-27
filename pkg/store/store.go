@@ -108,8 +108,26 @@ var openFile = func(root *os.Root, name string, flag int) (handle, error) {
 	return engine.WrapStorage(f, name), nil
 }
 
-// rename renames in root; tests replace it to simulate a file held by an antivirus.
-var rename = func(root *os.Root, from, to string) error { return root.Rename(from, to) }
+// rename renames from to to in root. Unless replace, a file at to is never replaced: the call
+// that renames refuses (ErrExists), so none can appear between a check and the rename (#313).
+// Tests replace it to simulate a file held by an antivirus.
+var rename = func(root *os.Root, from, to string, replace bool) error {
+	if replace {
+		return root.Rename(from, to)
+	}
+	err := renameNoReplace(root, from, to)
+	if !errors.Is(err, errNoReplace) {
+		return err
+	}
+	// This file system cannot refuse to replace: check, then rename.
+	if _, lerr := root.Lstat(to); lerr == nil {
+		return ErrExists
+	}
+	return root.Rename(from, to)
+}
+
+// errNoReplace: renameNoReplace cannot rename without replacing on this file system.
+var errNoReplace = errors.New("store: no rename without replacing here")
 
 // File is one file being received.
 type File struct {
@@ -493,7 +511,7 @@ func (f *File) Commit() error {
 	f.commitMu.Lock()
 	defer f.commitMu.Unlock()
 	f.mu.Lock()
-	batch := f.pending
+	batch, batchBytes := f.pending, f.pendingBytes
 	f.pending, f.pendingBytes, f.lastCommit = nil, 0, time.Now()
 	f.mu.Unlock()
 	if len(batch) == 0 {
@@ -505,7 +523,8 @@ func (f *File) Commit() error {
 	err := f.commit(batch)
 	if err != nil {
 		f.mu.Lock()
-		f.pending = append(batch, f.pending...) // a later commit tries again
+		f.pending = append(batch, f.pending...) // a later commit tries again,
+		f.pendingBytes += batchBytes            // due by their bytes too (#313)
 		f.mu.Unlock()
 	}
 	return err
@@ -664,15 +683,14 @@ func (f *File) Finalize() error {
 func (f *File) publish() error {
 	final := filepath.FromSlash(f.name)
 	var err error
-	if _, lerr := f.root.Lstat(final); lerr == nil && !f.p.Overwrite {
-		err = fmt.Errorf("%w: %s", ErrExists, f.name)
-	} else {
-		for _, wait := range renameTries {
-			time.Sleep(wait)
-			if err = rename(f.root, f.osName(PartSuffix), final); err == nil {
-				break
-			}
+	for _, wait := range renameTries {
+		time.Sleep(wait)
+		if err = rename(f.root, f.osName(PartSuffix), final, f.p.Overwrite); err == nil || errors.Is(err, ErrExists) {
+			break
 		}
+	}
+	if errors.Is(err, ErrExists) {
+		err = fmt.Errorf("%w: %s", ErrExists, f.name)
 	}
 	if err != nil {
 		if nerr := f.notePending(); nerr != nil {

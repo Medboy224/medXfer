@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 )
 
@@ -183,7 +184,8 @@ func SaveConfigTo(cfgPath string, cfg Config) error {
 		return err
 	}
 
-	return os.WriteFile(cfgPath, data, 0644)
+	// Replaced in one go: cut by a power loss, it would be read as the defaults (#313).
+	return identity.WriteFileAtomic(cfgPath, data, 0o644)
 }
 
 // DaemonStatus represents the current state of the backend
