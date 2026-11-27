@@ -294,12 +294,12 @@ func TestRenameIsRetried(t *testing.T) {
 	t.Cleanup(func() { rename, renameTries = saved, savedTries })
 	renameTries = []time.Duration{0, time.Millisecond, time.Millisecond, time.Millisecond}
 	fails := 0
-	rename = func(r *os.Root, from, to string) error {
+	rename = func(r *os.Root, from, to string, replace bool) error {
 		if fails < 2 {
 			fails++
 			return errors.New("held by an antivirus")
 		}
-		return saved(r, from, to)
+		return saved(r, from, to, replace)
 	}
 	data, sums := content(t, 10)
 	f, _ := Open(root, "f.bin", params(len(data)))

@@ -694,7 +694,7 @@ Aucune sonde n'écrit dans le dossier de réception (D10 du plan J4b, #36) : les
 
 | Id | Exigence | Raison |
 |---|---|---|
-| `STO-09` | Le receveur NE DOIT JAMAIS supprimer un fichier qu'il n'a pas créé *dans ce transfert*. Seuls les `.part` et `.state` du transfert courant sont supprimables, après vérification de leur clé de reprise. | Supprime la classe entière de faille. |
+| `STO-09` | Le receveur NE DOIT JAMAIS supprimer un fichier qu'il n'a pas créé *dans ce transfert*. Seuls les `.part` et `.state` du transfert courant sont supprimables, après vérification de leur clé de reprise. Il n'en écrase pas non plus, sauf écrasement demandé : le renommage du `.part` refuse un nom pris dans le même appel (`renameat2` avec `RENAME_NOREPLACE`, `renameatx_np` avec `RENAME_EXCL`, `MoveFileEx` sans remplacement), si bien qu'un fichier apparu pendant la réception reste intact et que le fichier reçu reste un `.part` reprenable (lot Revue R-3, #313 : `TestPublishNeverReplacesAFileThatAppears`). | Supprime la classe entière de faille. |
 | `STO-10` | Chaque transfert multi-éléments est reçu dans **un dossier racine neuf** (`<destination>/<racine>`), dont le nom est résolu *une fois* par la politique de collision (renommer, ignorer ou écraser). À l'intérieur, rien n'est fusionné avec l'existant. | Les conflits ne se produisent qu'au niveau racine. |
 | `STO-11` | Si un composant de chemin existe déjà avec le mauvais type (fichier au lieu de dossier), l'élément échoue avec l'erreur `PATH_CONFLICT` ; rien n'est supprimé. | — |
 | `STO-12` | Tout chemin reçu passe par `SafeRelPath` (ci-dessous) **avant** toute opération disque. | — |
