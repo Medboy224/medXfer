@@ -71,6 +71,7 @@ func StartNode(t testing.TB, srv Server) *Node {
 
 	addr := "127.0.0.1:" + portOf(ln.Addr().String())
 	c := wsclient.Local(srv.HandleJSON, srv.SubscribeJSON)
+	c.Keep(0) // a test reads the whole history (Events); it is short
 	t.Cleanup(func() { _ = c.Close() })
 	if _, err := c.Send("", "get_status", nil); err != nil { // the status a WebSocket gets first
 		t.Fatalf("testkit: %v", err)

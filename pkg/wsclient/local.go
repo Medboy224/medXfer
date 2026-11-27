@@ -17,7 +17,7 @@ var ErrClosed = errors.New("wsclient: closed")
 // As over the WebSocket, Send returns at once and the daemon runs the requests one at a time,
 // in order: a handler that waits does not block the caller.
 func Local(handle func(request []byte, reply func(event []byte)), subscribe func(fn func(event []byte)) (cancel func())) *Client {
-	c := &Client{changed: make(chan struct{})}
+	c := &Client{changed: make(chan struct{}), keep: DefaultKeep}
 	t := &localTransport{c: c, handle: handle, requests: make(chan []byte, 256), done: make(chan struct{})}
 	c.tr = t
 	t.unsubscribe = subscribe(c.deliverJSON)
