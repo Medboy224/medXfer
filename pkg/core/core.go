@@ -50,6 +50,9 @@ const SchemaVersion = 6
 // the engine never waits for the interface.
 const DefaultQueueSize = 65536
 
+// maxHeldEnds bounds the ends of transfers held past a full queue (#297).
+const maxHeldEnds = 256
+
 // progressGap is the least time between two progress events: 10 per second at most (B7).
 const progressGap = 100 * time.Millisecond
 
@@ -89,11 +92,14 @@ type Core struct {
 	stopCh   chan struct{}
 	dispatch func(api.Responder, api.RequestMessage) // tests replace it
 
-	mu           sync.Mutex
-	started      bool
-	stopped      bool
-	unsubscribe  func()
+	mu          sync.Mutex
+	started     bool
+	stopped     bool
+	unsubscribe func()
+
+	qmu          sync.Mutex // the queue's own: Start holds mu while the server sends events
 	lastProgress time.Time
+	ends         []api.EventMessage // transfer ends that found the queue full, read after it
 }
 
 // New prepares a core; nothing listens until Start.
@@ -186,10 +192,8 @@ func (c *Core) CallJSON(request []byte) []byte {
 // NextEvent returns the next event, or false after timeout (0: do not wait; negative: no
 // limit) or once Stop has woken every reader (B9).
 func (c *Core) NextEvent(timeout time.Duration) (api.EventMessage, bool) {
-	select {
-	case e := <-c.events:
+	if e, ok := c.take(); ok {
 		return e, true
-	default:
 	}
 	if timeout == 0 {
 		return api.EventMessage{}, false
@@ -226,6 +230,24 @@ func (c *Core) Stop() {
 	c.srv.Stop()
 }
 
+// take returns the next event without waiting: the queue's, then the ends held past it. While
+// an end is held nothing enters the queue, so waiting on the queue alone misses none.
+func (c *Core) take() (api.EventMessage, bool) {
+	select {
+	case e := <-c.events:
+		return e, true
+	default:
+	}
+	c.qmu.Lock()
+	defer c.qmu.Unlock()
+	if len(c.ends) == 0 {
+		return api.EventMessage{}, false
+	}
+	e := c.ends[0]
+	c.ends = c.ends[1:]
+	return e, true
+}
+
 // serverStopping runs just before the server stops; tests hold it.
 var serverStopping = func() {}
 
@@ -237,7 +259,11 @@ func (c *Core) Stopped() bool {
 }
 
 // Stats reports the event queue.
-func (c *Core) Stats() Stats { return Stats{Queued: len(c.events), Drops: c.drops.Load()} }
+func (c *Core) Stats() Stats {
+	c.qmu.Lock()
+	defer c.qmu.Unlock()
+	return Stats{Queued: len(c.events) + len(c.ends), Drops: c.drops.Load()}
+}
 
 // NodeAddr is the address of the device's single port, once started ("" before).
 func (c *Core) NodeAddr() string { return c.srv.NodeListenAddr() }
@@ -251,23 +277,40 @@ func (c *Core) JournalDir() string { return c.srv.JournalDir() }
 
 // push queues an event without ever blocking the engine: a full queue drops and counts (B11);
 // progress events closer than progressGap are dropped too, the next one carries the news (B7).
-// The last one, at 100 %, always passes: no other comes after it (audit §3.7, #156).
+// The last one, at 100 %, always passes: no other comes after it (audit §3.7, #156). A
+// transfer's end is never dropped: past a full queue it is held, and what comes after it is
+// dropped until it is read, never put before it (#297).
 func (c *Core) push(e api.EventMessage) {
+	c.qmu.Lock()
+	defer c.qmu.Unlock()
 	if e.Event == "transfer_progress" {
-		c.mu.Lock()
 		now := time.Now()
 		if now.Sub(c.lastProgress) < progressGap && !finalProgress(e) {
-			c.mu.Unlock()
 			return
 		}
 		c.lastProgress = now
-		c.mu.Unlock()
 	}
-	select {
-	case c.events <- e:
-	default:
-		c.drops.Add(1)
+	if len(c.ends) == 0 {
+		select {
+		case c.events <- e:
+			return
+		default:
+		}
 	}
+	if transferEnd(e.Event) && len(c.ends) < maxHeldEnds {
+		c.ends = append(c.ends, e)
+		return
+	}
+	c.drops.Add(1)
+}
+
+// transferEnd reports whether event ends a transfer: the interface would wait for it forever.
+func transferEnd(event string) bool {
+	switch event {
+	case "transfer_complete", "transfer_failed", "transfer_canceled", "transfer_rejected":
+		return true
+	}
+	return false
 }
 
 // finalProgress reports whether e is the progress event of a finished transfer.

@@ -814,7 +814,7 @@ Vérifié sur Windows, Linux et Android (`g2a-report.md`, §6).
 | B8 | Le cœur ne garde aucun pointeur vers du code Dart : les événements passent par sa file, lue par `medxfer_next_event`. |
 | B9 | Le lecteur d'événements s'arrête de façon coordonnée : le cœur le réveille par une sentinelle. On ne tue jamais un isolat bloqué dans un appel natif (un événement perdu lors de la mise au point). `medxfer_next_event` avec un délai négatif attend sans limite. `medxfer_stop` rend la main une fois le cœur arrêté : un `medxfer_start` pendant l'arrêt attend, deux cœurs ne tournent jamais ensemble (#156). |
 | B10 | Le lecteur transmet les événements par lots, jusqu'à 256 par message (lenteur de l'interface en rafale : 237 ms un par un, 3 à 5 ms par lots). |
-| B11 | La file du cœur est bornée (65 536) ; un événement sans place est compté (`drops`), le moteur n'attend jamais l'interface. |
+| B11 | La file du cœur est bornée (65 536) ; un événement sans place est compté (`drops`), le moteur n'attend jamais l'interface. La fin d'un transfert (`transfer_complete`, `transfer_failed`, `transfer_canceled`, `transfer_rejected`) n'est jamais jetée : sans place, elle est gardée (256 au plus) et lue après la file ; ce qui arrive ensuite est jeté jusqu'à sa lecture, jamais placé avant elle (#297, `TestFullQueueKeepsTransferEnds`). |
 
 ---
 
