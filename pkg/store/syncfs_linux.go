@@ -15,6 +15,25 @@ var sysSyncfs = map[string]uintptr{
 // canSyncFS: Linux and Android make a whole file system durable in one call.
 var canSyncFS = sysSyncfs != 0
 
+// fuseMagic is FUSE_SUPER_MAGIC, the type statfs gives a FUSE file system: Android's shared
+// storage (/storage/emulated) is one.
+const fuseMagic = 0x65735546
+
+// onFUSE reports whether root is on FUSE, where syncfs makes nothing durable: it fails
+// (ENOENT, Android 16) or succeeds without writing anything (Android 12). Tests replace it.
+var onFUSE = func(root *os.Root) bool {
+	d, err := root.Open(".")
+	if err != nil {
+		return false
+	}
+	defer d.Close()
+	var st syscall.Statfs_t
+	if err := syscall.Fstatfs(int(d.Fd()), &st); err != nil {
+		return false
+	}
+	return int64(st.Type) == fuseMagic
+}
+
 // syncFS makes everything written to the file system of root durable: syncfs(2). Tests
 // replace it.
 var syncFS = func(root *os.Root) error {

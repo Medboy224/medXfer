@@ -674,12 +674,12 @@ Tous chunks présents → `digest` correspond → `part.Sync()` → fermeture �
 - *Quels fichiers :* sous Linux et Android, ceux reçus d'une traite dans le dossier racine du transfert, donc sans journal, sont finalisés ensemble (`store.Batch`).
 - *Déroulement :*
   1. chaque fichier est scellé sans `fsync` ;
-  2. un seul `syncfs` rend tout le lot durable ;
+  2. un seul `syncfs` rend tout le lot durable. **Sur FUSE** (le stockage partagé d'Android, repéré par `statfs`), `syncfs` ne rend rien durable : il échoue, ou réussit sans rien écrire (R-0, #302). Chaque fichier y reçoit donc son `fsync`, 8 à la fois, comme quand `syncfs` échoue ailleurs ;
   3. viennent ensuite les renommages ;
   4. puis un `fsync` par dossier.
 - *Déclenchement :* le lot est vidé à 256 fichiers, à 64 Mio, 2 s après son premier fichier, dès qu'il ne reste rien d'autre à recevoir, et à la fin de la session, même annulée.
 - *Garantie inchangée :* aucun nom final avant des données durables (`STO-01`). Un arrêt brutal perd au plus le lot, dont les `.part` sans journal sont repris de zéro (§9.2, journal).
-- *Gain :* sur un téléphone, environ 5 fois moins de temps par petit fichier. Un `syncfs` écrit aussi les données en attente des autres programmes sur ce disque : le premier lot d'un transfert peut donc coûter plus cher que les suivants.
+- *Gain :* sur un téléphone, environ 5 fois moins de temps par petit fichier. Un `syncfs` écrit aussi les données en attente des autres programmes sur ce disque : le premier lot d'un transfert peut donc coûter plus cher que les suivants. Sur FUSE, le gain mesuré au départ ne valait rien, puisque `syncfs` n'y écrivait rien. Le `fsync` par fichier, 8 à la fois, y prend le même temps que l'ancien chemin, mais rend les fichiers durables (`TestBatchOnFUSESyncsEachFile` ; mesure dans `bench-results/`, R-3a).
 - *Ailleurs :* Windows et macOS n'ont pas de `syncfs`, et chaque fichier y est finalisé seul. Sous Windows, le coût d'un petit fichier est sa création (NTFS, antivirus), pas son `fsync`.
 
 ### 9.7 Espace disque

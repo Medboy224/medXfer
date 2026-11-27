@@ -10,3 +10,6 @@ var canSyncFS = false
 
 // syncFS is not available: Batch.Flush syncs each file alone. Tests replace it.
 var syncFS = func(*os.Root) error { return errNoSyncFS }
+
+// onFUSE: no batch here.
+var onFUSE = func(*os.Root) bool { return false }

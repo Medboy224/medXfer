@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"sync"
 )
 
 // Batch makes several complete files durable at once, then gives them their names (WP-4.11).
@@ -18,6 +19,7 @@ import (
 // journal in the transfer's own folder, which a resume starts over (Params.Owned).
 type Batch struct {
 	root  *os.Root
+	fuse  bool
 	files []*File
 	bytes int64
 }
@@ -28,7 +30,7 @@ func NewBatch(root *os.Root) *Batch {
 	if !canSyncFS {
 		return nil
 	}
-	return &Batch{root: root}
+	return &Batch{root: root, fuse: onFUSE(root)}
 }
 
 // Batchable reports whether f may join a batch: a file of its transfer's own folder received
@@ -59,10 +61,10 @@ func (b *Batch) Len() int { return len(b.files) }
 // Bytes is their size.
 func (b *Batch) Bytes() int64 { return b.bytes }
 
-// Flush makes the files durable at once (syncfs; each file synced alone if that fails),
-// closes them, gives each its name, then syncs each folder once (Unix). errs[i] is the error
-// of the i-th file added: a file whose data could not be made durable is not renamed. The
-// batch is empty afterwards.
+// Flush makes the files durable at once (syncfs; each file synced, parallelSyncs at a time, if
+// that fails or on FUSE, where syncfs makes nothing durable: #302), closes them, gives each its
+// name, then syncs each folder once (Unix). errs[i] is the error of the i-th file added: a file
+// whose data could not be made durable is not renamed. The batch is empty afterwards.
 func (b *Batch) Flush() (errs []error) {
 	files := b.files
 	b.files, b.bytes = nil, 0
@@ -71,14 +73,8 @@ func (b *Batch) Flush() (errs []error) {
 	for _, f := range files {
 		sync = sync || !f.p.NoSync
 	}
-	if sync {
-		if err := syncFS(b.root); err != nil {
-			for i, f := range files {
-				if !f.p.NoSync {
-					errs[i] = f.part.Sync()
-				}
-			}
-		}
+	if sync && (b.fuse || syncFS(b.root) != nil) {
+		syncEach(files, errs)
 	}
 	dirs := map[string]bool{}
 	for i, f := range files {
@@ -103,6 +99,29 @@ func (b *Batch) Flush() (errs []error) {
 		}
 	}
 	return errs
+}
+
+// parallelSyncs bounds the fsyncs in flight. On the shared storage of the phones, 8 at a time
+// took 0.33 to 0.5 ms a file, against 2 to 3.3 ms one after the other (R-0, bench-results).
+const parallelSyncs = 8
+
+// syncEach syncs each file that asks for it, parallelSyncs at a time; errs[i] gets file i's.
+func syncEach(files []*File, errs []error) {
+	slots := make(chan struct{}, parallelSyncs)
+	var wg sync.WaitGroup
+	for i, f := range files {
+		if f.p.NoSync {
+			continue
+		}
+		slots <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = f.part.Sync()
+			<-slots
+		}()
+	}
+	wg.Wait()
 }
 
 // errNoSyncFS: the system has no syncfs.

@@ -2,6 +2,27 @@
 
 Les mesures sur appareils réels (bible §17.4, DEV-21) sont gardées ici pour comparer les appareils et les versions. Chaque fichier `matrix-<appareil>-<système>-<date>.json` est la sortie de `xfer bench matrix` côté **receveur**.
 
+## 27 novembre 2026 — R-3a : lots de petits fichiers sur FUSE, `fsync` par fichier (#302)
+
+**But :** mesurer, sur les mêmes téléphones qu'en R-0, ce que coûte le nouveau chemin des lots sur le stockage partagé d'Android (FUSE). Ce chemin fait un `fsync` par fichier, 8 à la fois, au lieu de se fier à `syncfs`. Sorties brutes : [`r3a-flush-a57-20261127.txt`](r3a-flush-a57-20261127.txt).
+
+**Méthode :**
+- Le binaire de test de `pkg/store` est compilé pour Android et lancé par `adb shell`, avec `MEDXFER_TEST_FUSE_DIR` sur un dossier de `/sdcard/Download`.
+- `TestBatchFlushTimeOnSharedStorage` chronomètre `Batch.Flush` pour 200 fichiers de 16 Kio, par l'ancien chemin puis par le nouveau. Le temps comprend la synchronisation, la fermeture, le renommage et la synchronisation du dossier.
+- Trois passages.
+
+**Résultats sur l'A57 :**
+
+| Chemin | ms par fichier (3 passages) |
+|---|---|
+| ancien (`syncfs`, repli un par un) | 8,44 ; 8,58 ; 7,80 |
+| nouveau (`fsync` par fichier, 8 à la fois) | 8,03 ; 8,72 ; 8,89 |
+
+**Lecture :**
+- Les deux chemins prennent le même temps, à la dispersion près.
+- L'ancien chemin ne rendait pourtant rien durable : `syncfs` y a répondu « succès », et aucun fichier n'était synchronisé. R-0 a montré qu'un `syncfs` sur FUSE n'écrit rien. Le nouveau chemin rend les fichiers durables sans surcoût mesurable.
+- Le temps d'un petit fichier sur FUSE est donc surtout ailleurs que dans la synchronisation, qui ne pèse qu'environ 0,3 à 0,5 ms par fichier en R-0 : fermeture, renommage, dossier. C'est à mesurer à part.
+
 ## 25 novembre 2026 — R-0 : `syncfs` sur le stockage partagé d'Android (#302)
 
 **But :** savoir si `syncfs` rend vraiment durables les petits fichiers reçus dans le stockage partagé d'Android, qui passe par FUSE (lot R-0 du plan de revue, décision R3). Sorties brutes : [`r0-syncfs-a57-20261125.txt`](r0-syncfs-a57-20261125.txt), [`r0-syncfs-tecno-20261125.txt`](r0-syncfs-tecno-20261125.txt).
