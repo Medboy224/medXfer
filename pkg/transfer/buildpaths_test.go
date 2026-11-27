@@ -63,6 +63,16 @@ func TestBuildOfferFromDotPaths(t *testing.T) {
 	}
 }
 
+// An empty path designates nothing: filepath.Clean made it ".", and `xfer send "$F"` with F
+// empty, or `send ""` in xfer node, offered the whole current folder.
+func TestBuildOfferRefusesAnEmptyPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeTree(t, ".", "secret.txt")
+	if offer, _, err := BuildOffer([]string{""}, protocol.DefaultChunkSize); err == nil {
+		t.Fatalf("an empty path offered %d files of the current folder", len(offer.Items))
+	}
+}
+
 // The sender checks the paths of its offer as the receiver will: a path the receiver would
 // refuse fails at once, named, rather than file by file over there (#300).
 func TestBuildOfferRefusesAPathTheReceiverRefuses(t *testing.T) {

@@ -41,6 +41,9 @@ func Build(paths []string) (*Manifest, error) {
 	rootName := fmt.Sprintf("batch_%d_files", len(paths))
 	used := map[string]bool{} // top-level names already given, lower case
 	for _, p := range paths {
+		if p == "" { // Clean would make it ".": the whole current folder
+			return nil, fmt.Errorf("an empty path designates no file")
+		}
 		cleanPath := filepath.Clean(p)
 		info, err := os.Stat(cleanPath)
 		if err != nil {
