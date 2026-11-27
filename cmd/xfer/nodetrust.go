@@ -18,7 +18,7 @@ import (
 )
 
 // trustPromptTimeout bounds how long a question waits for the user.
-const trustPromptTimeout = 60 * time.Second
+var trustPromptTimeout = 60 * time.Second
 
 // listedName is how a device of a discovery list is shown: under the name this device recorded
 // when it is a device of mutual trust, recognized by its tags (DISC-11), never by its address;

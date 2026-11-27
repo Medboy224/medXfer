@@ -282,15 +282,36 @@ var stdinLines = sync.OnceValue(func() <-chan string {
 	return lines
 })
 
-// askLine reads the user's answer, or "" (no) when ctx ends, after trustPromptTimeout, or
-// without a terminal.
-func askLine(ctx context.Context) string {
+// askLine reads the user's answer; ok is false without one: ctx ended, trustPromptTimeout
+// passed, or there is no terminal (#301).
+func askLine(ctx context.Context) (line string, ok bool) {
 	select {
-	case s := <-stdinLines():
-		return s
+	case s, open := <-stdinLines():
+		if open {
+			return s, true
+		}
+		fmt.Println("\n[-] No terminal to answer: refused.")
 	case <-ctx.Done():
 	case <-time.After(trustPromptTimeout):
 		fmt.Println("\n[-] No answer: refused.")
 	}
-	return ""
+	return "", false
+}
+
+// yesByDefault reads the answer to a [Y/n] question: Enter alone is yes, but only typed (#301).
+func yesByDefault(ctx context.Context) bool {
+	l, ok := askLine(ctx)
+	ans := strings.TrimSpace(strings.ToLower(l))
+	return ok && (ans == "" || ans == "y" || ans == "yes" || ans == "o" || ans == "oui")
+}
+
+// acceptOffer asks whether to download the offer shown, unless autoAccept: xfer recv
+// --auto-accept, for scripts, where no terminal means no (#314).
+func acceptOffer(autoAccept bool) bool {
+	if autoAccept {
+		fmt.Println("[*] Accepted (--auto-accept).")
+		return true
+	}
+	fmt.Print("[?] Confirm download? [Y/n]: ")
+	return yesByDefault(context.Background())
 }
