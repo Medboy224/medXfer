@@ -511,7 +511,7 @@ func (f *File) Commit() error {
 	f.commitMu.Lock()
 	defer f.commitMu.Unlock()
 	f.mu.Lock()
-	batch := f.pending
+	batch, batchBytes := f.pending, f.pendingBytes
 	f.pending, f.pendingBytes, f.lastCommit = nil, 0, time.Now()
 	f.mu.Unlock()
 	if len(batch) == 0 {
@@ -523,7 +523,8 @@ func (f *File) Commit() error {
 	err := f.commit(batch)
 	if err != nil {
 		f.mu.Lock()
-		f.pending = append(batch, f.pending...) // a later commit tries again
+		f.pending = append(batch, f.pending...) // a later commit tries again,
+		f.pendingBytes += batchBytes            // due by their bytes too (#313)
 		f.mu.Unlock()
 	}
 	return err
