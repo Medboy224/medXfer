@@ -40,8 +40,11 @@ import (
 // (files added to a running session, or withdrawn); web_share_started lists the items;
 // web_share_networks (action and answer: the networks a session may serve on, never mobile
 // data), web_share_started's kind, and web_share_start's errors no_local_network and
-// address_not_local (real tests of 10 November 2026, WP-W.6).
-const SchemaVersion = 5
+// address_not_local (real tests of 10 November 2026, WP-W.6). 6: an item's event
+// (batch_item_transferring, item_completed, item_failed, file_skipped, file_paused,
+// file_resumed) carries its item_index and status, no longer the whole queue (items), which
+// comes with the offer, batch_accepted, batch_paused_waiting and transfer_complete (#297).
+const SchemaVersion = 6
 
 // DefaultQueueSize bounds the event queue (B11): past it, an event is dropped and counted, and
 // the engine never waits for the interface.

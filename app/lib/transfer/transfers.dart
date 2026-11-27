@@ -457,7 +457,7 @@ class Transfers extends ChangeNotifier {
         _active = a.copyWith(stage: Stage.running, totalBytes: (m['batch_total_bytes'] as num?)?.toInt());
       case 'batch_item_transferring' || 'item_completed' || 'item_failed' || 'file_skipped' || 'file_paused' || 'file_resumed':
         if (a == null || a.stage == Stage.done) return;
-        _active = a.copyWith(items: _merge(a.items, _items(m['items'])));
+        _active = a.copyWith(items: _set(a.items, m['item_index'], m['status']));
         if (e.name == 'item_failed') _notices.add(FileError(_pathOf(a, m['item_index']), (m['error'] as String?) ?? ''));
       case 'batch_paused_waiting':
         if (a == null || a.stage == Stage.done) return;
@@ -555,6 +555,14 @@ class Transfers extends ChangeNotifier {
     if (fresh.isEmpty) return old;
     final bytes = {for (final i in old) i.index: i.bytes};
     return [for (final i in fresh) i.copyWith(bytes: i.status == ItemStatus.completed ? i.size : bytes[i.index] ?? 0)];
+  }
+
+  /// An item's event changes that item's status alone (#297); a completed file has all its bytes.
+  static List<TransferItem> _set(List<TransferItem> items, Object? index, Object? status) {
+    final i = (index as num?)?.toInt();
+    if (i == null || status is! String) return items;
+    final s = _status(status);
+    return [for (final x in items) x.index == i ? x.copyWith(status: s, bytes: s == ItemStatus.completed ? x.size : null) : x];
   }
 
   static String _pathOf(ActiveTransfer a, Object? index) {

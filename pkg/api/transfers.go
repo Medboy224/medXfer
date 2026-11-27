@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -132,22 +133,26 @@ func (s *DaemonServer) queue() []BatchFileInfo {
 }
 
 // setStatus sets item i's status in the queue, unless it already ended or the user decided
-// otherwise (keep). It reports whether it changed. Called with s.mu held.
-func (s *DaemonServer) setStatus(i int, status string, keep ...string) bool {
+// otherwise (keep). It returns the item's status then, "" if it is not in the queue. Called
+// with s.mu held.
+func (s *DaemonServer) setStatus(i int, status string, keep ...string) string {
 	for k := range s.currentBatchItems {
 		it := &s.currentBatchItems[k]
 		if it.Index != i {
 			continue
 		}
-		for _, st := range keep {
-			if it.Status == st {
-				return false
-			}
+		if !slices.Contains(keep, it.Status) {
+			it.Status = status
 		}
-		it.Status = status
-		return true
+		return it.Status
 	}
-	return false
+	return ""
+}
+
+// itemData is an item's event: its index and status, never the whole queue (#297), which
+// comes with the offer, the acceptance, batch_paused_waiting and the end.
+func itemData(i int, status string) map[string]interface{} {
+	return map[string]interface{}{"item_index": i, "status": status}
 }
 
 // onlyPausedLeft reports whether every item not yet ended is paused, with at least one:
@@ -657,17 +662,17 @@ const (
 
 func (s *DaemonServer) itemAction(action string, i int, fromPeer bool, reqID string) {
 	s.mu.Lock()
-	var event string
+	var event, status string
 	switch action {
 	case itemSkip:
 		event = "file_skipped"
-		s.setStatus(i, "skipped", "completed", "failed")
+		status = s.setStatus(i, "skipped", "completed", "failed")
 	case itemPause:
 		event = "file_paused"
-		s.setStatus(i, "paused", "completed", "skipped", "failed")
+		status = s.setStatus(i, "paused", "completed", "skipped", "failed")
 	case itemResume:
 		event = "file_resumed"
-		s.setStatus(i, "pending", "completed", "skipped", "failed", "transferring")
+		status = s.setStatus(i, "pending", "completed", "skipped", "failed", "transferring")
 	}
 	rx := s.activeReceiver
 	id := s.activeTransferID
@@ -678,8 +683,11 @@ func (s *DaemonServer) itemAction(action string, i int, fromPeer bool, reqID str
 		id = s.pendingOffer.TransferID
 	}
 	sess := s.activeSession
-	items := s.queue()
+	var items []BatchFileInfo
 	waiting := s.activeReceiver != nil && s.onlyPausedLeft()
+	if waiting {
+		items = s.queue()
+	}
 	s.mu.Unlock()
 
 	// After the unlock: ending an item, the receiver's scheduler tells the events, which take
@@ -699,9 +707,9 @@ func (s *DaemonServer) itemAction(action string, i int, fromPeer bool, reqID str
 		_ = sess.Send(session.Message{Type: action, TransferID: id, Item: &i})
 	}
 	if reqID != "" {
-		s.Broadcast(NewEvent(event, map[string]interface{}{"item_index": i, "items": items}, reqID))
+		s.Broadcast(NewEvent(event, itemData(i, status), reqID))
 	} else {
-		s.Broadcast(NewEvent(event, map[string]interface{}{"item_index": i, "items": items}))
+		s.Broadcast(NewEvent(event, itemData(i, status)))
 	}
 	if waiting {
 		s.broadcastPausedWaiting(items)
@@ -1014,22 +1022,25 @@ func fileProgress(offer protocol.Offer, p transfer.Progress, current int, batchP
 func (e *daemonEvents) OnItem(ev transfer.ItemEvent) {
 	s := e.s
 	s.mu.Lock()
-	var event string
+	var event, status string
 	switch ev.State {
 	case transfer.ItemStarted:
-		s.setStatus(ev.Item, "transferring", "paused", "skipped", "completed", "failed")
+		status = s.setStatus(ev.Item, "transferring", "paused", "skipped", "completed", "failed")
 	case transfer.ItemDone:
-		s.setStatus(ev.Item, "completed")
+		status = s.setStatus(ev.Item, "completed")
 		event = "item_completed"
 	case transfer.ItemSkipped:
-		s.setStatus(ev.Item, "skipped")
+		status = s.setStatus(ev.Item, "skipped")
 		event = "file_skipped"
 	case transfer.ItemFailed:
-		s.setStatus(ev.Item, "failed")
+		status = s.setStatus(ev.Item, "failed")
 		event = "item_failed"
 	}
-	items := s.queue()
+	var items []BatchFileInfo
 	waiting := ev.State != transfer.ItemStarted && s.onlyPausedLeft()
+	if waiting {
+		items = s.queue()
+	}
 	s.mu.Unlock()
 
 	if ev.State == transfer.ItemStarted {
@@ -1044,11 +1055,11 @@ func (e *daemonEvents) OnItem(ev transfer.ItemEvent) {
 			"batch_total_bytes": e.offer.TotalBytes,
 		}))
 		if len(e.offer.Items) > 1 {
-			s.Broadcast(NewEvent("batch_item_transferring", map[string]interface{}{"item_index": ev.Item, "items": items}))
+			s.Broadcast(NewEvent("batch_item_transferring", itemData(ev.Item, status)))
 		}
 		return
 	}
-	data := map[string]interface{}{"item_index": ev.Item, "items": items}
+	data := itemData(ev.Item, status)
 	if ev.Err != nil {
 		data["error"] = ev.Err.Error()
 		if errors.Is(ev.Err, store.ErrPathConflict) {
