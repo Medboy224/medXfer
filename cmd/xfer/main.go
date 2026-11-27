@@ -197,6 +197,7 @@ func handleNode() error {
 		fmt.Fprintf(os.Stderr, "[-] %v\n", err)
 		return errShown
 	}
+	recvDir := nodeReceiveDir()
 	nodeLn, err := listenNodePort("0.0.0.0")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[-] Cannot listen: %v\n", err)
@@ -212,8 +213,7 @@ func handleNode() error {
 	discOffer := &discovery.TransferOffer{FileName: "medXfer-Node", FileSize: 0}
 	discServer := discovery.NewDiscoveryServer("node", nodePort, discOffer)
 	discServer.SetPairingCode(nodePairingCode)
-	discServer.Start(ctxDisc)
-	discServer.SetTags(announceTagsOf(nodeTrust, nodeID)) // devices of mutual trust recognize this one (DISC-11)
+	startAnnouncing(ctxDisc, discServer, announceTagsOf(nodeTrust, nodeID)) // devices of mutual trust recognize this one (DISC-11)
 	// Control connections: unknown keys start UNAUTH. The pairing code only finds this node on
 	// the network: a device pairs by a PIN or a QR code, or as a device of mutual trust (bible
 	// chapter 6, PAIR-09, PAIR-12).
@@ -235,6 +235,7 @@ func handleNode() error {
 	fmt.Printf(" Local IP    : %s\n", getLocalIP())
 	fmt.Printf(" Find code   : %s   (locates this node; trust comes from its key)\n", nodePairingCode)
 	fmt.Printf(" Fingerprint : %s\n", nodeID.Fingerprint.Short())
+	fmt.Printf(" Receives in : %s\n", recvDir)
 	fmt.Println("--------------------------------------------------")
 	fmt.Println(" Commands:")
 	fmt.Println("   scan              - Find devices on the network")
@@ -625,8 +626,8 @@ func handleNode() error {
 					printPrompt()
 					continue
 				}
-				if err := checkSpace(".", offer, sessionPeer(activeSession)); err != nil {
-					fmt.Printf("[-] Cannot receive here: %v.\n", err)
+				if err := checkSpace(recvDir, offer, sessionPeer(activeSession)); err != nil {
+					fmt.Printf("[-] Cannot receive into %s: %v.\n", recvDir, err)
 					activeSession.Send(session.Message{Type: "reject", TransferID: offer.TransferID, Code: "no_space", Error: err.Error()})
 					printPrompt()
 					continue
@@ -642,7 +643,7 @@ func handleNode() error {
 				cfg := securechan.Config{Identity: localID, Expected: sessionPeer(activeSession)}
 				go func(ctx context.Context, s *session.Channel) {
 					defer printPrompt()
-					if receiveOffer(ctx, addr, ".", 0, offer, cfg, tid) == nil { // 0: the receiver chooses
+					if receiveOffer(ctx, addr, recvDir, 0, offer, cfg, tid) == nil { // 0: the receiver chooses
 						s.Send(session.Message{Type: "complete", TransferID: offer.TransferID})
 					}
 				}(ctx, activeSession)
@@ -930,10 +931,14 @@ func handleNode() error {
 					fmt.Println("[-] Usage: send <filepath or folderpath> [additional paths...]")
 					break
 				}
-				rawArg := strings.TrimSpace(parts[1])
-				rawPaths := strings.Fields(rawArg)
+				rawPaths, err := splitArgs(parts[1])
+				if err != nil {
+					fmt.Printf("[-] %v: a path with spaces goes between \"quotes\".\n", err)
+					break
+				}
 				if len(rawPaths) == 0 {
-					rawPaths = []string{rawArg}
+					fmt.Println("[-] Usage: send <filepath or folderpath> [additional paths...]")
+					break
 				}
 
 				// One offer for a file, several files or a folder (bible §8.3).
