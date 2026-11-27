@@ -8,10 +8,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
 
 // The foreground service (API-08, WP-B.4): while a session, a transfer, the Connect screen or
 // the hotspot is on, Android keeps the app's network when it goes to the background (G2A-05:
@@ -19,9 +17,6 @@ import android.os.PowerManager
 // another device over the network, with no daily limit (dataSync has 6 hours from Android 15).
 // The notification says what runs; a tap opens the app.
 class MedxferService : Service() {
-    private var wakeLock: PowerManager.WakeLock? = null
-    private var wifiLock: WifiManager.WifiLock? = null
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -34,42 +29,7 @@ class MedxferService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-        acquireLocks()
         return START_NOT_STICKY // the app decides when it runs: never restarted on its own
-    }
-
-    override fun onDestroy() {
-        releaseLocks()
-        super.onDestroy()
-    }
-
-    private fun acquireLocks() {
-        if (wakeLock == null) {
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "medxfer:service").apply {
-                setReferenceCounted(false)
-            }
-        }
-        // Bounded to 60 minutes per refresh so a killed service never leaks CPU awake indefinitely.
-        wakeLock?.acquire(60 * 60 * 1000L)
-        if (wifiLock == null) {
-            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-            } else {
-                @Suppress("DEPRECATION")
-                WifiManager.WIFI_MODE_FULL_HIGH_PERF
-            }
-            wifiLock = wm.createWifiLock(mode, "medxfer:wifi").apply { setReferenceCounted(false) }
-        }
-        if (wifiLock?.isHeld == false) wifiLock?.acquire()
-    }
-
-    private fun releaseLocks() {
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wakeLock = null
-        wifiLock?.let { if (it.isHeld) it.release() }
-        wifiLock = null
     }
 
     companion object {
@@ -83,11 +43,7 @@ class MedxferService : Service() {
         fun hold(context: Context, title: String, text: String, progress: Int) {
             val intent = Intent(context, MedxferService::class.java)
                 .putExtra(EXTRA_TITLE, title).putExtra(EXTRA_TEXT, text).putExtra(EXTRA_PROGRESS, progress)
-            // Android 12+ throws ForegroundServiceStartNotAllowedException if called from background.
-            try {
-                context.startForegroundService(intent)
-            } catch (_: IllegalStateException) {
-            }
+            context.startForegroundService(intent)
         }
 
         fun release(context: Context) {

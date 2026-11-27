@@ -31,8 +31,6 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
     private var request: NetworkRequest? = null
     private var joined: Network? = null
     private var generation = 0
-    private var retryCount = 0
-    private var retryTask: Runnable? = null
     private var pending: ((Map<String, Any?>?, String?) -> Unit)? = null
 
     private fun resolve(gen: Int, data: Map<String, Any?>?, error: String?) {
@@ -86,7 +84,6 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = main.post {
                 if (gen != generation) return@post
-                retryCount = 0
                 cm.bindProcessToNetwork(network)
                 joined = network
                 if (!hasInitial) return@post changed()
@@ -123,13 +120,7 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
                 changed()
                 val again = request ?: return@post // left on purpose
                 runCatching { cm.unregisterNetworkCallback(this) }
-                if (retryCount >= MAX_RETRIES) return@post
-                val delay = minOf(8_000L, 500L shl minOf(retryCount, 4))
-                retryCount++
-                val task = Runnable { ask(again, hasInitial = false, gen = gen) }
-                retryTask?.let { main.removeCallbacks(it) }
-                retryTask = task
-                main.postDelayed(task, delay)
+                ask(again, hasInitial = false, gen = gen)
             }.let { }
         }
         callback = cb
@@ -140,9 +131,6 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
         generation++
         val prev = pending
         pending = null
-        retryTask?.let { main.removeCallbacks(it) }
-        retryTask = null
-        retryCount = 0
         request = null
         callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         callback = null
@@ -154,6 +142,5 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
     companion object {
         const val WIFI_OFF = "wifi_off"
         const val NO_BAND = "no_band"
-        private const val MAX_RETRIES = 10
     }
 }
