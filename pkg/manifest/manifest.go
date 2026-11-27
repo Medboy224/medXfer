@@ -38,26 +38,27 @@ func Build(paths []string) (*Manifest, error) {
 	var items []Item
 	var totalBytes int64
 
-	rootName := ""
-	if len(paths) == 1 {
-		clean := filepath.Clean(paths[0])
-		rootName = filepath.Base(clean)
-	} else {
-		rootName = fmt.Sprintf("batch_%d_files", len(paths))
-	}
-
+	rootName := fmt.Sprintf("batch_%d_files", len(paths))
 	used := map[string]bool{} // top-level names already given, lower case
 	for _, p := range paths {
+		if p == "" { // Clean would make it ".": the whole current folder
+			return nil, fmt.Errorf("an empty path designates no file")
+		}
 		cleanPath := filepath.Clean(p)
 		info, err := os.Stat(cleanPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to access '%s': %w", p, err)
 		}
-		top := filepath.Base(cleanPath)
+		top, err := topName(cleanPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to access '%s': %w", p, err)
+		}
+		if len(paths) == 1 {
+			rootName = top
+		}
 		name := uniqueTop(top, info.IsDir(), used)
 
 		if info.IsDir() {
-			baseDir := filepath.Dir(cleanPath)
 			err = filepath.WalkDir(cleanPath, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
 					return err
@@ -75,12 +76,13 @@ func Build(paths []string) (*Manifest, error) {
 					return err
 				}
 
-				relPath, err := filepath.Rel(baseDir, path)
+				// Relative to the folder itself: "." and ".." are not in the path walked (#300).
+				relPath, err := filepath.Rel(cleanPath, path)
 				if err != nil {
 					return err
 				}
 
-				normRelPath := name + filepath.ToSlash(relPath)[len(top):]
+				normRelPath := name + "/" + filepath.ToSlash(relPath)
 
 				items = append(items, Item{
 					RelPath:  normRelPath,
@@ -122,6 +124,20 @@ func Build(paths []string) (*Manifest, error) {
 		TotalBytes: totalBytes,
 		Items:      items,
 	}, nil
+}
+
+// topName is the name a cleaned path goes by in the offer: its last element, or, for "." and
+// "..", the name of the folder they designate (#300).
+func topName(cleanPath string) (string, error) {
+	top := filepath.Base(cleanPath)
+	if top != "." && top != ".." {
+		return top, nil
+	}
+	abs, err := filepath.Abs(cleanPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Base(abs), nil
 }
 
 // uniqueTop is the name the path top gets in the offer: top itself, or, when an earlier path

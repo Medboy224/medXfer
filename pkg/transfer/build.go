@@ -1,8 +1,10 @@
 package transfer
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/manifest"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 )
@@ -18,6 +20,10 @@ func BuildOffer(paths []string, chunkSize uint32) (protocol.Offer, []string, err
 	offer := protocol.Offer{Root: m.RootName, ChunkSize: chunkSize, TotalBytes: m.TotalBytes}
 	files := make([]string, len(m.Items))
 	for i, it := range m.Items {
+		// Checked as the receiver will (STO-12): a path it would refuse fails here, named (#300).
+		if _, err := engine.SafeRelPath(it.RelPath); err != nil {
+			return protocol.Offer{}, nil, fmt.Errorf("%s: %w", it.FullPath, err)
+		}
 		offer.Items = append(offer.Items, protocol.OfferItem{Item: i, Path: it.RelPath, Size: it.Size, MTime: it.MTime})
 		files[i] = it.FullPath
 	}

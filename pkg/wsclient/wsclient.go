@@ -1,7 +1,7 @@
 // Package wsclient speaks the control vocabulary (requests in, events out) to a daemon in the
-// same process (Local): it sends requests and buffers every event in order, so a slow reader
-// never blocks the daemon. pkg/testkit and `xfer ctl` are built on it. Its WebSocket transport
-// went with the web dashboard, at gate G7 (DEV-19-R).
+// same process (Local): it sends requests and buffers the latest events in order, so a slow
+// reader never blocks the daemon. pkg/testkit and `xfer ctl` are built on it. Its WebSocket
+// transport went with the web dashboard, at gate G7 (DEV-19-R).
 package wsclient
 
 import (
@@ -48,19 +48,26 @@ type transport interface {
 	close() error
 }
 
+// DefaultKeep is how many events a client keeps, the latest ones, unless Keep says otherwise:
+// a long `xfer ctl` stays bounded (#314).
+const DefaultKeep = 10000
+
 // Client speaks the control vocabulary (requests in, events out) to a daemon, whatever the
-// transport: it keeps every event received, for WaitFor, Watch and Events.
+// transport: it keeps the latest events received, for WaitFor, Watch and Events.
 type Client struct {
 	tr      transport
 	writeMu sync.Mutex
 	nextID  atomic.Int64
 
-	mu      sync.Mutex
-	events  []Event
-	cursor  int           // events before cursor were consumed by Next / WaitFor
-	changed chan struct{} // closed and replaced whenever events or err change
-	err     error         // read error that ended the connection
-	watch   func(Event)   // called for every event, in order, from the reading goroutine
+	mu        sync.Mutex
+	events    []Event       // the latest ones, keep at most
+	keep      int           // 0: every event
+	cursor    int           // events before cursor were consumed by Next / WaitFor
+	changed   chan struct{} // closed and replaced whenever events or err change
+	err       error         // read error that ended the connection
+	watch     func(Event)   // given every event, in order, by feedWatch
+	watchNext int           // the first event watch has not been given
+	feeding   bool          // a goroutine is giving watch its events
 }
 
 // deliver records an event, or the error that ended the transport, and wakes the waiters.
@@ -74,14 +81,32 @@ func (c *Client) deliver(e Event, err error) {
 		c.err = err
 	} else {
 		c.events = append(c.events, e)
+		c.trim()
 	}
 	close(c.changed)
 	c.changed = make(chan struct{})
-	watch := c.watch
 	c.mu.Unlock()
-	if err == nil && watch != nil {
-		watch(e)
+	c.feedWatch()
+}
+
+// trim drops the oldest events beyond keep, consumed or not. Called with mu held.
+func (c *Client) trim() {
+	drop := len(c.events) - c.keep
+	if c.keep <= 0 || drop <= 0 {
+		return
 	}
+	clear(c.events[:drop])
+	c.events = c.events[drop:]
+	c.cursor = max(c.cursor-drop, 0)
+	c.watchNext = max(c.watchNext-drop, 0)
+}
+
+// Keep sets how many events the client keeps, the latest ones; 0 keeps them all.
+func (c *Client) Keep(n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.keep = n
+	c.trim()
 }
 
 // Send sends a request. payload may be nil, a json.RawMessage, a string holding JSON, or any
@@ -142,17 +167,34 @@ func (c *Client) WaitFor(ctx context.Context, match func(Event) bool) (Event, er
 // Next returns the next unconsumed event, whatever it is.
 func (c *Client) Next(ctx context.Context) (Event, error) { return c.WaitFor(ctx, nil) }
 
-// Watch calls fn for every event, in order: first for the events already received, then for
-// each new one, from the goroutine that reads the connection. fn must not block for long.
-// Watch does not consume events: WaitFor and Next still see them.
+// Watch gives fn every event, in order: first the events kept, then each new one. fn gets one
+// event at a time, on a goroutine that delivers events, and without the client's lock: it may
+// call Events or Send (#314). fn must not block for long. Watch does not consume events:
+// WaitFor and Next still see them. A client has one watcher.
 func (c *Client) Watch(fn func(Event)) {
 	c.mu.Lock()
-	past := append([]Event(nil), c.events...)
-	c.watch = fn
-	// Hold the lock while replaying so a new event cannot be delivered before the past ones.
-	for _, e := range past {
-		fn(e)
+	c.watch, c.watchNext = fn, 0
+	c.mu.Unlock()
+	c.feedWatch()
+}
+
+// feedWatch gives watch the events it has not had yet, from one goroutine at a time: an event
+// delivered meanwhile is given by the goroutine already feeding, after the earlier ones.
+func (c *Client) feedWatch() {
+	c.mu.Lock()
+	if c.watch == nil || c.feeding {
+		c.mu.Unlock()
+		return
 	}
+	c.feeding = true
+	for c.watchNext < len(c.events) {
+		e, fn := c.events[c.watchNext], c.watch
+		c.watchNext++
+		c.mu.Unlock()
+		fn(e)
+		c.mu.Lock()
+	}
+	c.feeding = false
 	c.mu.Unlock()
 }
 

@@ -565,7 +565,7 @@ Messages `CONTROL` (champ `type`) : `hello`, `pair_secret`, `pair_pake`, `pair_c
 - `reject{transfer_id, code?}` : `code: busy` quand un transfert est déjà actif avec cet appareil (`LIM-08`).
 
 ### 8.3 Déroulement d'un transfert
-1. **Offre.** L'émetteur envoie `offer` : `transfer_id` (128 bits aléatoires), liste d'éléments `{item, path, size}`, `total_bytes`, `chunk_size` proposée. Un seul `offer` couvre un fichier, plusieurs fichiers ou un dossier.
+1. **Offre.** L'émetteur envoie `offer` : `transfer_id` (128 bits aléatoires), liste d'éléments `{item, path, size}`, `total_bytes`, `chunk_size` proposée. Un seul `offer` couvre un fichier, plusieurs fichiers ou un dossier. Les chemins d'un dossier partent de lui, sous son nom, même quand il est donné par `.` ou `..`. L'émetteur les vérifie par `SafeRelPath`, comme le receveur (`STO-12`) : une offre dont un chemin serait refusé échoue tout de suite, en nommant le fichier (lot Revue R-4, #300 : `TestBuildOfferFromDotPaths`, `TestBuildOfferRefusesAPathTheReceiverRefuses`).
 2. **Décision.** Le receveur affiche nom, taille, nombre de fichiers et expéditeur, puis répond `accept{transfer_id, chunk_size}` (peut réduire la taille) ou `reject`.
 3. **Flux de données.** Le receveur ouvre *N* connexions (défaut 4, de 1 à 8 📏), chacune commence par `DATA_JOIN`.
 4. **Le receveur pilote (modèle « pull »).** Il envoie `CHUNK_REQ` pour les plus petits index manquants, avec au plus 2 requêtes en vol par connexion. Les écritures restent presque séquentielles (utile pour les disques durs) et la mémoire est bornée : `N × 2 × chunk_size`.

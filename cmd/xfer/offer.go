@@ -62,10 +62,18 @@ type cliEvents struct {
 	cancel   context.CancelFunc // sender: called once the receiver is done
 	resume   func()             // receiver: goes on after a full disk
 	finished bool
+	partial  bool // sender: the receiver did not take every file
 }
 
 func newCLIEvents(sender bool, cancel context.CancelFunc) *cliEvents {
 	return &cliEvents{Stages: diag.NewStages(), bar: ui.NewProgressBar(), sender: sender, cancel: cancel}
+}
+
+// tookAll reports whether the receiver said it took every file (sender side).
+func (e *cliEvents) tookAll() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.finished && !e.partial
 }
 
 func (e *cliEvents) OnProgress(p transfer.Progress) {
@@ -80,7 +88,7 @@ func (e *cliEvents) OnProgress(p transfer.Progress) {
 	// The sender is done when the receiver says so (DONE): not when every chunk was served,
 	// which a resume or a skip never reaches (#33), nor while the receiver writes (#44).
 	if e.sender && !e.finished && p.Finished {
-		e.finished = true
+		e.finished, e.partial = true, p.Partial
 		e.finish()
 		if p.Partial {
 			fmt.Println("\n[*] Transfer ended: the receiver did not take every file.")
