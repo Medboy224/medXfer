@@ -2,6 +2,40 @@
 
 Les mesures sur appareils réels (bible §17.4, DEV-21) sont gardées ici pour comparer les appareils et les versions. Chaque fichier `matrix-<appareil>-<système>-<date>.json` est la sortie de `xfer bench matrix` côté **receveur**.
 
+## 27 novembre 2026 — R-3b : événements d'un fichier sans la file (#297)
+
+**But :** voir ce que change le schéma v6 pour une application qui reçoit beaucoup de petits fichiers, sur le téléphone le plus lent. Sorties brutes : [`r3b-events-tecno-20261127.txt`](r3b-events-tecno-20261127.txt).
+
+**Méthode :**
+- Le téléphone : le TECNO BF6 (Android 12, 32 bits, 2 Gio de mémoire), avec une version profile de l'application.
+- Deux versions comparées : `main` (schéma 5), puis la branche de la PR #340 (schéma 6). Le PC garde la même version.
+- Le PC envoie 2 000 fichiers aléatoires de 4 à 64 Kio (70 Mo) par le Wi-Fi. Pendant tout le transfert, on fait défiler la liste des fichiers sur le TECNO, sans pause ni saut.
+- Ce qui est relevé :
+  - les images, par `lib/perf.dart`, toutes les 2 s ;
+  - les images sautées que compte Android ;
+  - le temps processeur de chaque fil, à la fin ;
+  - la durée vue par l'émetteur.
+
+**Résultats :**
+
+| | avant (`main`) | après (schéma 6) |
+|---|---|---|
+| Images dessinées | 840 en 137 s | 3 582 en 143 s |
+| Images de plus de 100 ms | 141 | 73 |
+| Image la plus longue | 15,75 s | 0,59 s |
+| Images sautées (Android) | 1 522 | 87, au lancement |
+| Fenêtre « L'application ne répond pas » | affichée | jamais |
+| Processeur : fil principal | 1 min 47 s | 1 min 14 s |
+| Processeur : fil Dart de fond le plus chargé | 1 min 08 s | 6 s |
+| Durée du transfert | 105,9 s | 108,8 s |
+| Impression pendant le défilement | l'appli ne répond plus | 4 sur 5 |
+
+**Lecture :**
+- **Le fil Dart de fond :** sans doute le lecteur d'événements, qui décodait la file entière à chaque événement de fichier. Il passe de plus d'une minute à 6 s.
+- **L'écran :** il ne gèle plus.
+- **La durée :** elle ne change pas, car le réseau et le stockage la fixent.
+- **Ce qui reste :** des images lentes pendant la première minute du transfert, avec 45 à 70 ms de construction (p90), puis environ 23 ms. C'est à voir dans le lot sur la fluidité (WP-8.5).
+
 ## 27 novembre 2026 — R-3a : lots de petits fichiers sur FUSE, `fsync` par fichier (#302)
 
 **But :** mesurer, sur les mêmes téléphones qu'en R-0, ce que coûte le nouveau chemin des lots sur le stockage partagé d'Android (FUSE). Ce chemin fait un `fsync` par fichier, 8 à la fois, au lieu de se fier à `syncfs`. Sorties brutes : [`r3a-flush-a57-20261127.txt`](r3a-flush-a57-20261127.txt), [`r3a-flush-tecno-20261127.txt`](r3a-flush-tecno-20261127.txt).

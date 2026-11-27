@@ -1,0 +1,129 @@
+R-3b (#297), TECNO BF6 (Android 12, armeabi-v7a, 2 Gio de RAM), versions profile.
+Le PC envoie 2 000 fichiers aléatoires de 4 à 64 Kio (70 023 168 octets) par le Wi-Fi ; pendant tout
+le transfert, on fait défiler la liste des fichiers sur le TECNO, sans pause ni saut.
+avant : main (b6263fb, schéma 5) ; après : fix/revue-r3b-evenements (b0eae80, schéma 6).
+Le PC garde la même version (schéma 6) : le schéma est celui du cœur et de son appli, pas du réseau.
+
+== avant : mesures d'images (lib/perf.dart), images sautées (Choreographer), fenêtre « ne répond pas »
+15:08:19.434 I/Choreographer(31912): Skipped 82 frames!  The application may be doing too much work on its main thread.
+15:08:21.946 perf: 80 frames in 2.0 s (39/s while drawing), over 16.7 ms: 80, over 100 ms: 2, build p90 4.6 ms, raster p90 18.6 ms, total p90 31.3 ms, max 585.7 ms (build 9.4, raster 10.4, waiting 14.1), longest gap 583.5 ms
+15:08:24.012 perf: 95 frames in 2.1 s (45/s while drawing), over 16.7 ms: 89, over 100 ms: 4, build p90 3.9 ms, raster p90 18.3 ms, total p90 31.4 ms, max 268.2 ms (build 12.7, raster 9.0, waiting 246.1), longest gap 266.6 ms
+15:08:26.167 perf: 80 frames in 2.1 s (39/s while drawing), over 16.7 ms: 30, over 100 ms: 2, build p90 5.8 ms, raster p90 17.8 ms, total p90 31.3 ms, max 144.0 ms (build 13.0, raster 125.5, waiting 4.8), longest gap 549.8 ms
+15:08:29.496 perf: 24 frames in 3.4 s (7/s while drawing), over 16.7 ms: 10, over 100 ms: 1, build p90 7.1 ms, raster p90 13.2 ms, total p90 29.5 ms, max 145.6 ms (build 70.0, raster 45.1, waiting 30.1), longest gap 2884.2 ms
+15:08:38.441 perf: 17 frames in 8.9 s (2/s while drawing), over 16.7 ms: 7, over 100 ms: 0, build p90 2.6 ms, raster p90 15.3 ms, total p90 29.7 ms, max 36.6 ms (build 25.8, raster 9.6, waiting 0.8), longest gap 8632.6 ms
+15:08:41.392 perf: 28 frames in 2.6 s (11/s while drawing), over 16.7 ms: 11, over 100 ms: 2, build p90 11.2 ms, raster p90 22.9 ms, total p90 39.9 ms, max 399.3 ms (build 41.5, raster 23.8, waiting 333.7), longest gap 1000.2 ms
+15:08:43.312 perf: 5 frames in 2.0 s (2/s while drawing), over 16.7 ms: 5, over 100 ms: 4, build p90 110.9 ms, raster p90 16.2 ms, total p90 590.4 ms, max 590.4 ms (build 66.1, raster 16.2, waiting 506.2), longest gap 883.0 ms
+15:08:45.352 perf: 8 frames in 2.0 s (4/s while drawing), over 16.7 ms: 8, over 100 ms: 5, build p90 60.2 ms, raster p90 10.6 ms, total p90 413.0 ms, max 525.0 ms (build 81.3, raster 9.2, waiting 434.1), longest gap 500.0 ms
+15:08:46.252 I/Choreographer(31912): Skipped 258 frames!  The application may be doing too much work on its main thread.
+15:08:47.407 perf: 10 frames in 2.0 s (5/s while drawing), over 16.7 ms: 10, over 100 ms: 9, build p90 67.8 ms, raster p90 11.0 ms, total p90 246.1 ms, max 313.1 ms (build 71.4, raster 10.5, waiting 230.9), longest gap 366.6 ms
+15:08:49.591 perf: 11 frames in 2.2 s (5/s while drawing), over 16.7 ms: 11, over 100 ms: 9, build p90 84.6 ms, raster p90 22.0 ms, total p90 392.4 ms, max 408.2 ms (build 101.8, raster 22.0, waiting 284.0), longest gap 433.3 ms
+15:08:51.575 I/Choreographer(31912): Skipped 272 frames!  The application may be doing too much work on its main thread.
+15:08:51.588 perf: 15 frames in 2.1 s (7/s while drawing), over 16.7 ms: 15, over 100 ms: 6, build p90 70.0 ms, raster p90 18.1 ms, total p90 246.5 ms, max 265.9 ms (build 38.1, raster 28.5, waiting 192.5), longest gap 316.6 ms
+15:08:53.751 perf: 17 frames in 2.0 s (8/s while drawing), over 16.7 ms: 16, over 100 ms: 6, build p90 70.4 ms, raster p90 13.0 ms, total p90 267.9 ms, max 299.8 ms (build 76.6, raster 14.6, waiting 206.5), longest gap 333.3 ms
+15:08:53.968 I/Choreographer(31912): Skipped 136 frames!  The application may be doing too much work on its main thread.
+15:08:55.080 I/Choreographer(31912): Skipped 39 frames!  The application may be doing too much work on its main thread.
+15:08:55.977 perf: 24 frames in 2.1 s (12/s while drawing), over 16.7 ms: 19, over 100 ms: 7, build p90 59.5 ms, raster p90 12.3 ms, total p90 165.4 ms, max 177.4 ms (build 59.5, raster 6.7, waiting 111.0), longest gap 200.0 ms
+15:08:58.059 perf: 20 frames in 2.0 s (10/s while drawing), over 16.7 ms: 17, over 100 ms: 10, build p90 64.4 ms, raster p90 9.5 ms, total p90 186.7 ms, max 221.5 ms (build 64.4, raster 7.7, waiting 149.0), longest gap 250.0 ms
+15:09:00.003 perf: 28 frames in 2.1 s (13/s while drawing), over 16.7 ms: 22, over 100 ms: 8, build p90 63.6 ms, raster p90 11.2 ms, total p90 169.9 ms, max 232.9 ms (build 61.3, raster 6.5, waiting 165.0), longest gap 233.4 ms
+15:09:02.202 perf: 29 frames in 2.1 s (14/s while drawing), over 16.7 ms: 19, over 100 ms: 9, build p90 55.6 ms, raster p90 13.5 ms, total p90 182.0 ms, max 242.1 ms (build 37.7, raster 7.4, waiting 196.7), longest gap 249.9 ms
+15:09:04.283 perf: 23 frames in 2.0 s (11/s while drawing), over 16.7 ms: 19, over 100 ms: 8, build p90 68.1 ms, raster p90 10.8 ms, total p90 206.7 ms, max 238.8 ms (build 46.0, raster 8.7, waiting 183.9), longest gap 250.0 ms
+15:09:06.423 perf: 35 frames in 2.2 s (16/s while drawing), over 16.7 ms: 18, over 100 ms: 7, build p90 61.6 ms, raster p90 11.0 ms, total p90 137.9 ms, max 279.5 ms (build 61.6, raster 14.5, waiting 202.9), longest gap 283.3 ms
+15:09:08.500 perf: 27 frames in 2.0 s (13/s while drawing), over 16.7 ms: 24, over 100 ms: 8, build p90 56.1 ms, raster p90 9.1 ms, total p90 118.7 ms, max 209.0 ms (build 35.8, raster 8.2, waiting 164.8), longest gap 216.6 ms
+15:09:10.567 perf: 30 frames in 2.1 s (14/s while drawing), over 16.7 ms: 24, over 100 ms: 8, build p90 57.0 ms, raster p90 9.1 ms, total p90 133.3 ms, max 157.6 ms (build 97.1, raster 11.6, waiting 48.6), longest gap 166.7 ms
+15:09:12.574 perf: 27 frames in 2.0 s (13/s while drawing), over 16.7 ms: 22, over 100 ms: 7, build p90 61.6 ms, raster p90 10.0 ms, total p90 136.2 ms, max 211.2 ms (build 94.1, raster 6.8, waiting 109.8), longest gap 250.0 ms
+15:09:14.533 perf: 30 frames in 2.0 s (15/s while drawing), over 16.7 ms: 24, over 100 ms: 5, build p90 52.1 ms, raster p90 8.8 ms, total p90 148.2 ms, max 203.9 ms (build 34.4, raster 7.5, waiting 161.6), longest gap 200.0 ms
+15:09:16.634 perf: 39 frames in 2.0 s (19/s while drawing), over 16.7 ms: 29, over 100 ms: 7, build p90 53.1 ms, raster p90 11.8 ms, total p90 117.9 ms, max 147.8 ms (build 35.5, raster 6.4, waiting 105.4), longest gap 150.0 ms
+15:09:18.657 perf: 52 frames in 2.1 s (25/s while drawing), over 16.7 ms: 35, over 100 ms: 4, build p90 49.6 ms, raster p90 13.8 ms, total p90 75.1 ms, max 128.5 ms (build 60.0, raster 6.7, waiting 61.3), longest gap 133.3 ms
+15:09:20.919 perf: 46 frames in 2.3 s (20/s while drawing), over 16.7 ms: 34, over 100 ms: 0, build p90 52.3 ms, raster p90 12.2 ms, total p90 62.0 ms, max 86.1 ms (build 39.8, raster 41.5, waiting 0.9), longest gap 266.6 ms
+15:10:05.886 perf: 7 frames in 44.3 s (0/s while drawing), over 16.7 ms: 7, over 100 ms: 1, build p90 41.5 ms, raster p90 10.0 ms, total p90 53.2 ms, max 15750.0 ms (build 62.9, raster 10.0, waiting 15676.7), longest gap 28313.7 ms
+15:10:06.334 I/Choreographer(31912): Skipped 735 frames!  The application may be doing too much work on its main thread.
+15:10:08.056 perf: 19 frames in 2.1 s (9/s while drawing), over 16.7 ms: 6, over 100 ms: 0, build p90 6.6 ms, raster p90 10.3 ms, total p90 23.4 ms, max 48.5 ms (build 2.0, raster 5.6, waiting 40.5), longest gap 1766.7 ms
+15:10:17.114 perf: 10 frames in 9.0 s (1/s while drawing), over 16.7 ms: 6, over 100 ms: 1, build p90 3.6 ms, raster p90 16.6 ms, total p90 34.6 ms, max 627.9 ms (build 15.8, raster 14.1, waiting 597.7), longest gap 8198.0 ms
+15:10:23.150 perf: 2 frames in 5.9 s (0/s while drawing), over 16.7 ms: 2, over 100 ms: 0, build p90 15.0 ms, raster p90 14.3 ms, total p90 30.1 ms, max 30.1 ms (build 15.0, raster 9.0, waiting 5.6), longest gap 5865.5 ms
+15:10:52.341 perf: 2 frames in 15.6 s (0/s while drawing), over 16.7 ms: 1, over 100 ms: 1, build p90 79.0 ms, raster p90 17.1 ms, total p90 107.9 ms, max 107.9 ms (build 79.0, raster 17.1, waiting 11.2), longest gap 15631.5 ms
+fenêtre « L'application ne répond pas » : affichée, de 15:10:36 à 15:10:52
+temps processeur par fil, depuis le lancement de l'appli (top -H, à la fin) :
+  [TIME+]THREAD PROCESS
+  1:46.82 dxfer.app.debug
+  1:07.60 DartWorker
+  0:06.60 DartWorker
+  0:06.25 1.raster
+  0:05.33 Signal
+  0:02.19 pool-2-thread-1
+  0:01.51 Binder:31912_4
+
+== après : mesures d'images (lib/perf.dart), images sautées (Choreographer), fenêtre « ne répond pas »
+15:17:56.142 I/Choreographer( 3580): Skipped 87 frames!  The application may be doing too much work on its main thread.
+15:17:58.653 perf: 80 frames in 2.0 s (39/s while drawing), over 16.7 ms: 80, over 100 ms: 2, build p90 6.6 ms, raster p90 19.8 ms, total p90 37.7 ms, max 566.5 ms (build 37.2, raster 9.9, waiting 11.8), longest gap 566.6 ms
+15:18:00.681 perf: 86 frames in 2.0 s (42/s while drawing), over 16.7 ms: 16, over 100 ms: 4, build p90 4.9 ms, raster p90 15.7 ms, total p90 29.9 ms, max 404.8 ms (build 13.8, raster 12.0, waiting 378.5), longest gap 416.6 ms
+15:18:03.057 perf: 38 frames in 2.3 s (17/s while drawing), over 16.7 ms: 5, over 100 ms: 0, build p90 4.9 ms, raster p90 7.5 ms, total p90 17.0 ms, max 29.5 ms (build 19.1, raster 9.5, waiting 0.7), longest gap 1216.5 ms
+15:18:05.950 perf: 66 frames in 2.4 s (28/s while drawing), over 16.7 ms: 61, over 100 ms: 2, build p90 7.5 ms, raster p90 18.5 ms, total p90 34.1 ms, max 147.7 ms (build 13.9, raster 125.8, waiting 7.6), longest gap 1066.6 ms
+15:18:12.761 perf: 24 frames in 4.9 s (5/s while drawing), over 16.7 ms: 7, over 100 ms: 0, build p90 2.9 ms, raster p90 16.5 ms, total p90 31.0 ms, max 34.6 ms (build 17.5, raster 7.9, waiting 8.7), longest gap 4483.0 ms
+15:18:14.869 perf: 33 frames in 2.1 s (16/s while drawing), over 16.7 ms: 21, over 100 ms: 3, build p90 40.3 ms, raster p90 26.1 ms, total p90 96.0 ms, max 157.0 ms (build 27.6, raster 110.6, waiting 0.7), longest gap 1000.0 ms
+15:18:17.270 perf: 46 frames in 2.3 s (20/s while drawing), over 16.7 ms: 34, over 100 ms: 5, build p90 63.7 ms, raster p90 19.0 ms, total p90 121.5 ms, max 313.1 ms (build 297.5, raster 14.7, waiting 0.6), longest gap 233.3 ms
+15:18:19.272 perf: 31 frames in 2.1 s (15/s while drawing), over 16.7 ms: 27, over 100 ms: 9, build p90 92.9 ms, raster p90 25.2 ms, total p90 170.0 ms, max 285.5 ms (build 82.7, raster 188.6, waiting 12.3), longest gap 166.7 ms
+15:18:21.736 perf: 32 frames in 2.0 s (16/s while drawing), over 16.7 ms: 26, over 100 ms: 7, build p90 102.2 ms, raster p90 33.8 ms, total p90 122.9 ms, max 157.5 ms (build 125.4, raster 30.9, waiting 0.8), longest gap 166.7 ms
+15:18:23.305 perf: 25 frames in 2.1 s (12/s while drawing), over 16.7 ms: 21, over 100 ms: 1, build p90 68.0 ms, raster p90 16.1 ms, total p90 88.0 ms, max 589.2 ms (build 41.4, raster 11.1, waiting 536.5), longest gap 583.3 ms
+15:18:25.517 perf: 39 frames in 2.1 s (18/s while drawing), over 16.7 ms: 34, over 100 ms: 3, build p90 69.7 ms, raster p90 19.7 ms, total p90 96.8 ms, max 117.6 ms (build 102.2, raster 6.6, waiting 8.5), longest gap 133.3 ms
+15:18:27.517 perf: 29 frames in 2.1 s (14/s while drawing), over 16.7 ms: 24, over 100 ms: 8, build p90 90.9 ms, raster p90 16.7 ms, total p90 128.3 ms, max 242.3 ms (build 153.1, raster 16.4, waiting 1.4), longest gap 183.3 ms
+15:18:29.576 perf: 39 frames in 2.1 s (19/s while drawing), over 16.7 ms: 35, over 100 ms: 2, build p90 70.2 ms, raster p90 28.9 ms, total p90 89.4 ms, max 250.7 ms (build 116.1, raster 114.5, waiting 0.9), longest gap 133.3 ms
+15:18:31.786 perf: 40 frames in 2.2 s (18/s while drawing), over 16.7 ms: 30, over 100 ms: 7, build p90 86.4 ms, raster p90 29.9 ms, total p90 119.4 ms, max 165.4 ms (build 120.4, raster 27.3, waiting 0.7), longest gap 166.6 ms
+15:18:33.908 perf: 48 frames in 2.1 s (23/s while drawing), over 16.7 ms: 34, over 100 ms: 3, build p90 55.4 ms, raster p90 15.2 ms, total p90 88.7 ms, max 225.0 ms (build 104.2, raster 119.1, waiting 1.3), longest gap 116.7 ms
+15:18:35.935 perf: 40 frames in 2.0 s (20/s while drawing), over 16.7 ms: 40, over 100 ms: 4, build p90 66.7 ms, raster p90 26.9 ms, total p90 96.1 ms, max 135.4 ms (build 66.7, raster 56.0, waiting 5.0), longest gap 133.3 ms
+15:18:37.930 perf: 43 frames in 2.0 s (21/s while drawing), over 16.7 ms: 36, over 100 ms: 1, build p90 63.6 ms, raster p90 10.1 ms, total p90 78.7 ms, max 107.6 ms (build 99.0, raster 7.1, waiting 1.0), longest gap 116.7 ms
+15:18:40.054 perf: 51 frames in 2.1 s (24/s while drawing), over 16.7 ms: 35, over 100 ms: 4, build p90 54.3 ms, raster p90 9.9 ms, total p90 70.2 ms, max 106.5 ms (build 93.1, raster 6.9, waiting 0.9), longest gap 116.7 ms
+15:18:42.176 perf: 44 frames in 2.1 s (21/s while drawing), over 16.7 ms: 35, over 100 ms: 1, build p90 59.0 ms, raster p90 10.9 ms, total p90 68.1 ms, max 130.2 ms (build 106.7, raster 10.5, waiting 12.7), longest gap 133.3 ms
+15:18:44.195 perf: 42 frames in 2.0 s (21/s while drawing), over 16.7 ms: 34, over 100 ms: 0, build p90 68.2 ms, raster p90 10.0 ms, total p90 81.2 ms, max 99.0 ms (build 91.5, raster 6.4, waiting 0.9), longest gap 100.0 ms
+15:18:46.324 perf: 61 frames in 2.1 s (29/s while drawing), over 16.7 ms: 38, over 100 ms: 0, build p90 45.9 ms, raster p90 9.9 ms, total p90 58.6 ms, max 81.2 ms (build 72.9, raster 6.7, waiting 1.2), longest gap 83.4 ms
+15:18:48.324 perf: 60 frames in 2.1 s (29/s while drawing), over 16.7 ms: 35, over 100 ms: 0, build p90 50.6 ms, raster p90 9.3 ms, total p90 62.7 ms, max 94.9 ms (build 73.8, raster 7.8, waiting 12.9), longest gap 100.0 ms
+15:18:50.345 perf: 60 frames in 2.0 s (30/s while drawing), over 16.7 ms: 37, over 100 ms: 0, build p90 44.9 ms, raster p90 10.3 ms, total p90 59.2 ms, max 87.9 ms (build 68.7, raster 6.7, waiting 12.1), longest gap 100.0 ms
+15:18:52.408 perf: 54 frames in 2.1 s (26/s while drawing), over 16.7 ms: 43, over 100 ms: 0, build p90 41.2 ms, raster p90 9.9 ms, total p90 58.7 ms, max 97.8 ms (build 83.7, raster 6.1, waiting 7.7), longest gap 100.0 ms
+15:18:54.476 perf: 58 frames in 2.0 s (29/s while drawing), over 16.7 ms: 41, over 100 ms: 0, build p90 47.2 ms, raster p90 8.3 ms, total p90 61.8 ms, max 84.0 ms (build 64.5, raster 7.1, waiting 11.9), longest gap 100.0 ms
+15:18:56.600 perf: 58 frames in 2.1 s (27/s while drawing), over 16.7 ms: 44, over 100 ms: 0, build p90 46.6 ms, raster p90 10.3 ms, total p90 68.0 ms, max 97.0 ms (build 81.2, raster 14.5, waiting 1.0), longest gap 100.0 ms
+15:18:58.597 perf: 49 frames in 2.0 s (24/s while drawing), over 16.7 ms: 32, over 100 ms: 1, build p90 52.5 ms, raster p90 12.5 ms, total p90 77.8 ms, max 171.1 ms (build 40.1, raster 87.3, waiting 42.5), longest gap 100.0 ms
+15:19:00.682 perf: 56 frames in 2.1 s (27/s while drawing), over 16.7 ms: 40, over 100 ms: 0, build p90 51.5 ms, raster p90 16.5 ms, total p90 74.6 ms, max 88.7 ms (build 49.7, raster 10.6, waiting 26.5), longest gap 83.3 ms
+15:19:02.728 perf: 71 frames in 2.0 s (35/s while drawing), over 16.7 ms: 40, over 100 ms: 0, build p90 38.0 ms, raster p90 9.1 ms, total p90 48.0 ms, max 69.3 ms (build 61.5, raster 6.5, waiting 0.9), longest gap 66.8 ms
+15:19:04.717 perf: 60 frames in 2.0 s (30/s while drawing), over 16.7 ms: 44, over 100 ms: 1, build p90 42.5 ms, raster p90 10.9 ms, total p90 59.1 ms, max 104.3 ms (build 91.3, raster 12.1, waiting 0.7), longest gap 100.0 ms
+15:19:06.805 perf: 59 frames in 2.0 s (29/s while drawing), over 16.7 ms: 42, over 100 ms: 0, build p90 42.6 ms, raster p90 8.5 ms, total p90 68.0 ms, max 91.9 ms (build 23.1, raster 5.7, waiting 62.7), longest gap 83.4 ms
+15:19:08.876 perf: 51 frames in 2.1 s (25/s while drawing), over 16.7 ms: 43, over 100 ms: 0, build p90 51.6 ms, raster p90 9.8 ms, total p90 70.7 ms, max 85.8 ms (build 77.0, raster 7.6, waiting 1.0), longest gap 83.4 ms
+15:19:10.920 perf: 49 frames in 2.1 s (23/s while drawing), over 16.7 ms: 39, over 100 ms: 1, build p90 54.3 ms, raster p90 10.1 ms, total p90 62.5 ms, max 108.1 ms (build 92.4, raster 14.4, waiting 1.0), longest gap 116.6 ms
+15:19:13.078 perf: 54 frames in 2.1 s (26/s while drawing), over 16.7 ms: 45, over 100 ms: 0, build p90 59.6 ms, raster p90 14.9 ms, total p90 68.9 ms, max 82.3 ms (build 66.2, raster 14.4, waiting 1.0), longest gap 83.3 ms
+15:19:15.114 perf: 63 frames in 2.0 s (31/s while drawing), over 16.7 ms: 35, over 100 ms: 1, build p90 38.4 ms, raster p90 9.6 ms, total p90 62.9 ms, max 121.0 ms (build 54.8, raster 9.1, waiting 56.5), longest gap 83.3 ms
+15:19:17.113 perf: 52 frames in 2.0 s (26/s while drawing), over 16.7 ms: 38, over 100 ms: 0, build p90 50.3 ms, raster p90 7.9 ms, total p90 68.4 ms, max 78.6 ms (build 70.4, raster 6.6, waiting 1.2), longest gap 83.3 ms
+15:19:19.236 perf: 63 frames in 2.1 s (30/s while drawing), over 16.7 ms: 41, over 100 ms: 0, build p90 46.7 ms, raster p90 14.9 ms, total p90 65.1 ms, max 85.7 ms (build 77.6, raster 6.5, waiting 0.9), longest gap 100.0 ms
+15:19:21.221 perf: 69 frames in 2.0 s (34/s while drawing), over 16.7 ms: 37, over 100 ms: 1, build p90 31.0 ms, raster p90 7.4 ms, total p90 44.6 ms, max 141.6 ms (build 19.1, raster 96.3, waiting 25.8), longest gap 100.0 ms
+15:19:23.289 perf: 91 frames in 2.1 s (44/s while drawing), over 16.7 ms: 31, over 100 ms: 0, build p90 22.6 ms, raster p90 7.6 ms, total p90 30.5 ms, max 59.8 ms (build 47.1, raster 7.0, waiting 5.2), longest gap 66.7 ms
+15:19:25.391 perf: 95 frames in 2.1 s (45/s while drawing), over 16.7 ms: 32, over 100 ms: 0, build p90 22.8 ms, raster p90 7.6 ms, total p90 30.8 ms, max 37.4 ms (build 27.5, raster 8.2, waiting 1.1), longest gap 33.4 ms
+15:19:27.488 perf: 94 frames in 2.1 s (45/s while drawing), over 16.7 ms: 31, over 100 ms: 0, build p90 21.7 ms, raster p90 8.6 ms, total p90 30.1 ms, max 34.8 ms (build 23.8, raster 6.3, waiting 4.3), longest gap 33.4 ms
+15:19:29.580 perf: 89 frames in 2.1 s (43/s while drawing), over 16.7 ms: 33, over 100 ms: 0, build p90 26.7 ms, raster p90 7.8 ms, total p90 34.7 ms, max 68.8 ms (build 32.7, raster 6.5, waiting 29.2), longest gap 66.6 ms
+15:19:31.618 perf: 93 frames in 2.1 s (45/s while drawing), over 16.7 ms: 30, over 100 ms: 0, build p90 22.5 ms, raster p90 6.9 ms, total p90 30.5 ms, max 33.0 ms (build 26.3, raster 5.6, waiting 0.8), longest gap 50.0 ms
+15:19:33.690 perf: 93 frames in 2.1 s (45/s while drawing), over 16.7 ms: 31, over 100 ms: 0, build p90 21.9 ms, raster p90 7.0 ms, total p90 29.7 ms, max 52.3 ms (build 21.1, raster 6.0, waiting 24.8), longest gap 50.0 ms
+15:19:35.786 perf: 93 frames in 2.1 s (45/s while drawing), over 16.7 ms: 30, over 100 ms: 0, build p90 21.9 ms, raster p90 7.4 ms, total p90 30.4 ms, max 37.4 ms (build 25.8, raster 8.0, waiting 0.9), longest gap 50.0 ms
+15:19:37.823 perf: 97 frames in 2.1 s (47/s while drawing), over 16.7 ms: 28, over 100 ms: 0, build p90 22.1 ms, raster p90 8.6 ms, total p90 30.1 ms, max 38.5 ms (build 23.0, raster 14.3, waiting 0.9), longest gap 33.4 ms
+15:19:39.870 perf: 93 frames in 2.0 s (45/s while drawing), over 16.7 ms: 28, over 100 ms: 0, build p90 22.5 ms, raster p90 8.5 ms, total p90 30.2 ms, max 47.4 ms (build 23.4, raster 8.5, waiting 15.0), longest gap 50.0 ms
+15:19:41.933 perf: 96 frames in 2.1 s (47/s while drawing), over 16.7 ms: 28, over 100 ms: 0, build p90 22.1 ms, raster p90 6.7 ms, total p90 29.9 ms, max 35.1 ms (build 24.5, raster 9.2, waiting 0.8), longest gap 33.4 ms
+15:19:43.988 perf: 92 frames in 2.0 s (45/s while drawing), over 16.7 ms: 30, over 100 ms: 0, build p90 23.0 ms, raster p90 7.5 ms, total p90 30.8 ms, max 39.1 ms (build 25.9, raster 6.4, waiting 6.4), longest gap 50.0 ms
+15:19:46.086 perf: 94 frames in 2.1 s (45/s while drawing), over 16.7 ms: 31, over 100 ms: 0, build p90 22.0 ms, raster p90 8.3 ms, total p90 29.9 ms, max 42.8 ms (build 24.0, raster 6.4, waiting 12.0), longest gap 50.0 ms
+15:19:48.136 perf: 94 frames in 2.0 s (46/s while drawing), over 16.7 ms: 27, over 100 ms: 0, build p90 22.1 ms, raster p90 7.2 ms, total p90 30.4 ms, max 47.1 ms (build 29.4, raster 9.2, waiting 8.2), longest gap 50.0 ms
+15:19:50.199 perf: 91 frames in 2.1 s (44/s while drawing), over 16.7 ms: 28, over 100 ms: 0, build p90 22.4 ms, raster p90 8.5 ms, total p90 30.7 ms, max 42.6 ms (build 23.4, raster 6.4, waiting 12.3), longest gap 66.7 ms
+15:19:52.319 perf: 96 frames in 2.1 s (45/s while drawing), over 16.7 ms: 31, over 100 ms: 0, build p90 22.3 ms, raster p90 7.8 ms, total p90 30.0 ms, max 39.7 ms (build 25.6, raster 12.7, waiting 1.2), longest gap 33.4 ms
+15:19:54.416 perf: 95 frames in 2.1 s (45/s while drawing), over 16.7 ms: 31, over 100 ms: 0, build p90 22.2 ms, raster p90 6.9 ms, total p90 30.4 ms, max 35.3 ms (build 23.5, raster 10.3, waiting 1.0), longest gap 50.0 ms
+15:19:56.472 perf: 96 frames in 2.0 s (47/s while drawing), over 16.7 ms: 27, over 100 ms: 0, build p90 24.1 ms, raster p90 9.3 ms, total p90 33.5 ms, max 38.5 ms (build 30.2, raster 6.7, waiting 1.4), longest gap 33.4 ms
+15:19:58.686 perf: 24 frames in 2.1 s (11/s while drawing), over 16.7 ms: 15, over 100 ms: 0, build p90 25.6 ms, raster p90 7.7 ms, total p90 34.5 ms, max 36.3 ms (build 27.0, raster 7.6, waiting 1.2), longest gap 216.7 ms
+15:20:00.841 perf: 16 frames in 2.0 s (8/s while drawing), over 16.7 ms: 15, over 100 ms: 0, build p90 25.4 ms, raster p90 7.2 ms, total p90 36.1 ms, max 36.7 ms (build 24.8, raster 6.1, waiting 5.5), longest gap 200.0 ms
+15:20:03.217 perf: 23 frames in 2.2 s (11/s while drawing), over 16.7 ms: 19, over 100 ms: 1, build p90 13.0 ms, raster p90 6.8 ms, total p90 24.6 ms, max 144.6 ms (build 34.6, raster 10.3, waiting 99.3), longest gap 200.0 ms
+15:20:06.919 perf: 2 frames in 2.1 s (1/s while drawing), over 16.7 ms: 1, over 100 ms: 1, build p90 2.8 ms, raster p90 10.0 ms, total p90 108.0 ms, max 108.0 ms (build 0.5, raster 10.0, waiting 97.1), longest gap 2033.1 ms
+15:20:24.560 perf: 2 frames in 17.5 s (0/s while drawing), over 16.7 ms: 1, over 100 ms: 0, build p90 0.7 ms, raster p90 45.9 ms, total p90 47.8 ms, max 47.8 ms (build 0.5, raster 45.9, waiting 0.8), longest gap 17531.6 ms
+15:21:06.361 perf: 3 frames in 2.2 s (1/s while drawing), over 16.7 ms: 2, over 100 ms: 1, build p90 16.7 ms, raster p90 27.4 ms, total p90 187.7 ms, max 187.7 ms (build 16.7, raster 27.4, waiting 143.2), longest gap 1883.2 ms
+fenêtre « L'application ne répond pas » : jamais
+temps processeur par fil, depuis le lancement de l'appli (top -H, à la fin) :
+  [TIME+]THREAD PROCESS
+  1:14.28 dxfer.app.debug
+  0:21.49 1.raster
+  0:06.12 DartWorker
+  0:02.53 pool-2-thread-1
+  0:02.03 DartWorker
+  0:01.27 Binder:3580_4
+  0:01.20 Binder:3580_3
+
+== durée vue par l'émetteur (rapport du PC) : avant 105,9 s ; après 108,8 s
