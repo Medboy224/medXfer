@@ -1,9 +1,11 @@
 #ifndef RUNNER_WIFI_JOIN_H_
 #define RUNNER_WIFI_JOIN_H_
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <guiddef.h>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -52,6 +54,8 @@ class WifiJoin {
   std::string ssid_;       // its network's name, while joined
   std::wstring previous_;  // the profile of the network the computer was on
   GUID card_{};
+  std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
+  std::atomic<uint64_t> gen_{0};
 };
 
 #endif  // RUNNER_WIFI_JOIN_H_
