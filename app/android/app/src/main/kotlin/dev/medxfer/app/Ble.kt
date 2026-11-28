@@ -82,6 +82,13 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
             server = null
             advertising = null
             scanning = null
+            writes.clear()
+            replies.clear()
+            parked.clear()
+            clientsOf.clear()
+            seenAt.clear()
+            for (c in clients.values.toList()) c.close("bluetooth_off")
+            clients.clear()
         }
     }
 
@@ -161,6 +168,10 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
         advertising = null
         scanning?.let { manager?.adapter?.bluetoothLeScanner?.stopScan(it) }
         scanning = null
+        for ((conn, list) in parked) {
+            val device = clientsOf[conn] ?: continue
+            for ((requestId, offset) in list) server?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null)
+        }
         writes.clear()
         replies.clear()
         parked.clear()
@@ -432,6 +443,7 @@ class Ble(context: Context, private val emit: (String, Map<String, Any?>) -> Uni
         }.let { }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) = main.post {
+            if (status != BluetoothGatt.GATT_SUCCESS) return@post close("gatt_$status")
             val service = g.getService(SERVICE)
             message = service?.getCharacteristic(MESSAGE)
             call = service?.getCharacteristic(CALL)

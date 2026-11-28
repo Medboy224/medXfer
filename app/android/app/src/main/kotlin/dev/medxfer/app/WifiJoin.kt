@@ -2,11 +2,14 @@ package dev.medxfer.app
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
+import android.os.Handler
+import android.os.Looper
 
 // Joining another device's access point from the app (WP-B.7): the QR gives the network's name
 // and passphrase; Android asks the user once, then the app's own sockets go through that network
@@ -23,9 +26,19 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
 
     /** Whether Wi-Fi is on: a network is joined only then, and an app cannot turn it on (Android 10 on). */
     val wifiOn: Boolean get() = wifi.isWifiEnabled
+    private val main = Handler(Looper.getMainLooper())
     private var callback: ConnectivityManager.NetworkCallback? = null
     private var request: NetworkRequest? = null
     private var joined: Network? = null
+    private var generation = 0
+    private var pending: ((Map<String, Any?>?, String?) -> Unit)? = null
+
+    private fun resolve(gen: Int, data: Map<String, Any?>?, error: String?) {
+        if (gen != generation) return
+        val cb = pending ?: return
+        pending = null
+        cb(data, error)
+    }
 
     /** The joined network's handle, for the core's sockets; 0 when none. */
     val network: Long get() = joined?.networkHandle ?: 0L
@@ -51,52 +64,91 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
             .setNetworkSpecifier(spec)
             .build()
         request = r
-        ask(r, done)
+        pending = done
+        ask(r, hasInitial = true, gen = generation)
     }
 
-    // first: the join's answer; null when asking again after a loss.
-    private fun ask(r: NetworkRequest, first: ((Map<String, Any?>?, String?) -> Unit)?) {
-        var answered = false
+    // hasInitial: resolves the initial join's MethodChannel callback; false on reconnects after onLost.
+    private fun ask(r: NetworkRequest, hasInitial: Boolean, gen: Int) {
+        if (gen != generation) return
+        var fallbackAddress: Runnable? = null
+        fun cancelFallback() {
+            fallbackAddress?.let { main.removeCallbacks(it) }
+            fallbackAddress = null
+        }
+        fun deliver(address: String?) {
+            if (!hasInitial || gen != generation) return
+            cancelFallback()
+            resolve(gen, mapOf("address" to address, "interfaces" to LocalHotspot.interfaces()), null)
+        }
         val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
+            override fun onAvailable(network: Network) = main.post {
+                if (gen != generation || callback !== this) return@post
                 cm.bindProcessToNetwork(network)
                 joined = network
-                if (first == null) return changed()
+                if (!hasInitial) return@post changed()
                 val address = cm.getLinkProperties(network)?.linkAddresses
                     ?.firstOrNull { it.address is java.net.Inet4Address }?.address?.hostAddress
-                if (!answered) {
-                    answered = true
-                    first(mapOf("address" to address, "interfaces" to LocalHotspot.interfaces()), null)
+                if (address != null) {
+                    deliver(address)
+                } else if (pending != null && fallbackAddress == null) {
+                    val wait = Runnable { deliver(null) }
+                    fallbackAddress = wait
+                    main.postDelayed(wait, 2_000L)
                 }
-            }
+            }.let { }
 
-            override fun onUnavailable() {
-                if (first != null && !answered) {
-                    answered = true
-                    first(null, "unavailable") // refused by the user, or not found
-                }
-            }
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) = main.post {
+                if (gen != generation || callback !== this || !hasInitial || pending == null || joined != network) return@post
+                val address = linkProperties.linkAddresses
+                    .firstOrNull { it.address is java.net.Inet4Address }?.address?.hostAddress ?: return@post
+                deliver(address)
+            }.let { }
 
-            override fun onLost(network: Network) {
+            override fun onUnavailable() = main.post {
+                if (gen != generation || callback !== this) return@post
+                cancelFallback()
+                callback = null
+                request = null
+                if (hasInitial) resolve(gen, null, "unavailable") // refused by the user, or not found
+            }.let { }
+
+            override fun onLost(network: Network) = main.post {
+                if (gen != generation || callback !== this) return@post
+                cancelFallback()
                 cm.bindProcessToNetwork(null)
                 joined = null
+                if (hasInitial && pending != null) {
+                    // Initial join failed before answering: leave cleanly so no request lingers in background.
+                    generation++
+                    request = null
+                    callback = null
+                    runCatching { cm.unregisterNetworkCallback(this) }
+                    val prev = pending
+                    pending = null
+                    prev?.invoke(null, "lost")
+                    return@post
+                }
                 changed()
-                val again = request ?: return // left on purpose
-                if (callback !== this) return
+                val again = request ?: return@post // left on purpose
                 runCatching { cm.unregisterNetworkCallback(this) }
-                ask(again, null)
-            }
+                ask(again, hasInitial = false, gen = gen)
+            }.let { }
         }
         callback = cb
         cm.requestNetwork(r, cb, 60_000)
     }
 
     fun leave() {
+        generation++
+        val prev = pending
+        pending = null
         request = null
         callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         callback = null
         joined = null
         cm.bindProcessToNetwork(null)
+        prev?.invoke(null, "cancelled")
     }
 
     companion object {
