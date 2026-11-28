@@ -20,3 +20,6 @@ Thumbs.db
 /build/
 # Packages built by scripts/package-* (WP-B.6)
 /dist/
+# Worktrees of the AI agents, one per work package (docs/medxfer-travail-a-deux-agents.md)
+/.claude/worktrees/
+/.gemini/worktrees/

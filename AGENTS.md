@@ -20,6 +20,7 @@ Transfert de fichiers chiffré sur le réseau local, sans serveur.
 | `docs/medxfer-plan-j8.md` | Le jalon en cours : ses lots (WP-8.x), ses décisions, ses risques |
 | `docs/medxfer-plan-*.md`, `docs/*report*.md` | Un plan au début de chaque jalon ou lot, un rapport à la fin |
 | `docs/medxfer-g4-dossier-revue.md` | Le dossier de la revue cryptographique externe (G4) |
+| `docs/medxfer-travail-a-deux-agents.md` | Le travail à deux agents (Claude, Gemini) : rôles, répartition des lots, worktrees, verrous du PC et des appareils, essais réels, relecture croisée |
 
 Avant de toucher un domaine, lis le chapitre de la bible qui le couvre et le lot du plan qui le demande.
 
@@ -79,6 +80,7 @@ Une plateforme égale un adaptateur. Une décision (quel réseau, quelle bande, 
    - Un agent = un lot = une branche propre depuis `main` (ou un `git worktree` dédié / espace isolé) et des fichiers disjoints des autres lots ouverts.
    - Si le travail touche plus d'un domaine indépendant, propose ou utilise une décomposition en lots parallèles (une issue GitHub par lot, PR sous 600 lignes hors tests) plutôt qu'un gros patch monolithique.
    - Remplis systématiquement les sections de `.github/pull_request_template.md` et rattache chaque PR à son issue (`Closes #NNN`).
+   - **Deux agents, Claude et Gemini, travaillent en parallèle** : suis `docs/medxfer-travail-a-deux-agents.md`. Chacun a son worktree et étiquette ses issues (`agent:claude`, `agent:gemini`). Le PC et les appareils se verrouillent avant usage. Chaque PR est relue par l'autre agent.
 1. **Un lot, une branche, une PR.**
    - Branches : `feat/…`, `fix/…`, `docs/…`, `test/…`, `ci/…`.
    - Une PR reste **sous 600 lignes modifiées**, hors tests et golden. Au-delà, découpe le lot en plusieurs PR et propose le découpage avant d'écrire.
