@@ -8,7 +8,11 @@ import (
 // Progress is a snapshot of a transfer, for the interface. Bytes counts each chunk once,
 // whatever was sent again: it never goes past Total (#33).
 type Progress struct {
-	Bytes     int64
+	Bytes int64
+	// Moved is what crossed the network in this session: read from the data connections
+	// (receiver), unique chunks served (sender). After a resume, or with files already there,
+	// it stays below Bytes (#304).
+	Moved     int64
 	Total     int64
 	SpeedMBps float64
 	Streams   int // data connections open

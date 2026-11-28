@@ -101,7 +101,7 @@ func (s *Sender) Progress() Progress {
 	s.mu.Lock()
 	active := activeOf(s.active, func(i int) (int64, int64) { return s.itemBytes[i], s.offer.Items[i].Size })
 	s.mu.Unlock()
-	return Progress{Bytes: s.bytes.Load(), Total: s.offer.TotalBytes, Streams: int(s.streams.Load()), Items: len(s.paths),
+	return Progress{Bytes: s.bytes.Load(), Moved: s.bytes.Load(), Total: s.offer.TotalBytes, Streams: int(s.streams.Load()), Items: len(s.paths),
 		Finished: s.finished.Load(), Partial: s.partial.Load(), Active: active}
 }
 

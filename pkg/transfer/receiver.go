@@ -1186,7 +1186,7 @@ func (ru *run) emitProgress(speed float64) {
 	})
 	ru.activeMu.Unlock()
 	p := Progress{Bytes: onBar(&ru.shown, &ru.seen, ru.bytes.Load(), ru.onTheWay.Load(), ru.offer.TotalBytes),
-		Total: ru.offer.TotalBytes, SpeedMBps: speed, Streams: int(ru.conns.Load()), ItemsDone: ended,
+		Moved: ru.received.Load(), Total: ru.offer.TotalBytes, SpeedMBps: speed, Streams: int(ru.conns.Load()), ItemsDone: ended,
 		Items: len(ru.items), Active: active}
 	ru.r.Events.OnProgress(p)
 }

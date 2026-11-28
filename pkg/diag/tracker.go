@@ -32,6 +32,7 @@ type TransferSessionTracker struct {
 	retries          int
 	stages           *Stages // per-chunk measures (DEV-03)
 	doneBytes        int64   // the last progress: what this side had when the transfer ended
+	sessionBytes     int64   // what crossed the network in this session (SessionBytes)
 	outcome          string  // how it ended (Outcome*), set by Finish
 	link             *Link   // the Wi-Fi, as the app said it (SetLink)
 
@@ -79,6 +80,7 @@ func (t *TransferSessionTracker) RecordSample(stats engine.TransferStats, progre
 	if stats.BytesTransferred > t.doneBytes {
 		t.doneBytes = stats.BytesTransferred
 	}
+	t.sessionBytes = max(t.sessionBytes, stats.SessionBytes)
 
 	// Track speed
 	if stats.SpeedMBps > 0 {
@@ -168,6 +170,10 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 	moved := t.TotalBytes
 	if t.outcome != "" && t.outcome != OutcomeCompleted {
 		moved = t.doneBytes
+	}
+	// What a resume found on disk, or a file already there, did not come in this session (#304).
+	if t.sessionBytes > 0 {
+		moved = min(moved, t.sessionBytes)
 	}
 	avgSpeed := 0.0
 	if moved > 0 && durSec > 0 {
