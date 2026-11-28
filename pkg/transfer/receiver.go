@@ -424,7 +424,8 @@ func (ru *run) stage(name string, parallel int, start time.Time, bytes int64) {
 }
 
 // params are the storage parameters of item st. Its resume key ties a partial file to this
-// sender, path, size and date (D2); the group commits are measured as the fsync stage.
+// sender, path, size and date (D2); a writer waiting for a group commit is measured as the
+// fsync stage.
 func (ru *run) params(st *item, overwrite bool) store.Params {
 	r := ru.r
 	p := store.Params{
@@ -434,7 +435,7 @@ func (ru *run) params(st *item, overwrite bool) store.Params {
 		Owned: ru.inRoot, // the root folder is this transfer's only (STO-10)
 	}
 	if ru.stages != nil {
-		p.OnSync = func(d time.Duration) { ru.stages.OnStage(StageFsync, 1, d, 0) }
+		p.OnSyncWait = func(d time.Duration) { ru.stages.OnStage(StageFsync, ru.workers, d, 0) }
 	}
 	return p
 }
@@ -993,7 +994,9 @@ func (ru *run) finish(i int) {
 	}
 	var err error
 	if st.f != nil {
+		start := time.Now()
 		err = st.f.Finalize()
+		ru.stage(StageFsync, ru.workers, start, 0) // the writer waits for the file to be durable
 	}
 	if engine.IsDiskFull(err) {
 		gen := st.gen.Load()
@@ -1043,7 +1046,10 @@ func (ru *run) flushBatch(force bool) {
 		ru.batchTimer = nil
 	}
 	ru.batchMu.Unlock()
-	for k, err := range b.Flush() {
+	start := time.Now()
+	errs := b.Flush()
+	ru.stage(StageFsync, ru.workers, start, 0) // the files of the batch made durable at once
+	for k, err := range errs {
 		i := items[k] // sealed and closed by the flush: no item lock to take (markEnded)
 		if err != nil {
 			ru.markEnded(i, ItemFailed, fmt.Errorf("%q: %w", ru.items[i].it.Path, err))

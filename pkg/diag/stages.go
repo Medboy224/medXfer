@@ -14,7 +14,7 @@ import (
 type StageStats struct {
 	BusyMs   float64 `json:"busy_ms"`  // time spent in the stage, all connections added up
 	Bytes    int64   `json:"bytes"`    // bytes that went through it
-	Count    int     `json:"count"`    // measures: one per chunk, one per commit for fsync
+	Count    int     `json:"count"`    // measures: one per chunk; for fsync, one per wait of a writer
 	P50Ms    float64 `json:"p50_ms"`   // median duration of one measure
 	P95Ms    float64 `json:"p95_ms"`   // 95th percentile
 	Parallel int     `json:"parallel"` // how many may run at once (connections, or 1)

@@ -100,7 +100,7 @@ const (
 	StageNetWait   = "net_wait"   // waiting for a CHUNK, from the moment the worker can take it
 	StageHash      = "hash"       // SHA-256 of a chunk (both sides)
 	StageDiskWrite = "disk_write" // writing a verified chunk
-	StageFsync     = "fsync"      // a group commit: data synced, then the state
+	StageFsync     = "fsync"      // a writer waiting for the disk: a commit behind, a file's or a batch's sync
 	// Sender.
 	StageDiskRead = "disk_read" // reading a chunk from the source
 	StageNetWrite = "net_write" // writing a CHUNK to the connection

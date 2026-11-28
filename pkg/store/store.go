@@ -84,8 +84,11 @@ type Params struct {
 	// is this transfer's, left by a stop before its first commit: it starts over under its
 	// name. Elsewhere, the journal's header is written with the file, so that such a stop
 	// leaves a partial file that reads as this transfer's.
-	Owned  bool
-	OnSync func(time.Duration)
+	Owned bool
+	// OnSyncWait gets each time a writer waited for a commit still running (CommitIfDue): the
+	// disk a commit behind. The commits themselves run beside the transfer and are not
+	// reported (DEV-03, #304).
+	OnSyncWait func(time.Duration)
 }
 
 func (p Params) chunks() uint32 {
@@ -444,8 +447,8 @@ func (f *File) WriteChunk(i uint32, data []byte, sum [32]byte) error {
 // WP-E.5 of the cable plan). One commit syncs while the next one fills; when that one is due
 // and the first still syncs, the writer waits for it: the disk sets the pace, and a power loss
 // costs at most twice CommitBytes to resend. The error of a background commit is returned by
-// the next call. It is apart from WriteChunk so
-// that a caller measures the write and the fsync as two stages (DEV-03).
+// the next call. It is apart from WriteChunk so that a caller measures the write and the wait
+// for the disk as two stages (DEV-03): the wait is what OnSyncWait gets.
 func (f *File) CommitIfDue() error {
 	f.mu.Lock()
 	if err := f.bgErr; err != nil {
@@ -460,7 +463,11 @@ func (f *File) CommitIfDue() error {
 	}
 	if running := f.bg; running != nil {
 		f.mu.Unlock()
+		start := time.Now()
 		<-running // the next commit is due while one still syncs: the disk is behind, the writer waits
+		if f.p.OnSyncWait != nil {
+			f.p.OnSyncWait(time.Since(start))
+		}
 		f.mu.Lock()
 		if err := f.bgErr; err != nil {
 			f.bgErr = nil
@@ -516,9 +523,6 @@ func (f *File) Commit() error {
 	f.mu.Unlock()
 	if len(batch) == 0 {
 		return nil
-	}
-	if f.p.OnSync != nil {
-		defer func(start time.Time) { f.p.OnSync(time.Since(start)) }(time.Now())
 	}
 	err := f.commit(batch)
 	if err != nil {
