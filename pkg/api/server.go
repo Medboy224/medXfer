@@ -1044,6 +1044,12 @@ func ReportsDir() string {
 // saveReport writes a transfer's report to disk; tests slow it down.
 var saveReport = diag.SaveReport
 
+// SaveReport saves the report of a transfer made outside the daemon (the command line) in
+// ReportsDir, keeping the newest maxSavedReports, as the daemon keeps its own.
+func SaveReport(r *TransferSummaryReport) (string, error) {
+	return saveReport(ReportsDir(), r, maxSavedReports)
+}
+
 // FinishTransferTracker closes the transfer's measures and saves their report in ReportsDir;
 // measures closed already give the last report. The report carries no file name, IP or host
 // name (DEV-05).

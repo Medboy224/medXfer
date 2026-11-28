@@ -100,6 +100,23 @@ func TestLoadReportRejectsUnknownSchema(t *testing.T) {
 	}
 }
 
+// Two reports of the same millisecond are both kept: the sender and the receiver of a transfer
+// on one device, or the command line next to the application, save theirs at the same moment
+// (#304). The second one replaced the first.
+func TestSaveReportKeepsTwoReportsOfTheSameMoment(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 11, 28, 17, 6, 22, 264_000_000, time.UTC)
+	for _, outcome := range []string{OutcomeCompleted, OutcomeFailed} {
+		if _, err := SaveReport(dir, &Report{SchemaVersion: SchemaVersion, GeneratedAt: at, Outcome: outcome}, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := ListReports(dir)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("%d reports kept (%v); want 2", len(files), err)
+	}
+}
+
 // A comparison shows what tells two transfers apart, beyond the speed (#304): the time of each
 // stage, the limiting stage, and the Wi-Fi, its frequency and another network.
 func TestCompareShowsStagesAndTheLink(t *testing.T) {

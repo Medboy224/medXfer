@@ -2,7 +2,9 @@ package diag
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -182,23 +184,29 @@ func SaveReport(dir string, r *Report, keep int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := reportPrefix + r.GeneratedAt.UTC().Format("20060102-150405.000") + ".json"
-	path := filepath.Join(dir, name)
+	path, err := reserveReportName(dir, reportPrefix+r.GeneratedAt.UTC().Format("20060102-150405.000"))
+	if err != nil {
+		return "", err
+	}
 	tmp, err := os.CreateTemp(dir, ".report-*.tmp")
 	if err != nil {
+		os.Remove(path)
 		return "", err
 	}
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
+		os.Remove(path)
 		return "", err
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
+		os.Remove(path)
 		return "", err
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := os.Rename(tmp.Name(), path); err != nil { // replaces the empty file reserved
 		os.Remove(tmp.Name())
+		os.Remove(path)
 		return "", err
 	}
 	if keep > 0 {
@@ -209,6 +217,27 @@ func SaveReport(dir string, r *Report, keep int) (string, error) {
 		}
 	}
 	return path, nil
+}
+
+// reserveReportName creates an empty file named base.json, or base-2.json and so on when
+// another report of the same millisecond has the name: the sender and the receiver of one
+// device, or the command line next to the application, save theirs at the same moment (#304).
+// O_EXCL makes the reservation hold between processes too.
+func reserveReportName(dir, base string) (string, error) {
+	for n := 1; ; n++ {
+		name := base + ".json"
+		if n > 1 {
+			name = fmt.Sprintf("%s-%d.json", base, n)
+		}
+		path := filepath.Join(dir, name)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			return path, f.Close()
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+	}
 }
 
 // ListReports returns the report files of dir, oldest first.

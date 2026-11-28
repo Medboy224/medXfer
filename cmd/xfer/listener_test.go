@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/transfer"
 )
 
@@ -13,7 +14,7 @@ import (
 func TestSenderWaitsForReceiverBeforeCompleting(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	e := newCLIEvents(true, cancel)
+	e := newCLIEvents(true, cancel, protocol.Offer{})
 	e.bar = nil // no progress bar in test output
 	const size = 64 << 20
 

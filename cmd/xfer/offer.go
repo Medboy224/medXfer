@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/Medboy224/medXfer/pkg/api"
 	"github.com/Medboy224/medXfer/pkg/diag"
+	"github.com/Medboy224/medXfer/pkg/engine"
 	"github.com/Medboy224/medXfer/pkg/identity"
 	"github.com/Medboy224/medXfer/pkg/protocol"
 	"github.com/Medboy224/medXfer/pkg/transfer"
@@ -52,9 +54,10 @@ func takeDiskResume() func() {
 }
 
 // cliEvents shows a transfer in the terminal: one progress bar for the whole offer, and the
-// items that fail or are skipped.
+// items that fail or are skipped. It keeps the transfer's measures for its report, as the
+// daemon does (DEV-05).
 type cliEvents struct {
-	*diag.Stages // the time of each stage of each chunk (DEV-03)
+	*diag.TransferSessionTracker // the samples and the time of each stage (DEV-03)
 
 	mu       sync.Mutex
 	bar      *ui.ProgressBar
@@ -65,8 +68,33 @@ type cliEvents struct {
 	partial  bool // sender: the receiver did not take every file
 }
 
-func newCLIEvents(sender bool, cancel context.CancelFunc) *cliEvents {
-	return &cliEvents{Stages: diag.NewStages(), bar: ui.NewProgressBar(), sender: sender, cancel: cancel}
+func newCLIEvents(sender bool, cancel context.CancelFunc, offer protocol.Offer) *cliEvents {
+	return &cliEvents{TransferSessionTracker: diag.NewTransferSessionTracker(offer.Root, len(offer.Items), offer.TotalBytes),
+		bar: ui.NewProgressBar(), sender: sender, cancel: cancel}
+}
+
+// sendOutcome is how a send ended, for its report: failed when serving failed.
+func (e *cliEvents) sendOutcome(failed bool) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	switch {
+	case e.finished && !e.partial:
+		return diag.OutcomeCompleted
+	case e.finished || failed:
+		return diag.OutcomeFailed
+	}
+	return diag.OutcomeCanceled
+}
+
+// saveReport closes the transfer's measures and saves its report where `xfer report` reads
+// it, without names or addresses (DEV-05).
+func (e *cliEvents) saveReport(outcome string) {
+	e.Finish(outcome)
+	if path, err := api.SaveReport(e.GenerateReport(diag.ReportOptions{})); err != nil {
+		fmt.Printf("[!] The transfer report was not saved: %v\n", err)
+	} else {
+		fmt.Printf("[*] Transfer report: %s (xfer report show)\n", path)
+	}
 }
 
 // tookAll reports whether the receiver said it took every file (sender side).
@@ -77,6 +105,12 @@ func (e *cliEvents) tookAll() bool {
 }
 
 func (e *cliEvents) OnProgress(p transfer.Progress) {
+	var percent float64
+	if p.Total > 0 {
+		percent = 100 * float64(p.Bytes) / float64(p.Total)
+	}
+	e.RecordSample(engine.TransferStats{BytesTransferred: p.Bytes, SessionBytes: p.Moved, TotalBytes: p.Total,
+		SpeedMBps: p.SpeedMBps, ActiveStreams: p.Streams, ProgressPercent: percent}, percent)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if p.Finished && !p.Partial {
@@ -138,7 +172,7 @@ func (e *cliEvents) finish() {
 
 // printLimiting names the stage that limited this side of the transfer (DEV-04).
 func (e *cliEvents) printLimiting() {
-	if b := e.Bottleneck(); b.Stage != "" {
+	if _, b := e.Live(); b.Stage != "" {
 		fmt.Printf("[*] Limiting stage on this device: %s (%s confidence)\n", b.Stage, b.Confidence)
 	}
 }

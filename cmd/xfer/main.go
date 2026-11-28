@@ -1178,15 +1178,26 @@ func runNodeServe(parentCtx context.Context, o *nodeOffer) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 	defer o.close()
-	sender, err := transfer.NewSender(o.offer, o.files)
+	_, err := serveOffer(ctx, cancel, o.offer, o.files, o.l)
+	return err
+}
+
+// serveOffer serves offer on l until the receiver has everything or ctx ends; cancel ends ctx
+// once the receiver is done. complete: the receiver took every file.
+func serveOffer(ctx context.Context, cancel context.CancelFunc, offer protocol.Offer, files []string, l *transfer.Listener) (complete bool, err error) {
+	sender, err := transfer.NewSender(offer, files)
 	if err != nil {
-		return err
+		return false, err
 	}
-	sender.SetEvents(newCLIEvents(true, cancel))
-	if err := sender.Serve(ctx, o.l); err != nil && ctx.Err() == nil {
-		return err
+	events := newCLIEvents(true, cancel, offer)
+	sender.SetEvents(events)
+	err = sender.Serve(ctx, l)
+	failed := err != nil && ctx.Err() == nil
+	events.saveReport(events.sendOutcome(failed))
+	if failed {
+		return false, err
 	}
-	return nil
+	return events.tookAll(), nil
 }
 
 // =====================================================================
@@ -1303,16 +1314,11 @@ func runOneShotSend(offer protocol.Offer, files []string, port int, anyPort bool
 	if tl == nil {
 		return errShown
 	}
-	sender, err := transfer.NewSender(offer, files)
+	complete, err := serveOffer(ctx, cancel, offer, files, tl)
 	if err != nil {
-		return fail("[-] %v\n", err)
-	}
-	events := newCLIEvents(true, cancel)
-	sender.SetEvents(events)
-	if err := sender.Serve(ctx, tl); err != nil && ctx.Err() == nil {
 		return fail("\n[-] Transfer error: %v\n", err)
 	}
-	if !events.tookAll() {
+	if !complete {
 		return errShown
 	}
 	return nil
@@ -1601,13 +1607,19 @@ func receiveOffer(ctx context.Context, targetAddr, outDir string, workers int, o
 	rx := transfer.NewReceiver(outDir, transfer.JoinFunc(cfg, base))
 	rx.SenderKey = cfg.Expected // part of each file's resume key (D2)
 	rx.Workers = workers
-	events := newCLIEvents(false, nil)
+	events := newCLIEvents(false, nil, offer)
 	events.resume = rx.Resume
 	rx.Events = events
 	start := time.Now()
 	results, err := rx.Run(ctx, targetAddr, offer)
 	events.done()
+	outcome := diag.OutcomeCompleted
+	defer func() { events.saveReport(outcome) }() // after the lines that say how it went
 	if err != nil {
+		outcome = diag.OutcomeFailed
+		if ctx.Err() != nil {
+			outcome = diag.OutcomeCanceled
+		}
 		if ctx.Err() == nil {
 			fmt.Printf("\n[-] Download failed: %v\n", err)
 			if errors.Is(err, transfer.ErrTransferFailed) {
@@ -1623,6 +1635,7 @@ func receiveOffer(ctx context.Context, targetAddr, outDir string, workers int, o
 		}
 	}
 	if failed > 0 {
+		outcome = diag.OutcomeFailed
 		fmt.Printf("\n[-] %d of %d files could not be received.\n", failed, len(results))
 		return fmt.Errorf("%d of %d files not received", failed, len(results))
 	}
