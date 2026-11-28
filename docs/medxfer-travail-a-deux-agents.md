@@ -13,8 +13,13 @@
 
 | Qui | Fait | Ne fait pas |
 |---|---|---|
-| **Le développeur** | Décide : lots, découpages, fusions, choix des tables « Décisions ». Fait les gestes physiques des essais réels (§5.4). | — |
-| **Chaque agent** | Prend un lot, l'écrit, le teste, le mesure, ouvre sa PR. Fait lui-même ses essais réels quand il peut (§5). Relit les PR de l'autre agent (§6). | Fusionner, pousser sur `main`, prendre un lot déjà pris, élargir son lot |
+| **Le développeur** | Décide : lots, découpages, fusions, choix des tables « Décisions ». Relit les PR. Fait les gestes physiques des essais réels (§5.4). | — |
+| **Chaque agent** | Prend un lot, l'écrit, le teste, le mesure, ouvre sa PR. Fait lui-même ses essais réels quand il peut (§5). Relit une PR de l'autre agent quand le développeur le demande (§6). | Fusionner, pousser sur `main`, prendre un lot déjà pris, élargir son lot |
+
+**Tout est fondé.** Deux agents en parallèle ne valent que si chacun produit du travail solide :
+- **Un changement part d'un constat** : un test qui échoue sur l'ancien code, une mesure, ou une lecture du code qui cite le fichier et la ligne. Sans constat, pas de changement ; un défaut non reproduit est dit « préventif ».
+- **Une affirmation se vérifie avant d'être écrite** : dans le code, dans une sortie de commande, dans une source citée. Ce qui n'a pas été vérifié est dit tel quel.
+- **Rien sans besoin** : pas de document, de code, de commentaire ni d'issue qui ne serve pas le lot ou un constat réel.
 
 **Ce que le développeur attend de toute contribution :**
 - **La vitesse :** medXfer vise le transfert local le plus rapide. Les petits fichiers sont le point faible connu. Une optimisation se mesure avant et après (`bench-results/`).
@@ -154,10 +159,14 @@ rm -r "$COORD/a57.lock"
 
 **Comment le demander :** un seul message court, en français. Il dit quoi faire, sur quel appareil, à quel moment, et ce qu'il faut répondre. Par exemple : « Sur l'A57, coupe le Bluetooth maintenant, puis dis-moi “fait” ». L'agent vérifie ensuite lui-même le résultat (journal, mesure, capture), et n'affirme rien qu'il n'a pas constaté.
 
-## 6. La relecture croisée
+## 6. La relecture
 
-- Chaque PR d'un agent est relue par l'autre avant que le développeur fusionne.
-- La relecture est un commentaire sur la PR. Il contient la compilation, les essais réels faits, les défauts trouvés (avec le scénario qui les montre et la correction proposée), et un avis.
+- **Le développeur relit les PR et les fusionne.** Le travail avance sans attendre l'autre agent.
+- **Un agent relit une PR de l'autre seulement quand le développeur le lui demande.** Sa relecture est un commentaire sur la PR, qui contient :
+  - la compilation ;
+  - les essais réels faits ;
+  - les défauts trouvés, chacun avec le scénario qui le montre et la correction proposée ;
+  - un avis.
 - La décision reste au développeur.
 - Une PR qui touche `pkg/securechan`, `pkg/pairing`, `pkg/identity`, `pkg/webshare`, `pkg/engine/safepath.go` ou `pkg/store` a en plus sa revue de sécurité (`AGENTS.md`).
 - Le code natif (Kotlin, C++) n'a pas de test automatique, et la CI ne compile que Linux. Sa relecture doit donc dire s'il a été compilé (`flutter build apk`, `flutter build windows`) et essayé sur un appareil.
