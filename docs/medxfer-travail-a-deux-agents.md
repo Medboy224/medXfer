@@ -37,7 +37,7 @@
 - **Les fichiers de deux lots ouverts sont disjoints.**
   - Avant de commencer, regarder les fichiers des PR ouvertes : `gh pr list`, puis `gh pr diff N --name-only`.
   - Si un fichier est commun, le dire au développeur avant d'écrire.
-- **Répartition par défaut,** que le développeur peut changer à tout moment :
+- **Répartition par défaut,** confirmée par le développeur le 28 novembre 2026, qu'il peut changer à tout moment :
 
 | Domaine | Agent | Dossiers |
 |---|---|---|
@@ -45,6 +45,16 @@
 | Natif Android et Windows, connexion, interface Flutter | Gemini | `app/android/`, `app/windows/`, `app/linux/`, `app/lib/` |
 
 - Un lot qui traverse la frontière (par exemple, un événement du cœur affiché par l'application) se découpe en deux PR, une par côté, ou se fait par un seul agent avec l'accord du développeur.
+
+**La répartition est un défaut, pas une exclusivité.** Chaque agent doit pouvoir faire seul tout le travail, dans les deux domaines.
+- **Quand le développeur dit qu'un agent n'est pas disponible,** l'autre reprend ses lots :
+  - il change l'étiquette de l'issue et commente : « Repris par Claude, depuis la branche `fix/…` » ;
+  - il repart de la branche poussée et du dernier commentaire de l'issue, dans son propre worktree ;
+  - il lit les consignes du domaine : `app/AGENTS.md` pour l'application, le chapitre de la bible pour le cœur.
+- **Pour que cette reprise soit possible à tout moment,** même si l'agent s'arrête sans prévenir :
+  - chaque agent pousse sa branche à chaque étape qui tient (tests verts), jamais sur `main` ;
+  - il tient l'issue de son lot à jour (§7).
+- **Un verrou laissé par l'agent absent :** le développeur dit s'il peut être enlevé.
 
 ## 3. Les dossiers de travail
 
@@ -177,7 +187,7 @@ rm -r "$COORD/a57.lock"
   - Le dépôt est public : ni adresse, ni nom de machine, ni lien de session, ni contenu des téléphones.
   - Chaque agent a sa propre mémoire. Ce que l'autre doit savoir va dans une issue, une PR ou un document de `docs/`.
 - **Le développeur relaie** quand un agent a besoin d'une décision ou d'une action de l'autre.
-- **En fin de session,** un agent laisse son lot dans un état lisible :
-  - branche poussée ou commits décrits ;
-  - verrous enlevés ;
-  - un commentaire sur l'issue, qui dit où il en est et ce qui reste.
+- **À chaque étape qui tient, et en fin de session,** un agent laisse son lot dans un état que l'autre peut reprendre (§2) :
+  - la branche poussée ;
+  - les verrous enlevés ;
+  - un commentaire sur l'issue, qui dit où il en est, ce qui reste et ce qui a été vérifié.
