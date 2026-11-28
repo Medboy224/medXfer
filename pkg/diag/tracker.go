@@ -28,25 +28,18 @@ type TransferSessionTracker struct {
 	sumSpeed         float64
 	peakSpeed        float64
 	minSpeed         float64
-	sumDiskLatency   float64
-	sumNetLatency    float64
-	diskSampleCount  int
-	netSampleCount   int
 	bottleneckCounts map[string]int
 	retries          int
 	stages           *Stages // per-chunk measures (DEV-03)
 	doneBytes        int64   // the last progress: what this side had when the transfer ended
+	sessionBytes     int64   // what crossed the network in this session (SessionBytes)
 	outcome          string  // how it ended (Outcome*), set by Finish
 	link             *Link   // the Wi-Fi, as the app said it (SetLink)
 
 	// 4 Quartile buckets (0: 0-25%, 1: 25-50%, 2: 50-75%, 3: 75-100%)
-	phaseSpeedSum       [4]float64
-	phaseSpeedCount     [4]int
-	phaseDiskLatencySum [4]float64
-	phaseDiskCount      [4]int
-	phaseNetLatencySum  [4]float64
-	phaseNetCount       [4]int
-	phaseBottlenecks    [4]map[string]int
+	phaseSpeedSum    [4]float64
+	phaseSpeedCount  [4]int
+	phaseBottlenecks [4]map[string]int
 }
 
 // NewTransferSessionTracker creates a tracker for a single file or folder batch
@@ -87,6 +80,7 @@ func (t *TransferSessionTracker) RecordSample(stats engine.TransferStats, progre
 	if stats.BytesTransferred > t.doneBytes {
 		t.doneBytes = stats.BytesTransferred
 	}
+	t.sessionBytes = max(t.sessionBytes, stats.SessionBytes)
 
 	// Track speed
 	if stats.SpeedMBps > 0 {
@@ -98,16 +92,6 @@ func (t *TransferSessionTracker) RecordSample(stats engine.TransferStats, progre
 		if stats.SpeedMBps < t.minSpeed {
 			t.minSpeed = stats.SpeedMBps
 		}
-	}
-
-	// Track disk & net latency
-	if stats.DiskWriteLatencyMs > 0 {
-		t.sumDiskLatency += stats.DiskWriteLatencyMs
-		t.diskSampleCount++
-	}
-	if stats.NetReadLatencyMs > 0 {
-		t.sumNetLatency += stats.NetReadLatencyMs
-		t.netSampleCount++
 	}
 
 	// Track bottleneck
@@ -127,14 +111,6 @@ func (t *TransferSessionTracker) RecordSample(stats engine.TransferStats, progre
 	if stats.SpeedMBps > 0 {
 		t.phaseSpeedSum[q] += stats.SpeedMBps
 		t.phaseSpeedCount[q]++
-	}
-	if stats.DiskWriteLatencyMs > 0 {
-		t.phaseDiskLatencySum[q] += stats.DiskWriteLatencyMs
-		t.phaseDiskCount[q]++
-	}
-	if stats.NetReadLatencyMs > 0 {
-		t.phaseNetLatencySum[q] += stats.NetReadLatencyMs
-		t.phaseNetCount[q]++
 	}
 	if stats.Bottleneck != "" {
 		t.phaseBottlenecks[q][stats.Bottleneck]++
@@ -195,6 +171,10 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 	if t.outcome != "" && t.outcome != OutcomeCompleted {
 		moved = t.doneBytes
 	}
+	// What a resume found on disk, or a file already there, did not come in this session (#304).
+	if t.sessionBytes > 0 {
+		moved = min(moved, t.sessionBytes)
+	}
 	avgSpeed := 0.0
 	if moved > 0 && durSec > 0 {
 		avgSpeed = (float64(moved) / (1024 * 1024)) / durSec
@@ -205,16 +185,6 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 	minSpeed := t.minSpeed
 	if minSpeed == math.MaxFloat64 {
 		minSpeed = 0
-	}
-
-	avgDiskLatency := 0.0
-	if t.diskSampleCount > 0 {
-		avgDiskLatency = t.sumDiskLatency / float64(t.diskSampleCount)
-	}
-
-	avgNetLatency := 0.0
-	if t.netSampleCount > 0 {
-		avgNetLatency = t.sumNetLatency / float64(t.netSampleCount)
 	}
 
 	// Find primary bottleneck
@@ -239,20 +209,6 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 			pSpeed = avgSpeed
 		}
 
-		pDisk := 0.0
-		if t.phaseDiskCount[i] > 0 {
-			pDisk = t.phaseDiskLatencySum[i] / float64(t.phaseDiskCount[i])
-		} else {
-			pDisk = avgDiskLatency
-		}
-
-		pNet := 0.0
-		if t.phaseNetCount[i] > 0 {
-			pNet = t.phaseNetLatencySum[i] / float64(t.phaseNetCount[i])
-		} else {
-			pNet = avgNetLatency
-		}
-
 		dom := "BALANCED"
 		dCount := 0
 		for b, count := range t.phaseBottlenecks[i] {
@@ -265,8 +221,6 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 		phaseSamples = append(phaseSamples, PhaseSample{
 			Phase:          phaseNames[i],
 			AvgSpeedMBps:   math.Round(pSpeed*10) / 10,
-			DiskLatencyMs:  math.Round(pDisk*10) / 10,
-			NetLatencyMs:   math.Round(pNet*10) / 10,
 			DominantFactor: dom,
 		})
 	}
@@ -282,16 +236,16 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 	var diagnosisText string
 	switch primaryBottleneck {
 	case "STORAGE":
-		diagnosisText = fmt.Sprintf("⚠️ Storage bottleneck: high disk latency (~%.1f ms), typical of an external hard disk (HDD) or a full write buffer.", avgDiskLatency)
+		diagnosisText = "⚠️ Storage bottleneck: the disk limits the speed, writing or making the data durable (a slow disk, a memory card, or a phone's shared storage)."
 	case "CPU":
 		diagnosisText = "⚙️ CPU bottleneck: computing the SHA-256 hashes limits the speed (a slow device, or no hardware acceleration)."
 		if bottleneck != nil && bottleneck.Stage == "tls" {
 			diagnosisText = "⚙️ CPU bottleneck: decrypting the data (TLS) limits the speed (a slow device, or no hardware acceleration)."
 		}
 	case "NETWORK":
-		diagnosisText = fmt.Sprintf("⚡ Network bottleneck: the network link limits the speed (latency ~%.1f ms); disk writes keep up (%.1f ms).", avgNetLatency, avgDiskLatency)
+		diagnosisText = "⚡ Network bottleneck: the network link, or the other device, limits the speed; this device keeps up."
 	default:
-		diagnosisText = fmt.Sprintf("✓ Balanced transfer: continuous sequential writes (disk latency %.1f ms, network latency %.1f ms).", avgDiskLatency, avgNetLatency)
+		diagnosisText = "✓ Balanced transfer: no stage stands out."
 	}
 	if t.link != nil && t.link.OtherWifiMHz > 0 {
 		diagnosisText += " This device was on another Wi-Fi as well: its radio shared its time between the two networks, about 3 times slower."
@@ -313,8 +267,6 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 	r.MinSpeedMBps = math.Round(minSpeed*10) / 10
 	r.Retries = t.retries
 	r.PrimaryBottleneck = primaryBottleneck
-	r.AvgDiskLatencyMs = math.Round(avgDiskLatency*10) / 10
-	r.AvgNetLatencyMs = math.Round(avgNetLatency*10) / 10
 	r.PhaseSamples = phaseSamples
 	if bottleneck != nil {
 		r.Stages = t.stages.Stats()

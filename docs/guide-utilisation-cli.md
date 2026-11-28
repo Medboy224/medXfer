@@ -100,7 +100,8 @@ Si un autre medXfer occupe déjà le port 18887 sur l'appareil (un autre `xfer n
 
 | Commande | Usage |
 |---|---|
-| `xfer report list` / `show` | Rapports des derniers transferts : débit, étape limitante |
+| `xfer report list` / `show` | Rapports des derniers transferts, ceux de l'application comme ceux de `xfer send`, `recv` et `node` : débit, temps de chaque étape, étape limitante |
+| `xfer report compare A B` | Ce qui diffère entre deux rapports : débit, étapes, étape limitante, Wi-Fi |
 | `xfer bundle` | Paquet de diagnostic pour signaler un problème (sans secret ni nom de fichier) |
 | `xfer bench …` | Mesures de disque et de réseau |
 | `xfer ctl` | Piloter un cœur par des lignes JSON, pour les scripts sans écran |

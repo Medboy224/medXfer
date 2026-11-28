@@ -100,24 +100,69 @@ func TestLoadReportRejectsUnknownSchema(t *testing.T) {
 	}
 }
 
+// Two reports of the same millisecond are both kept: the sender and the receiver of a transfer
+// on one device, or the command line next to the application, save theirs at the same moment
+// (#304). The second one replaced the first.
+func TestSaveReportKeepsTwoReportsOfTheSameMoment(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 11, 28, 17, 6, 22, 264_000_000, time.UTC)
+	for _, outcome := range []string{OutcomeCompleted, OutcomeFailed} {
+		if _, err := SaveReport(dir, &Report{SchemaVersion: SchemaVersion, GeneratedAt: at, Outcome: outcome}, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := ListReports(dir)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("%d reports kept (%v); want 2", len(files), err)
+	}
+}
+
+// A comparison shows what tells two transfers apart, beyond the speed (#304): the time of each
+// stage, the limiting stage, and the Wi-Fi, its frequency and another network.
+func TestCompareShowsStagesAndTheLink(t *testing.T) {
+	a := &Report{AvgSpeedMBps: 40, TotalBytes: 1 << 30, TotalFiles: 1,
+		Stages:     map[string]StageStats{"net_wait": {BusyMs: 400, Parallel: 4}, "fsync": {BusyMs: 50, Parallel: 4}},
+		Bottleneck: &Bottleneck{Stage: "net_wait", Confidence: "high"},
+		Link:       &Link{Network: LinkCreated, FrequencyMHz: 5180}}
+	b := &Report{AvgSpeedMBps: 12, TotalBytes: 1 << 30, TotalFiles: 1,
+		Stages:     map[string]StageStats{"net_wait": {BusyMs: 800, Parallel: 4}, "tls": {BusyMs: 400, Parallel: 4}},
+		Bottleneck: &Bottleneck{Stage: "tls", Confidence: "medium"},
+		Link:       &Link{Network: LinkJoined, FrequencyMHz: 2437, OtherWifiMHz: 2412}}
+	c := Compare(a, b)
+	stages := map[string]Delta{}
+	for _, d := range c.Metrics {
+		stages[d.Metric] = d
+	}
+	if d := stages["stage net_wait"]; d.A != 100 || d.B != 200 || d.Better != "a" {
+		t.Errorf("net_wait: %+v; want 100 ms then 200 ms, A better", d)
+	}
+	if d := stages["stage tls"]; d.A != 0 || d.B != 100 || d.Better != "" {
+		t.Errorf("tls: %+v; want 0 then 100 ms, neither better: A did not measure it", d)
+	}
+	text := FormatComparison(c)
+	for _, want := range []string{"net_wait (high) -> tls (medium)", "created, 5180 MHz -> joined, 2437 MHz", "none -> 2412 MHz"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("no %q in:\n%s", want, text)
+		}
+	}
+}
+
 func TestCompareReports(t *testing.T) {
 	a := &Report{DurationSec: 10, AvgSpeedMBps: 50, PeakSpeedMBps: 60, MinSpeedMBps: 20, Retries: 4,
-		AvgDiskLatencyMs: 2, AvgNetLatencyMs: 8, TotalBytes: 500 << 20, TotalFiles: 2, PrimaryBottleneck: "NETWORK"}
+		TotalBytes: 500 << 20, TotalFiles: 2, PrimaryBottleneck: "NETWORK"}
 	b := &Report{DurationSec: 5, AvgSpeedMBps: 100, PeakSpeedMBps: 60, MinSpeedMBps: 30, Retries: 0,
-		AvgDiskLatencyMs: 6, AvgNetLatencyMs: 4, TotalBytes: 500 << 20, TotalFiles: 2, PrimaryBottleneck: "STORAGE"}
+		TotalBytes: 500 << 20, TotalFiles: 2, PrimaryBottleneck: "STORAGE"}
 	c := Compare(a, b)
 	want := map[string]struct {
 		pct    float64
 		better string
 	}{
-		"duration":     {-50, "b"},
-		"avg_speed":    {100, "b"},
-		"peak_speed":   {0, ""},
-		"min_speed":    {50, "b"},
-		"retries":      {-100, "b"},
-		"disk_latency": {200, "a"},
-		"net_latency":  {-50, "b"},
-		"total_bytes":  {0, ""},
+		"duration":    {-50, "b"},
+		"avg_speed":   {100, "b"},
+		"peak_speed":  {0, ""},
+		"min_speed":   {50, "b"},
+		"retries":     {-100, "b"},
+		"total_bytes": {0, ""},
 	}
 	for _, d := range c.Metrics {
 		w, ok := want[d.Metric]

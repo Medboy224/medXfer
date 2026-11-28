@@ -948,7 +948,7 @@ func (e *daemonEvents) OnProgress(p transfer.Progress) {
 	}
 
 	s.RecordTransferSample(e.offer.TransferID, engine.TransferStats{
-		BytesTransferred: p.Bytes, TotalBytes: p.Total, SpeedMBps: p.SpeedMBps,
+		BytesTransferred: p.Bytes, SessionBytes: p.Moved, TotalBytes: p.Total, SpeedMBps: p.SpeedMBps,
 		ActiveStreams: p.Streams, ProgressPercent: percent,
 	}, percent, offerName(e.offer), len(e.offer.Items), e.offer.TotalBytes)
 	loads, neck := s.liveStages()

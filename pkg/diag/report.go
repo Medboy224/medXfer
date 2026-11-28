@@ -2,7 +2,9 @@ package diag
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -51,8 +53,6 @@ func (l Link) Valid() bool {
 type PhaseSample struct {
 	Phase          string  `json:"phase"`
 	AvgSpeedMBps   float64 `json:"avg_speed_mbps"`
-	DiskLatencyMs  float64 `json:"avg_disk_latency_ms"`
-	NetLatencyMs   float64 `json:"avg_net_latency_ms"`
 	DominantFactor string  `json:"dominant_factor"`
 }
 
@@ -76,9 +76,7 @@ type Report struct {
 	PeakSpeedMBps     float64       `json:"peak_speed_mbps"`
 	MinSpeedMBps      float64       `json:"min_speed_mbps"`
 	Retries           int           `json:"retries"`
-	PrimaryBottleneck string        `json:"primary_bottleneck"` // "STORAGE", "NETWORK", "BALANCED"
-	AvgDiskLatencyMs  float64       `json:"avg_disk_latency_ms"`
-	AvgNetLatencyMs   float64       `json:"avg_net_latency_ms"`
+	PrimaryBottleneck string        `json:"primary_bottleneck"` // "STORAGE", "NETWORK", "CPU", "BALANCED"
 	PhaseSamples      []PhaseSample `json:"phase_samples"`
 	// Stages are the per-chunk measures of this device's side (DEV-03), and Bottleneck the
 	// limiting one (DEV-04). Absent from version 1 reports.
@@ -115,8 +113,7 @@ func FormatText(r *Report) string {
 	}
 	sb.WriteString(fmt.Sprintf("Duration: %02dm %02ds | Avg Speed: %.1f MB/s | Peak: %.1f MB/s | Min: %.1f MB/s\n",
 		durMinutes, durRemainderSec, r.AvgSpeedMBps, r.PeakSpeedMBps, r.MinSpeedMBps))
-	sb.WriteString(fmt.Sprintf("Bottleneck: %s (Disk Latency: %.1f ms | Net Latency: %.1f ms) | Retries: %d\n",
-		r.PrimaryBottleneck, r.AvgDiskLatencyMs, r.AvgNetLatencyMs, r.Retries))
+	sb.WriteString(fmt.Sprintf("Bottleneck: %s | Retries: %d\n", r.PrimaryBottleneck, r.Retries))
 	if r.Bottleneck != nil && r.Bottleneck.Stage != "" {
 		sb.WriteString(fmt.Sprintf("Limiting stage: %s (%s confidence)\n", r.Bottleneck.Stage, r.Bottleneck.Confidence))
 		sb.WriteString(FormatStages(r.Stages))
@@ -130,8 +127,7 @@ func FormatText(r *Report) string {
 	}
 	sb.WriteString("Quartile Breakdown:\n")
 	for _, ps := range r.PhaseSamples {
-		sb.WriteString(fmt.Sprintf("  - %s: %5.1f MB/s | Disk: %5.1f ms | Net: %5.1f ms [%s]\n",
-			ps.Phase, ps.AvgSpeedMBps, ps.DiskLatencyMs, ps.NetLatencyMs, ps.DominantFactor))
+		sb.WriteString(fmt.Sprintf("  - %s: %5.1f MB/s [%s]\n", ps.Phase, ps.AvgSpeedMBps, ps.DominantFactor))
 	}
 	sb.WriteString(fmt.Sprintf("Analysis: %s\n", r.DiagnosisText))
 	sb.WriteString(fmt.Sprintf("medXfer %s · %s/%s · %s\n", r.AppVersion, r.OS, r.Arch, r.GeneratedAt.Local().Format("2006-01-02 15:04:05")))
@@ -188,23 +184,29 @@ func SaveReport(dir string, r *Report, keep int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := reportPrefix + r.GeneratedAt.UTC().Format("20060102-150405.000") + ".json"
-	path := filepath.Join(dir, name)
+	path, err := reserveReportName(dir, reportPrefix+r.GeneratedAt.UTC().Format("20060102-150405.000"))
+	if err != nil {
+		return "", err
+	}
 	tmp, err := os.CreateTemp(dir, ".report-*.tmp")
 	if err != nil {
+		os.Remove(path)
 		return "", err
 	}
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		os.Remove(tmp.Name())
+		os.Remove(path)
 		return "", err
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
+		os.Remove(path)
 		return "", err
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := os.Rename(tmp.Name(), path); err != nil { // replaces the empty file reserved
 		os.Remove(tmp.Name())
+		os.Remove(path)
 		return "", err
 	}
 	if keep > 0 {
@@ -215,6 +217,27 @@ func SaveReport(dir string, r *Report, keep int) (string, error) {
 		}
 	}
 	return path, nil
+}
+
+// reserveReportName creates an empty file named base.json, or base-2.json and so on when
+// another report of the same millisecond has the name: the sender and the receiver of one
+// device, or the command line next to the application, save theirs at the same moment (#304).
+// O_EXCL makes the reservation hold between processes too.
+func reserveReportName(dir, base string) (string, error) {
+	for n := 1; ; n++ {
+		name := base + ".json"
+		if n > 1 {
+			name = fmt.Sprintf("%s-%d.json", base, n)
+		}
+		path := filepath.Join(dir, name)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			return path, f.Close()
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+	}
 }
 
 // ListReports returns the report files of dir, oldest first.
