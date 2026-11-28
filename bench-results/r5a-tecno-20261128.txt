@@ -1,0 +1,24 @@
+R-5a (#304) : essai réel, 28 novembre 2026. L'A57 (Termux, xfer send, version R-5a) envoie un
+fichier aléatoire de 256 Mio au TECNO BF6 (Android 12, processeur armv8l, binaires 32 bits).
+Le TECNO est lui-même le point d'accès Wi-Fi (2,4 GHz) : le lien est direct.
+Le TECNO reçoit par adb (xfer recv --auto-accept), une fois avec main (b634638), une fois avec
+R-5a. Chaque version reçue a une ligne temporaire, non commitée, qui affiche le temps de chaque
+étape du receveur à la fin du transfert. Binaires linux/arm GOARM=7 statiques : android/arm
+demande cgo.
+
+----- main
+[+] Transfer completed in 44.389s
+[*] Limiting stage on this device: net_wait (high confidence)
+  - net_wait   busy 176266.4 ms /4 | p50 1282.7 ms | p95 2253.1 ms | 256.00 MB
+  - hash       busy   9783.1 ms /4 | p50   76.7 ms | p95   85.3 ms | 256.00 MB
+  - disk_write busy    504.7 ms /4 | p50    3.4 ms | p95    4.3 ms | 256.00 MB
+  - fsync      busy   1306.5 ms /1 | p50   72.4 ms | p95   93.0 ms | 0 B
+
+----- r5a
+[+] Transfer completed in 48.546s
+[*] Limiting stage on this device: net_wait (high confidence)
+  - net_wait   busy 172796.5 ms /4 | p50 1289.2 ms | p95 2353.8 ms | 256.00 MB
+  - tls        busy  18933.2 ms /4 | p50  152.5 ms | p95  169.6 ms | 256.00 MB
+  - hash       busy   9674.4 ms /4 | p50   75.3 ms | p95   83.6 ms | 256.00 MB
+  - disk_write busy    475.4 ms /4 | p50    3.3 ms | p95    4.6 ms | 256.00 MB
+  - fsync      busy     11.8 ms /4 | p50   11.8 ms | p95   11.8 ms | 0 B

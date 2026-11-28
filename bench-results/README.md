@@ -31,6 +31,20 @@ Temps des étapes du receveur sur l'A57, marche R6, avec R-5a (somme des 4 conne
 - L'attente réelle du disque n'est que de 0,1 s : les commits qui tournent en arrière-plan ne comptent plus.
 - Les débits ne changent pas, à la dispersion près. Le second passage du PC était plus lent sur toutes les marches, R3 comprise, qui ne touche pas au disque.
 
+**Essai réel, 28 novembre :** l'A57 envoie 256 Mio au TECNO BF6, qui est lui-même le point d'accès (2,4 GHz, lien direct). Le TECNO reçoit avec `main`, puis avec R-5a, chaque fois avec la ligne temporaire qui affiche les étapes. Sorties brutes : [`r5a-tecno-20261128.txt`](r5a-tecno-20261128.txt).
+
+| Étape du receveur (somme des 4 connexions) | `main` | R-5a |
+|---|---|---|
+| `net_wait` | 176,3 s | 172,8 s |
+| `tls` | comptée dans `net_wait` | 18,9 s (152 ms par chunk de 2 Mio) |
+| `hash` | 9,8 s | 9,7 s |
+| `disk_write` | 0,5 s | 0,5 s |
+| `fsync` | 1,3 s (les commits, parallélisme 1) | 0,01 s (une seule vraie attente) |
+| Durée, étape limitante | 44,4 s, `net_wait` | 48,5 s, `net_wait` |
+
+- À 5 à 6 MB/s, c'est le Wi-Fi qui limite le TECNO : `net_wait` pèse 9 fois `tls`.
+- Le déchiffrement y coûte 152 ms par chunk de 2 Mio, soit deux fois le hash (75 ms), contre 10,5 ms sur l'A57 en boucle locale : l'A57 a l'accélération AES, pas le Go 32 bits du TECNO. Le hash et le déchiffrement font ensemble environ 230 ms de processeur par chunk et par cœur : sur 4 cœurs, ce serait un plafond d'environ 35 MB/s, au-dessus de ce Wi-Fi mais sous un bon lien à 5 GHz. C'est un point à mesurer en WP-8.4.
+
 ## 27 novembre 2026 — R-3b : événements d'un fichier sans la file (#297)
 
 **But :** voir ce que change le schéma v6 pour une application qui reçoit beaucoup de petits fichiers, sur le téléphone le plus lent. Sorties brutes : [`r3b-events-tecno-20261127.txt`](r3b-events-tecno-20261127.txt).
