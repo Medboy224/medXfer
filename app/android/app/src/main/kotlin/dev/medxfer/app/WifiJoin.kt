@@ -83,7 +83,7 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
         }
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = main.post {
-                if (gen != generation) return@post
+                if (gen != generation || callback !== this) return@post
                 cm.bindProcessToNetwork(network)
                 joined = network
                 if (!hasInitial) return@post changed()
@@ -99,24 +99,36 @@ class WifiJoin(context: Context, private val changed: () -> Unit) {
             }.let { }
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) = main.post {
-                if (gen != generation || !hasInitial || pending == null || joined != network) return@post
+                if (gen != generation || callback !== this || !hasInitial || pending == null || joined != network) return@post
                 val address = linkProperties.linkAddresses
                     .firstOrNull { it.address is java.net.Inet4Address }?.address?.hostAddress ?: return@post
                 deliver(address)
             }.let { }
 
             override fun onUnavailable() = main.post {
-                if (gen != generation) return@post
+                if (gen != generation || callback !== this) return@post
                 cancelFallback()
+                callback = null
+                request = null
                 if (hasInitial) resolve(gen, null, "unavailable") // refused by the user, or not found
             }.let { }
 
             override fun onLost(network: Network) = main.post {
                 if (gen != generation || callback !== this) return@post
                 cancelFallback()
-                if (hasInitial && pending != null) resolve(gen, null, "lost")
                 cm.bindProcessToNetwork(null)
                 joined = null
+                if (hasInitial && pending != null) {
+                    // Initial join failed before answering: leave cleanly so no request lingers in background.
+                    generation++
+                    request = null
+                    callback = null
+                    runCatching { cm.unregisterNetworkCallback(this) }
+                    val prev = pending
+                    pending = null
+                    prev?.invoke(null, "lost")
+                    return@post
+                }
                 changed()
                 val again = request ?: return@post // left on purpose
                 runCatching { cm.unregisterNetworkCallback(this) }
