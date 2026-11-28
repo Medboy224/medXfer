@@ -50,12 +50,17 @@ class WifiJoin {
   winrt::fire_and_forget Rejoin(std::function<void(bool joined)> done);
 
  private:
+  // Shared with background coroutines so they never touch `this` after destruction (#345).
+  struct Life {
+    std::atomic<bool> alive{true};
+    std::atomic<uint64_t> gen{0};
+  };
+
   std::wstring profile_;   // the app's profile, while joined
   std::string ssid_;       // its network's name, while joined
   std::wstring previous_;  // the profile of the network the computer was on
   GUID card_{};
-  std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
-  std::atomic<uint64_t> gen_{0};
+  std::shared_ptr<Life> life_ = std::make_shared<Life>();
 };
 
 #endif  // RUNNER_WIFI_JOIN_H_

@@ -1,6 +1,7 @@
 #ifndef RUNNER_BLE_H_
 #define RUNNER_BLE_H_
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -63,22 +64,32 @@ class Ble {
   struct Served;  // a device connected to this one
   struct Client;  // this one connected to a device
   struct Held;    // a phone's link kept with this one, by which this one calls it
+  // Shared with background callbacks/coroutines so ~Ble() never destroys the mutex or ui while in use (#345).
+  struct Gate {
+    std::mutex mu;
+    std::atomic<bool> alive{true};
+    std::optional<winrt::apartment_context> ui;
+  };
 
-  winrt::fire_and_forget OnWrite(winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattWriteRequestedEventArgs args);
-  winrt::fire_and_forget OnRead(winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattReadRequestedEventArgs args);
-  winrt::fire_and_forget OnSeen(uint64_t address, int16_t rssi, int type, bool holds);
-  winrt::fire_and_forget OnCallWrite(winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattWriteRequestedEventArgs args);
-  winrt::fire_and_forget OnCallRead(winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattReadRequestedEventArgs args);
-  void OnSubscribers();
-  winrt::fire_and_forget Call(std::shared_ptr<Held> h, std::vector<uint8_t> message, Answer done);
-  winrt::fire_and_forget AnswerOnUi(Answer done, std::optional<std::string> error, std::vector<uint8_t> answer);
+  winrt::fire_and_forget OnWrite(winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattWriteRequestedEventArgs args,
+                                 std::shared_ptr<Gate> gate);
+  winrt::fire_and_forget OnRead(winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattReadRequestedEventArgs args,
+                                std::shared_ptr<Gate> gate);
+  winrt::fire_and_forget OnSeen(uint64_t address, int16_t rssi, int type, bool holds, std::shared_ptr<Gate> gate);
+  winrt::fire_and_forget OnCallWrite(winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattWriteRequestedEventArgs args,
+                                     std::shared_ptr<Gate> gate);
+  winrt::fire_and_forget OnCallRead(winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattReadRequestedEventArgs args,
+                                    std::shared_ptr<Gate> gate);
+  void OnSubscribers(std::shared_ptr<Gate> gate);
+  winrt::fire_and_forget Call(std::shared_ptr<Held> h, std::vector<uint8_t> message, Answer done, std::shared_ptr<Gate> gate);
+  winrt::fire_and_forget AnswerOnUi(Answer done, std::optional<std::string> error, std::vector<uint8_t> answer,
+                                    std::shared_ptr<Gate> gate);
   void DropHeldLocked(const std::string& conn, std::vector<Answer>& failed, bool& dropped);
-  winrt::fire_and_forget EmitOnUi(std::string event, flutter::EncodableMap args);
+  winrt::fire_and_forget EmitOnUi(std::string event, flutter::EncodableMap args, std::shared_ptr<Gate> gate);
   Served& ServedLocked(const winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattSession& session);
 
   Emit emit_;
-  std::optional<winrt::apartment_context> ui_;
-  std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);  // false once destroyed: late callbacks stop
+  std::shared_ptr<Gate> gate_ = std::make_shared<Gate>();
 
   // The service, kept from one Start to the next: only its advertisement stops (Stop).
   winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattServiceProvider provider_{nullptr};
@@ -86,7 +97,7 @@ class Ble {
   bool advertising_ = false;
   winrt::Windows::Devices::Bluetooth::Advertisement::BluetoothLEAdvertisementWatcher watcher_{nullptr};
 
-  std::mutex mu_;  // the maps below: the server's events come on Windows' threads
+  // Protected by gate_->mu: the server's events come on Windows' threads.
   std::map<std::string, std::shared_ptr<Served>> served_;
   std::map<uint64_t, int64_t> seen_at_;  // ms of the last "seen" of each address
   // The type of each address seen (BluetoothAddressType: 0 public, 1 random), for Exchange to

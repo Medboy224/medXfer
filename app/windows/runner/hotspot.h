@@ -1,6 +1,7 @@
 #ifndef RUNNER_HOTSPOT_H_
 #define RUNNER_HOTSPOT_H_
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -67,7 +68,9 @@ class WifiDirectHotspot {
   bool Alive();
 
  private:
-  winrt::fire_and_forget Accept(winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionRequest request);
+  winrt::fire_and_forget Accept(winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionRequest request,
+                                winrt::apartment_context ui,
+                                std::shared_ptr<std::atomic<bool>> alive);
 
   winrt::Windows::Devices::WiFiDirect::WiFiDirectAdvertisementPublisher publisher_{nullptr};
   uint32_t group_index_ = 0;  // the group's adapter
@@ -78,8 +81,7 @@ class WifiDirectHotspot {
   // serve the addresses: otherwise it fails after 30 s, and the listener is let go.
   winrt::Windows::Devices::WiFiDirect::WiFiDirectConnectionListener listener_{nullptr};
   winrt::event_token requested_{};
-  std::optional<winrt::apartment_context> ui_;
-  std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
+  std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
   std::vector<winrt::Windows::Devices::WiFiDirect::WiFiDirectDevice> accepted_;
 };
 
