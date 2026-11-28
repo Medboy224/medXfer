@@ -1,6 +1,7 @@
 package diag
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -76,8 +77,7 @@ func TestTransferSessionTracker(t *testing.T) {
 	}
 
 	for idx, ps := range report.PhaseSamples {
-		t.Logf("Phase %d (%s): Speed=%.1f MB/s, Disk=%.1f ms, Net=%.1f ms, Factor=%s",
-			idx, ps.Phase, ps.AvgSpeedMBps, ps.DiskLatencyMs, ps.NetLatencyMs, ps.DominantFactor)
+		t.Logf("Phase %d (%s): Speed=%.1f MB/s, Factor=%s", idx, ps.Phase, ps.AvgSpeedMBps, ps.DominantFactor)
 		if ps.AvgSpeedMBps <= 0 {
 			t.Errorf("Expected positive speed for phase %s", ps.Phase)
 		}
@@ -115,6 +115,28 @@ func TestFailedTransferReport(t *testing.T) {
 	done.Finish(OutcomeCompleted)
 	if r := done.GenerateReport(ReportOptions{}); r.DoneBytes != 0 || strings.Contains(FormatText(r), "Outcome") {
 		t.Fatalf("a completed transfer: done %d, text %q", r.DoneBytes, FormatText(r))
+	}
+}
+
+// A report says no latency it did not measure (#304): nothing fills those fields any more, and
+// the report showed "Disk Latency: 0.0 ms | Net Latency: 0.0 ms", quartiles at 0 ms, and a
+// diagnosis of "latency ~0.0 ms". The time of each stage says it instead (DEV-03).
+func TestReportSaysNoLatency(t *testing.T) {
+	tr := NewTransferSessionTracker("a.bin", 1, 4<<20)
+	tr.OnStage("net_wait", 4, 400*time.Millisecond, 4<<20)
+	tr.OnStage("hash", 4, 40*time.Millisecond, 4<<20)
+	tr.RecordSample(engine.TransferStats{BytesTransferred: 4 << 20, TotalBytes: 4 << 20, SpeedMBps: 12}, 100)
+	tr.Finish(OutcomeCompleted)
+	r := tr.GenerateReport(ReportOptions{})
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := strings.ToLower(string(b)); strings.Contains(text, "latency") {
+		t.Fatalf("the report speaks of a latency nobody measured:\n%s", r.FormattedReport)
+	}
+	if text := strings.ToLower(FormatComparison(Compare(r, r))); strings.Contains(text, "latency") {
+		t.Fatalf("the comparison speaks of a latency:\n%s", text)
 	}
 }
 

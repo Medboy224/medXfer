@@ -25,7 +25,7 @@ type Comparison struct {
 	SameTransfer bool    `json:"same_transfer"` // same byte and file counts
 }
 
-// Compare returns the differences in speed, latency, retries and bottleneck between a and b.
+// Compare returns the differences in speed, retries and bottleneck between a and b.
 func Compare(a, b *Report) Comparison {
 	type metric struct {
 		name, unit   string
@@ -39,8 +39,6 @@ func Compare(a, b *Report) Comparison {
 		{"peak_speed", "MB/s", a.PeakSpeedMBps, b.PeakSpeedMBps, true, false},
 		{"min_speed", "MB/s", a.MinSpeedMBps, b.MinSpeedMBps, true, false},
 		{"retries", "", float64(a.Retries), float64(b.Retries), false, false},
-		{"disk_latency", "ms", a.AvgDiskLatencyMs, b.AvgDiskLatencyMs, false, false},
-		{"net_latency", "ms", a.AvgNetLatencyMs, b.AvgNetLatencyMs, false, false},
 		{"total_bytes", "B", float64(a.TotalBytes), float64(b.TotalBytes), false, true},
 		{"total_files", "", float64(a.TotalFiles), float64(b.TotalFiles), false, true},
 	}

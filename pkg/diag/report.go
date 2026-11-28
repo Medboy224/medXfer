@@ -51,8 +51,6 @@ func (l Link) Valid() bool {
 type PhaseSample struct {
 	Phase          string  `json:"phase"`
 	AvgSpeedMBps   float64 `json:"avg_speed_mbps"`
-	DiskLatencyMs  float64 `json:"avg_disk_latency_ms"`
-	NetLatencyMs   float64 `json:"avg_net_latency_ms"`
 	DominantFactor string  `json:"dominant_factor"`
 }
 
@@ -76,9 +74,7 @@ type Report struct {
 	PeakSpeedMBps     float64       `json:"peak_speed_mbps"`
 	MinSpeedMBps      float64       `json:"min_speed_mbps"`
 	Retries           int           `json:"retries"`
-	PrimaryBottleneck string        `json:"primary_bottleneck"` // "STORAGE", "NETWORK", "BALANCED"
-	AvgDiskLatencyMs  float64       `json:"avg_disk_latency_ms"`
-	AvgNetLatencyMs   float64       `json:"avg_net_latency_ms"`
+	PrimaryBottleneck string        `json:"primary_bottleneck"` // "STORAGE", "NETWORK", "CPU", "BALANCED"
 	PhaseSamples      []PhaseSample `json:"phase_samples"`
 	// Stages are the per-chunk measures of this device's side (DEV-03), and Bottleneck the
 	// limiting one (DEV-04). Absent from version 1 reports.
@@ -115,8 +111,7 @@ func FormatText(r *Report) string {
 	}
 	sb.WriteString(fmt.Sprintf("Duration: %02dm %02ds | Avg Speed: %.1f MB/s | Peak: %.1f MB/s | Min: %.1f MB/s\n",
 		durMinutes, durRemainderSec, r.AvgSpeedMBps, r.PeakSpeedMBps, r.MinSpeedMBps))
-	sb.WriteString(fmt.Sprintf("Bottleneck: %s (Disk Latency: %.1f ms | Net Latency: %.1f ms) | Retries: %d\n",
-		r.PrimaryBottleneck, r.AvgDiskLatencyMs, r.AvgNetLatencyMs, r.Retries))
+	sb.WriteString(fmt.Sprintf("Bottleneck: %s | Retries: %d\n", r.PrimaryBottleneck, r.Retries))
 	if r.Bottleneck != nil && r.Bottleneck.Stage != "" {
 		sb.WriteString(fmt.Sprintf("Limiting stage: %s (%s confidence)\n", r.Bottleneck.Stage, r.Bottleneck.Confidence))
 		sb.WriteString(FormatStages(r.Stages))
@@ -130,8 +125,7 @@ func FormatText(r *Report) string {
 	}
 	sb.WriteString("Quartile Breakdown:\n")
 	for _, ps := range r.PhaseSamples {
-		sb.WriteString(fmt.Sprintf("  - %s: %5.1f MB/s | Disk: %5.1f ms | Net: %5.1f ms [%s]\n",
-			ps.Phase, ps.AvgSpeedMBps, ps.DiskLatencyMs, ps.NetLatencyMs, ps.DominantFactor))
+		sb.WriteString(fmt.Sprintf("  - %s: %5.1f MB/s [%s]\n", ps.Phase, ps.AvgSpeedMBps, ps.DominantFactor))
 	}
 	sb.WriteString(fmt.Sprintf("Analysis: %s\n", r.DiagnosisText))
 	sb.WriteString(fmt.Sprintf("medXfer %s · %s/%s · %s\n", r.AppVersion, r.OS, r.Arch, r.GeneratedAt.Local().Format("2006-01-02 15:04:05")))

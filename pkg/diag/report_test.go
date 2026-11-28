@@ -102,22 +102,20 @@ func TestLoadReportRejectsUnknownSchema(t *testing.T) {
 
 func TestCompareReports(t *testing.T) {
 	a := &Report{DurationSec: 10, AvgSpeedMBps: 50, PeakSpeedMBps: 60, MinSpeedMBps: 20, Retries: 4,
-		AvgDiskLatencyMs: 2, AvgNetLatencyMs: 8, TotalBytes: 500 << 20, TotalFiles: 2, PrimaryBottleneck: "NETWORK"}
+		TotalBytes: 500 << 20, TotalFiles: 2, PrimaryBottleneck: "NETWORK"}
 	b := &Report{DurationSec: 5, AvgSpeedMBps: 100, PeakSpeedMBps: 60, MinSpeedMBps: 30, Retries: 0,
-		AvgDiskLatencyMs: 6, AvgNetLatencyMs: 4, TotalBytes: 500 << 20, TotalFiles: 2, PrimaryBottleneck: "STORAGE"}
+		TotalBytes: 500 << 20, TotalFiles: 2, PrimaryBottleneck: "STORAGE"}
 	c := Compare(a, b)
 	want := map[string]struct {
 		pct    float64
 		better string
 	}{
-		"duration":     {-50, "b"},
-		"avg_speed":    {100, "b"},
-		"peak_speed":   {0, ""},
-		"min_speed":    {50, "b"},
-		"retries":      {-100, "b"},
-		"disk_latency": {200, "a"},
-		"net_latency":  {-50, "b"},
-		"total_bytes":  {0, ""},
+		"duration":    {-50, "b"},
+		"avg_speed":   {100, "b"},
+		"peak_speed":  {0, ""},
+		"min_speed":   {50, "b"},
+		"retries":     {-100, "b"},
+		"total_bytes": {0, ""},
 	}
 	for _, d := range c.Metrics {
 		w, ok := want[d.Metric]
