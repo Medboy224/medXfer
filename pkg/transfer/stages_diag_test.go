@@ -91,6 +91,11 @@ func TestLimitingStageIsFound(t *testing.T) {
 				return faultfs.Wrap(f, faultfs.Plan{SyncDelay: time.Second})
 			}))
 		}},
+		// A slow decryption: time spent reading a chunk, but not in the network (#304).
+		{"slow decryption", StageTLS, true, false, func(t *testing.T) {
+			decryptDelay = 100 * time.Millisecond
+			t.Cleanup(func() { decryptDelay = 0 })
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			c.slow(t)

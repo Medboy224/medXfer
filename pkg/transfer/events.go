@@ -97,7 +97,8 @@ type DiskFullEvents interface {
 // Stages of a chunk, measured for diag (DEV-03).
 const (
 	// Receiver.
-	StageNetWait   = "net_wait"   // waiting for a CHUNK, from the moment the worker can take it
+	StageNetWait   = "net_wait"   // waiting for a CHUNK in the network, from the moment the worker can take it
+	StageTLS       = "tls"        // the rest of that wait: decrypting, above all
 	StageHash      = "hash"       // SHA-256 of a chunk (both sides)
 	StageDiskWrite = "disk_write" // writing a verified chunk
 	StageFsync     = "fsync"      // a writer waiting for the disk: a commit behind, a file's or a batch's sync

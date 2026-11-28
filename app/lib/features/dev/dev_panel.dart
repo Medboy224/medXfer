@@ -16,10 +16,11 @@ import '../../theme.dart';
 import '../../widgets/format.dart';
 
 /// The stages in the order of a chunk's way: the receiver's, then the sender's.
-const _stageOrder = ['net_wait', 'hash', 'disk_write', 'fsync', 'disk_read', 'net_write'];
+const _stageOrder = ['net_wait', 'tls', 'hash', 'disk_write', 'fsync', 'disk_read', 'net_write'];
 
 String _stageName(AppLocalizations l, String stage) => switch (stage) {
   'net_wait' => l.stageNetWait,
+  'tls' => l.stageTls,
   'hash' => l.stageHash,
   'disk_write' => l.stageDiskWrite,
   'fsync' => l.stageFsync,

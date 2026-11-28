@@ -144,7 +144,7 @@ func (s *Stages) Bottleneck() Bottleneck {
 }
 
 // stageOrder is the order stages are shown in: receiver's, then sender's.
-var stageOrder = []string{"net_wait", "hash", "disk_write", "fsync", "disk_read", "net_write"}
+var stageOrder = []string{"net_wait", "tls", "hash", "disk_write", "fsync", "disk_read", "net_write"}
 
 // FormatStages renders stages as text lines, in the order of a chunk's way.
 func FormatStages(stages map[string]StageStats) string {
@@ -180,7 +180,7 @@ func Kind(stage string) string {
 		return "NETWORK"
 	case "disk_write", "disk_read", "fsync":
 		return "STORAGE"
-	case "hash":
+	case "hash", "tls":
 		return "CPU"
 	}
 	return "BALANCED"

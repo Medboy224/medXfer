@@ -416,11 +416,28 @@ func (ru *run) markRoot() error {
 // hashDelay slows every hash down; tests use it to make the hash the limiting stage (DEV-04).
 var hashDelay time.Duration
 
+// decryptDelay is added to every frame read, outside the network: tests use it as a slow
+// decryption, to make StageTLS the limiting stage (DEV-04).
+var decryptDelay time.Duration
+
 // stage reports the time a stage took since start, if someone measures (DEV-03).
 func (ru *run) stage(name string, parallel int, start time.Time, bytes int64) {
 	if ru.stages != nil {
 		ru.stages.OnStage(name, parallel, time.Since(start), bytes)
 	}
+}
+
+// chunkWait splits the wait for a chunk since start: inNet, spent in the reads below TLS, is
+// the network's; the rest is the receiver's own work, decrypting above all (DEV-03, #304).
+// TLS reads ahead, so a chunk's share is approximate; the sums are exact.
+func (ru *run) chunkWait(start time.Time, inNet time.Duration, bytes int64) {
+	if ru.stages == nil {
+		return
+	}
+	wait := time.Since(start)
+	inNet = min(inNet, wait)
+	ru.stages.OnStage(StageNetWait, ru.workers, inNet, bytes)
+	ru.stages.OnStage(StageTLS, ru.workers, wait-inNet, bytes)
 }
 
 // params are the storage parameters of item st. Its resume key ties a partial file to this
@@ -1211,8 +1228,9 @@ func (ru *run) reportProgress(ctx context.Context) {
 
 // connect opens one data connection: dial with a timeout, then Join (TLS and DATA_JOIN), with
 // up to 8 attempts (XFER-05). Once the sender answered in this run, one more every
-// reconnectEvery for ReconnectWindow: the sender's network may come back (WP-B.8).
-func (ru *run) connect(ctx context.Context, addr string) (net.Conn, error) {
+// reconnectEvery for ReconnectWindow: the sender's network may come back (WP-B.8). Its clock
+// adds up the time its reads spend in the network, below TLS.
+func (ru *run) connect(ctx context.Context, addr string) (net.Conn, *netClock, error) {
 	r := ru.r
 	var lastErr error
 	var deadline time.Time // of the further attempts, set when they start
@@ -1238,7 +1256,7 @@ func (ru *run) connect(ctx context.Context, addr string) (net.Conn, error) {
 			}
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return nil, nil, ctx.Err()
 			case <-time.After(delay):
 			}
 		}
@@ -1256,24 +1274,42 @@ func (ru *run) connect(ctx context.Context, addr string) (net.Conn, error) {
 		}
 		cancel()
 		if err == nil {
-			raw = engine.WrapDialed(raw)
+			// Above the faults of diag builds: their delays are the network's.
+			clock := &netClock{Conn: engine.WrapDialed(raw)}
 			var c net.Conn
 			// Not reached yet: in TLS 1.3 a refused client ends its handshake before the
 			// sender checks it, so only an answer (worker) shows the sender took it.
-			if c, err = r.Join(ctx, raw); err == nil {
-				return c, nil
+			if c, err = r.Join(ctx, clock); err == nil {
+				return c, clock, nil
 			}
 		}
 		lastErr = err
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		}
 	}
 	if !ru.reached.Load() && DialFailed(lastErr) {
-		return nil, fmt.Errorf("%w: %v", ErrSenderUnreachable, lastErr)
+		return nil, nil, fmt.Errorf("%w: %v", ErrSenderUnreachable, lastErr)
 	}
-	return nil, fmt.Errorf("%w: %v", ErrTransferFailed, lastErr)
+	return nil, nil, fmt.Errorf("%w: %v", ErrTransferFailed, lastErr)
 }
+
+// netClock adds up the time the reads of a data connection spend in the network, below TLS:
+// the rest of a chunk's wait is the receiver's own work, decrypting above all (#304).
+type netClock struct {
+	net.Conn
+	ns atomic.Int64
+}
+
+func (c *netClock) Read(p []byte) (int, error) {
+	start := time.Now()
+	n, err := c.Conn.Read(p)
+	c.ns.Add(int64(time.Since(start)))
+	return n, err
+}
+
+// inNet is the time the reads have spent in the network so far.
+func (c *netClock) inNet() time.Duration { return time.Duration(c.ns.Load()) }
 
 // received is a chunk read from the network, waiting to be checked and written.
 type received struct {
@@ -1327,6 +1363,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 	}()
 	var out []byte
 	var conn net.Conn
+	var clock *netClock // conn's time in the network
 	var stopClosing func() bool
 	var inflight []task
 	reconnects := 0 // in a row, without a chunk received in between (audit 14, #156)
@@ -1360,11 +1397,11 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 			if ru.allEnded() {
 				return nil
 			}
-			c, err := ru.connect(ctx, addr)
+			c, cl, err := ru.connect(ctx, addr)
 			if err != nil {
 				return err
 			}
-			conn = c
+			conn, clock = c, cl
 			ru.track(c, true)
 			// A cancel closes the connection: a read waiting for a silent sender ends at once.
 			stopClosing = context.AfterFunc(ctx, func() { c.Close() })
@@ -1415,12 +1452,15 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 		}
 		// The wait starts once the worker can take a chunk: a slow disk or hash holds the
 		// buffers back, and must not count as network time (DEV-04).
-		readStart := time.Now()
+		readStart, netBefore := time.Now(), clock.inNet()
 		_ = conn.SetReadDeadline(readStart.Add(chunkReadTimeout))
 		t := inflight[0]
 		st := ru.items[t.item]
 		var frame int64 // its bytes on the way, given back once the chunk is counted or dropped
 		h, p, err := protocol.ReadFrame(onTheWayReader{conn, &ru.received, &ru.onTheWay, &st.onTheWay, &frame}, limits, buf)
+		if decryptDelay > 0 {
+			time.Sleep(decryptDelay)
+		}
 		arrived := func(n int64) {
 			ru.onTheWay.Add(-n)
 			st.onTheWay.Add(-n)
@@ -1456,7 +1496,7 @@ func (ru *run) worker(ctx context.Context, addr string) error {
 			continue
 		}
 		item, index, sum, data, err := protocol.ParseChunkData(p)
-		ru.stage(StageNetWait, ru.workers, readStart, int64(len(data)))
+		ru.chunkWait(readStart, clock.inNet()-netBefore, int64(len(data)))
 		if err != nil || h.Type != protocol.TypeChunkData || int(item) != t.item || index != t.index {
 			if h.Type == protocol.TypeChunkData {
 				arrived(frame)
