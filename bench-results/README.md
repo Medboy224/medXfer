@@ -2,6 +2,49 @@
 
 Les mesures sur appareils réels (bible §17.4, DEV-21) sont gardées ici pour comparer les appareils et les versions. Chaque fichier `matrix-<appareil>-<système>-<date>.json` est la sortie de `xfer bench matrix` côté **receveur**.
 
+## 27 novembre 2026 — R-5a : l'attente du disque et le déchiffrement, mesurés à part (#304)
+
+**But :** voir ce que R-5a change à l'étape limitante, avec le banc de la revue (`xfer bench ladder` en boucle locale). Sorties brutes : [`r5a-stages-20261127.txt`](r5a-stages-20261127.txt).
+
+**Méthode :**
+- `xfer bench ladder`, serveur et pair sur le même appareil (`--listen 127.0.0.1`), 1 Gio par marche, 4 connexions, chunks de 2 Mio.
+- `main`, puis la branche R-5a, sur le PC (Windows 11, processeur Intel sans instructions SHA) et sur l'A57 (Android 16, dans Termux).
+- Sur l'A57, une version de R-5a avec une ligne temporaire, non commitée, affiche le temps de chaque étape du receveur.
+
+**Résultats :**
+
+| Appareil, marche R6 | `main` | R-5a |
+|---|---|---|
+| PC | 297 MB/s, limité par `hash` | 289 et 261 MB/s, limité par `hash` |
+| A57 | 168 MB/s, limité par `net_wait` | 171 MB/s, limité par `net_wait` |
+
+Temps des étapes du receveur sur l'A57, marche R6, avec R-5a (somme des 4 connexions) :
+
+| `net_wait` | `tls` | `disk_write` | `hash` | `fsync` |
+|---|---|---|---|---|
+| 10,4 s | 6,3 s | 4,5 s | 3,7 s | 0,1 s |
+
+**Lecture :**
+- Le constat de la revue, « limiting: fsync » à 440–510 MB/s, ne se reproduit sur aucun des deux appareils. Sur le PC, le SHA-256 limite avant le disque ; sur l'A57, c'est l'arrivée des données. Les tests de R-5a le couvrent à la place : `TestOnlyTheWritersWaitIsMeasured`, et le scénario « slow fsync » de `TestLimitingStageIsFound`.
+- Sur l'A57, 6,3 s de déchiffrement comptaient comme du réseau avant R-5a : environ un tiers de l'ancien `net_wait`.
+- `net_wait` reste l'étape la plus longue. En boucle locale sur un seul téléphone, le travail de l'émetteur (chiffrement, lecture, hash) ralentit l'arrivée des données.
+- L'attente réelle du disque n'est que de 0,1 s : les commits qui tournent en arrière-plan ne comptent plus.
+- Les débits ne changent pas, à la dispersion près. Le second passage du PC était plus lent sur toutes les marches, R3 comprise, qui ne touche pas au disque.
+
+**Essai réel, 28 novembre :** l'A57 envoie 256 Mio au TECNO BF6, qui est lui-même le point d'accès (2,4 GHz, lien direct). Le TECNO reçoit avec `main`, puis avec R-5a, chaque fois avec la ligne temporaire qui affiche les étapes. Sorties brutes : [`r5a-tecno-20261128.txt`](r5a-tecno-20261128.txt).
+
+| Étape du receveur (somme des 4 connexions) | `main` | R-5a |
+|---|---|---|
+| `net_wait` | 176,3 s | 172,8 s |
+| `tls` | comptée dans `net_wait` | 18,9 s (152 ms par chunk de 2 Mio) |
+| `hash` | 9,8 s | 9,7 s |
+| `disk_write` | 0,5 s | 0,5 s |
+| `fsync` | 1,3 s (les commits, parallélisme 1) | 0,01 s (une seule vraie attente) |
+| Durée, étape limitante | 44,4 s, `net_wait` | 48,5 s, `net_wait` |
+
+- À 5 à 6 MB/s, c'est le Wi-Fi qui limite le TECNO : `net_wait` pèse 9 fois `tls`.
+- Le déchiffrement y coûte 152 ms par chunk de 2 Mio, soit deux fois le hash (75 ms), contre 10,5 ms sur l'A57 en boucle locale : l'A57 a l'accélération AES, pas le Go 32 bits du TECNO. Le hash et le déchiffrement font ensemble environ 230 ms de processeur par chunk et par cœur : sur 4 cœurs, ce serait un plafond d'environ 35 MB/s, au-dessus de ce Wi-Fi mais sous un bon lien à 5 GHz. C'est un point à mesurer en WP-8.4.
+
 ## 27 novembre 2026 — R-3b : événements d'un fichier sans la file (#297)
 
 **But :** voir ce que change le schéma v6 pour une application qui reçoit beaucoup de petits fichiers, sur le téléphone le plus lent. Sorties brutes : [`r3b-events-tecno-20261127.txt`](r3b-events-tecno-20261127.txt).

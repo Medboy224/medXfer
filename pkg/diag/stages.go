@@ -14,7 +14,7 @@ import (
 type StageStats struct {
 	BusyMs   float64 `json:"busy_ms"`  // time spent in the stage, all connections added up
 	Bytes    int64   `json:"bytes"`    // bytes that went through it
-	Count    int     `json:"count"`    // measures: one per chunk, one per commit for fsync
+	Count    int     `json:"count"`    // measures: one per chunk; for fsync, one per wait of a writer
 	P50Ms    float64 `json:"p50_ms"`   // median duration of one measure
 	P95Ms    float64 `json:"p95_ms"`   // 95th percentile
 	Parallel int     `json:"parallel"` // how many may run at once (connections, or 1)
@@ -144,7 +144,7 @@ func (s *Stages) Bottleneck() Bottleneck {
 }
 
 // stageOrder is the order stages are shown in: receiver's, then sender's.
-var stageOrder = []string{"net_wait", "hash", "disk_write", "fsync", "disk_read", "net_write"}
+var stageOrder = []string{"net_wait", "tls", "hash", "disk_write", "fsync", "disk_read", "net_write"}
 
 // FormatStages renders stages as text lines, in the order of a chunk's way.
 func FormatStages(stages map[string]StageStats) string {
@@ -180,7 +180,7 @@ func Kind(stage string) string {
 		return "NETWORK"
 	case "disk_write", "disk_read", "fsync":
 		return "STORAGE"
-	case "hash":
+	case "hash", "tls":
 		return "CPU"
 	}
 	return "BALANCED"

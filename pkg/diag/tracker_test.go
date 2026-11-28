@@ -118,6 +118,25 @@ func TestFailedTransferReport(t *testing.T) {
 	}
 }
 
+// Decrypting is the receiver's own work, not the network's (#304): a report limited by it says
+// so, and shows the stage next to the network wait.
+func TestReportSaysTheDecryption(t *testing.T) {
+	tr := NewTransferSessionTracker("a.bin", 1, 4<<20)
+	tr.OnStage("net_wait", 4, 40*time.Millisecond, 4<<20)
+	tr.OnStage("tls", 4, 400*time.Millisecond, 4<<20)
+	tr.OnStage("hash", 4, 20*time.Millisecond, 4<<20)
+	r := tr.GenerateReport(ReportOptions{})
+	if r.Bottleneck == nil || r.Bottleneck.Stage != "tls" || r.PrimaryBottleneck != "CPU" {
+		t.Fatalf("bottleneck %+v, %s; want tls, CPU", r.Bottleneck, r.PrimaryBottleneck)
+	}
+	if !strings.Contains(r.DiagnosisText, "decrypting") {
+		t.Fatalf("diagnosis %q does not say the decryption", r.DiagnosisText)
+	}
+	if text := FormatStages(r.Stages); strings.Index(text, "tls") < strings.Index(text, "net_wait") || strings.Index(text, "tls") > strings.Index(text, "hash") {
+		t.Fatalf("tls not between net_wait and hash:\n%s", text)
+	}
+}
+
 // The Wi-Fi of the transfer in its report: the network, its frequency, and another Wi-Fi this
 // device was on as well, which stays once seen (real tests of 17 November 2026).
 func TestReportSaysTheLink(t *testing.T) {

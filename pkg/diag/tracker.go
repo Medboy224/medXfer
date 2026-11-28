@@ -285,6 +285,9 @@ func (t *TransferSessionTracker) GenerateReport(opts ReportOptions) *Report {
 		diagnosisText = fmt.Sprintf("⚠️ Storage bottleneck: high disk latency (~%.1f ms), typical of an external hard disk (HDD) or a full write buffer.", avgDiskLatency)
 	case "CPU":
 		diagnosisText = "⚙️ CPU bottleneck: computing the SHA-256 hashes limits the speed (a slow device, or no hardware acceleration)."
+		if bottleneck != nil && bottleneck.Stage == "tls" {
+			diagnosisText = "⚙️ CPU bottleneck: decrypting the data (TLS) limits the speed (a slow device, or no hardware acceleration)."
+		}
 	case "NETWORK":
 		diagnosisText = fmt.Sprintf("⚡ Network bottleneck: the network link limits the speed (latency ~%.1f ms); disk writes keep up (%.1f ms).", avgNetLatency, avgDiskLatency)
 	default:

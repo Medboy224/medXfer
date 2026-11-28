@@ -248,6 +248,7 @@
   "confidenceMedium": "likely",
   "confidenceLow": "uncertain",
   "stageNetWait": "waiting for the network",
+  "stageTls": "decryption",
   "stageHash": "checksum",
   "stageDiskWrite": "disk write",
   "stageFsync": "disk sync",

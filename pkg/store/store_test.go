@@ -605,6 +605,74 @@ func TestCommitDoesNotHoldTheWriter(t *testing.T) {
 	}
 }
 
+// The fsync stage is the time a writer waits for the disk, not the length of the commits that
+// run beside the transfer (#304): measured whole, they named fsync the limiting stage at
+// 440-510 MB/s on a loopback. Here the disk is a commit behind once: one wait, and only one.
+func TestOnlyTheWritersWaitIsMeasured(t *testing.T) {
+	root, _ := openRoot(t)
+	m := &memFS{files: map[string]*memFile{}}
+	useMemFS(t, m)
+	data, sums := content(t, 8*testChunk)
+	p := params(len(data))
+	p.CommitBytes, p.CommitInterval = 2*testChunk, time.Hour
+	var mu sync.Mutex
+	var waits []time.Duration
+	p.OnSyncWait = func(d time.Duration) {
+		mu.Lock()
+		waits = append(waits, d)
+		mu.Unlock()
+	}
+	f, err := Open(root, "f.bin", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := make(chan struct{})
+	m.mu.Lock()
+	m.files["f.bin"+PartSuffix].gate = gate // a slow disk: Sync waits
+	m.mu.Unlock()
+	for i := range 2 { // the commit of chunks 0 and 1 starts, and waits for the disk
+		if err := writeChunk(f, uint32(i), chunkOf(data, i), sums[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for taken := false; !taken; { // until the commit has taken its chunks
+		f.mu.Lock()
+		taken = f.pendingBytes == 0
+		f.mu.Unlock()
+		time.Sleep(time.Millisecond)
+	}
+	if err := writeChunk(f, 2, chunkOf(data, 2), sums[2]); err != nil {
+		t.Fatal(err)
+	}
+	behind := make(chan error, 1)
+	go func() { behind <- writeChunk(f, 3, chunkOf(data, 3), sums[3]) }() // due, the first still syncing
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	if err := <-behind; err != nil {
+		t.Fatal(err)
+	}
+	// The disk keeps up from now on: each commit ends before the next is due.
+	for i := 4; i < 8; i++ {
+		if err := f.Settle(); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeChunk(f, uint32(i), chunkOf(data, i), sums[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Settle(); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(waits) != 1 || waits[0] < 40*time.Millisecond {
+		t.Fatalf("measured %v; want one wait of about 50 ms, the commits beside the writer not counted", waits)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The error of a commit run in the background is not lost: the next call returns it, and the
 // writer stops there (a disk unplugged, a disk full: STO-07).
 func TestBackgroundCommitErrorIsReported(t *testing.T) {

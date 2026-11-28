@@ -147,6 +147,21 @@ void main() {
     expect(find.text('Panneau développeur'), findsNothing);
   });
 
+  testWidgets('the decryption stage is shown under its name, next to the network wait (#304)', (tester) async {
+    final (core, _, _) = await _app(tester, devMode: true);
+    core.emit(const CoreEvent('transfer_progress', data: {
+      'speed_mbps': 20.0,
+      'batch_bytes': 1 << 20,
+      'batch_total_bytes': 10 << 20,
+      'stage_ms': {'net_wait': 120.0, 'tls': 400.0, 'hash': 60.0},
+      'bottleneck': 'tls',
+      'bottleneck_confidence': 'high',
+    }));
+    await tester.tap(find.byKey(const Key('dev-banner')));
+    await tester.pumpAndSettle();
+    expect(find.text('Étape limitante : déchiffrement (nette)'), findsOneWidget);
+  });
+
   testWidgets('switched on in the settings: the banner, then the panel with the live transfer', (tester) async {
     final (core, _, settings) = await _app(tester);
     await tester.tap(find.byKey(const Key('home-menu')));

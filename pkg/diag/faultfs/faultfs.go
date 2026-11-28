@@ -34,6 +34,7 @@ type Plan struct {
 	TornWriteAt  int64         // the write that crosses this many bytes writes only its first half, then fails; 0 = never
 	LyingSync    bool          // Sync reports success without syncing
 	WriteDelay   time.Duration // every write waits this long first: a slow disk (DEV-04)
+	SyncDelay    time.Duration // every Sync waits this long first: a disk slow to sync (DEV-04)
 }
 
 // File is a storage file with faults. Its counters let a test check what happened.
@@ -148,6 +149,9 @@ func (f *File) Sync() error {
 	f.mu.Unlock()
 	if lie {
 		return nil
+	}
+	if f.plan.SyncDelay > 0 {
+		time.Sleep(f.plan.SyncDelay)
 	}
 	f.mu.Lock()
 	pending := len(f.unsynced) // writes that end after this point stay unsynced

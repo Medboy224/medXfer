@@ -1,0 +1,81 @@
+R-5a (#304) : xfer bench ladder en boucle locale, 1 Gio par marche, 4 connexions, chunks de 2 Mio.
+27 novembre 2026. Serveur et pair sur le même appareil (--listen 127.0.0.1:PORT), chacun avec
+son dossier de configuration de test.
+
+- main : origin/main au commit b634638 (fusion de #348).
+- r5a : la branche fix/revue-r5a-mesures.
+- probe : r5a, plus une ligne temporaire, non commitée, qui affiche diag.FormatStages pour
+  R3 à R6 (le temps de chaque étape du receveur).
+
+##### PC Windows 11 (Intel, sans instructions SHA), main
+Bench ladder: 4 streams, chunk 2.00 MB
+  R1 raw TCP                                  1205.0 MB/s   100 % of R1
+  R2 + TLS 1.3, pinned key                    1272.6 MB/s   106 % of R1
+  R3 + frames and SHA-256, null sink           460.1 MB/s    38 % of R1  (limiting: hash)
+  R4 + disk writes, no fsync                   427.4 MB/s    35 % of R1  (limiting: hash)
+  R5 + journal and fsync                       306.9 MB/s    25 % of R1  (limiting: hash)
+  R6 whole transfer: offer, digest, rename     297.0 MB/s    25 % of R1  (limiting: hash)
+
+##### PC Windows 11, r5a, deux passages
+Bench ladder: 4 streams, chunk 2.00 MB
+  R1 raw TCP                                  1036.6 MB/s   100 % of R1
+  R2 + TLS 1.3, pinned key                    1224.4 MB/s   118 % of R1
+  R3 + frames and SHA-256, null sink           470.1 MB/s    45 % of R1  (limiting: hash)
+  R4 + disk writes, no fsync                   419.3 MB/s    40 % of R1  (limiting: hash)
+  R5 + journal and fsync                       307.0 MB/s    30 % of R1  (limiting: hash)
+  R6 whole transfer: offer, digest, rename     289.1 MB/s    28 % of R1  (limiting: hash)
+Bench ladder: 4 streams, chunk 2.00 MB
+  R1 raw TCP                                  1384.5 MB/s   100 % of R1
+  R2 + TLS 1.3, pinned key                     873.9 MB/s    63 % of R1
+  R3 + frames and SHA-256, null sink           308.8 MB/s    22 % of R1  (limiting: hash)
+  R4 + disk writes, no fsync                   306.0 MB/s    22 % of R1  (limiting: hash)
+  R5 + journal and fsync                       225.7 MB/s    16 % of R1  (limiting: hash)
+  R6 whole transfer: offer, digest, rename     261.1 MB/s    19 % of R1  (limiting: hash)
+
+##### Samsung A57 (Android 16, arm64), Termux
+----- main
+Bench ladder: 4 streams, chunk 2.00 MB
+  R1 raw TCP                                  1026.4 MB/s   100 % of R1
+  R2 + TLS 1.3, pinned key                     160.8 MB/s    16 % of R1
+  R3 + frames and SHA-256, null sink           187.3 MB/s    18 % of R1  (limiting: net_wait)
+  R4 + disk writes, no fsync                   156.1 MB/s    15 % of R1  (limiting: net_wait)
+  R5 + journal and fsync                       164.8 MB/s    16 % of R1  (limiting: net_wait)
+  R6 whole transfer: offer, digest, rename     168.0 MB/s    16 % of R1  (limiting: net_wait)
+----- r5a
+Bench ladder: 4 streams, chunk 2.00 MB
+  R1 raw TCP                                  1084.0 MB/s   100 % of R1
+  R2 + TLS 1.3, pinned key                     255.6 MB/s    24 % of R1
+  R3 + frames and SHA-256, null sink           205.6 MB/s    19 % of R1  (limiting: net_wait)
+  R4 + disk writes, no fsync                   179.7 MB/s    17 % of R1  (limiting: net_wait)
+  R5 + journal and fsync                       173.1 MB/s    16 % of R1  (limiting: net_wait)
+  R6 whole transfer: offer, digest, rename     171.1 MB/s    16 % of R1  (limiting: net_wait)
+----- probe
+PROBE stages:
+  - net_wait   busy  12424.2 ms /4 | p50   23.0 ms | p95   51.6 ms | 1.00 GB
+  - tls        busy   6768.4 ms /4 | p50   11.5 ms | p95   30.4 ms | 1.00 GB
+  - hash       busy   3538.0 ms /4 | p50    4.9 ms | p95   19.0 ms | 1.00 GB
+PROBE stages:
+  - net_wait   busy   9450.1 ms /4 | p50   14.0 ms | p95   49.4 ms | 1.00 GB
+  - tls        busy   6472.7 ms /4 | p50   10.6 ms | p95   26.6 ms | 1.00 GB
+  - hash       busy   3723.1 ms /4 | p50    5.3 ms | p95   19.4 ms | 1.00 GB
+  - disk_write busy   4333.7 ms /4 | p50    6.7 ms | p95   20.5 ms | 1.00 GB
+  - fsync      busy      0.5 ms /4 | p50    0.5 ms | p95    0.5 ms | 0 B
+PROBE stages:
+  - net_wait   busy   9933.2 ms /4 | p50   16.4 ms | p95   53.0 ms | 1.00 GB
+  - tls        busy   6523.1 ms /4 | p50   10.7 ms | p95   26.9 ms | 1.00 GB
+  - hash       busy   3507.0 ms /4 | p50    4.1 ms | p95   19.1 ms | 1.00 GB
+  - disk_write busy   4520.9 ms /4 | p50    7.6 ms | p95   20.4 ms | 1.00 GB
+  - fsync      busy    141.4 ms /4 | p50   52.7 ms | p95   52.7 ms | 0 B
+PROBE stages:
+  - net_wait   busy  10357.2 ms /4 | p50   16.0 ms | p95   53.9 ms | 1.00 GB
+  - tls        busy   6292.1 ms /4 | p50   10.4 ms | p95   27.1 ms | 1.00 GB
+  - hash       busy   3689.5 ms /4 | p50    4.9 ms | p95   18.9 ms | 1.00 GB
+  - disk_write busy   4536.5 ms /4 | p50    7.4 ms | p95   21.8 ms | 1.00 GB
+  - fsync      busy    107.2 ms /4 | p50   51.7 ms | p95   51.7 ms | 0 B
+Bench ladder: 4 streams, chunk 2.00 MB
+  R1 raw TCP                                  1058.8 MB/s   100 % of R1
+  R2 + TLS 1.3, pinned key                     248.3 MB/s    23 % of R1
+  R3 + frames and SHA-256, null sink           204.5 MB/s    19 % of R1  (limiting: net_wait)
+  R4 + disk writes, no fsync                   175.7 MB/s    17 % of R1  (limiting: net_wait)
+  R5 + journal and fsync                       171.7 MB/s    16 % of R1  (limiting: net_wait)
+  R6 whole transfer: offer, digest, rename     169.3 MB/s    16 % of R1  (limiting: net_wait)
